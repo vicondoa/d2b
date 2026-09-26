@@ -535,7 +535,7 @@ fn decode_spec<T: DeserializeOwned>(
         .map_err(|error| AudioResourceRuntimeError::InvalidSpec(error.to_string()))
 }
 
-/// The `status. resource` projection for one AudioBinding (old
+/// The `status.resource` projection for one AudioBinding (old
 /// `audio_binding_status_projection_with_status`): the typed channel status
 /// plus the realized Process/Endpoint references the driver owns.
 pub(crate) fn audio_binding_projection(

@@ -896,12 +896,12 @@ impl ComponentStateVolumeProjection {
         &self.source_execution_ref
     }
 
-    /// Return the Volume `quota. maxBytes` value.
+    /// Return the Volume `quota.maxBytes` value.
     pub const fn quota_max_bytes(&self) -> u64 {
         self.quota_max_bytes
     }
 
-    /// Return the nonzero Volume `quota. maxInodes` value.
+    /// Return the nonzero Volume `quota.maxInodes` value.
     pub const fn quota_max_inodes(&self) -> u64 {
         self.quota_max_inodes
     }
@@ -1086,7 +1086,7 @@ impl ComponentStateNamespace {
         self.sensitivity_class
     }
 
-    /// Return the byte quota copied to `quota. maxBytes`.
+    /// Return the byte quota copied to `quota.maxBytes`.
     pub const fn quota_bytes(&self) -> u64 {
         self.quota_bytes
     }
@@ -1814,7 +1814,7 @@ impl<'de> Deserialize<'de> for StandardCapabilityMatrix {
     }
 }
 
-/// One registered `spec. provider` or `status. provider` extension schema.
+/// One registered `spec.provider` or `status.provider` extension schema.
 ///
 /// The resource store validates every extension write against the installed
 /// Provider's registration, rejecting an unregistered or version-mismatched
@@ -1838,8 +1838,8 @@ redacted_debug!(ExtensionSchemaRegistration);
 /// fingerprint it implements, the signed capability matrix, and the strict
 /// extension schemas it registers. The base itself is never redefined here:
 /// fields shared across implementations are promoted to the ResourceType
-/// base and are never registered under `spec. provider` or
-/// `status. provider`.
+/// base and are never registered under `spec.provider` or
+/// `status.provider`.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceApiBinding {
@@ -1988,12 +1988,12 @@ impl ResourceApiBinding {
         &self.capability_matrix
     }
 
-    /// The registered `spec. provider` extension schema, if any.
+    /// The registered `spec.provider` extension schema, if any.
     pub const fn spec_extension(&self) -> Option<&ExtensionSchemaRegistration> {
         self.spec_extension.as_ref()
     }
 
-    /// The registered `status. provider` extension schema, if any.
+    /// The registered `status.provider` extension schema, if any.
     pub const fn status_extension(&self) -> Option<&ExtensionSchemaRegistration> {
         self.status_extension.as_ref()
     }
@@ -2208,7 +2208,7 @@ impl ProjectionFactory {
 
     /// Decide whether an export may target the supplied stored resource.
     ///
-    /// `ResourceExport. resourceRef` must target a locally owned authority
+    /// `ResourceExport.resourceRef` must target a locally owned authority
     /// Service. An import-owned projection is never re-exportable.
     pub fn admits_export_target(
         &self,

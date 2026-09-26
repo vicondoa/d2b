@@ -27,7 +27,7 @@
 //!     live/.d2b-marker-<vm>         # zero-length readiness marker
 //!     meta/                            # guest read-only share root
 //!       current -> generations/<generation-id>
-//!       generations/<generation-id>/{store-paths,db. dump,meta.json}
+//!       generations/<generation-id>/{store-paths,db.dump,meta.json}
 //!     state/                           # host-only broker state
 //!       current -> generations/<generation-id>
 //!       generations/<generation-id>/{system,marker.json,meta.json}
@@ -100,7 +100,7 @@ pub enum HardlinkFarmError {
         b_dev: u64,
     },
     /// `link(2)` returned `EXDEV` even though source and destination
-    /// share the same `st_dev` - i. e. they are on the same underlying
+    /// share the same `st_dev` - i.e. they are on the same underlying
     /// filesystem but in different *vfsmounts* (the canonical case is
     /// NixOS bind-mounting `/nix/store` read-only on top of itself).
     /// Unlike [`HardlinkFarmError::DifferentFilesystem`] this is RECOVERABLE: building the
@@ -728,7 +728,7 @@ pub async fn write_generation_marker(
     // here (it has no on-disk backing) but ext4 / xfs / btrfs need
     // this for full crash safety. Best-effort: errors are
     // non-fatal - the marker file itself is already on disk via
-    // the f. sync_all() above.
+    // the f.sync_all() above.
     if let Ok(dir) = tokio::fs::File::open(generation_dir).await {
         let _ = dir.sync_all().await;
     }
@@ -853,7 +853,7 @@ pub async fn build_farm(
 /// Shared by the legacy [`build_farm`] and the split-layout
 /// [`build_store_view`]. Top-level paths already present in `live/` are
 /// skipped (the flat pool is shared across retained generations); the
-/// rest are hardlinked into a private `live. stage.<tag>.<pid>` sibling
+/// rest are hardlinked into a private `live.stage.<tag>.<pid>` sibling
 /// and atomically renamed into `live/`. `store_root` and `live/` must
 /// already exist and share one filesystem (the caller asserts this).
 /// Returns the top-level link/skip accounting.
@@ -985,7 +985,7 @@ async fn fsync_tree_bottom_up(path: &Path) -> Result<(), HardlinkFarmError> {
 ///
 /// `generation_id` is the collision-free on-disk key (see
 /// [`generation_id`]). This function does NOT swap the `state/current` or
-/// `meta/current` pointers, copy `db. dump`, or plant the live readiness
+/// `meta/current` pointers, copy `db.dump`, or plant the live readiness
 /// marker: those are the in-process "publish" steps the caller performs
 /// after a successful (possibly cross-mount-retried) materialisation, in
 /// the ADR-mandated order (state/current, then meta/current, then the
@@ -1044,7 +1044,7 @@ pub async fn build_store_view(
     let counts = link_closures_into_live(store_root, generation_id, closure_paths).await?;
 
     // Guest-served metadata (`meta/generations/<id>/`): store-paths +
-    // guest-safe meta.json only. db. dump is copied in by the caller
+    // guest-safe meta.json only. db.dump is copied in by the caller
     // before the meta/current swap.
     let meta_gen = meta_generation_dir(store_root, generation_id);
     tokio::fs::create_dir_all(&meta_gen)
@@ -1121,10 +1121,10 @@ async fn plant_generation_gcroot(
     Ok(())
 }
 
-/// Copy the closure-scoped Nix DB dump into `meta/generations/<id>/db. dump`.
+/// Copy the closure-scoped Nix DB dump into `meta/generations/<id>/db.dump`.
 /// In-process (a byte copy, cross-mount-safe). tmp+rename for crash
 /// safety. Must complete before the `meta/current` swap so the guest
-/// never observes a current generation without its `db. dump`.
+/// never observes a current generation without its `db.dump`.
 pub async fn write_meta_db_dump(
     store_root: &Path,
     generation_id: &str,
@@ -1707,7 +1707,7 @@ pub async fn read_meta_current_id(store_root: &Path) -> Option<String> {
     read_current_pointer_id(&meta_dir(store_root)).await
 }
 
-/// Remove stale `current. tmp` files left under `state/` and `meta/` by a
+/// Remove stale `current.tmp` files left under `state/` and `meta/` by a
 /// previous publish that crashed between symlink-write and rename.
 /// Idempotent.
 pub async fn reconcile_split_current_tmp(store_root: &Path) -> Result<(), HardlinkFarmError> {

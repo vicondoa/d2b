@@ -2,7 +2,7 @@
 //!
 //! Implements the per-role bridge port flag defaults table plus the
 //! validators that gate east-west bridges behind the
-//! `env. lan. allowEastWest` + `site. allowUnsafeEastWest` double opt-in.
+//! `env.lan.allowEastWest` + `site.allowUnsafeEastWest` double opt-in.
 //!
 //! The complete flag set this module covers (every flag, every role):
 //! `isolated`, `hairpin_mode`, `learning`, `unicast_flood`,
@@ -167,9 +167,9 @@ pub fn validate_readback(
 /// Double opt-in policy for east-west bridges.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EastWestPolicy {
-    /// Env-level toggle: `d2b. envs.<env>.lan. allowEastWest`.
+    /// Env-level toggle: `d2b.envs.<env>.lan.allowEastWest`.
     pub env_allow_east_west: bool,
-    /// Site-level toggle: `d2b. site. allowUnsafeEastWest`.
+    /// Site-level toggle: `d2b.site.allowUnsafeEastWest`.
     pub site_allow_unsafe_east_west: bool,
 }
 
@@ -177,7 +177,7 @@ pub struct EastWestPolicy {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BridgePortPolicyError {
     /// The bundle requested `WorkloadLanEastWest` but the env did not
-    /// set `lan. allowEastWest = true`.
+    /// set `lan.allowEastWest = true`.
     EastWestRequiresEnvOptIn,
     /// The bundle requested `WorkloadLanEastWest` and the env opted in
     /// but the site did not set `allowUnsafeEastWest = true`.

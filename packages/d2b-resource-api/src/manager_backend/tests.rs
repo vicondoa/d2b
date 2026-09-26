@@ -555,7 +555,7 @@ async fn create_get_update_delete_round_trip_through_the_manager() {
 /// Nix-ingested rows persist spec-shaped bytes, so their envelope is
 /// rendered on the read (the fallback path). The manager view must serve the
 /// row's stable uid there: the public delete precondition resolves the exact
-/// uid from `metadata. uid`, and `ResourceUid`'s redacted `Display` is never
+/// uid from `metadata.uid`, and `ResourceUid`'s redacted `Display` is never
 /// data. A round trip through an API-created row cannot catch this - those
 /// rows persist envelope-shaped bytes and already carry their uid.
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -821,7 +821,7 @@ fn rendered_full_envelopes_keep_the_strict_reader_contract() {
 /// converted type the API can serve renders through the one producer, and
 /// each rendered row is a complete strict envelope - with and without a live
 /// status projection - whose status object is exactly the contract's closed
-/// shape and whose `status. resource` layer is the driver's own value carried
+/// shape and whose `status.resource` layer is the driver's own value carried
 /// unchanged.
 ///
 /// A type whose rendering lost a required member, wrapped the driver's layer,
@@ -1026,7 +1026,7 @@ async fn every_converted_type_is_served_by_the_manager_path() {
     fixture.manager_actor.get_cell().stop(None);
 }
 
-/// The converted types whose contracts pin a typed `status. resource` layer
+/// The converted types whose contracts pin a typed `status.resource` layer
 /// decode the served layer through exactly that `deny-unknown-fields`
 /// decoder: the projection cannot wrap, rename, or nest what the type's
 /// consumers read. The remaining converted types publish free-form evidence
@@ -1040,7 +1040,7 @@ fn converted_type_status_layers_round_trip_through_their_typed_decoders() {
     use d2b_resource_runtime::spec_store::{ResourceKey, ResourceProvenance};
 
     /// One typed status decoder case: the converted type's name, the served
-    /// wire `status. resource` value, and the type's decoder.
+    /// wire `status.resource` value, and the type's decoder.
     type TypedDecoderCase = (
         &'static str,
         serde_json::Value,
@@ -1672,8 +1672,8 @@ async fn list_refuses_a_cursor_it_cannot_honour() {
 }
 
 /// An owner-scoped LIST matches the manager's owned children: the row's real
-/// ownership is projected into the store shape, so `owner. resourceUid` and
-/// `owner. resourceRef` return the owner's rows instead of an empty page.
+/// ownership is projected into the store shape, so `owner.resourceUid` and
+/// `owner.resourceRef` return the owner's rows instead of an empty page.
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn list_owner_filters_match_manager_owned_children() {

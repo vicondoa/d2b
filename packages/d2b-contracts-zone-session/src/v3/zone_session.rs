@@ -54,14 +54,14 @@
 //!   a v3 peer from silently reading an old tag as a new role.
 //!
 //! Two service-package wire strings are stated by the specs and used verbatim:
-//! `d2b. resource. v3` and `d2b. zone. v3`. The remaining new wire strings and
+//! `d2b.resource.v3` and `d2b.zone.v3`. The remaining new wire strings and
 //! every new numeric tag are the minimal defensible extension of the frozen
 //! scheme, not a spec quotation. They are listed in the module's report as
 //! inferences pending explicit contract confirmation:
 //! `EndpointPurpose::ZoneLocal` = 14, `EndpointPurpose::ZoneControl` = 15,
 //! `EndpointRole::ZoneRelay` = 9, `EndpointRole::ZoneBootstrap` = 10,
 //! `ServicePackage::ZoneV3` = 7, `ServicePackage::ZoneLinkV3` = 8, and the
-//! wire string `d2b. zonelink. v3`.
+//! wire string `d2b.zonelink.v3`.
 //!
 //! # Relationship to the v2-shaped session structs
 //!
@@ -172,7 +172,7 @@ zone_closed_enum!(
     EndpointPurpose {
         /// Lifecycle control on a Zone-local endpoint.
         LocalLifecycle = 1 => "local-lifecycle",
-        /// The `d2b. resource. v3` resource service.
+        /// The `d2b.resource.v3` resource service.
         ResourceService = 2 => "resource-service",
         /// An enrolled ZoneLink between a parent and a child Zone.
         ZoneLink = 3 => "zone-link",
@@ -199,7 +199,7 @@ zone_closed_enum!(
         /// A Zone-local endpoint reached over an allocator-issued socket,
         /// never over a ZoneLink.
         ZoneLocal = 14 => "zone-local",
-        /// The `d2b. zone. v3` Zone control service.
+        /// The `d2b.zone.v3` Zone control service.
         ZoneControl = 15 => "zone-control",
     }
 );
@@ -242,7 +242,7 @@ zone_closed_enum!(
     /// frozen independently of the v2 assignments and are not restated by
     /// this module.
     ServicePackage {
-        /// `d2b. resource. v3.ResourceService`.
+        /// `d2b.resource.v3.ResourceService`.
         ResourceV3 = 1 => "d2b.resource.v3",
         /// The controller service package.
         ControllerV3 = 2 => "d2b.controller.v3",
@@ -254,7 +254,7 @@ zone_closed_enum!(
         SupportV3 = 5 => "d2b.support.v3",
         /// The credential service package.
         CredentialV3 = 6 => "d2b.credential.v3",
-        /// `d2b. zone. v3.ZoneService`.
+        /// `d2b.zone.v3.ZoneService`.
         ZoneV3 = 7 => "d2b.zone.v3",
         /// The ZoneLink carriage service package.
         ZoneLinkV3 = 8 => "d2b.zonelink.v3",

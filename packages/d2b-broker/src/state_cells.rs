@@ -163,7 +163,7 @@ impl std::fmt::Display for CellStoreError {
 /// Retention bounds for replayable non-one-time outcome records.
 ///
 /// One-time consumed markers are always exempt; records carrying live
-/// in-process payloads (e. g. the runner pidfd registry) are live state, not
+/// in-process payloads (e.g. the runner pidfd registry) are live state, not
 /// outcome history, and are exempt too.
 #[derive(Debug, Clone, Copy)]
 pub struct RetentionPolicy {
@@ -195,7 +195,7 @@ struct CellRecord {
     /// into a reconciliation rather than an in-progress refusal.
     claimed: bool,
     durability: CellDurability,
-    /// Non-durable cell value (e. g. a runner's pidfd). Live state, exempt
+    /// Non-durable cell value (e.g. a runner's pidfd). Live state, exempt
     /// from retention and never serialized.
     payload: Option<Arc<dyn Any + Send + Sync>>,
     consumed_ms: u64,
@@ -435,7 +435,7 @@ impl CellStore {
         reply_rx.recv().map_err(|_| CellStoreError::Poisoned)?
     }
 
-    /// Insert one payload record into an ephemeral cell (e. g. a registered
+    /// Insert one payload record into an ephemeral cell (e.g. a registered
     /// runner's pidfd). The cell record is in-process state, never durable;
     /// the recorded principal is the initiating principal of the write.
     pub fn insert_payload(

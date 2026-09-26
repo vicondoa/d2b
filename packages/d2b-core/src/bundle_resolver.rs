@@ -424,7 +424,7 @@ pub struct ResolvedDiskInitOp {
     pub target_path: std::path::PathBuf,
     /// Pre-allocated file size in bytes.
     pub size_bytes: u64,
-    /// Unix permission bits (e. g. `0o600`).
+    /// Unix permission bits (e.g. `0o600`).
     pub mode: u32,
     /// Owner UID - typically the per-VM runner UID.
     pub owner_uid: u32,
@@ -986,9 +986,9 @@ fn lookup_group_gid(name: &str) -> Option<u32> {
 /// on any security check failure:
 /// - `"symlink"` - `open` returned `ELOOP` (path is a symlink).
 /// - `"not-regular-file"` - `fstat` shows it is not a regular file.
-/// - `"owner"` - `st_uid` ≠ `policy. required_uid` or
-///   `st_gid` ≠ `policy. required_gid` (when Some).
-/// - `"mode"` - low 9 bits of `st_mode` ≠ `policy. required_mode`.
+/// - `"owner"` - `st_uid` ≠ `policy.required_uid` or
+///   `st_gid` ≠ `policy.required_gid` (when Some).
+/// - `"mode"` - low 9 bits of `st_mode` ≠ `policy.required_mode`.
 ///
 /// The read is part of the bundle-read work class the loader seat isolates:
 /// async consumers reach it only through
@@ -1087,7 +1087,7 @@ fn verify_artifact_hash(
 ///
 /// The hash is computed over the canonical JSON of the bundle with
 /// `bundleHash` removed and `artifactHashes` set to null - matching what
-/// `nixos-modules/bundle.nix` emits via `builtins. toJSON dataWithoutHash`
+/// `nixos-modules/bundle.nix` emits via `builtins.toJSON dataWithoutHash`
 /// where `dataWithoutHash` has `artifactHashes = null`.
 ///
 /// For `schemaVersion "v2"` bundles a missing `bundleHash` is a hard
@@ -1164,7 +1164,7 @@ fn verify_bundle_hash(path: &Path, raw_bytes: &[u8]) -> Result<(), Error> {
 
     // serde_json without `preserve_order` feature serialises objects with
     // BTreeMap (sorted keys) - the same lexicographic ordering that
-    // builtins. toJSON uses on the Nix side.
+    // builtins.toJSON uses on the Nix side.
     let canonical =
         serde_json::to_vec(&value).map_err(|_| Error::internal_io("bundle-hash-canonical"))?;
     let actual = sha256_hex(&canonical);
@@ -2547,7 +2547,7 @@ impl BundleResolver {
     /// `Guest` is the v3 ResourceType for VMs (there is no separate `Vm`
     /// type); each yielded pair carries the enclosing `ZoneId` and the
     /// `BundleResource` whose `spec()` holds the provider identity
-    /// (`spec. providerRef`) plus the ExecutionPolicy base. Parsing happens
+    /// (`spec.providerRef`) plus the ExecutionPolicy base. Parsing happens
     /// on each call over the verified bytes the resolver holds; the
     /// `ResourceBundle::from_json` parse rejects malformed bytes.
     pub fn guest_vm_resources(&self) -> impl Iterator<Item = (&ZoneId, &BundleResource)> {
@@ -3016,7 +3016,7 @@ impl BundleResolver {
     }
 
     /// Build the canonical `host-runtime.json` record from the bundle's
-    /// `host. if_name_mappings` rows. The broker writes this during
+    /// `host.if_name_mappings` rows. The broker writes this during
     /// `RunHostInstall` so downstream consumers read ifnames from a
     /// single source of truth instead of recomputing via the
     /// SHA-256-vs-FNV-1a dual-algorithm dance.
@@ -3540,7 +3540,7 @@ fn cidr_contains_address(cidr: &str, address: &str) -> bool {
 /// the host-side bridge host octet 1 of the uplink CIDR while the routes'
 /// gateway host (host octet 2) rides the net-VM side. The derivation
 /// refuses a malformed uplink CIDR and any uplink whose gateway host would
-/// fall outside the bridge's own subnet (e. g. a `/31` or `/32` uplink, or
+/// fall outside the bridge's own subnet (e.g. a `/31` or `/32` uplink, or
 /// a network whose host octet cannot carry both hosts).
 fn uplink_bridge_cidr(uplink_cidr: &str) -> Option<Ipv4Cidr> {
     let bridge = network_cidr_host_address(uplink_cidr, 1)?;
@@ -5019,7 +5019,7 @@ type LoadedZoneResourceBundles = (BTreeMap<String, Vec<u8>>, Vec<ProcessTemplate
 
 /// Load the integrity-pinned per-Zone Resource bundles emitted by Nix.
 ///
-/// The bundle index is deliberately kept in `Bundle. artifact_hashes` rather
+/// The bundle index is deliberately kept in `Bundle.artifact_hashes` rather
 /// than added as another compatibility field to `bundle.json`: older
 /// producers can still be parsed, while v3 producers get the same
 /// no-follow/ownership/hash enforcement as every other private artifact.
@@ -8863,7 +8863,7 @@ mod tests {
     //
     // When the swtpm RoleProfile declares userNamespace = Some(...),
     // resolve_runner_node must carry that spec through to
-    // ResolvedRunnerIntent. user_namespace = Some(...).
+    // ResolvedRunnerIntent.user_namespace = Some(...).
     // This mirrors the virtiofsd user_namespace round-trip contract
     // (ADR 0021) and guards against silent drops in the resolver.
     #[test]
@@ -8971,7 +8971,7 @@ mod tests {
     //
     // When the gpu-render-node RoleProfile declares userNamespace = Some(...),
     // resolve_runner_node must carry that spec through to
-    // ResolvedRunnerIntent. user_namespace = Some(...).
+    // ResolvedRunnerIntent.user_namespace = Some(...).
     // Also verifies that the role name resolves to "gpu-render-node" and
     // that the legacy arg0 is "d2b-{vm}-gpu-render-node".
     #[test]
@@ -9087,8 +9087,8 @@ mod tests {
     // v1.2 audio broker-pre-NS extension (Tier 2).
     //
     // When the audio RoleProfile declares userNamespace = Some(...) and
-    // namespaces. net = true, resolve_runner_node must carry the user_namespace
-    // spec through to ResolvedRunnerIntent. user_namespace = Some(...).
+    // namespaces.net = true, resolve_runner_node must carry the user_namespace
+    // spec through to ResolvedRunnerIntent.user_namespace = Some(...).
     //
     // Context: vhost-device-sound's libpipewire client opens
     // AF_NETLINK(NETLINK_KOBJECT_UEVENT) during pw_context_new() (spa-alsa-monitor).

@@ -404,7 +404,7 @@ impl ProductionSharedProviderEffects {
     }
 
     /// The old-shape document of one resource (`spec`, `metadata`, live
-    /// `status. phase`) from the manager view.
+    /// `status.phase`) from the manager view.
     async fn resource_value(
         &self,
         target: &ResourceRef,
@@ -560,7 +560,7 @@ struct NetworkReadiness {
 }
 
 /// The Network child port over the manager-routed surface: every upsert is a
-/// `ctx. ensure_child` (F1) and every read is the live row.
+/// `ctx.ensure_child` (F1) and every read is the live row.
 struct NetworkChildPort<'a> {
     effects: &'a ProductionSharedProviderEffects,
     request: &'a SharedProviderEffectRequest<'a>,
@@ -696,7 +696,7 @@ fn child_ref(resource_type: &str, name: &str) -> ResourceRef {
 
 /// The spec-level content projection check (old
 /// `network_config_content_projection_ready` without its persisted-status
-/// terms: the materialization evidence lived in `status. resource`, which R11
+/// terms: the materialization evidence lived in `status.resource`, which R11
 /// deletes; the Volume actor's live Ready phase is the equivalent gate).
 fn network_config_projection_present(value: &Value, volume_uid: &ResourceUid) -> bool {
     let Some(provider) = value.pointer("/spec/provider") else {
@@ -1080,9 +1080,9 @@ impl ProductionSharedProviderEffects {
                 .ok_or(SharedProviderEffectError::InvalidResource)?;
             // The attached row's authoritative zone is the zone its key
             // resolved under (`resource_value` reads the plane for
-            // `self. zone`); the stored metadata carries no zone, so the old
+            // `self.zone`); the stored metadata carries no zone, so the old
             // `/metadata/zone` read was always `None` and refused every
-            // attachment unconditionally. `request. zone` is external input,
+            // attachment unconditionally. `request.zone` is external input,
             // so the fence stays: a request naming a zone the resolved rows
             // cannot be in is refused.
             if self.zone.as_str() != request.zone.as_str() {
@@ -1133,9 +1133,9 @@ impl ProductionSharedProviderEffects {
             if !attached {
                 continue;
             }
-            // The committed Guest rows were resolved under `self. zone` (the
+            // The committed Guest rows were resolved under `self.zone` (the
             // type-scoped manager list selects the plane's own zone), so the
-            // row's authoritative zone is `self. zone`; the fence compares it
+            // row's authoritative zone is `self.zone`; the fence compares it
             // against the request zone instead of a projection-synthesised
             // field.
             if self.zone.as_str() != request.zone.as_str() {

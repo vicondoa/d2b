@@ -125,7 +125,7 @@ macro_rules! redacted_debug {
 
 pub(crate) use redacted_debug;
 
-/// The closed set of `d2b. zone. v3.ZoneService` methods.
+/// The closed set of `d2b.zone.v3.ZoneService` methods.
 ///
 /// The inventory is frozen here in full. Every method has a landed handler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -500,7 +500,7 @@ struct AdmittedEnrollment {
     child: ZonePath,
 }
 
-/// The `d2b. zone. v3.ZoneService` handler for one Zone.
+/// The `d2b.zone.v3.ZoneService` handler for one Zone.
 ///
 /// The Zone runtime instantiates exactly one of these per Zone. It composes
 /// [`ZoneEntrypointResolver`] over the sealed topology with a caller-supplied
@@ -1839,7 +1839,7 @@ mod tests {
 
     #[test]
     fn construction_rejects_a_topology_the_seal_rejects() {
-        // k9. k0 is never declared as a child, so the row would attach a
+        // k9.k0 is never declared as a child, so the row would attach a
         // subtree outside the sealed scope.
         assert_eq!(
             ZoneServiceServer::new(

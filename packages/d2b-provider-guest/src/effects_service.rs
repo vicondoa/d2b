@@ -25,7 +25,7 @@
 //! `activeProcessCount`). That status is the row's actor's to own (R11) and
 //! there is no durable row to write: the session captures the controller's
 //! write into the effect call's [`GuestStatusSink`] and the driver publishes
-//! it as the row's `status. resource` projection. The provider controller's
+//! it as the row's `status.resource` projection. The provider controller's
 //! finalizer requests are acknowledged without a store write for the same
 //! reason - the manager's deleting-row hold replaces the old durable
 //! finalizer (F3).
@@ -632,7 +632,7 @@ impl GuestEffectsService {
     }
 
     /// The old-shape document of one resource (`spec`, `metadata`, live
-    /// `status. phase`) from the manager view, answered as one classified read
+    /// `status.phase`) from the manager view, answered as one classified read
     /// (issue #511): `Present` carries the document, `Absent` is the honest
     /// not-created answer, `Unavailable` is a plane that could not answer,
     /// and `Error` carries the projection detail of a committed row that

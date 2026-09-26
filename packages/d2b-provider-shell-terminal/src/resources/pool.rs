@@ -1,4 +1,4 @@
-//! `shell-terminal. d2bus. org.ShellPool` schema.
+//! `shell-terminal.d2bus.org.ShellPool` schema.
 
 use super::{ShellTerminalError, validate_name};
 

@@ -173,7 +173,7 @@ impl UhidDevice {
     /// Read and parse one event from /dev/uhid.
     ///
     /// Blocks until an event is available. Returns `None` on clean EOF
-    /// (e. g. the kernel closed the device).
+    /// (e.g. the kernel closed the device).
     pub async fn read_event(&mut self) -> io::Result<Option<UhidEvent>> {
         let mut buf = [0u8; UHID_EVENT_SIZE];
         let n = self.read_nonblocking(&mut buf).await?;

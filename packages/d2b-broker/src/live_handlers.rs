@@ -934,10 +934,10 @@ fn ensure_runner_cgroup_leaf<B: d2b_host::cgroup::CgroupBackend>(
     };
     let leaf_path = cgroup_leaf_path(parent_slice, &segments);
     // Always materialize the cgroup leaf dir tree even when
-    // placement. delegated == false. The delegated flag is about
+    // placement.delegated == false. The delegated flag is about
     // controller delegation (enabling subtree control), not whether
     // the directory exists. The broker spawn path always needs the
-    // Zone/Guest role leaf to write the child pid into cgroup. procs.
+    // Zone/Guest role leaf to write the child pid into cgroup.procs.
     let slice = crate::ops::cgroup::create_d2b_slice(
         backend,
         unified_hierarchy_root,
@@ -1943,7 +1943,7 @@ async fn refresh_spawn_runner_acls(
                 // Derive the expected runtime-dir owner uid from the
                 // declarative path `/run/user/<uid>` (from the bundle's
                 // XDG_RUNTIME_DIR value, which originates in
-                // d2b. site. waylandUser). Do not shell out.
+                // d2b.site.waylandUser). Do not shell out.
                 let wayland_user_uid = runtime
                     .file_name()
                     .and_then(|s| s.to_str())
@@ -2366,7 +2366,7 @@ fn validate_served_view_root(root: &Path) -> Result<(), String> {
 /// The worker runs as the trusted intent's principal, never as the daemon:
 /// the broker's only authentication factor is peer identity
 /// (`peer_matches_instance` admits exactly the daemon uid/gid on
-/// `/run/d2b/priv. sock`), so a worker launched with the daemon identity
+/// `/run/d2b/priv.sock`), so a worker launched with the daemon identity
 /// would be able to call the whole daemon API after a guest -> worker
 /// compromise. The daemon-provisioned trees the worker legitimately needs
 /// are therefore opened to its own principal instead:
@@ -2785,7 +2785,7 @@ fn grant_component_session_socket_acl_once(socket: &Path) -> Result<bool, String
 /// is the production revoke wiring: there is no CH-stop teardown hook
 /// carrying the socket path (`SignalRunner` has only vm_id/role_id/
 /// signal), so revoke runs as a revoke-then-grant at the next CH
-/// (re-) spawn so a replaced/disabled socket cannot retain a stale grant.
+/// (re-)spawn so a replaced/disabled socket cannot retain a stale grant.
 fn revoke_component_session_vsock_acl(socket: &Path) -> Result<(), String> {
     if let Some((dev, ino)) = setfacl_component_session(
         socket,
@@ -2835,7 +2835,7 @@ fn spawn_component_session_vsock_acl_retry(socket: PathBuf) {
 ///
 /// Revoke-then-grant: first revoke any stale per-VM daemon grant left on
 /// the (possibly replaced) socket inode from a prior generation, then
-/// (re-) establish the full ancestor traversal chain and grant `rw` on
+/// (re-)establish the full ancestor traversal chain and grant `rw` on
 /// the live socket. The traversal grant is applied synchronously so the
 /// daemon never loses search on the per-VM state dir (the api-socket
 /// depends on it too); if the socket is not yet present, a bounded retry
@@ -2950,14 +2950,14 @@ pub async fn live_spawn_runner(
     // spawns (ADR 0021).
     //
     // Detection: seccomp_policy_ref == "w1-gpu-render-node" AND
-    // user_namespace. is_some() (both conditions must hold; the policy
+    // user_namespace.is_some() (both conditions must hold; the policy
     // ref is the canonical identifier for the render-node-only profile
     // and avoids introducing a new SpawnRunnerPlan field).
     //
     // The fd is opened here (parent side, before clone3(CLONE_NEWUSER))
     // so the DAC permission check runs as the broker UID - the child's
     // user-NS UID mapping provides no host-side access. The OwnedFd is
-    // moved into RunnerIsolationSpec. pre_opened_device_fds; the broker
+    // moved into RunnerIsolationSpec.pre_opened_device_fds; the broker
     // sys layer dup2's it to RENDER_NODE_INHERITED_FD (10) in the child
     // closure before execve. The crosvm argv carries
     // --gpu-device-node /proc/self/fd/10 as the render node path.
@@ -3101,9 +3101,9 @@ pub async fn live_spawn_runner(
 ///
 /// Two placements exist:
 ///
-/// - a **VM-scoped** placement (`d2b. slice/<vm>/...`, the legacy VM DAG) is
+/// - a **VM-scoped** placement (`d2b.slice/<vm>/...`, the legacy VM DAG) is
 ///   provisioned and identity-bound here, exactly as before;
-/// - a **resource-backed** placement (`d2b. slice/process-<64hex>/...`,
+/// - a **resource-backed** placement (`d2b.slice/process-<64hex>/...`,
 ///   `private_cgroup_placement`) carries no VM identity in the cgroup and the
 ///   typed Device-worker intent ships no writable paths, so the identity comes
 ///   from the verified bundle (`resource_backed`) and the launch is fenced
@@ -3135,7 +3135,7 @@ async fn maybe_harden_swtpm_dir(
         // directory for the log and pid file the moment it starts, so a launch
         // racing the Volume's layout must fail retryably here instead of
         // burning the row's restart budget on a child that dies on its first
-        // write. The one-shot flush (`--unix <dir>/ctrl. sock`) only connects
+        // write. The one-shot flush (`--unix <dir>/ctrl.sock`) only connects
         // to the worker's control socket inside that directory: it is admitted
         // and waits for the socket, so refusing it would spend the row's one
         // attempt on a race it can win. Presence is a filesystem fact, so it
@@ -4265,7 +4265,7 @@ mod tests {
         );
         assert!(backend.directory_exists(&leaf));
         // DEFAULT_DELEGATED_PARENT_SLICE is the top-level
-        // `/sys/fs/cgroup/d2b. slice` (systemd top-level slice naming
+        // `/sys/fs/cgroup/d2b.slice` (systemd top-level slice naming
         // convention). The leaf path lives under that, so the slice MUST
         // exist for the leaf to exist.
         assert!(backend.directory_exists(Path::new("/sys/fs/cgroup/d2b.slice")));
@@ -4628,7 +4628,7 @@ mod tests {
         // behaviour (no setfacl on world-traversable ancestors) is
         // covered hermetically by `dir_traverse_classification_world_x_vs_private`
         // without invoking the host setfacl binary on real ancestors -
-        // which a TestDir rooted under a non-world-x CI path (e. g.
+        // which a TestDir rooted under a non-world-x CI path (e.g.
         // `/home/runner`, mode 0750) would otherwise trigger.
         revoke_component_session_vsock_acl(&socket).expect("revoke of absent socket is a no-op");
     }

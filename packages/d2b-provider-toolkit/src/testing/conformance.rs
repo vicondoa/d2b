@@ -4,7 +4,7 @@
 //! `ResourceApiBinding` to implement the exact base spec and status schema
 //! version and fingerprint the installed ResourceType contract declares, to
 //! accept the canonical minimal valid base spec without a
-//! `spec. provider` extension, and to refuse an optional base capability
+//! `spec.provider` extension, and to refuse an optional base capability
 //! only through its signed capability matrix and the provider-neutral
 //! `unsupported-capability` result.
 //!
@@ -296,7 +296,7 @@ pub fn check_descriptor_conformance(
 
 /// Live conformance for one binding: the Provider advertises the installed
 /// base schema identity, and the canonical minimal valid base spec is
-/// accepted without any `spec. provider` extension.
+/// accepted without any `spec.provider` extension.
 ///
 /// # Errors
 ///

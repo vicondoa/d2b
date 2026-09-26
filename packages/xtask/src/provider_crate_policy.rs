@@ -3535,6 +3535,18 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-contracts/src/unsafe_local_workloads.rs",
+        token: "network_local",
+        family: "network-local",
+        retires_with: "permanent: the local-vm workload limit is family-named shared wire vocabulary and no shared crate may depend on a provider crate. The signal is an assembled name, so it is invisible to a text search for the token: the module contains no occurrence of network_local, which is why this row is required rather than removable",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-contracts/src/unsafe_local_workloads.rs",
+        token: "volume_local",
+        family: "volume-local",
+        retires_with: "permanent: the local-vm workload limit is family-named shared wire vocabulary and no shared crate may depend on a provider crate. The signal is an assembled name, so it is invisible to a text search for the token: the module contains no occurrence of volume_local, which is why this row is required rather than removable",
+    },
+    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/live_handlers.rs",
         token: "activation_nixos",
         family: "activation-nixos",
@@ -7069,7 +7081,7 @@ fn packages_tokens(line: &str) -> Vec<String> {
             end += 1;
         }
         // A `<...>` immediately after the run marks a naming-template
-        // placeholder (e. g. `packages/d2b-provider-<base>-<implementation>/`),
+        // placeholder (e.g. `packages/d2b-provider-<base>-<implementation>/`),
         // not a resolvable citation; skip it.
         if bytes.get(end) == Some(&b'<') {
             search = &rest[end..];
@@ -8824,7 +8836,7 @@ enum CommittedScopeClass {
 /// stale. A committed-scope check cannot police every file outside these
 /// classes without encoding the whole plan's touch surface, so it polices
 /// the crate set and the declared artifact roots, the two surfaces the plan
-/// names; every other surface (docs/plans, changelog. d, tests/, Nix
+/// names; every other surface (docs/plans, changelog.d, tests/, Nix
 /// modules, Bazel files, ...) is out of its scope by construction.
 struct CommittedScopeEntry {
     crate_name: &'static str,

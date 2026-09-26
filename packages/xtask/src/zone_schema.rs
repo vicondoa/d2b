@@ -4,7 +4,7 @@
 //! Two generators read this one model:
 //!
 //! * `gen-zone-schemas` writes
-//!   `docs/reference/schemas/v3/core. d2bus. org_<Type>.schema.json`,
+//!   `docs/reference/schemas/v3/core.d2bus.org_<Type>.schema.json`,
 //!   the committed JSON Schema for the emitted canonical resource object.
 //! * `gen-zone-nix-options` writes the committed generated Nix modules under
 //!   `nixos-modules/generated/`.
@@ -38,7 +38,7 @@ const CREDENTIAL_REF_PATTERN: &str = "^Credential/[a-z][a-z0-9-]{0,62}$";
 /// `ADR-046-resources-zone-control.md` section 3.3: the transport Provider ref
 /// is required, explicit, and its local name always begins with `transport-`.
 const TRANSPORT_PROVIDER_REF_PATTERN: &str = "^Provider/transport-[a-z][a-z0-9-]{0,52}$";
-/// Any same-Zone `<Type>/<name>` ref, used by `metadata. ownerRef`.
+/// Any same-Zone `<Type>/<name>` ref, used by `metadata.ownerRef`.
 const RESOURCE_REF_PATTERN: &str = "^(?:[A-Z][A-Za-z0-9]{0,62}|[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62})/[a-z][a-z0-9-]{0,62}$";
 /// Role posture `principalRef` spelling: the host-account identity the
 /// committed principal allocation names. It is not a ResourceRef.
@@ -75,7 +75,7 @@ enum FieldKind {
         min: i64,
         max: i64,
     },
-    /// `types. ints. positive`: the specification states a positive integer with
+    /// `types.ints.positive`: the specification states a positive integer with
     /// no declared ceiling, so no ceiling is invented here.
     PositiveInt,
     /// Closed object with a fixed, fully-defaulted member list.

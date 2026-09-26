@@ -1,15 +1,15 @@
 //! The shared security-key semantic Service and Binding base contract.
 //!
 //! This module owns the common base spec, status, and schema contract for the
-//! frozen security-key pair `security-key. d2bus. org.SecurityKeyService` and
-//! `security-key. d2bus. org.SecurityKeyBinding`. The field sets below are the
+//! frozen security-key pair `security-key.d2bus.org.SecurityKeyService` and
+//! `security-key.d2bus.org.SecurityKeyBinding`. The field sets below are the
 //! top-level provider-neutral base fields stated by the security-key Provider
 //! dossier's Service and Binding spec/status contract sections.
 //!
 //! The Service base is a discriminated `mode` union declaring only semantic
 //! security-key authority. The physical backing selector is deliberately not a
 //! base field for this family: the dossier places `deviceRef` and the relay
-//! Endpoint inside the implementation's strict `spec. provider` extension.
+//! Endpoint inside the implementation's strict `spec.provider` extension.
 //!
 //! Consequences of that placement. Because no semantic base field names a
 //! backing resource, this family's closed `allowedBackingRefTypes` set is
@@ -51,7 +51,7 @@ const BINDING_SPEC_REQUIRED: &[&str] = &["providerRef", "serviceRef", "target"];
 const BINDING_STATUS_ALLOWED: &[&str] = &["attachment"];
 
 /// The Core-owned projection branch permits only `providerRef` and the
-/// observed mode. It rejects `spec. provider`, the physical device selector,
+/// observed mode. It rejects `spec.provider`, the physical device selector,
 /// the authority descriptor, and every physical selector.
 const PROJECTION_SPEC_ALLOWED: &[&str] = &["providerRef", "mode"];
 const PROJECTION_SPEC_REQUIRED: &[&str] = &["providerRef", "mode"];
@@ -91,7 +91,7 @@ mod tests {
         resource_envelope,
     };
 
-    /// Canonical minimal base acceptance without `spec. provider`.
+    /// Canonical minimal base acceptance without `spec.provider`.
     #[test]
     fn the_canonical_minimal_base_is_accepted_without_a_provider_extension() {
         assert_minimal_base_round_trips(contract().service(), r#"{"mode":"authority"}"#);
@@ -148,7 +148,7 @@ mod tests {
         );
     }
 
-    /// A Core projection rejects `spec. provider` and the authority descriptor.
+    /// A Core projection rejects `spec.provider` and the authority descriptor.
     #[test]
     fn a_projection_rejects_a_provider_extension_and_the_authority_descriptor() {
         let spec = d2b_contracts_resource::v3::resource::ResourceSpec::new(

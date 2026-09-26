@@ -11,12 +11,12 @@
 //!
 //! ```text
 //! crosvm device gpu \
-//!   --socket corp-desktop-gpu. sock \
+//!   --socket corp-desktop-gpu.sock \
 //!   --wayland-sock $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY \
 //!   --params '{"context-types":"virgl:virgl2:cross-domain","displays":[{"hidden":true}],"egl":true,"vulkan":true}'
 //! ```
 //!
-//! CH then connects via `--gpu socket=corp-desktop-gpu. sock`. The Process
+//! CH then connects via `--gpu socket=corp-desktop-gpu.sock`. The Process
 //! Provider composes that private CH argument from the sealed launch ticket;
 //! the Guest controller does not receive or assemble it.
 //!
@@ -85,11 +85,11 @@ pub struct GpuArgvInput {
     /// not embed the VM name (the socket path does).
     pub vm_name: String,
     /// `--socket` value. Audit uses runner-cwd-relative
-    /// `<vm>-gpu. sock`; the daemon uses an absolute path under
+    /// `<vm>-gpu.sock`; the daemon uses an absolute path under
     /// `/run/d2b/vms/<vm>/`. Either shape is honoured.
     pub socket_path: String,
     /// `--wayland-sock` value. Resolved by the daemon caller to the
-    /// host's primary Wayland session socket (per `d2b. site. waylandUser`).
+    /// host's primary Wayland session socket (per `d2b.site.waylandUser`).
     pub wayland_sock: String,
     /// `--params` JSON payload.
     pub params: GpuParams,

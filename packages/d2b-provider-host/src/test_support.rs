@@ -109,7 +109,7 @@ struct RecordingProbeCore {
 
 impl RecordingProbe {
     /// Construct the double over one scripted capability set, the default
-    /// Ready gate (6.9 with cgroup. kill), and the default bounded metadata.
+    /// Ready gate (6.9 with cgroup.kill), and the default bounded metadata.
     pub fn new(capabilities: Vec<HostCapabilityClass>) -> Arc<Self> {
         Arc::new(Self {
             core: Arc::new(RecordingProbeCore {

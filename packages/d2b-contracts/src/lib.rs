@@ -378,7 +378,7 @@ mod tests {
     fn encode_frame_public_sock_cap_boundary_is_exact() {
         // A JSON string of N chars serializes to N+2 bytes (two quotes), so
         // drive the encoded body length to exactly cap-1, cap, and cap+1 to
-        // pin the public. sock frame boundary. Removing the `> MAX_FRAME_SIZE`
+        // pin the public.sock frame boundary. Removing the `> MAX_FRAME_SIZE`
         // check would let the cap+1 case through and fail this test.
         let body_len = |n: usize| serde_json::to_vec(&"x".repeat(n)).expect("serialize").len();
         // cap - 1 and cap fit.

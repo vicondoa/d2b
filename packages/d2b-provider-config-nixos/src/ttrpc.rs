@@ -541,7 +541,7 @@ mod tests {
         // Drive the registered service handler, not the helper behind it. On
         // the single-threaded runtime below the release can only be delivered
         // while the backend is parked if the handler left its polling worker
-        // free: an inline `backend. dispatch` would stall the only worker and
+        // free: an inline `backend.dispatch` would stall the only worker and
         // the handler would answer the parked call with an error.
         let (started, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
         let (release, release_rx) = channel();

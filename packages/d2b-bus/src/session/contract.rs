@@ -765,7 +765,7 @@ impl RuntimeRouteAdmissionAuthority {
 /// use d2b_bus::session::contract::RouteAdmissionEvidence;
 ///
 /// fn forge(mut value: RouteAdmissionEvidence) {
-///     value. body = todo!();
+///     value.body = todo!();
 /// }
 /// ```
 pub struct RouteAdmissionEvidence {

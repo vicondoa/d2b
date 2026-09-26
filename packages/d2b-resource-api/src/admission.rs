@@ -264,7 +264,7 @@ impl AdmissionPermit {
 /// use d2b_resource_api::AdmittedMutation;
 ///
 /// fn inspect(value: &AdmittedMutation) {
-///     let _ = &value. mutations;
+///     let _ = &value.mutations;
 /// }
 /// ```
 pub struct AdmittedMutation {

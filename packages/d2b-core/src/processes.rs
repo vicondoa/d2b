@@ -25,7 +25,7 @@ pub struct VmProcessDag {
     /// Additive: present for VMs that are declared as realm workloads;
     /// absent (`None`) for VMs that predate realm workload declarations.
     /// Consumers must not treat absence as an error - it simply means the
-    /// VM is a classical `d2b. vms.<vm>` entry without a realm workload row.
+    /// VM is a classical `d2b.vms.<vm>` entry without a realm workload row.
     ///
     /// The provider/backend-specific config (vm_id, role, runner argv) is
     /// carried separately in the per-node `profile` and `argv` fields so
@@ -138,7 +138,7 @@ pub enum ProcessNetworkInterfaceType {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProcessMacvtapInterface {
-    /// Lower host interface to attach to, e. g. `eno1`.
+    /// Lower host interface to attach to, e.g. `eno1`.
     pub link: String,
     /// macvtap/macvlan mode passed to `ip link ... type macvtap mode`.
     pub mode: ProcessMacvtapMode,
@@ -183,7 +183,7 @@ pub enum SpawnRunnerPlanOp {
     /// image when present.
     ///
     /// Used for d2b-owned raw ext4 volumes and the per-VM writable
-    /// store overlay disk (`store-overlay. img`). The broker validates
+    /// store overlay disk (`store-overlay.img`). The broker validates
     /// `target_path` is under `/var/lib/d2b/vms/`, creates absent
     /// files with `O_CREAT|O_EXCL`, pre-allocates `size_bytes` via
     /// `fallocate`, formats them as ext4, and sets mode + ownership.
@@ -197,7 +197,7 @@ pub enum SpawnRunnerPlanOp {
         target_path: PathBuf,
         /// Pre-allocated size in bytes (broker calls `fallocate`).
         size_bytes: u64,
-        /// Unix permission bits in octal (e. g. `0o600` = 384 decimal).
+        /// Unix permission bits in octal (e.g. `0o600` = 384 decimal).
         mode: u32,
         /// Owner UID - typically the per-VM runner UID.
         owner_uid: u32,

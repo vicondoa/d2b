@@ -19,7 +19,7 @@
 //!   [`ResourceDriver::reconcile`]: the desired child set is ensured through
 //!   the manager child API (committed before the child actor exists, F1), the
 //!   typed Provider effect runs behind the port, and the in-memory status
-//!   projection is published with `ctx. set_status` (R11) plus a self-requeue
+//!   projection is published with `ctx.set_status` (R11) plus a self-requeue
 //!   while the family is not converged.
 //! - `prepare_finalize`/`execute_finalize`/`finalize` ->
 //!   [`ResourceDriver::delete`]: the family's staged fabric finalizer runs
@@ -241,7 +241,7 @@ const NETWORK_READS: &[WellKnownType] = &[
 /// `Network` is `BUILTIN | STARTUP` (no RUNTIME bit): zone networking is
 /// referenced by every Guest-bearing zone, so the plane must have the driver
 /// registered before it opens. The type is not exportable: `ResourceExport`
-/// admits only qualified `*.d2bus. org.*Service` types, so a network can never
+/// admits only qualified `*.d2bus.org.*Service` types, so a network can never
 /// be an export subject. The driver declares the thirteen network-fds family
 /// operations (U12): the broker-generic kernels serve each operation's
 /// privileged core in-broker, while the family operation itself stays

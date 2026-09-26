@@ -63,10 +63,10 @@ pub use d2b_contracts_zone_session::v3::zone_session::{
     BOOTSTRAP_PSK_TTL_MS_DEFAULT, KK_SESSION_MAX_LIFETIME_MS_DEFAULT,
 };
 
-/// Admission ceiling for `spec. limits. maxPendingIntents`.
+/// Admission ceiling for `spec.limits.maxPendingIntents`.
 pub const MAX_PENDING_LOCAL_INTENTS: u32 = 1024;
 
-/// Admission ceiling for `spec. limits. maxActiveStreams`.
+/// Admission ceiling for `spec.limits.maxActiveStreams`.
 pub const MAX_ACTIVE_STREAMS: u32 = 128;
 
 /// Maximum committed route-admission operation IDs retained for one immutable
@@ -250,7 +250,7 @@ impl core::fmt::Display for ZoneLinkError {
 
 impl std::error::Error for ZoneLinkError {}
 
-/// Bounded ZoneLink connection and queue limits from `spec. limits`.
+/// Bounded ZoneLink connection and queue limits from `spec.limits`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ZoneLinkLimits {
     max_pending_intents: u32,
@@ -260,7 +260,7 @@ pub struct ZoneLinkLimits {
 }
 
 impl ZoneLinkLimits {
-    /// Validate one complete `spec. limits` object against its frozen bounds.
+    /// Validate one complete `spec.limits` object against its frozen bounds.
     ///
     /// # Errors
     ///
@@ -995,7 +995,7 @@ impl core::fmt::Debug for ZoneLinkRecord {
     }
 }
 
-/// The D088 `status. resource` projection written by the child-local handler.
+/// The D088 `status.resource` projection written by the child-local handler.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZoneLinkStatus {
     phase: ZoneLinkPhase,
@@ -1282,7 +1282,7 @@ impl ZoneLinkHandler {
         self.key_policy
     }
 
-    /// Project the current D088 `status. resource` observation.
+    /// Project the current D088 `status.resource` observation.
     pub fn status(&self) -> ZoneLinkStatus {
         ZoneLinkStatus {
             phase: self.phase,

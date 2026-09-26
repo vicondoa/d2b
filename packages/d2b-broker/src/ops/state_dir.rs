@@ -62,7 +62,7 @@ pub struct PrepareDirRequest {
     pub base_dir: PathBuf,
     /// Per-VM or global scope (`global` if `vm_id` is `None`).
     pub vm_id_or_scope: String,
-    /// 0o-mode (e. g. 0o750 for state, 0o755 for runtime).
+    /// 0o-mode (e.g. 0o750 for state, 0o755 for runtime).
     pub mode: u32,
     /// The owner uid to apply to created directories.
     pub owner_uid: u32,

@@ -53,7 +53,7 @@ struct Args {
     #[arg(long)]
     connect: Option<String>,
 
-    /// Canonical workload target, e. g. `tools. host. d2b`.
+    /// Canonical workload target, e.g. `tools.host.d2b`.
     #[arg(long, value_name = "TARGET")]
     target: Option<String>,
 
@@ -764,7 +764,7 @@ fn accept_poll_timeout_ms(
         .min(i32::MAX as u128) as i32
 }
 
-/// Renders an error together with its full `source()` chain on one line, e. g.
+/// Renders an error together with its full `source()` chain on one line, e.g.
 /// `could not dispatch server events: receiver object 4278190081 does not exist`.
 /// `thiserror`'s `Display` only prints the top-level message, so without walking
 /// the chain the `#[source]` detail that pinpoints the failing message is lost.

@@ -56,7 +56,7 @@ pub struct EffectObservation {
     pub kind: GuestKind,
     /// The Provider row's spec the driver resolved, when the manager held it.
     pub provider_spec: Option<serde_json::Value>,
-    /// The driver's last published `status. resource` projection, when one
+    /// The driver's last published `status.resource` projection, when one
     /// was published.
     pub status: Option<serde_json::Value>,
     /// The owned child rows the call read, with their live phase.
@@ -111,7 +111,7 @@ impl ScriptedEffects {
         *self.phase.lock().await = phase;
     }
 
-    /// Script the `status. resource` projection the next `reconcile` reports.
+    /// Script the `status.resource` projection the next `reconcile` reports.
     pub async fn set_projection(&self, projection: Option<serde_json::Value>) {
         *self.projection.lock().await = projection;
     }
@@ -331,7 +331,7 @@ pub fn row_fixture(
 }
 
 /// A manager row fixture with explicit metadata (the gateway-custody
-/// validation reads the gateway Guest's `metadata. zone`).
+/// validation reads the gateway Guest's `metadata.zone`).
 pub fn row_fixture_with_metadata(
     zone: &str,
     type_name: &str,

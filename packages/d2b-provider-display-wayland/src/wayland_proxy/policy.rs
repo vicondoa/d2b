@@ -137,10 +137,10 @@ impl PolicyWarning {
 pub struct PolicyInput {
     /// Typed canonical workload identity.
     pub identity: ProxyIdentity,
-    /// Prefix prepended to `xdg_toplevel. set_app_id` values.
+    /// Prefix prepended to `xdg_toplevel.set_app_id` values.
     /// Default: the identity's provider-specific prefix.
     pub app_id_prefix: Option<String>,
-    /// Prefix prepended to `xdg_toplevel. set_title` values.
+    /// Prefix prepended to `xdg_toplevel.set_title` values.
     /// Default: the identity's provider-specific prefix.
     pub title_prefix: Option<String>,
     /// Additional explicit deny rules (appended after defaults).

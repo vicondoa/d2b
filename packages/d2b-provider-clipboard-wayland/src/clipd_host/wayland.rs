@@ -36,7 +36,7 @@ pub enum HostClipboardEvent {
     /// the policy allowlist.  `has_secret` indicates a password-manager hint.
     /// Call [`DataControlOffer::receive`] (then flush + drop write end) to get
     /// the data.  `offer` is `None` when the selection has no allowed MIME
-    /// types (i. e. the content cannot be pasted).
+    /// types (i.e. the content cannot be pasted).
     SelectionChanged {
         offer: Option<DataControlOffer>,
         allowed_mimes: Vec<String>,

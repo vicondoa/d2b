@@ -36,7 +36,7 @@ use crate::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownTyp
 /// and creates no children through this declaration.
 ///
 /// None of the types is exportable: `ResourceExport` admits only qualified
-/// `*.d2bus. org.*Service` types, so a row of one of these types is never an
+/// `*.d2bus.org.*Service` types, so a row of one of these types is never an
 /// export subject.
 pub fn metadata_descriptor(resource_type: WellKnownType) -> DriverDescriptor {
     DriverDescriptor {

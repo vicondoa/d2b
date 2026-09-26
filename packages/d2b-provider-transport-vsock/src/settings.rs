@@ -1,4 +1,4 @@
-//! Closed `ZoneLink. spec. transportSettings` validation.
+//! Closed `ZoneLink.spec.transportSettings` validation.
 
 use serde::{Deserialize, Serialize};
 use std::fmt;

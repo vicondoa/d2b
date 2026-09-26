@@ -87,7 +87,7 @@ impl core::fmt::Debug for PositiveDecisionCache {
 }
 
 impl PositiveDecisionCache {
-    /// Construct a bounded positive-only cache. max_entries = 0
+    /// Construct a bounded positive-only cache.max_entries = 0
     /// disables caching entirely.
     pub fn new(max_entries: usize) -> Self {
         Self {

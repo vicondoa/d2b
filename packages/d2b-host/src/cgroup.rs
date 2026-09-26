@@ -6,22 +6,22 @@
 //!
 //! ## Invariants enforced here
 //!
-//! 1. The unified hierarchy must be present (`/sys/fs/cgroup/cgroup. controllers`).
+//! 1. The unified hierarchy must be present (`/sys/fs/cgroup/cgroup.controllers`).
 //! 2. The required controller set `{cpu, memory, io, pids, cpuset}` must be
 //!    advertised on the root before any subtree is created.
-//! 3. Before enabling `+cpuset`, an ancestor with an empty `cpuset. cpus` or
-//!    `cpuset. mems` inherits from `cpuset. cpus. effective` / `cpuset. mems. effective`.
-//! 4. `cgroup. subtree_control` is rewritten in the strict order
+//! 3. Before enabling `+cpuset`, an ancestor with an empty `cpuset.cpus` or
+//!    `cpuset.mems` inherits from `cpuset.cpus.effective` / `cpuset.mems.effective`.
+//! 4. `cgroup.subtree_control` is rewritten in the strict order
 //!    `+cpu, +memory, +io, +pids, +cpuset` with a re-read verification after
 //!    each individual enable.
-//! 5. `cpuset. cpus. partition` STAYS `member`. A debug assertion blows up if
+//! 5. `cpuset.cpus.partition` STAYS `member`. A debug assertion blows up if
 //!    any caller passes the partition-root key into the writer; releases
 //!    fail closed by returning [`CgroupError::CgroupPartitionRootForbidden`].
-//! 6. Threaded cgroups are forbidden - `cgroup. type=threaded` is refused.
-//! 7. `d2b. slice` and intermediate Zone/Guest cgroup directories must
+//! 6. Threaded cgroups are forbidden - `cgroup.type=threaded` is refused.
+//! 7. `d2b.slice` and intermediate Zone/Guest cgroup directories must
 //!    be process-free; only leaf role cgroups carry processes.
-//! 8. `cgroup. kill` is allowed only on broker/daemon-owned VM or role leaves;
-//!    ancestor `cgroup. kill` is refused with
+//! 8. `cgroup.kill` is allowed only on broker/daemon-owned VM or role leaves;
+//!    ancestor `cgroup.kill` is refused with
 //!    [`CgroupError::CgroupKillOnAncestorRefused`].
 //! 9. The delegation must NOT be performed while running as uid 0; the
 //!    broker is the only root-effective component, and even it walks this
@@ -69,7 +69,7 @@ impl Controller {
         Controller::Cpuset,
     ];
 
-    /// The cgroup v2 controller name as written in `cgroup. controllers`.
+    /// The cgroup v2 controller name as written in `cgroup.controllers`.
     pub fn as_str(&self) -> &'static str {
         match self {
             Controller::Cpu => "cpu",
@@ -104,7 +104,7 @@ impl fmt::Display for Controller {
     }
 }
 
-/// Snapshot of the controllers advertised on a cgroup's `cgroup. controllers`
+/// Snapshot of the controllers advertised on a cgroup's `cgroup.controllers`
 /// file at the moment of probing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnabledControllers {
@@ -141,24 +141,24 @@ impl EnabledControllers {
 /// into the broker audit record `error_kind` field.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CgroupError {
-    /// Unified hierarchy probe failed - `/sys/fs/cgroup/cgroup. controllers`
+    /// Unified hierarchy probe failed - `/sys/fs/cgroup/cgroup.controllers`
     /// is missing or unreadable. CLI exit code 1; matches plan-named
     /// `cgroup-v2-unified-not-present`.
     CgroupV2UnifiedNotPresent { detail: String },
-    /// One or more required controllers are absent from `cgroup. controllers`
+    /// One or more required controllers are absent from `cgroup.controllers`
     /// on the delegation root. Matches plan-named `cgroup-controllers-missing`.
     CgroupControllersMissing { missing: Vec<Controller> },
     /// Delegation was attempted while running as uid 0 (or the host cannot
     /// support non-root delegation). Matches plan-named
     /// `cgroup-delegation-refused`.
     CgroupDelegationRefused { detail: String },
-    /// `cgroup. kill` was attempted on an ancestor (e. g. `d2b. slice`
+    /// `cgroup.kill` was attempted on an ancestor (e.g. `d2b.slice`
     /// or an intermediate VM cgroup). Matches plan-named
     /// `cgroup-kill-on-ancestor-refused`.
     CgroupKillOnAncestorRefused { path: PathBuf },
     /// cpuset inheritance could not produce non-empty `.effective` files.
     CpusetInheritanceFailed { path: PathBuf, detail: String },
-    /// `d2b. slice` or an intermediate VM cgroup contained running
+    /// `d2b.slice` or an intermediate VM cgroup contained running
     /// processes when the no-internal-process invariant was checked.
     CgroupInternalProcessesPresent { path: PathBuf, pids: Vec<u32> },
     /// Subtree-control verification failed after a write - the re-read
@@ -169,12 +169,12 @@ pub enum CgroupError {
     },
     /// Threaded cgroup encountered - forbidden.
     ThreadedCgroupForbidden { path: PathBuf },
-    /// Attempt to write `cpuset. cpus. partition` (partition roots are
-    /// forbidden; ancestors and `d2b. slice` stay `member`).
+    /// Attempt to write `cpuset.cpus.partition` (partition roots are
+    /// forbidden; ancestors and `d2b.slice` stay `member`).
     CgroupPartitionRootForbidden { path: PathBuf },
     /// Subtree-control write on `parent` enabled `controller` (the
-    /// re-read of `parent/cgroup. subtree_control` confirmed it) but the
-    /// child cgroup's `cgroup. controllers` does not advertise the
+    /// re-read of `parent/cgroup.subtree_control` confirmed it) but the
+    /// child cgroup's `cgroup.controllers` does not advertise the
     /// controller. The delegation must fail closed before chown.
     CgroupControllerNotExposedToChild {
         controller: Controller,
@@ -286,7 +286,7 @@ impl fmt::Display for CgroupError {
 impl std::error::Error for CgroupError {}
 
 /// Default unified hierarchy mount point. The probe target is
-/// `<root>/cgroup. controllers`.
+/// `<root>/cgroup.controllers`.
 pub const UNIFIED_HIERARCHY_ROOT: &str = "/sys/fs/cgroup";
 /// Canonical d2b slice name under the unified hierarchy.
 pub const D2B_SLICE_NAME: &str = "d2b.slice";
@@ -311,7 +311,7 @@ pub trait CgroupBackend {
     fn mkdir(&self, path: &Path) -> Result<(), CgroupError>;
     fn fchown(&self, path: &Path, uid: u32, gid: u32) -> Result<(), CgroupError>;
 
-    /// Returns the PIDs currently inside `cgroup. procs` for the given
+    /// Returns the PIDs currently inside `cgroup.procs` for the given
     /// cgroup directory.
     fn read_procs(&self, dir: &Path) -> Result<Vec<u32>, CgroupError>;
 }
@@ -371,8 +371,8 @@ fn read_trimmed<B: CgroupBackend>(backend: &B, path: &Path) -> Result<String, Cg
     backend.read_file(path).map(|s| s.trim().to_owned())
 }
 
-/// Step 2: cpuset inheritance - copy `.effective` into `cpuset. cpus` /
-/// `cpuset. mems` when empty and verify `.effective` is non-empty.
+/// Step 2: cpuset inheritance - copy `.effective` into `cpuset.cpus` /
+/// `cpuset.mems` when empty and verify `.effective` is non-empty.
 pub fn prepare_cpuset_inheritance<B: CgroupBackend>(
     backend: &B,
     path: &Path,
@@ -424,11 +424,11 @@ pub fn prepare_cpuset_inheritance<B: CgroupBackend>(
     Ok(())
 }
 
-/// Step 3: enable controllers in `cgroup. subtree_control` in the strict
+/// Step 3: enable controllers in `cgroup.subtree_control` in the strict
 /// order, verifying re-read after each individual enable. When `child`
-/// is `Some`, the child cgroup's `cgroup. controllers` file is also
+/// is `Some`, the child cgroup's `cgroup.controllers` file is also
 /// re-read after each enable ("Each enable is verified by re-reading
-/// cgroup. subtree_control AND cgroup. controllers on the child").
+/// cgroup.subtree_control AND cgroup.controllers on the child").
 pub fn enable_subtree_controllers<B: CgroupBackend>(
     backend: &B,
     path: &Path,
@@ -438,7 +438,7 @@ pub fn enable_subtree_controllers<B: CgroupBackend>(
 }
 
 /// Variant of [`enable_subtree_controllers`] that additionally verifies
-/// the child cgroup's `cgroup. controllers` advertises the just-enabled
+/// the child cgroup's `cgroup.controllers` advertises the just-enabled
 /// controller. Fail-closed with
 /// [`CgroupError::CgroupControllerNotExposedToChild`].
 pub fn enable_subtree_controllers_with_child<B: CgroupBackend>(
@@ -485,7 +485,7 @@ pub fn enable_subtree_controllers_with_child<B: CgroupBackend>(
 }
 
 /// Step 4 enforcement helper: the algorithm NEVER writes
-/// `cpuset. cpus. partition`. Any code path that tries to is treated as a
+/// `cpuset.cpus.partition`. Any code path that tries to is treated as a
 /// programmer bug - a `debug_assert!` blows up in development builds,
 /// and release builds return [`CgroupError::CgroupPartitionRootForbidden`].
 pub fn assert_partition_member_only(path: &Path, key: &str) -> Result<(), CgroupError> {
@@ -517,7 +517,7 @@ pub fn assert_not_threaded<B: CgroupBackend>(backend: &B, path: &Path) -> Result
     Ok(())
 }
 
-/// Step 5: assert `cgroup. procs` is empty on an intermediate (non-leaf)
+/// Step 5: assert `cgroup.procs` is empty on an intermediate (non-leaf)
 /// cgroup. Returns [`CgroupError::CgroupInternalProcessesPresent`]
 /// listing the offending pids when not.
 pub fn assert_no_internal_processes<B: CgroupBackend>(
@@ -534,7 +534,7 @@ pub fn assert_no_internal_processes<B: CgroupBackend>(
     Ok(())
 }
 
-/// Step 7: `cgroup. kill` is allowed only on a leaf. The caller passes
+/// Step 7: `cgroup.kill` is allowed only on a leaf. The caller passes
 /// the cgroup directory and the leaves it is permitted to kill; any
 /// path not in the leaf set is refused.
 pub fn cgroup_kill_leaf_only<B: CgroupBackend>(
@@ -581,7 +581,7 @@ pub fn chown_subtree_to_d2bd<B: CgroupBackend>(
 }
 
 /// v1.1.1 per-VM-interior + per-role-leaf taxonomy. Creates the
-/// process-free intermediate directory `d2b. slice/<vm_id>/`
+/// process-free intermediate directory `d2b.slice/<vm_id>/`
 /// (NOT a leaf). Per-role leaf cgroups are created by
 /// the per-role leaf helper. Per ADR 0011 Decision item 1.
 pub fn create_vm_subtree<B: CgroupBackend>(
@@ -932,7 +932,7 @@ pub mod fake {
                     .unwrap_or_default(),
             )?;
             let mut inner = self.inner.lock().unwrap();
-            // `cgroup. kill` is intercepted separately so the kill scope
+            // `cgroup.kill` is intercepted separately so the kill scope
             // can be audited from tests.
             if path
                 .file_name()
@@ -1183,7 +1183,7 @@ mod tests {
     fn child_controllers_verified_after_subtree_enable() {
         // Drive the new verifying variant directly to assert the
         // child-controllers re-read is load-bearing: if the fake
-        // backend's child `cgroup. controllers` is *blank* the call
+        // backend's child `cgroup.controllers` is *blank* the call
         // fail-closes with `cgroup-controller-not-exposed-to-child`.
         let backend = fresh(d2bd_uid());
         let root = Path::new(FAKE_ROOT);

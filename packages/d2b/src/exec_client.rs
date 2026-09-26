@@ -1,7 +1,7 @@
 //! CLI-side `d2b vm exec` owner-connection FSM + host terminal safety.
 //!
 //! `d2b vm exec` establishes one Process/EphemeralProcess resource owner over
-//! the daemon `public. sock`, then drives the authenticated named stream with
+//! the daemon `public.sock`, then drives the authenticated named stream with
 //! (`WriteStdin`/`ReadOutput`/`Signal`/`Resize`/`Wait`/`Close`) operations. The
 //! CLI never opens a new connection per op and never allocates a host PTY -
 //! the guest owns the PTY (helper-exec). This module is the pure FSM +
@@ -25,7 +25,7 @@ use serde_json::Value;
 use crate::terminal_client::{TerminalHostIo, TerminalSignalSource, TerminalTransport};
 
 // Reserved exec CLI exit codes. Guest WIFEXITED 0-255 codes pass through
-// and CAN collide with these reserved numbers (e. g. a guest that exits 70 vs.
+// and CAN collide with these reserved numbers (e.g. a guest that exits 70 vs.
 // the old-generation transport class); `--json` disambiguates via
 // `source`/`reason`/`guestExitCode`/`transportExitCode`. These deliberately
 // avoid the pre-existing CLI exit codes 2/3/33/78.
@@ -209,7 +209,7 @@ pub fn exit_for_kind(kind: &str) -> (i32, ExecFailureSource) {
             (EXIT_EXEC_AUTH, ExecFailureSource::ComponentSession)
         }
         // The daemon's admin gate refused the caller before any guest contact
-        // (caller not in `d2b. site. adminUsers`). It is an authorization
+        // (caller not in `d2b.site.adminUsers`). It is an authorization
         // failure, NOT an internal bug - map it to the AUTH reserved code so
         // it does not fall through to the internal (42) default.
         "authz-not-admin" => (EXIT_EXEC_AUTH, ExecFailureSource::ComponentSession),

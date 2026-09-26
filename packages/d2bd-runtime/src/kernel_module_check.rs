@@ -101,14 +101,14 @@ pub const OPTIONAL_TPM: &str = "tpm_vtpm_proxy";
 /// One row in [`ModuleCheckReport::optional_missing`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OptionalMissing {
-    /// Kernel module name (e. g. `nvidia`, `usbip_host`,
+    /// Kernel module name (e.g. `nvidia`, `usbip_host`,
     /// `tpm_vtpm_proxy`).
     pub module: String,
     /// VMs whose declared features depend on this module. Empty
-    /// for purely host-wide optionals (e. g. `nvidia` with no
+    /// for purely host-wide optionals (e.g. `nvidia` with no
     /// graphics VMs declared).
     pub affected_vms: BTreeSet<String>,
-    /// Short human-readable reason (e. g. "graphics VMs may fall
+    /// Short human-readable reason (e.g. "graphics VMs may fall
     /// back to software rendering"). Suitable for log + the
     /// operator reference.
     pub reason: String,
@@ -310,7 +310,7 @@ pub fn check_kernel_modules(
     }
 
     // Optional rows. Each is recorded only when (a) the gate is
-    // satisfied (e. g. there is at least one graphics VM) and
+    // satisfied (e.g. there is at least one graphics VM) and
     // (b) the module is NOT present.
     let mut optional_missing: Vec<OptionalMissing> = Vec::new();
 
@@ -388,7 +388,7 @@ pub const PROC_MODULES_PATH: &str = "/proc/modules";
 pub const SYS_MODULE_DIR: &str = "/sys/module";
 
 /// Side-effecting wrapper: read `/proc/modules` + `/sys/module` + the
-/// `modules. builtin` text file, then dispatch to [`check_kernel_modules`].
+/// `modules.builtin` text file, then dispatch to [`check_kernel_modules`].
 ///
 /// Module detection order (union of all three sources):
 ///   1. `/proc/modules` - loadable modules currently inserted.
@@ -397,10 +397,10 @@ pub const SYS_MODULE_DIR: &str = "/sys/module";
 ///      not appear in `/proc/modules`. This is the primary fix for
 ///      false-positive "missing" reports on hosts where virtio modules
 ///      are compiled in (`=y`) rather than loadable (`=m`).
-///   3. `/lib/modules/$(uname -r)/modules. builtin` - text list of
+///   3. `/lib/modules/$(uname -r)/modules.builtin` - text list of
 ///      built-in modules for offline/early-boot coverage, merged into
 ///      the `builtin` set.
-///   4. `/boot/config-$(uname -r)` / `/proc/config. gz` - kernel config
+///   4. `/boot/config-$(uname -r)` / `/proc/config.gz` - kernel config
 ///      for `CONFIG_*=y` built-in detection (existing path).
 ///
 /// On any read failure we conservatively treat the failed source as
@@ -422,7 +422,7 @@ pub fn run_kernel_module_check(resolver: &BundleResolver) -> ModuleCheckReport {
     }
     let loaded = read_loaded_modules_at(Path::new(PROC_MODULES_PATH), Path::new(SYS_MODULE_DIR));
 
-    // Step 3: modules. builtin text file (uname handled internally).
+    // Step 3: modules.builtin text file (uname handled internally).
     let modules_builtin = read_builtin_modules_with_fallback();
 
     // Step 4: kernel config (existing path).
@@ -773,7 +773,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // /sys/module and modules. builtin detection tests
+    // /sys/module and modules.builtin detection tests
     // ------------------------------------------------------------------
 
     /// Virtio modules compiled as =y appear in `/sys/module/<name>/` but

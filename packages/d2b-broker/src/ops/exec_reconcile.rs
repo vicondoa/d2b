@@ -253,7 +253,7 @@ pub trait ReconcileExecutor: Send + Sync {
     }
 
     /// Generate a replacement ed25519 keypair and atomically publish it
-    /// at `key_path` + `key_path. pub`.
+    /// at `key_path` + `key_path.pub`.
     fn run_ssh_keygen<'a>(
         &'a self,
         key_path: &'a Path,
@@ -1683,7 +1683,7 @@ mod tests {
     static HELPER_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     /// Sysctl key validation: the broker callers pass dotted keys
-    /// (`net. ipv4. ip_forward`); the executor translates dots to
+    /// (`net.ipv4.ip_forward`); the executor translates dots to
     /// slashes for the /proc/sys path. Rejects absolute paths,
     /// traversal, and unsafe characters.
     #[tokio::test]

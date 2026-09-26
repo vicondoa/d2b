@@ -6,7 +6,7 @@
 //! `docs/reference/daemon-metrics.md`), and avoiding a new transitive
 //! dependency keeps the supply-chain audit footprint minimal. The
 //! exposition format we emit is the documented
-//! [text-format v0.0.4](https://prometheus. io/docs/instrumenting/exposition_formats/#text-based-format)
+//! [text-format v0.0.4](https://prometheus.io/docs/instrumenting/exposition_formats/#text-based-format)
 //! that every Prometheus-compatible scraper accepts.
 //!
 //! The module is the canonical source of truth for the metric

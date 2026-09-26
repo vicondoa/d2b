@@ -1,6 +1,6 @@
 //! The Zone enrollment admission shape (`ADR046-routing-016`).
 //!
-//! `zone-bootstrap` and `zone-enroll` are the two `d2b. zone. v3.ZoneService`
+//! `zone-bootstrap` and `zone-enroll` are the two `d2b.zone.v3.ZoneService`
 //! methods that place a Guest agent: the one-time IKpsk2 bootstrap that
 //! consumes the allocator-issued single-use PSK, and the enrolled `Noise_KK`
 //! enrollment that commits the sealed enrollment record and admits the peer.

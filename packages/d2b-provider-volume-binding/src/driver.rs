@@ -31,7 +31,7 @@
 //! - `observe` -> [`ResourceDriver::recover`].
 //! - `binding_children` minting + readiness -> [`ResourceDriver::reconcile`].
 //! - `finalize_binding` drain + endpoint-first teardown -> [`ResourceDriver::delete`].
-//! - `UpdateStatus` -> `ctx. set_status` (in-memory only).
+//! - `UpdateStatus` -> `ctx.set_status` (in-memory only).
 //!
 //! Everything the driver needs from outside arrives through the driver
 //! effect port ([`BindingDriverEffects`]): the serving socket probe, the
@@ -736,7 +736,7 @@ impl BindingDriver {
         // Host/host-system) and as the signed `virtiofsd-worker` template
         // the launch ticket resolves through binds it: the template's
         // execution_ref is the volume-virtiofs Provider's
-        // config. controllerExecutionRef. The attachment's Guest stays the
+        // config.controllerExecutionRef. The attachment's Guest stays the
         // ticket's target ref (KTD7), re-derived from the owning VolumeBinding
         // row by the Process driver's identity path.
         let process_spec = serde_json::json!({
@@ -957,7 +957,7 @@ impl ResourceDriver for BindingDriver {
                 .expect("the fenced binding projection is always serializable"),
         );
         if mutated || !socket_ready {
-            // The child rows were (re) committed this pass, or the socket is
+            // The child rows were (re)committed this pass, or the socket is
             // not serving yet: re-check on the preserved resync cadence (the
             // Runner contract's repair interval) - the same shape the Guest
             // driver uses while its Provider phase is not Ready, so a
@@ -1076,7 +1076,7 @@ impl ResourceDriver for BindingDriver {
 ///
 /// Derived from the placement contract: `VolumeBinding` names no placement
 /// anchor (`PlacementAnchor::canonical_for` resolves none), so a binding row
-/// never carries the canonical `spec. executionRef` and the plane reconciles
+/// never carries the canonical `spec.executionRef` and the plane reconciles
 /// it on its containing Zone's Host. The attachment's `executionRef` selects
 /// the Guest that consumes the share, never where the binding row itself is
 /// reconciled.
@@ -1094,7 +1094,7 @@ const BINDING_READS: &[WellKnownType] = &[WellKnownType::VOLUME];
 /// `VolumeBinding` is `BUILTIN | STARTUP` (no RUNTIME bit): the plane cannot
 /// serve the converted binding shapes without it, so it must be registered
 /// before the plane opens. The type is not exportable: `ResourceExport`
-/// admits only qualified `*.d2bus. org.*Service` types, so a binding can never
+/// admits only qualified `*.d2bus.org.*Service` types, so a binding can never
 /// be an export subject. The driver serves no broker operations and
 /// contributes no startup steps; the worker Process and Endpoint children it
 /// mints are declared in [`BINDING_CREATIONS`], and the declaration carries

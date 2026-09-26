@@ -550,7 +550,7 @@ struct ServerState {
     pidfd_table: Arc<PidfdTable>,
     broker_reap_log: Arc<BrokerReapLog>,
     metrics_registry: Arc<d2bd_runtime::metrics::Registry>,
-    /// Daemon-side audit log for supervisor events (e. g. api-ready
+    /// Daemon-side audit log for supervisor events (e.g. api-ready
     /// timeout) that are not emitted by the broker.
     daemon_audit: Arc<d2bd_runtime::daemon_audit::DaemonAuditLog>,
     /// In-process Process-session table (caps + opaque handles) for
@@ -5512,7 +5512,7 @@ async fn run_startup_autostart(state: &ServerState, kernel_module_degraded: &BTr
     let _ = resolver;
 }
 
-/// Thin wrapper used by the `options. once` test path and by direct
+/// Thin wrapper used by the `options.once` test path and by direct
 /// unit-test callers: authorizes the peer (SO_PEERCRED), then runs the
 /// authorized connection body. The production accept loop authorizes the
 /// peer itself (before admission) and calls
@@ -10405,7 +10405,7 @@ fn cloud_hypervisor_api_socket(argv: &[String]) -> Option<PathBuf> {
 /// The producer-derived Endpoint generation one guest-control Endpoint
 /// carries.
 ///
-/// The old daemon publication stage stamped `status. resource. endpointGeneration`
+/// The old daemon publication stage stamped `status.resource.endpointGeneration`
 /// from the Endpoint row's own generation; `Endpoint` is a converted type, so
 /// a manager row has no durable status to read and the row's committed
 /// generation is the same value the old stage published.
@@ -11387,7 +11387,7 @@ async fn live_cached_guest_session_generation(
 }
 
 /// Re-adopt every assignment the directory holds for one Guest after a
-/// (re) connect: the target layer is the only place that re-binds a handle to
+/// (re)connect: the target layer is the only place that re-binds a handle to
 /// the live session generation, and a source the Guest cannot confirm is left
 /// for its owning actor to realize again (F5).
 async fn adopt_guest_target_assignments(
@@ -14707,7 +14707,7 @@ async fn open_resource_plane(
 
     // v3 resource plane (U9/U10): assemble each Zone's manager plane once the
     // generation publication is committed, and publish the whole table into
-    // `state. v3_planes` before any runtime activates. The runtime's
+    // `state.v3_planes` before any runtime activates. The runtime's
     // manager-backed API service resolves its manager client + watch hub from
     // that table, so a Zone whose plane is not published yet cannot activate.
     let mut v3_planes: BTreeMap<String, std::sync::Arc<crate::resource_plane_v3::ResourcePlaneV3>> =
@@ -17039,7 +17039,7 @@ fn request_cgroup_kill_if_populated(
     // its own processes.json placement (the same derivation the old typed
     // CgroupKill arm performed broker-side from the bundle) and the
     // kill-cgroup kernel kills exactly that leaf, refusing any path outside
-    // the delegated d2b. slice subtree.
+    // the delegated d2b.slice subtree.
     let Some(cgroup_path) = role_cgroup_path(state, vm, role_id) else {
         tracing::warn!(vm = %vm, role = %role_id, "broker CgroupKill request skipped: no cgroup placement");
         return;
@@ -18150,7 +18150,7 @@ fn host_prep_role_id_from_bundle_ref(
 
 /// Dispatch a broker request for one host-prep DAG step where the broker
 /// may return a typed response
-/// (e. g. `CreatePersistentTap`, `SetBridgePortFlags`) rather than
+/// (e.g. `CreatePersistentTap`, `SetBridgePortFlags`) rather than
 /// the canonical `Ack`. Treats any non-`Error` response as success
 /// and surfaces `Error` responses through the same launcher-side
 /// redaction path used by `dispatch_broker_ack_request`. Any fd
@@ -18319,7 +18319,7 @@ fn execute_host_prep_dag(
     use d2b_host::host_prep_dag::HostPrepStepKind;
     const VERB: &str = "vm start";
     // Resolve the per-VM state directory once (used by daemon-native
-    // step handlers that need filesystem context, e. g. the
+    // step handlers that need filesystem context, e.g. the
     // ssh-host-key preflight). The v3 zone-native Guest resource carries
     // no stateDir surface (the v2 manifest is an empty stub), so there is
     // no clean stateDir source; daemon-native handlers gracefully no-op.
@@ -21167,7 +21167,7 @@ fn build_public_list(
     } = load_public_request_artifacts(state, false, true)?;
 
     // Resolve the `vm` filter through the workload index so callers can
-    // use a canonical target (`vm. realm. d2b`) or unambiguous workload id.
+    // use a canonical target (`vm.realm.d2b`) or unambiguous workload id.
     let resolved_vm_filter =
         resolve_vm_filter_target(request.vm.as_deref(), workload_index.as_ref(), &manifest)
             .map_err(typed_error_from_resolution_error)?;
@@ -23811,7 +23811,7 @@ pub(crate) mod detached_exec_routing_tests {
     }
 }
 
-/// The public. sock accept loop is serial: it accepts one connection, runs
+/// The public.sock accept loop is serial: it accepts one connection, runs
 /// `handle_connection`, then accepts the next. A Process resource owner
 /// connection is long-lived, so `handle_connection` MUST hand it off to a
 /// spawned owner thread and return immediately - otherwise the single accept
@@ -24172,7 +24172,7 @@ mod accept_loop_concurrency_tests {
         handle_a.join().expect("accept-loop thread joins");
 
         // Prove the owner session is STILL HELD OPEN (the body has not torn
-        // down) at the moment handle_connection has already returned - i. e. the
+        // down) at the moment handle_connection has already returned - i.e. the
         // dispatch was genuinely off-loop, concurrent with the accept loop.
         {
             let (lock, _cv) = &*shared;
@@ -24184,7 +24184,7 @@ mod accept_loop_concurrency_tests {
             );
         }
 
-        // --- Connection B: a SECOND public. sock request is accepted and served
+        // --- Connection B: a SECOND public.sock request is accepted and served
         //     while connection A's owner session is still held open. ---
         let (server_b, client_b) = seqpacket_pair();
         let client_b = std::thread::spawn(move || {
@@ -29128,7 +29128,7 @@ mod broker_dispatch_tests {
         );
     }
 
-    /// Wiring test: verify that `ServerState. daemon_audit` is wired with a
+    /// Wiring test: verify that `ServerState.daemon_audit` is wired with a
     /// `DaemonAuditLog` that can capture `DaemonEvent::ApiReadyTimeout`
     /// events, and that the event serialises with the expected field shape.
     ///
@@ -29618,7 +29618,7 @@ mod broker_dispatch_tests {
         // HAZARD: the stateless readiness helper treats an EMPTY predicate
         // slice as TRIVIALLY ready - it returns Ok without running any
         // probe. `spawn_and_check_process_alive` (the process-alive fast
-        // path, e. g. `--no-wait-api`) delegates the node to
+        // path, e.g. `--no-wait-api`) delegates the node to
         // `spawn_and_wait_ready(vm, node, &[], budget)` with exactly this
         // empty slice. If a ComponentSessionHealth node ever reached
         // `wait_for_readiness`, an absent/auth-failing component-session
@@ -29635,7 +29635,7 @@ mod broker_dispatch_tests {
         // `spawn_and_check_process_alive` does NOT take the LongLived
         // process-alive-only short-circuit (which registers a node as alive
         // after spawn with no probe at all). It falls through to
-        // `spawn_and_wait_ready`, whose `node. role == ComponentSessionHealth`
+        // `spawn_and_wait_ready`, whose `node.role == ComponentSessionHealth`
         // special case runs `wait_for_component_session_health` BEFORE the empty
         // readiness slice can reach the trivially-ready `wait_for_readiness`.
         // Were ComponentSessionHealth ever made LongLived, or the interception
@@ -30115,7 +30115,7 @@ mod broker_dispatch_tests {
     /// Creates bundle artifacts for a minimal obs-enabled VM start test.
     /// The obs VM has an empty process DAG (no nodes) so the supervisor DAG
     /// succeeds immediately without a broker connection. The bundle is wired
-    /// with `_observability. enabled=true` and `vmName="obs"` so
+    /// with `_observability.enabled=true` and `vmName="obs"` so
     /// `dispatch_broker_vm_start` reaches the OtelHostBridge readiness gate.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_obs_enabled_bundle_artifacts(root: &Path) -> ArtifactPaths {
@@ -30259,7 +30259,7 @@ mod broker_dispatch_tests {
     /// is bypassed entirely and the `degraded` field MUST NOT appear in the
     /// success envelope. Prevents false-positive `degraded` from leaking into
     /// VM starts that were explicitly requested without the API-readiness wait
-    /// (e. g., CLI `--no-wait-api` flag).
+    /// (e.g., CLI `--no-wait-api` flag).
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn vm_start_non_obs_vm_has_no_degraded_field_in_envelope() {

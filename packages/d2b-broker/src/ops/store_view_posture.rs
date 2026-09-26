@@ -374,7 +374,7 @@ async fn posture_store_view_matrix_paths_with(
 }
 
 /// Posture every ancestor strictly above the per-VM state dir (the farm
-/// root's parent, i. e. the daemon's ownership-matrix root) up to the first
+/// root's parent, i.e. the daemon's ownership-matrix root) up to the first
 /// world-traversable directory, so the daemon's group can search it.
 ///
 /// The daemon reaches `<state-root>/zones/<zone>/guests/<guest>/store-view`
@@ -563,7 +563,7 @@ mod tests {
     /// `<root>/zones/work/guests/acceptance-guest/store-view` and return the
     /// farm root plus the broker-created levels above the per-VM state dir,
     /// innermost first. The state dir itself - the daemon's ownership-matrix
-    /// root - is `farm. parent()`.
+    /// root - is `farm.parent()`.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn farm_chain(root: &Path) -> (PathBuf, Vec<PathBuf>) {
         let farm = root

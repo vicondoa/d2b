@@ -31,7 +31,7 @@ pub enum ChApiError {
     MalformedResponse,
     /// The API answered a non-2xx status code.
     Rejected(u16),
-    /// The `vm. info` payload did not deserialize into the expected shape.
+    /// The `vm.info` payload did not deserialize into the expected shape.
     InvalidJson(String),
 }
 
@@ -47,11 +47,11 @@ impl ChApiError {
     }
 }
 
-/// The subset of the Cloud Hypervisor `vm. info` payload this crate
+/// The subset of the Cloud Hypervisor `vm.info` payload this crate
 /// consumes; fields absent from the reply stay `None`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChVmInfo {
-    /// The VM run state (e. g. `Running`, `Stopped`) as reported by CH.
+    /// The VM run state (e.g. `Running`, `Stopped`) as reported by CH.
     pub state: Option<String>,
     /// The configured vCPU count, when the reply reports one.
     pub vcpu_count: Option<u64>,
@@ -59,7 +59,7 @@ pub struct ChVmInfo {
     pub memory_mib: Option<u64>,
 }
 
-/// Fetch and parse the Cloud Hypervisor `vm. info` payload over the control
+/// Fetch and parse the Cloud Hypervisor `vm.info` payload over the control
 /// socket.
 ///
 /// # Errors
@@ -108,7 +108,7 @@ pub fn blocking_get_json(
     split_http_body(&raw)
 }
 
-/// Raw Cloud Hypervisor `vm. info` payload shape, deserialized at the
+/// Raw Cloud Hypervisor `vm.info` payload shape, deserialized at the
 /// boundary; fields absent from the reply default to `None`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct ChVmInfoRaw {
@@ -118,7 +118,7 @@ struct ChVmInfoRaw {
     config: ChVmInfoRawConfig,
 }
 
-/// Nested `config` object of the raw `vm. info` payload.
+/// Nested `config` object of the raw `vm.info` payload.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct ChVmInfoRawConfig {
     #[serde(default)]
@@ -127,14 +127,14 @@ struct ChVmInfoRawConfig {
     memory: ChVmInfoRawMemory,
 }
 
-/// Nested `config. cpus` object of the raw `vm. info` payload.
+/// Nested `config.cpus` object of the raw `vm.info` payload.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct ChVmInfoRawCpus {
     #[serde(default)]
     boot_vcpus: Option<u64>,
 }
 
-/// Nested `config. memory` object of the raw `vm. info` payload.
+/// Nested `config.memory` object of the raw `vm.info` payload.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct ChVmInfoRawMemory {
     #[serde(default)]

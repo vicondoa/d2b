@@ -151,7 +151,7 @@ pub enum HostPrepStepKind {
     /// tap creation so NetworkManager doesn't race the broker's
     /// `TUNSETIFF` + immediate `dev set master` and pull the link
     /// down between create + attach. Replaces the
-    /// `NetworkManager.conf. d/00-d2b-unmanaged.conf` materializer
+    /// `NetworkManager.conf.d/00-d2b-unmanaged.conf` materializer
     /// leaf of `microvm-setup@<vm>.service`.
     ApplyNmUnmanaged,
     /// Apply the per-VM sysctl set (RP filter, forwarding, MSS clamp
@@ -161,7 +161,7 @@ pub enum HostPrepStepKind {
     /// SetBridgePortFlags. Replaces the sysctl-apply leaf of
     /// `microvm-setup@<vm>.service`.
     ApplySysctl,
-    /// Set bridge-port flags on the tap (e. g. `learning off`,
+    /// Set bridge-port flags on the tap (e.g. `learning off`,
     /// `flood off`, `mcast_to_unicast off`) after tap attach.
     /// Replaces the `bridge link set` leaf of
     /// `microvm-tap-interfaces@<vm>.service`. Must run AFTER
@@ -227,7 +227,7 @@ impl HostPrepStepKind {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BundleStepRef {
     /// Opaque VM id this step targets (resolved against
-    /// `bundle. vms[<vm_id>]`).
+    /// `bundle.vms[<vm_id>]`).
     pub vm_id: VmId,
     /// Optional authorization scope (env / VM). Present for steps
     /// that scope to an env (`ApplyNftablesRules` uses
@@ -235,10 +235,10 @@ pub struct BundleStepRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope_id: Option<ScopeId>,
     /// Optional opaque intent reference for steps that look up a
-    /// specific bundle intent row (e. g. `nft:env:<env>` for
+    /// specific bundle intent row (e.g. `nft:env:<env>` for
     /// `ApplyNftablesRules`, `runner:vm:<vm>:role:<role>` for tap
     /// ownership derivation). `None` for steps whose entire
-    /// payload is derived from `vm_id` alone (e. g.
+    /// payload is derived from `vm_id` alone (e.g.
     /// `SshHostKeyPreflight`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bundle_op_id: Option<BundleOpId>,
@@ -306,7 +306,7 @@ impl std::error::Error for CycleError {}
 ///   `PreOpenVhostNetFd`).
 /// - `runner_role_id` names the runner intent role for the tap step.
 ///
-/// Net VMs (Guest resource `spec. netVm` flag) additionally emit
+/// Net VMs (Guest resource `spec.netVm` flag) additionally emit
 /// `SeedDnsmasqLease`.
 ///
 /// Steps unrelated to the VM's optional sidecars (obs / usbip /
@@ -333,7 +333,7 @@ pub fn build_host_prep_dag(
         return Vec::new();
     };
     let spec = resource.spec();
-    // Best-effort env: top-level `spec. env`, else `spec. executionPolicy. env`.
+    // Best-effort env: top-level `spec.env`, else `spec.executionPolicy.env`.
     let env = match spec.get("env") {
         Some(CanonicalJsonValue::String(env)) => Some(env.as_str()),
         _ => spec

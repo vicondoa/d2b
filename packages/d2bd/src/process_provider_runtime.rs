@@ -3149,7 +3149,7 @@ pub(crate) async fn resolve_device_worker_launch(
     // and no Guest target, so the row's own launch identity names no VM
     // by construction. The coherent VM scope is the owning Device's
     // Guest owner - the same derivation `tpm_device_targets_vm` requires
-    // (`Device. metadata. ownerRef == Guest/<vm>`) and the TPM
+    // (`Device.metadata.ownerRef == Guest/<vm>`) and the TPM
     // shared-provider effects mint their `VmId` from. A Device with no
     // Guest owner is the genuinely unresolvable case.
     let vm_name = match launch.vm() {
@@ -3240,7 +3240,7 @@ pub(crate) async fn resolve_device_worker_launch(
             let settings = device_gpu_settings(ctx, &owner_key).await?;
             // The Wayland socket the sidecar renders into is projected by
             // the trusted bundle from the site's own Wayland session
-            // (`d2b. site. waylandUser` / `waylandDisplay`, see
+            // (`d2b.site.waylandUser` / `waylandDisplay`, see
             // `nixos-modules/site-json.nix`). A bundle without the
             // artifact, or a headless site, leaves the slot unbound and
             // the launch refuses with its own code instead of naming a
@@ -3561,7 +3561,7 @@ fn device_state_dir(
 ///
 /// Only an absent Provider extension decodes to the Provider's bounded
 /// default. A present settings payload that does not decode as the closed
-/// `device-gpu. d2bus. org` extension refuses with its own code instead: folding
+/// `device-gpu.d2bus.org` extension refuses with its own code instead: folding
 /// it into the default made an undecodable declaration indistinguishable from
 /// a Device that declares nothing, and the default's context classes
 /// (including `CrossDomain`) are wider than anything the Device declared.
@@ -3579,7 +3579,7 @@ fn decode_device_gpu_settings(
 }
 
 /// The owning Device's declared GPU settings (the closed
-/// `device-gpu. d2bus. org` Device extension); a Device that declares none
+/// `device-gpu.d2bus.org` Device extension); a Device that declares none
 /// keeps the Provider's own bounded default.
 async fn device_gpu_settings(
     ctx: &mut ResourceContext,
@@ -3615,7 +3615,7 @@ fn video_nvidia_posture(
 /// The host Wayland socket the GPU sidecar renders into.
 ///
 /// The trusted bundle projects it (`site.json`, emitted from the site's own
-/// `d2b. site. waylandUser` / `waylandDisplay`), so the daemon never derives
+/// `d2b.site.waylandUser` / `waylandDisplay`), so the daemon never derives
 /// `/run/user/<uid>/...` itself: the daemon's own `/run/user` is its runtime
 /// directory, not the session user's. `None` - a bundle that predates the
 /// artifact, or a site without a Wayland session - keeps the slot unbound so
@@ -3644,7 +3644,7 @@ fn device_runtime_socket(
     socket_runtime_dir.join("vms").join(vm_name).join(file_name)
 }
 
-/// The per-VM video-decoder socket (`/run/d2b-video/<vm>/video. sock`): the
+/// The per-VM video-decoder socket (`/run/d2b-video/<vm>/video.sock`): the
 /// video module's own `RuntimeDirectory` and the guest's
 /// `--vhost-user-media socket=` argument name it, so the video runtime root is
 /// a sibling of the daemon's runtime root.
@@ -6050,7 +6050,7 @@ mod tests {
 
     // -- Launched-runner pidfd-table registration -----------------------------
     //
-    // A failed launch (e. g. a readiness-probe envelope timeout) stops the
+    // A failed launch (e.g. a readiness-probe envelope timeout) stops the
     // spawned child but never clears the daemon's pidfd-table slot for its
     // (vm, role). The next launch's observer registration would hit the
     // duplicate guard and be swallowed, leaving the probe and the stop path

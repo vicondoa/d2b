@@ -13,7 +13,7 @@
 //! spawn-or-update the actor -> reply. Identical specs return the current
 //! actor handle; changed specs persist a new generation and only then send
 //! `SpecChanged`; absent resources persist before their actor is spawned. A
-//! spawn that fails after the commit (e. g. no provider factory for the type)
+//! spawn that fails after the commit (e.g. no provider factory for the type)
 //! leaves the row durable; a later Ensure or manager restart recovers it.
 //!
 //! ## Admission boundary (KTD2 review finding; security review finding 3)
@@ -187,7 +187,7 @@ pub struct ResourceView {
     /// notified once per committed generation, so a status published before a
     /// spec change must not be read as observed state of the newer row.
     pub status_generation: Option<u64>,
-    /// The driver's wire-visible `status. resource` layer published with that
+    /// The driver's wire-visible `status.resource` layer published with that
     /// status (`None` when the driver published none, or when the status is
     /// not current for the row).
     pub status_projection: Option<serde_json::Value>,
@@ -210,7 +210,7 @@ impl ResourceView {
             .cloned()
     }
 
-    /// The `status. resource` layer published **for this exact row
+    /// The `status.resource` layer published **for this exact row
     /// generation**, mirroring [`Self::observed_status`]: a projection left
     /// over from an older generation is not observed state of the row.
     pub fn observed_status_projection(&self) -> Option<&serde_json::Value> {
@@ -221,7 +221,7 @@ impl ResourceView {
 
     /// The canonical wire `status` object for this row: the closed universal
     /// shape the resource contract defines, carrying this row's live
-    /// classification and its driver-published `status. resource` layer.
+    /// classification and its driver-published `status.resource` layer.
     ///
     /// This is the one producer of the status shape (issue #515). Every
     /// reader - the API's wire view, a store-shaped bridge, an effect gate -
@@ -358,7 +358,7 @@ pub enum ResourceManagerMsg {
         key: ResourceKey,
         generation: u64,
         status: ResourceStatus,
-        /// The actor's wire-visible `status. resource` layer for this pass,
+        /// The actor's wire-visible `status.resource` layer for this pass,
         /// when the driver published one (R11: in-memory only, replaced or
         /// dropped with the next status).
         projection: Option<serde_json::Value>,
@@ -463,7 +463,7 @@ pub struct ResourceManagerState {
     /// The generation each published status belongs to (see
     /// [`ResourceView::status_generation`]).
     status_generations: HashMap<ResourceKey, u64>,
-    /// The driver-published `status. resource` layer of each row's current
+    /// The driver-published `status.resource` layer of each row's current
     /// status (see [`ResourceView::status_projection`]); in-memory only.
     status_projections: HashMap<ResourceKey, serde_json::Value>,
     /// Rows whose cleanup completed at their actor while owned children were
@@ -873,7 +873,7 @@ pub struct ResourceManagerArgs {
     /// reference.
     pub host_target: TargetRef,
     /// Resolves the execution reference a stored desired spec declares
-    /// (`spec. executionRef`), supplied by the composition from the resource
+    /// (`spec.executionRef`), supplied by the composition from the resource
     /// contracts.
     pub target_resolver: Arc<dyn TargetResolver>,
     /// Fixed reconcile backoff for retryable driver failures (R13).
@@ -933,7 +933,7 @@ impl Actor for ResourceManager {
         // Restart recovery (F2, R15): load durable specs and spawn one actor
         // per row; each actor reconstructs observed state by discovery and
         // adoption on its target. Rows without a registered provider factory
-        // (e. g. a spawn that failed after commit) stay durable and are
+        // (e.g. a spawn that failed after commit) stay durable and are
         // picked up by the next Ensure or restart.
         let rows = state
             .store
@@ -2507,7 +2507,7 @@ mod tests {
     /// closed universal shape, and only a status published for the row's own
     /// generation is observed state. A stale published status must never
     /// leak a `Ready` into the served phase, and a live driver projection is
-    /// carried as the `status. resource` layer byte-for-byte.
+    /// carried as the `status.resource` layer byte-for-byte.
     #[test]
     fn wire_status_projects_only_current_observed_state() {
         use crate::identity::{ResourceKey, ResourceProvenance};
@@ -2630,7 +2630,7 @@ mod tests {
     /// projection publishes it, whatever its outcome. `InProgress` (a long
     /// effect in flight) keeps the actor's `Reconciling` status but must not
     /// swallow the evidence the pass just computed - dropping it left rows
-    /// serving the pre-pass (or no) `status. resource` layer while the driver
+    /// serving the pre-pass (or no) `status.resource` layer while the driver
     /// already knew better. Only invalidation (spec change, deletion) clears
     /// the layer.
     #[tokio::test]
@@ -3462,7 +3462,7 @@ mod tests {
     }
 
     /// The projection channel's failure case: a pass that computed a
-    /// `status. resource` layer and then failed publishes the failure, not the
+    /// `status.resource` layer and then failed publishes the failure, not the
     /// stale success layer. `wire_status` prefers a projection when one is
     /// present, so a leaked layer would hide the driver failure entirely.
     #[tokio::test]

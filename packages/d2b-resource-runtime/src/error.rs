@@ -101,7 +101,7 @@ impl std::fmt::Display for FailureClass {
 pub const REDACTED: &str = "<redacted>";
 
 /// Bounded note length a failure may carry (provider-supplied text). The wire
-/// `status. resource` layer is bounded, so failure detail is truncated at a
+/// `status.resource` layer is bounded, so failure detail is truncated at a
 /// char boundary before it can render.
 pub const MAX_FAILURE_NOTE_BYTES: usize = 512;
 
@@ -468,7 +468,7 @@ impl DriverFailure {
         Self::refused(op, FailureKinds::DRIVER_REFUSED)
     }
 
-    /// Refine the stage beyond the driver operation (e. g. `recover/adopt`).
+    /// Refine the stage beyond the driver operation (e.g. `recover/adopt`).
     #[must_use]
     pub fn at(mut self, stage: &'static str) -> Self {
         self.stage = stage;
@@ -586,7 +586,7 @@ impl DriverFailure {
         self.report().log_line()
     }
 
-    /// The `status. resource. driverFailure` wire object: the same structured
+    /// The `status.resource.driverFailure` wire object: the same structured
     /// detail as [`Self::log_line`].
     pub fn wire_layer(&self) -> serde_json::Value {
         self.report().wire_layer()
@@ -686,7 +686,7 @@ impl FailureReport {
         line
     }
 
-    /// The `status. resource. driverFailure` wire object. `operation` keeps the
+    /// The `status.resource.driverFailure` wire object. `operation` keeps the
     /// established PascalCase spelling and `retryable` stays first-class for
     /// the readers that gate child retries on it.
     pub fn wire_layer(&self) -> serde_json::Value {

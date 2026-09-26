@@ -33,7 +33,7 @@ use serde_json::{Value, json};
 /// The Provider projection commands the parser carries as static variants.
 ///
 /// A projected command is named by the declaring Provider's own
-/// `cliProjection. topLevel` (`d2b provider inspect`), which no compile-time
+/// `cliProjection.topLevel` (`d2b provider inspect`), which no compile-time
 /// table can enumerate, so clap holds one static variant per projection
 /// Provider and the projection binding admits exactly these names in place of
 /// a built-in command. They are parser carriers, not resource knowledge: the

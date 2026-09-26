@@ -583,7 +583,7 @@ pub enum TypedError {
     /// Refusal raised by the VM-start preflight for `sys-<env>-net` VMs
     /// when the on-disk
     /// dnsmasq.conf hash diverges from the bundle's expectation.
-    /// `env` is the env scope (e. g. `corp`, `personal`, `obs`);
+    /// `env` is the env scope (e.g. `corp`, `personal`, `obs`);
     /// `expected` and `actual` are 64-char lowercase SHA-256 hex
     /// digests. The mismatch indicates the bundle was updated but
     /// the dnsmasq render step did not rerun - rebuild the bundle
@@ -697,7 +697,7 @@ pub enum TypedError {
     ConsoleSessionTableFull {
         vm: String,
     },
-    /// A realm workload canonical target (`workload. realm. d2b`) was supplied
+    /// A realm workload canonical target (`workload.realm.d2b`) was supplied
     /// but is not present in the realm workload index. The caller must use a
     /// declared workload target or a known legacy VM name.
     WorkloadTargetNotFound {

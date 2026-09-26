@@ -86,7 +86,7 @@ pub const MAX_TARGET_NAME_BYTES: usize = 128;
 
 /// One canonical execution reference: `Host/<name>` or `Guest/<name>`.
 ///
-/// This is the reference a desired spec declares (`spec. executionRef`); it
+/// This is the reference a desired spec declares (`spec.executionRef`); it
 /// names where effects run and never changes a resource's Zone identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TargetRef {
@@ -463,7 +463,7 @@ impl std::error::Error for TargetError {}
 /// Resolves the execution target a stored desired spec declares.
 ///
 /// One implementation per composition: it reads the same canonical
-/// `spec. executionRef` the resource contracts resolve, and returns the
+/// `spec.executionRef` the resource contracts resolve, and returns the
 /// canonical `Host/<name>` or `Guest/<name>` reference. A row whose type has
 /// no execution anchor, or a legacy row that carries none, returns `None` and
 /// realizes on the Zone's Host target.

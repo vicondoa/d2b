@@ -480,7 +480,7 @@ pub struct UsbipUnbindCliRequest {
 
 /// Maximum decoded stdin chunk per `WriteStdin` op and decoded output chunk
 /// per `ReadOutput` op. The base64 envelope of a
-/// 64 KiB chunk (~87 KiB) stays well under the 1 MiB public. sock frame, so a
+/// 64 KiB chunk (~87 KiB) stays well under the 1 MiB public.sock frame, so a
 /// single exec op never approaches the frame cap.
 pub const EXEC_MAX_CHUNK_BYTES: u64 = 64 * 1024;
 
@@ -2001,7 +2001,7 @@ pub enum AudioErrorKind {
     ProviderMisconfigured,
     /// The requested VM was not found in the bundle.
     VmNotFound,
-    /// Audio enforcement is not available for this VM (e. g. the runtime does
+    /// Audio enforcement is not available for this VM (e.g. the runtime does
     /// not support it and no degraded path exists).
     EnforcementUnavailable,
     /// The VM exists but audio is not enabled in its manifest entry.
@@ -2070,7 +2070,7 @@ pub enum AudioOp {
 #[serde(rename_all = "camelCase")]
 pub struct AudioChannelState {
     /// Current volume/gain level in percent. `None` when the level is unknown
-    /// (e. g. the provider has not yet synced state).
+    /// (e.g. the provider has not yet synced state).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub level: Option<LevelPercent>,
     /// Whether the channel is currently muted.
@@ -2174,7 +2174,7 @@ pub struct HostDestroyRequest {
 }
 
 /// `host reconcile` request payload. Today the only scope is
-/// `--network`; future versions may add additional scopes (e. g.
+/// `--network`; future versions may add additional scopes (e.g.
 /// `--ownership`) carved out of `host prepare`. The daemon rejects
 /// requests with no scope selected with a typed `invalid-request`
 /// envelope.
@@ -2739,7 +2739,7 @@ pub struct ListEntry {
     pub usbip: bool,
     pub vm: String,
     /// Realm-native workload identity. Present for workloads that have been
-    /// associated with a realm; `None` for classical `d2b. vms` entries that
+    /// associated with a realm; `None` for classical `d2b.vms` entries that
     /// have not yet been adopted into a realm. Additive field - old daemons
     /// omit it; new CLI consumers must tolerate its absence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2776,7 +2776,7 @@ pub struct VmStatus {
     pub usb: Option<UsbipVmStatus>,
     pub vm: String,
     /// Realm-native workload identity. Present for workloads that have been
-    /// associated with a realm; `None` for classical `d2b. vms` entries that
+    /// associated with a realm; `None` for classical `d2b.vms` entries that
     /// have not yet been adopted into a realm. Additive field - old daemons
     /// omit it; new CLI consumers must tolerate its absence.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -18,7 +18,7 @@
 //! ## Spec store path decision
 //!
 //! The store is a plain daemon-owned file under
-//! `<daemon-state>/zones/<zone>/spec-store. sqlite3`. It is never opened
+//! `<daemon-state>/zones/<zone>/spec-store.sqlite3`. It is never opened
 //! through a broker fd handover: the broker-provisioned
 //! `<state-root>/zones/<zone>` directory is owned by the zone-store
 //! principal, so a spec store placed there fails to open with
@@ -1789,7 +1789,7 @@ pub struct ConstructionInputs {
     pub zone_token: BoundedToken,
     /// The zone's daemon-owned spec-store directory
     /// (`<daemon-state>/zones/<zone>`); the spec store lives at
-    /// `spec-store. sqlite3` underneath it.
+    /// `spec-store.sqlite3` underneath it.
     pub spec_store_dir: PathBuf,
     pub authority: ZoneAuthorityInputs,
     /// Committed `Provider` identities (KTD7) keyed by canonical reference,
@@ -1867,7 +1867,7 @@ pub user_facets: UserEffectFacets,
     /// The daemon-supplied facet set the Guest family's effects
     /// implementation is built from (U10):the zone's manager view (live
     /// rows, committed Provider identities, and the controller-session
-    /// generation) andthe Cloud Hypervisor controller session, supplied
+    /// generation)andthe Cloud Hypervisor controller session, supplied
     /// through the composition root. The family never receives a
     /// daemon-built effect port (R2).
     pub guest_facets: GuestEffectFacets,
@@ -2425,7 +2425,7 @@ impl AudioMediatorSource for DaemonAudioMediatorSource {
 
 /// Production `GuestOwnerIdentitySource` (KTD7): the pre-v3 plane owns `Guest`,
 /// so its durable rows are the authority for a Guest-owned Process launch's
-/// owner uid. The old store resolved every row's `metadata. ownerRef` to the
+/// owner uid. The old store resolved every row's `metadata.ownerRef` to the
 /// owner row's uid and the old descriptor composer read that linkage into the
 /// launch ticket; the converted manager row cannot carry it for an
 /// unconverted owner, so the Process effects resolve the same durable value
@@ -2670,7 +2670,7 @@ pub enum PlaneError {
 /// (`CORE_CONTROLLER_HOST_REF` in the old plane).
 const CORE_HOST_TARGET_NAME: &str = "host-system";
 
-/// The canonical `spec. executionRef` resolver (U13).
+/// The canonical `spec.executionRef` resolver (U13).
 ///
 /// A stored row's `spec` is the ResourceSpec object, so this reads exactly
 /// the `executionRef` base field the resource contracts' `PlacementAnchor::
@@ -2716,7 +2716,7 @@ impl core::fmt::Debug for ResourcePlaneV3 {
 
 impl ResourcePlaneV3 {
     /// The per-zone spec store path decision (documented in the module
-    /// header): `spec-store. sqlite3` under the daemon-owned
+    /// header): `spec-store.sqlite3` under the daemon-owned
     /// `<daemon-state>/zones/<zone>` directory.
     pub fn spec_store_path(spec_store_dir: &Path) -> PathBuf {
         spec_store_dir.join("spec-store.sqlite3")
@@ -3424,7 +3424,7 @@ impl ResourcePlaneV3 {
         let plan = partition_nix_bundle(&self.zone, bundle, &self.store).await?;
         let subject = nix_bundle_subject(&bundle.integrity.content_hash);
         let mut report = BundleIngestReport::default();
-        // Owners before owned. A bundle row that declares `metadata. ownerRef`
+        // Owners before owned. A bundle row that declares `metadata.ownerRef`
         // is ensured as that owner's child, so the manager links ownership by
         // uid the way R8 defines it: the Core `Provider` driver reads its
         // owned controller `Process` rows through that link (an unlinked row

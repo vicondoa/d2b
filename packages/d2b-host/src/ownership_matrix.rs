@@ -180,7 +180,7 @@ impl OwnershipMismatch {
 
 /// Per-VM hardlink-pool paths the enforcer NEVER recurses into.
 ///
-/// Each string is compared byte-for-byte against `entry. path`. Covers
+/// Each string is compared byte-for-byte against `entry.path`. Covers
 /// the canonical `store-view/live` pool and the legacy `store` farm;
 /// both share inodes with /nix/store, so recursing would risk
 /// propagating ownership/ACL changes into the system store.

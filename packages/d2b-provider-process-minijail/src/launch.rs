@@ -9,7 +9,7 @@ pub struct PlatformGate {
     pub kernel_major: u16,
     /// Kernel minor.
     pub kernel_minor: u16,
-    /// Whether the runtime cgroup exposes cgroup. kill.
+    /// Whether the runtime cgroup exposes cgroup.kill.
     pub cgroup_kill_available: bool,
 }
 
@@ -27,12 +27,12 @@ impl PlatformGate {
         }
     }
 
-    /// Check Linux 5.14 and cgroup. kill.
+    /// Check Linux 5.14 and cgroup.kill.
     ///
     /// # Errors
     ///
     /// Returns `PlatformGateRejected` when the kernel is older than
-    /// 5.14 or the runtime cgroup does not expose `cgroup. kill`.
+    /// 5.14 or the runtime cgroup does not expose `cgroup.kill`.
     pub const fn validate(self) -> Result<(), ProcessConformanceError> {
         if self.kernel_major < 5
             || (self.kernel_major == 5 && self.kernel_minor < 14)

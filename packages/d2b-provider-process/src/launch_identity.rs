@@ -24,7 +24,7 @@ const GUEST_RUNTIME_PROCESS_TEMPLATES: &[(&str, &str)] = &[
 /// the identity on its own.
 pub struct LaunchRow<'a> {
     /// The row's semantic owner (manager owner key, or the authored
-    /// `metadata. ownerRef` for an owner the manager does not hold).
+    /// `metadata.ownerRef` for an owner the manager does not hold).
     pub owner_ref: Option<&'a ResourceRef>,
     /// The durable owner linkage the row persists.
     pub owner_uid: Option<ResourceUid>,

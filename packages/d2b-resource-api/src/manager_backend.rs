@@ -12,8 +12,8 @@
 //!   remainder exists, and a cursor that cannot be honoured is refused with
 //!   a typed error rather than ignored;
 //! - the closed list filters keep their durable-plane semantics, including
-//!   ownership (`owner. resourceUid` matches the row's resolved owner uid,
-//!   `owner. resourceRef` the owner reference the row renders);
+//!   ownership (`owner.resourceUid` matches the row's resolved owner uid,
+//!   `owner.resourceRef` the owner reference the row renders);
 //! - mutations admit at the manager boundary under the caller's real
 //!   authenticated subject ([`api_subject`]) and persist through
 //!   `Ensure`/`Remove` with commit-before-return (F1/AE1);
@@ -334,7 +334,7 @@ fn check_precondition(mutation: &StoreMutation, row: &StoredDesiredResource) -> 
 }
 
 /// The owner reference the row renders, when one is rendered: the authored
-/// `metadata. ownerRef` wins (exactly as [`render_envelope`] resolves it), and
+/// `metadata.ownerRef` wins (exactly as [`render_envelope`] resolves it), and
 /// a row without one renders the resolved owner key. Evaluating the filter
 /// here keeps it on the same value the row's readers see.
 fn rendered_owner_ref(view: &ResourceView) -> Option<String> {
@@ -595,7 +595,7 @@ fn stored_of(
     generation: u64,
     spec: &[u8],
 ) -> StoredResource {
-    // Rows not created through this backend (e. g. Nix-materialized rows whose
+    // Rows not created through this backend (e.g. Nix-materialized rows whose
     // spec the compiler owns) keep their bytes verbatim; the digest is
     // recomputed only when the spec is a complete resource envelope.
     let payload_digest = CanonicalJsonValue::parse(spec)
@@ -938,7 +938,7 @@ fn stamp_deletion_request(stored: &mut StoredResource) -> Result<(), StoreError>
 ///
 /// ```text
 /// let authorizer = Arc::new(NativeAuthorizer::new(catalog, policy)?);
-/// let acceptor = authorizer. take_store_seal(manager_seal_identity())?;
+/// let acceptor = authorizer.take_store_seal(manager_seal_identity())?;
 /// let backend = ManagerBackend::new(client, hub, acceptor);
 /// let service = ResourceService::new_with_zone_uid(Arc::new(backend), authorizer, zone_uid)?;
 /// ```

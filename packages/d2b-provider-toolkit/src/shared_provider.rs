@@ -17,7 +17,7 @@
 //!   actor exists, F1), owned children the desired set no longer derives are
 //!   retired in the family's preserved order, the typed Provider effect runs
 //!   behind the family's port, and the in-memory status projection is
-//!   published with `ctx. set_status` (R11) plus a self-`requeue_after` while
+//!   published with `ctx.set_status` (R11) plus a self-`requeue_after` while
 //!   the family is not converged;
 //! - `prepare_finalize`/`execute_finalize`/`finalize` ->
 //!   [`ResourceDriver::delete`]: the family's teardown stage runs behind the
@@ -35,7 +35,7 @@
 //! observable from an effect through [`SharedProviderChildSurface::view`],
 //! which reads the manager plane's live view for a row of the driving
 //! resource; the driver itself only registers
-//! `ctx. watch(.., WatchCondition::Ready)` edges so dependency and child
+//! `ctx.watch(.., WatchCondition::Ready)` edges so dependency and child
 //! readiness wake it, and it never fabricates a readiness it cannot observe.
 
 use std::sync::Arc;
@@ -180,12 +180,12 @@ pub enum SharedProviderEffectPhase {
 }
 
 /// One Provider effect outcome: the phase the old effect returned plus the
-/// `status. resource` projection the old status candidate published.
+/// `status.resource` projection the old status candidate published.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SharedProviderEffectOutcome {
     /// The phase the effect returned.
     pub phase: SharedProviderEffectPhase,
-    /// The `status. resource` projection the old status candidate published.
+    /// The `status.resource` projection the old status candidate published.
     pub resource_projection: Option<Value>,
 }
 
@@ -198,7 +198,7 @@ impl SharedProviderEffectOutcome {
         }
     }
 
-    /// A phase outcome carrying one `status. resource` projection.
+    /// A phase outcome carrying one `status.resource` projection.
     pub fn projection(phase: SharedProviderEffectPhase, resource_projection: Value) -> Self {
         Self {
             phase,
@@ -306,12 +306,12 @@ impl std::error::Error for SharedProviderDriverError {}
 
 /// Typed in-memory status projection (R11: never persisted). Carries the
 /// closed phase the old status candidate published plus the Provider's
-/// `status. resource` projection.
+/// `status.resource` projection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SharedProviderDriverStatus {
     /// The phase the effect published.
     pub phase: SharedProviderEffectPhase,
-    /// The Provider's `status. resource` projection.
+    /// The Provider's `status.resource` projection.
     pub resource: Option<Value>,
 }
 

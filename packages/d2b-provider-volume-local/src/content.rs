@@ -707,7 +707,7 @@ impl NetworkConfigContentProjection {
         Ok(projection)
     }
 
-    /// Parse and validate a provider `settings. content` object.
+    /// Parse and validate a provider `settings.content` object.
     pub fn from_settings(settings: &serde_json::Value) -> Result<Self, VolumeLocalError> {
         let projection: Self =
             serde_json::from_value(settings.clone()).map_err(|_| VolumeLocalError::InvalidSpec)?;

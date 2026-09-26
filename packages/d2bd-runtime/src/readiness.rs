@@ -309,7 +309,7 @@ pub async fn wait_for_readiness_async(
 /// fail-fast, or treat as terminal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProcState {
-    /// The process is alive in the given state character (e. g.
+    /// The process is alive in the given state character (e.g.
     /// 'S' sleeping, 'R' running, 'D' uninterruptible sleep,
     /// 'Z' zombie awaiting reap, 'X' dead).
     Alive(char),
@@ -522,7 +522,7 @@ mod unix_socket_readiness_tests {
 /// No `unsafe` code: child processes are created via
 /// `std::process::Command`.  Rust's `Child` does not call `waitpid` on
 /// drop, so an exited child stays in 'Z' state until the test calls
-/// `child. wait()` for cleanup.
+/// `child.wait()` for cleanup.
 #[cfg(test)]
 #[cfg(target_os = "linux")]
 mod wait_for_one_shot_exit_tests {

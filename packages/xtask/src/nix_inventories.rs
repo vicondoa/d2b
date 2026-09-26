@@ -246,8 +246,8 @@ fn core_schema_file(resource_type: &str) -> String {
 
 /// Split one qualified ResourceType into its schema namespace and local name.
 ///
-/// A qualified type is `<namespace>.d2bus. org.<Name>`; the committed artifact
-/// is `<namespace>.d2bus. org_<Name>.schema.json`.
+/// A qualified type is `<namespace>.d2bus.org.<Name>`; the committed artifact
+/// is `<namespace>.d2bus.org_<Name>.schema.json`.
 fn qualified_schema_parts(
     resource_type: &str,
 ) -> Result<(&str, &str), Box<dyn std::error::Error>> {

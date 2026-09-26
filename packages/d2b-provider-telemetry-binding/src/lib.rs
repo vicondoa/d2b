@@ -1,7 +1,7 @@
 //! The TelemetryBinding resource type's driver, its spec decoder, and its
 //! driver declaration.
 //!
-//! The crate owns the `telemetry. d2bus. org.TelemetryBinding` type's complete
+//! The crate owns the `telemetry.d2bus.org.TelemetryBinding` type's complete
 //! resource knowledge: the relationship admission (the owner must name the
 //! telemetry Provider and its Service/target rows must exist and not be
 //! deleting), the provider-declared child set materialized as owned manager

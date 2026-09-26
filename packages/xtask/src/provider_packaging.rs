@@ -9,7 +9,7 @@
 //! nine field groups the specification's "Package catalog" section enumerates,
 //! flattened into the exact field names `nixos-modules/provider-catalog.nix`
 //! validates every entry against. The catalog itself is compiled in Nix from
-//! `d2b. artifacts.<id>` declarations; only its shape is generated here, so that
+//! `d2b.artifacts.<id>` declarations; only its shape is generated here, so that
 //! the module and any later Rust consumer cannot drift apart silently.
 //!
 //! Three absences in that section are the design rather than gaps, and the

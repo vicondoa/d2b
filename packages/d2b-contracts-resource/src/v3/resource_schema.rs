@@ -734,7 +734,7 @@ impl JsonSchema for SchemaVersion {
 ///
 /// A placement anchor is a contract-owned selector, not a Provider-defined
 /// field path. `Zone` resolves the containing Zone, while `ExecutionRef`
-/// resolves the canonical `spec. executionRef` field to one Host or Guest.
+/// resolves the canonical `spec.executionRef` field to one Host or Guest.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
 )]
@@ -742,7 +742,7 @@ impl JsonSchema for SchemaVersion {
 pub enum PlacementAnchor {
     /// Place the resource at its containing Zone.
     Zone,
-    /// Place the resource at its canonical `spec. executionRef` target.
+    /// Place the resource at its canonical `spec.executionRef` target.
     ExecutionRef,
 }
 
@@ -779,7 +779,7 @@ impl PlacementAnchor {
     /// # Errors
     ///
     /// Returns [`ResourceSchemaError::PlacementTargetMissing`] when an
-    /// `ExecutionRef` anchor finds no `spec. executionRef` field,
+    /// `ExecutionRef` anchor finds no `spec.executionRef` field,
     /// [`ResourceSchemaError::PlacementTargetInvalid`] when that field is not a
     /// string or not a parseable reference, and
     /// [`ResourceSchemaError::PlacementTargetWrongType`] when it names neither
@@ -910,12 +910,12 @@ impl ExtensionSchemaId {
         }
     }
 
-    /// Parse `<provider>.d2bus. org/<ResourceType>/{spec|status}`.
+    /// Parse `<provider>.d2bus.org/<ResourceType>/{spec|status}`.
     ///
     /// # Errors
     ///
     /// Returns [`ResourceSchemaError::InvalidSchemaId`] when the value is not
-    /// exactly `<provider>.d2bus. org/<ResourceType>/{spec|status}` with valid
+    /// exactly `<provider>.d2bus.org/<ResourceType>/{spec|status}` with valid
     /// provider and ResourceType names.
     pub fn parse(value: &str) -> Result<Self, ResourceSchemaError> {
         let (authority, remainder) = value
@@ -1277,7 +1277,7 @@ impl ResourceSchemaContract {
     /// # Errors
     ///
     /// Returns [`ResourceSchemaError::ProviderExtensionNotMinimal`] when the
-    /// spec carries a `spec. provider` extension, and
+    /// spec carries a `spec.provider` extension, and
     /// [`ResourceSchemaError::UnknownField`] or
     /// [`ResourceSchemaError::MissingField`] for a base field-set violation.
     pub fn validate_minimal_base_spec(

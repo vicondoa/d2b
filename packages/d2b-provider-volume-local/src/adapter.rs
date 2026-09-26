@@ -1266,7 +1266,7 @@ fn apply_metadata<R: VolumeRootResolver>(
 // POSIX ACL application
 //
 // The declared grants are real kernel ACLs: the daemon owns the entry it
-// creates, so it applies them through the `system. posix_acl_*` xattrs without
+// creates, so it applies them through the `system.posix_acl_*` xattrs without
 // any capability. The encoding is the kernel's `posix_acl_xattr_header` +
 // `posix_acl_xattr_entry` layout, and the mask carries the group-class
 // permissions exactly as `setfacl` computes it - the kernel requires the mask
@@ -1356,7 +1356,7 @@ fn acl_entries(mode: u32, mut named: Vec<AclEntry>) -> Vec<AclEntry> {
     entries
 }
 
-/// Encode one entry set as the `system. posix_acl_*` xattr value.
+/// Encode one entry set as the `system.posix_acl_*` xattr value.
 fn acl_xattr_bytes(entries: &[AclEntry]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(4 + entries.len() * 8);
     bytes.extend_from_slice(&POSIX_ACL_XATTR_VERSION.to_le_bytes());

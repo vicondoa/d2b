@@ -1969,7 +1969,7 @@ mod tests {
     /// call. The forwarded request leg carries the caller's descriptor over
     /// SCM_RIGHTS; the rendezvous validates it against the wire declarations
     /// and hands it to the declared handler, so this handler reading it back
-    /// proves the round trip through the real socket and the provider envelope. to
+    /// proves the round trip through the real socket and the provider envelope.to
     struct FdEchoHandler;
 
     #[async_trait::async_trait]
@@ -2487,7 +2487,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     use d2bd_runtime::unix_transport::write_frame_with_fds;
     /// Forward one invocation with SCM_RIGHTS attachments on the request
     /// frame, the way the broker's forwarder does once the request leg
-    /// carries fds. to
+    /// carries fds.to
     fn forward_with_fds(
         socket_path: &Path,
         operation: &str,
@@ -3746,7 +3746,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         // one-shot publication dial (started by the test after this returns)
         // can never race the bind: a dial before the bind would error, the
         // daemon would never retry, and the accept below would block the
-        // test's `broker. join()` forever.
+        // test's `broker.join()` forever.
         let listener = bind_public_socket(&socket_path, &test_identity())
             .expect("bind the test broker socket");
         std::thread::spawn(move || {

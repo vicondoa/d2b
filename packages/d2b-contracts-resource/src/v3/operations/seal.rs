@@ -97,7 +97,7 @@ pub struct MutationSealBody {
 /// use SealedMutation;
 ///
 /// fn inspect(sealed: SealedMutation) {
-///     let _ = sealed. body;
+///     let _ = sealed.body;
 /// }
 /// ```
 ///
@@ -107,7 +107,7 @@ pub struct MutationSealBody {
 /// use SealedMutation;
 ///
 /// fn clone(sealed: SealedMutation) {
-///     let _ = sealed. clone();
+///     let _ = sealed.clone();
 /// }
 /// ```
 ///
@@ -155,7 +155,7 @@ pub struct MutationSealIssuer {
 /// use operations::seal::MutationSealAcceptor;
 ///
 /// fn clone(acceptor: MutationSealAcceptor) {
-///     let _ = acceptor. clone();
+///     let _ = acceptor.clone();
 /// }
 /// ```
 pub struct MutationSealAcceptor {

@@ -96,7 +96,7 @@ const PROVIDER_CONVERGENCE_POLL: Duration = Duration::from_millis(1_000);
 ///
 /// Derived from the placement contract: `Provider` names no placement anchor
 /// (`PlacementAnchor::canonical_for` resolves none), so a Provider row never
-/// carries the canonical `spec. executionRef` and the plane reconciles it on
+/// carries the canonical `spec.executionRef` and the plane reconciles it on
 /// its own Host domain.
 const PROVIDER_EXECUTION_DOMAINS: &[&str] = &["host"];
 
@@ -120,8 +120,8 @@ const PROVIDER_READS: &[WellKnownType] = &[
 /// Typed in-memory status projection (R11: never persisted).
 ///
 /// The old plane persisted `phase`, `observedGeneration`, the
-/// `status. resource. providerReadiness` projection, and the store-derived
-/// `status. resource. owned. refs` list. Nothing durable replaces them: the
+/// `status.resource.providerReadiness` projection, and the store-derived
+/// `status.resource.owned.refs` list. Nothing durable replaces them: the
 /// generation the old `Enable`/`Update` short-circuit read and the projected
 /// phase are kept here, the readiness fields stay on the typed
 /// [`ProviderObservation`], and the last observed owned `Volume` references
@@ -131,7 +131,7 @@ const PROVIDER_READS: &[WellKnownType] = &[
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderDriverStatus {
     /// The desired generation this observation was taken at (the old
-    /// `status. observedGeneration`).
+    /// `status.observedGeneration`).
     pub observed_generation: u64,
     /// The phase the pure policy projected.
     pub phase: ProviderPhase,
@@ -149,7 +149,7 @@ pub struct ProviderDriverStatus {
 /// The live evidence the `Provider` observation needs and the manager cannot
 /// serve: a converted row's status is in-memory only (R11), so the manager's
 /// view carries the closed [`ResourceStatus`] and never the controller-session
-/// evidence the pure core reads as `status. resource. controllerSession`. The
+/// evidence the pure core reads as `status.resource.controllerSession`. The
 /// production implementation is the daemon's live-session seam; every unknown
 /// fails closed (`None`), so no caller can synthesize an admitted session.
 pub trait ProviderDriverEffects: Send + Sync + 'static {
@@ -348,7 +348,7 @@ impl ProviderDriver {
             .dependencies(ctx, &provider_ref, &provider_uid, generation)
             .await?;
 
-        // The old `status. observedGeneration` short-circuit selected the
+        // The old `status.observedGeneration` short-circuit selected the
         // `Enable` intent; the in-memory status is its runtime-only successor.
         let previous = ctx.status::<ProviderDriverStatus>();
         let intent = match previous {
@@ -361,7 +361,7 @@ impl ProviderDriver {
         // The provider row as the pure observation reads it: spec from the
         // stored envelope, metadata as authored, and the previous
         // observation's owned Volume references standing in for the durable
-        // `status. resource. owned. refs` projection the store used to derive.
+        // `status.resource.owned.refs` projection the store used to derive.
         let metadata: Value = serde_json::from_slice(ctx.metadata())
             .map_err(|_| spec_invalid(DriverOp::Reconcile, "spec/metadata"))?;
         let status = match previous {
@@ -524,7 +524,7 @@ impl ProviderDriver {
         // The manager's ownership is authoritative (R8): a row listed as this
         // Provider's child carries the Provider reference in the synthesized
         // payload, because the pure core reads ownership from
-        // `metadata. ownerRef`, not from the manager.
+        // `metadata.ownerRef`, not from the manager.
         metadata.as_object_mut()?.insert(
             "ownerRef".to_owned(),
             Value::String(provider_ref.to_owned()),
@@ -677,7 +677,7 @@ fn resource_uid(bytes: &[u8; 16]) -> Option<ResourceUid> {
 /// through this declaration.
 ///
 /// The type is not exportable: `ResourceExport` admits only qualified
-/// `*.d2bus. org.*Service` types, so a Provider row is never an export subject.
+/// `*.d2bus.org.*Service` types, so a Provider row is never an export subject.
 pub fn provider_descriptor(args: ProviderDriverArgs) -> DriverDescriptor {
     DriverDescriptor {
         resource_type: WellKnownType::PROVIDER,

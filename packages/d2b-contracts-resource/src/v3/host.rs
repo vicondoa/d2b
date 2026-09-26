@@ -1,8 +1,8 @@
 //! Host primitive ResourceType base spec.
 //!
 //! `Host` is the physical or local execution, policy, and budget parent.
-//! Layer 2 is this base spec; `spec. providerRef`, `spec. updatePolicy`, and
-//! the Layer 3 `spec. provider` extension envelope live on the universal
+//! Layer 2 is this base spec; `spec.providerRef`, `spec.updatePolicy`, and
+//! the Layer 3 `spec.provider` extension envelope live on the universal
 //! `ResourceSpec` and are never restated here.
 
 use schemars::JsonSchema;
@@ -20,13 +20,13 @@ use d2b_contracts::wire_deserialize;
 
 /// The canonical ResourceType name for this module.
 pub const HOST_RESOURCE_TYPE: &str = "Host";
-/// The only Provider admitted by `Host. spec. providerRef`.
+/// The only Provider admitted by `Host.spec.providerRef`.
 pub const HOST_PROVIDER_REF: &str = "Provider/system-core";
 
 /// The explicit no-isolation posture of the user-only Host.
 ///
 /// The posture is a promoted Host base field; it is never a
-/// `spec. provider. settings` field, and `null` used to evade the
+/// `spec.provider.settings` field, and `null` used to evade the
 /// no-isolation warning is rejected.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,

@@ -11,7 +11,7 @@
 //!   F1), owned children the desired set no longer derives are retired in
 //!   the family's preserved order, the typed Provider effect runs behind
 //!   [`GuestDriverEffects`], and the in-memory status projection is
-//!   published with `ctx. set_status` + `ctx. set_status_projection` (R11)
+//!   published with `ctx.set_status` + `ctx.set_status_projection` (R11)
 //!   plus a self-`requeue_after` while the family is not converged;
 //! - [`ResourceDriver::finalize`] and [`ResourceDriver::delete`]: the kind's
 //!   preserved teardown stage (Cloud Hypervisor's controller-owned finalize,
@@ -208,12 +208,12 @@ pub enum GuestEffectPhase {
 }
 
 /// One Provider effect outcome: the phase the old effect returned plus the
-/// layered `status. resource` projection the Provider published for the row.
+/// layered `status.resource` projection the Provider published for the row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuestEffectOutcome {
     /// The phase the Provider effect reported.
     pub phase: GuestEffectPhase,
-    /// The layered `status. resource` projection the Provider published.
+    /// The layered `status.resource` projection the Provider published.
     pub resource_projection: Option<Value>,
 }
 
@@ -340,12 +340,12 @@ impl std::error::Error for GuestDriverError {}
 
 /// Typed in-memory status projection (R11: never persisted). Carries the
 /// closed phase the old status candidate published plus the Provider's
-/// layered `status. resource` projection.
+/// layered `status.resource` projection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuestDriverStatus {
     /// The phase this status publishes.
     pub phase: GuestEffectPhase,
-    /// The Provider's sticky `status. resource` projection, when one exists.
+    /// The Provider's sticky `status.resource` projection, when one exists.
     pub resource: Option<Value>,
 }
 
@@ -541,7 +541,7 @@ pub struct GuestEffectRequest<'a> {
     /// The Provider row's spec for this Guest's `providerRef`, when the
     /// manager holds it (the framework kinds read their `/config` here).
     pub provider_spec: Option<Value>,
-    /// The driver's last published `status. resource` projection, when one
+    /// The driver's last published `status.resource` projection, when one
     /// was published: the Provider status is sticky, exactly as the old
     /// durable row's was.
     pub status: Option<Value>,
@@ -681,12 +681,12 @@ const GUEST_CREATIONS: &[ChildCreation] = &[
 /// `Guest` is `BUILTIN | STARTUP` (no RUNTIME bit): the plane cannot serve a
 /// guest whose provider controller never registered, so the type must be
 /// present before the plane opens. The type is not exportable:
-/// `ResourceExport` admits only qualified `*.d2bus. org.*Service` types, so a
+/// `ResourceExport` admits only qualified `*.d2bus.org.*Service` types, so a
 /// guest can never be an export subject. The driver serves no broker
 /// operations and contributes no startup step of its own; every child the
 /// family's drivers and controller sessions create is declared in
 /// [`GUEST_CREATIONS`]. The family's declared effects service
-/// (`guest. d2bus. org/effects`, U10) rides the declaration, so the daemon
+/// (`guest.d2bus.org/effects`, U10) rides the declaration, so the daemon
 /// hosts it through the registered factory over the composition root's
 /// facet set.
 pub fn guest_descriptor(args: GuestDriverArgs) -> DriverDescriptor {

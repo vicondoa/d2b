@@ -1,7 +1,7 @@
 //! The shared USB semantic Service and Binding base contract.
 //!
 //! This module owns the common base spec, status, and schema contract for the
-//! frozen USB pair `usb. d2bus. org.UsbService` and `usb. d2bus. org.UsbBinding`.
+//! frozen USB pair `usb.d2bus.org.UsbService` and `usb.d2bus.org.UsbBinding`.
 //! The field sets below are the top-level provider-neutral base fields stated
 //! by the USBIP Provider dossier's owner authority, projection, and per-Guest
 //! Binding sections, which describe the base as carrying only generic
@@ -118,7 +118,7 @@ mod tests {
     const MINIMAL_SERVICE: &str = r#"{"accessPolicy":{},"mode":"authority"}"#;
     const MINIMAL_BINDING: &str = r#"{"accessPolicy":{},"attachmentPolicy":{},"guestRef":"Guest/corp-vm","serviceRef":"usb.d2bus.org.UsbService/work-token"}"#;
 
-    /// Canonical minimal base acceptance without `spec. provider`.
+    /// Canonical minimal base acceptance without `spec.provider`.
     #[test]
     fn the_canonical_minimal_base_is_accepted_without_a_provider_extension() {
         assert_minimal_base_round_trips(contract().service(), MINIMAL_SERVICE);

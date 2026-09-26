@@ -60,7 +60,7 @@ use serde_json::Value;
 ///
 /// Derived from the placement contract: none of these types names a placement
 /// anchor (`PlacementAnchor::canonical_for` resolves none), so a row never
-/// carries the canonical `spec. executionRef` and the plane reconciles it on
+/// carries the canonical `spec.executionRef` and the plane reconciles it on
 /// its own Host domain.
 pub const METADATA_EXECUTION_DOMAINS: &[&str] = &["host"];
 

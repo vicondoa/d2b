@@ -63,7 +63,7 @@ opaque_id! {
 
 opaque_id! {
     /// Opaque identifier for a per-VM authorization scope. Resolved
-    /// against `bundle. vms[<vm_id>]`. The VM name string is
+    /// against `bundle.vms[<vm_id>]`. The VM name string is
     /// derivation-internal; the daemon should not synthesize one.
     VmId
 }

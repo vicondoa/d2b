@@ -1108,7 +1108,7 @@ impl BusCore {
     }
 
     // Operation bookkeeping is a brief non-suspending critical sectionshared
-    // with synchronous teardown (Drop impls of OperationLease/BusStream) and
+    // with synchronous teardown (Drop impls of OperationLease/BusStream)and
     // the operation table has no async form here.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn lock_operations(&self) -> MutexGuard<'_, OperationTable> {
@@ -1896,7 +1896,7 @@ pub struct CommittedInteractionSubjectInstallBody {
 /// use d2b_bus::CommittedInteractionSubjectIssuer;
 ///
 /// fn clone(value: CommittedInteractionSubjectIssuer) {
-///     let _ = value. clone();
+///     let _ = value.clone();
 /// }
 /// ```
 ///
@@ -1933,7 +1933,7 @@ pub struct CommittedInteractionSubjectIssuer {
 /// use d2b_bus::CommittedInteractionSubjectInstall;
 ///
 /// fn inspect(value: &CommittedInteractionSubjectInstall) {
-///     let _ = &value. body;
+///     let _ = &value.body;
 /// }
 /// ```
 ///
@@ -1941,7 +1941,7 @@ pub struct CommittedInteractionSubjectIssuer {
 /// use d2b_bus::CommittedInteractionSubjectInstall;
 ///
 /// fn clone(value: CommittedInteractionSubjectInstall) {
-///     let _ = value. clone();
+///     let _ = value.clone();
 /// }
 /// ```
 ///
@@ -2070,7 +2070,7 @@ struct ComponentSessionRegistrar {
 /// use d2b_bus::ComponentSessionAdmission;
 ///
 /// fn inspect(value: &ComponentSessionAdmission) {
-///     let _ = &value. identity;
+///     let _ = &value.identity;
 /// }
 /// ```
 ///

@@ -607,7 +607,7 @@ mod tests {
     fn sealing_rejects_a_subtree_attached_outside_the_sealed_scope() {
         let error = SealedZoneTopology::seal(
             zone(&["k0"]),
-            // k9. k0 is never declared as a child, so k1. k9. k0 would attach an
+            // k9.k0 is never declared as a child, so k1.k9.k0 would attach an
             // unknown subtree.
             vec![edge(&["k9", "k0"], &["k1", "k9", "k0"])],
         )
@@ -629,8 +629,8 @@ mod tests {
     #[test]
     fn a_descendant_matches_its_nearest_sealed_ancestor_not_the_root() {
         let topology = sealed();
-        // deep. k2. k1. k0 is not sealed; the longest suffix is k2. k1. k0, and the
-        // shorter suffixes k1. k0 and k0 must not win.
+        // deep.k2.k1.k0 is not sealed; the longest suffix is k2.k1.k0, and the
+        // shorter suffixes k1.k0 and k0 must not win.
         assert_eq!(
             topology.longest_suffix_match(&zone(&["deep", "k2", "k1", "k0"])),
             Some(&zone(&["k2", "k1", "k0"]))
@@ -720,8 +720,8 @@ mod tests {
     fn an_unsealed_descendant_resolves_to_its_sealed_ancestor_entrypoint() {
         let resolver = ZoneEntrypointResolver::new(sealed());
         let engine = seeded_engine();
-        // deep. k2. k1. k0 has no sealed row and no projection of its own; the
-        // sealed k2. k1. k0 owns it and is the entrypoint the engine routes to.
+        // deep.k2.k1.k0 has no sealed row and no projection of its own; the
+        // sealed k2.k1.k0 owns it and is the entrypoint the engine routes to.
         let request = allowed_request(zone(&["deep", "k2", "k1", "k0"]));
         let ZoneEntrypointResolution::Resolved {
             entrypoint_zone,

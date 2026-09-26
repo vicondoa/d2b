@@ -100,7 +100,7 @@ pub struct MinijailPlatformGate {
     pub kernel_major: u16,
     /// Minor Linux kernel version observed by the probe.
     pub kernel_minor: u16,
-    /// Whether the runtime cgroup exposes cgroup. kill.
+    /// Whether the runtime cgroup exposes cgroup.kill.
     pub cgroup_kill_available: bool,
 }
 
@@ -125,7 +125,7 @@ impl MinijailPlatformGate {
     ///
     /// Returns [`SystemCoreError::KernelTooOld`] when the kernel is below the
     /// mandatory floor and [`SystemCoreError::CgroupKillUnavailable`] when
-    /// the delegated cgroup leaf has no writable `cgroup. kill`.
+    /// the delegated cgroup leaf has no writable `cgroup.kill`.
     pub fn validate(self) -> Result<(), SystemCoreError> {
         if !self.kernel_supported() {
             return Err(SystemCoreError::KernelTooOld);
@@ -320,7 +320,7 @@ impl HostReconciler {
 
     /// Reconcile one Host resource into its public status.
     ///
-    /// `provider_ref` is the resource's declared `spec. providerRef`. A Host
+    /// `provider_ref` is the resource's declared `spec.providerRef`. A Host
     /// naming another Provider is refused rather than reconciled, because
     /// `Provider/system-core` is the only Provider the Host contract admits
     /// and reconciling a foreign Host would be exactly the bootstrap

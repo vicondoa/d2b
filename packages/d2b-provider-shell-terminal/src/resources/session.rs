@@ -1,4 +1,4 @@
-//! `shell-terminal. d2bus. org.ShellSession` schema.
+//! `shell-terminal.d2bus.org.ShellSession` schema.
 
 use super::{ShellPool, ShellTerminalError, validate_name};
 use crate::resources::ExecutionTarget;

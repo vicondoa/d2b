@@ -21,11 +21,11 @@
 //! identity (`st_dev`/`st_ino` + first-provision stamp). On every
 //! subsequent spawn the marker is verified against the live dir's
 //! identity; a missing dir after prior provision, or an `st_ino`
-//! mismatch (e. g. a fresh correct-owner empty replacement smuggled in
+//! mismatch (e.g. a fresh correct-owner empty replacement smuggled in
 //! under the sticky per-VM root), fails closed.
 //!
 //! The runtime socket dir (`/run/d2b/vms/<vm>`) posture is left
-//! untouched; only a stale `tpm. sock` under it is unlinked.
+//! untouched; only a stale `tpm.sock` under it is unlinked.
 //!
 //! Every error is PATH-FREE: the [`SwtpmHardenError`] `Display` carries
 //! only closed-set reason slugs, never a raw path, so the broker can
@@ -120,7 +120,7 @@ pub struct SwtpmDirPaths {
     /// Per-VM root: `<stateDir>/vms/<vm>` (the sticky 3770 parent).
     pub per_vm_root: PathBuf,
     /// Runtime socket dir: `/run/d2b/vms/<vm>`. Posture untouched;
-    /// only a stale `tpm. sock` under it is unlinked.
+    /// only a stale `tpm.sock` under it is unlinked.
     pub runtime_dir: PathBuf,
     /// Marker tree root (`/var/lib/d2b/swtpm-markers`).
     pub marker_dir: PathBuf,
@@ -227,17 +227,17 @@ fn production_swtpm_path(p: &Path) -> bool {
 
 /// The placement identity a spawn plan's cgroup subtree names.
 ///
-/// A legacy VM-scoped placement (`d2b. slice/<vm>[/<role>...]`) carries the VM
+/// A legacy VM-scoped placement (`d2b.slice/<vm>[/<role>...]`) carries the VM
 /// name in its first segment. A resource-backed (typed) launch is rewritten by
-/// `private_cgroup_placement` into `d2b. slice/process-<64hex>[/<role>...]`, a
+/// `private_cgroup_placement` into `d2b.slice/process-<64hex>[/<role>...]`, a
 /// commitment to the private runtime scope that deliberately carries no VM
 /// identity: for those launches the VM is resolved from the verified bundle,
 /// never from the cgroup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PlacementSegment {
-    /// `d2b. slice/<vm>[/...]` - the segment after `d2b. slice/` is the VM id.
+    /// `d2b.slice/<vm>[/...]` - the segment after `d2b.slice/` is the VM id.
     Vm(String),
-    /// `d2b. slice/process-<64hex>[/...]` - a private resource-backed scope.
+    /// `d2b.slice/process-<64hex>[/...]` - a private resource-backed scope.
     RuntimeScope(String),
 }
 
@@ -270,7 +270,7 @@ pub(crate) fn parse_placement_segment(subtree: &str) -> Option<PlacementSegment>
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceBackedSwtpm {
     /// The Guest whose owning Device declares the worker row
-    /// (`Device. metadata. ownerRef == Guest/<guest>`, the same derivation the
+    /// (`Device.metadata.ownerRef == Guest/<guest>`, the same derivation the
     /// daemon's Device-worker ticket uses).
     pub guest: String,
     /// The trusted TPM state policy root the `path:swtpm-state:<guest>` row
@@ -375,8 +375,8 @@ pub(crate) fn state_volume_name(device_uid: &ResourceUid) -> String {
 ///   `/run/d2b/vms` runtime dir must be exactly the trusted one;
 /// - the composed argv must name the trusted state volume directory
 ///   (`--tpmstate dir=<state root>/<volume name>` with `--ctrl
-///   ...path=<that>/ctrl. sock`) and the trusted per-Guest runtime socket
-///   (`--server`/`--unix` `...path=/run/d2b/vms/<guest>/tpm. sock`).
+///   ...path=<that>/ctrl.sock`) and the trusted per-Guest runtime socket
+///   (`--server`/`--unix` `...path=/run/d2b/vms/<guest>/tpm.sock`).
 ///
 /// A launch that disagrees fails closed with [`reasons::IDENTITY_MISMATCH`].
 pub fn derive_resource_backed_paths(
@@ -1021,7 +1021,7 @@ async fn apply_ancestor_traverse_acl(
         .map_err(|_| reasons::ANCESTOR_ACL_FAILED)
 }
 
-/// Unlink only the trusted `tpm. sock` under the runtime dir, if present.
+/// Unlink only the trusted `tpm.sock` under the runtime dir, if present.
 /// The runtime dir's own posture (mode / ACL / sibling entries) is left
 /// untouched. A missing runtime dir is a no-op (not an error).
 fn unlink_stale_socket(runtime_dir: &Path) -> Result<(), &'static str> {
@@ -1507,7 +1507,7 @@ mod tests {
         s.make_per_vm_root(&paths);
         let cfg = s.cfg();
         // Pre-create runtime dir with a distinctive mode + a sibling
-        // file + a stale tpm. sock.
+        // file + a stale tpm.sock.
         tokio::fs::create_dir_all(&paths.runtime_dir).await.unwrap();
         tokio::fs::set_permissions(&paths.runtime_dir, fs::Permissions::from_mode(0o751)).await.unwrap();
         let sibling = paths.runtime_dir.join("vsock.sock");
@@ -1721,7 +1721,7 @@ mod tests {
             },
             cgroup_placement: CgroupPlacement {
                 // What `private_cgroup_placement` writes for a typed launch:
-                // `d2b. slice/process-<64hex>/<role>`.
+                // `d2b.slice/process-<64hex>/<role>`.
                 subtree: format!(
                     "d2b.slice/{}/swtpm",
                     "process-".to_owned() + &"a".repeat(64)

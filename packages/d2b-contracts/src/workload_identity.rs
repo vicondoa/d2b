@@ -48,9 +48,9 @@ use crate::target::RealmTarget;
 /// ```
 /// use d2b_contracts::workload_identity::WorkloadTarget;
 ///
-/// let t = WorkloadTarget::parse("builder.dev. d2b").unwrap();
-/// assert_eq!(t. to_canonical(), "builder.dev. d2b");
-/// assert_eq!(t. workload. as_str(), "builder");
+/// let t = WorkloadTarget::parse("builder.dev.d2b").unwrap();
+/// assert_eq!(t.to_canonical(), "builder.dev.d2b");
+/// assert_eq!(t.workload.as_str(), "builder");
 /// ```
 pub type WorkloadTarget = RealmTarget;
 
@@ -84,15 +84,15 @@ pub struct WorkloadIdentity {
     /// Fully-qualified canonical target address, kept pre-rendered to avoid
     /// repeated formatting and to make it audit-log safe.
     pub canonical_target: WorkloadTarget,
-    /// Legacy `d2b. vms.<vm>` name for workloads that exist as a classical VM
+    /// Legacy `d2b.vms.<vm>` name for workloads that exist as a classical VM
     /// entry while the realm-native model is being adopted. `None` for
     /// workloads declared directly inside a realm without a legacy VM entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legacy_vm_name: Option<ContractId>,
-    /// Opaque runtime kind identifier (e. g. `nixos`, `qemu-media`).
+    /// Opaque runtime kind identifier (e.g. `nixos`, `qemu-media`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_kind: Option<ContractId>,
-    /// Stable provider identifier within the realm (e. g.
+    /// Stable provider identifier within the realm (e.g.
     /// `local-cloud-hypervisor`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_id: Option<ContractId>,

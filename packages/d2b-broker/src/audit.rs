@@ -1688,7 +1688,7 @@ fn prune_expired_daily_files_locked(audit_dir: &Path, retention_days: u32) -> io
         let age_days = today_unix_days - file_unix_days;
         if age_days > cutoff_days {
             // Best-effort: remove failures don't propagate as
-            // hard errors (e. g. file vanished between readdir
+            // hard errors (e.g. file vanished between readdir
             // and remove, permission denied on a stray file).
             if path_safe::remove_nofollow(&entry.path()).is_ok() {
                 pruned += 1;
@@ -2478,7 +2478,7 @@ fn ymd_from_unix(unix: i64) -> (i32, u32, u32) {
 /// underlying Hinnant algorithm normalizes out-of-range days into the
 /// next month, producing a different (y, m, d) on decode. We treat any
 /// normalization as `None` so `prune_expired_daily_files` doesn't trust
-/// a filename like `broker-2024-02-30. jsonl` as a real date.
+/// a filename like `broker-2024-02-30.jsonl` as a real date.
 fn unix_days_from_ymd(y: i32, m: u32, d: u32) -> Option<i64> {
     if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
         return None;
@@ -2495,7 +2495,7 @@ fn unix_days_from_ymd(y: i32, m: u32, d: u32) -> Option<i64> {
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
     let result = era as i64 * 146_097 + doe as i64 - 719_468;
     // Round-trip guard: rejects impossible calendar dates that the
-    // Hinnant algorithm would otherwise normalize (e. g. 2024-02-30
+    // Hinnant algorithm would otherwise normalize (e.g. 2024-02-30
     // becoming 2024-03-01). Pruning trusts the filename only after
     // this guard agrees.
     let (yy, mm, dd) = ymd_from_unix(result * 86_400);

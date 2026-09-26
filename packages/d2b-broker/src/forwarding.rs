@@ -2,7 +2,7 @@
 //!
 //! The broker holds the committed rows and links no provider crate, so the
 //! dispatch step of the operation envelope cannot run a family row's
-//! `OperationDef. handler` locally. It forwards instead: one validated,
+//! `OperationDef.handler` locally. It forwards instead: one validated,
 //! authorized invocation crosses to the process that declared the handler,
 //! which answers with the handler's canonical result or its refusal code.
 //!
@@ -751,7 +751,7 @@ mod tests {
     fn a_response_whose_fd_count_mismatches_its_declared_indexes_is_refused_not_truncated() {
         // The peer declares two descriptors but attaches only one:the
         // carrier must refuse with the fd-leg code rather than succeed with a
-        // truncated answer. Wherewhere
+        // truncated answer.where
         let (read_end, _write_end) = pipe().expect("pipe");
         let mut read_end = Some(read_end);
         let peer = Peer::spawn_raw(move |_request| {
@@ -794,7 +794,7 @@ mod tests {
     fn a_response_whose_fd_declarations_exceed_the_frame_ceiling_is_refused() {
         // Nine declared descriptors cannot ride an eight-descriptor frame;
         // the refusal must name the fd leg, never surface as a transport-side
-        // control-truncation error. Wherewhere
+        // control-truncation error.where
         let (read_end, _write_end) = pipe().expect("pipe");
         let mut read_end = Some(read_end);
         let peer = Peer::spawn_raw(move |_request| {

@@ -591,7 +591,7 @@ wire_deserialize!(
     .map_err(serde::de::Error::custom)
 );
 
-/// ResourceExport lifecycle state projected into `status. resource`.
+/// ResourceExport lifecycle state projected into `status.resource`.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
 )]

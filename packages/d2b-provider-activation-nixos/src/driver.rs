@@ -20,7 +20,7 @@
 //!
 //! Conversion mapping (spec section 13):
 //! - `describe` -> [`ActivationDriverFactory`] registration under
-//!   `activation-nixos. d2bus. org.NixosGeneration`.
+//!   `activation-nixos.d2bus.org.NixosGeneration`.
 //! - `validate_spec` -> [`ResourceDriver::validate`].
 //! - `observe` -> [`ResourceDriver::recover`] (rejoin the owned runner).
 //! - `plan`/`reconcile`/`execute_effect` -> [`ResourceDriver::reconcile`].
@@ -28,7 +28,7 @@
 //!   durable deleting mark is the manager's (R10), so the old finalizer
 //!   dance is not part of the new plane; the owned runner retires first
 //!   (F3).
-//! - `UpdateStatus` -> `ctx. set_status` (in-memory only, R11).
+//! - `UpdateStatus` -> `ctx.set_status` (in-memory only, R11).
 //!
 //! Three preserved behaviors do not map onto one resource's context and are
 //! reported rather than invented:
@@ -44,7 +44,7 @@
 //!    ever fabricated; the projection stays non-terminal until the
 //!    child-status surface exists.
 //! 3. The typed activation status projection is in-memory (R11); its
-//!    durable `status. resource. activationDetail` publication belongs to the
+//!    durable `status.resource.activationDetail` publication belongs to the
 //!    manager view model, not this driver.
 #![allow(dead_code)]
 
@@ -890,7 +890,7 @@ impl ResourceDriver for ActivationDriver {
 /// The execution domains the NixosGeneration type can be reconciled in.
 ///
 /// Derived from the placement contract: `NixosGeneration` names the canonical
-/// `spec. executionRef` anchor (`PlacementAnchor::canonical_for` resolves
+/// `spec.executionRef` anchor (`PlacementAnchor::canonical_for` resolves
 /// `ExecutionRef`), and the spec constructor admits a `Host` or a `Guest`
 /// there, so a generation row is driven in either domain.
 const ACTIVATION_EXECUTION_DOMAINS: &[&str] = &["host", "guest"];
@@ -907,7 +907,7 @@ const ACTIVATION_READS: &[WellKnownType] = &[WellKnownType::NIXOS_GENERATION];
 /// `NixosGeneration` is `BUILTIN | STARTUP` (no RUNTIME bit): the plane
 /// cannot serve the activation generations without it, so it must be
 /// registered before the plane opens. The type is not exportable:
-/// `ResourceExport` admits only qualified `*.d2bus. org.*Service` types, so a
+/// `ResourceExport` admits only qualified `*.d2bus.org.*Service` types, so a
 /// generation can never be an export subject. The driver serves no broker
 /// operations and declares the one child creation it performs - the owned
 /// activation runner ([`ACTIVATION_RUNNER_CREATION`]) - and the family's

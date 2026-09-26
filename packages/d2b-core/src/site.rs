@@ -2,7 +2,7 @@
 //!
 //! The NixOS site module resolves the host session facts the daemon must
 //! never guess - today the host Wayland socket that
-//! `d2b. site. waylandUser` + `d2b. site. waylandDisplay` describe - into this
+//! `d2b.site.waylandUser` + `d2b.site.waylandDisplay` describe - into this
 //! artifact, so the trusted bundle and the runtime directory the site
 //! provisions cannot disagree. The artifact is optional in the bundle index:
 //! a bundle that predates it, or a site that declares no Wayland session,
@@ -20,7 +20,7 @@ pub struct SiteJson {
     /// Artifact schema version (currently `"v1"`).
     pub schema_version: String,
     /// Absolute host Wayland socket (`/run/user/<uid>/<display>`), or `null`
-    /// when the site declares no Wayland session (`d2b. site. waylandUser` is
+    /// when the site declares no Wayland session (`d2b.site.waylandUser` is
     /// unset). Optional so bundles that predate the field still parse.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wayland_socket: Option<String>,
@@ -65,7 +65,7 @@ impl std::fmt::Display for SiteValidationError {
 
 /// The one accepted shape: exactly `/run/user/<uid>/<display>` with no parent
 /// components - the value the Nix emitter resolves from
-/// `d2b. site. waylandUser`'s uid and `d2b. site. waylandDisplay`.
+/// `d2b.site.waylandUser`'s uid and `d2b.site.waylandDisplay`.
 fn wayland_socket_ok(socket: &str) -> bool {
     let mut components = std::path::Path::new(socket).components();
     matches!(components.next(), Some(Component::RootDir))

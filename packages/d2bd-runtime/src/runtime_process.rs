@@ -162,10 +162,10 @@ pub fn validate_lock_parent(
     // `root:d2b 1770` (sticky bit, world-closed) with explicit POSIX
     // ACLs (g::r-x, u:d2bd:rwx, m::rwx) so:
     //   - launcher users (members of `d2b`) traverse via the effective
-    //     group ACL entry (g::r-x) to reach `/run/d2b/public. sock`
+    //     group ACL entry (g::r-x) to reach `/run/d2b/public.sock`
     //     (mode 0660, group d2b);
     //   - d2bd gets rwx via the named-user ACL entry without owning
-    //     the directory, so root-owned subdirs (e. g. /run/d2b/vms)
+    //     the directory, so root-owned subdirs (e.g. /run/d2b/vms)
     //     do not trigger the systemd-tmpfiles unsafe-path-transition guard;
     //   - the sticky bit prevents d2bd from unlinking those root-owned
     //     children.
@@ -335,7 +335,7 @@ pub fn bind_public_socket(path: &Path, identity: &RuntimeIdentity) -> Result<Soc
             source: error_source(err),
         }
     })?;
-    // Always chgrp the socket to `public_socket_gid` (i. e. `d2b` in
+    // Always chgrp the socket to `public_socket_gid` (i.e. `d2b` in
     // production). The previous `geteuid().is_root()` gate meant the
     // non-root systemd unit (User=d2bd, SupplementaryGroups=d2b)
     // left the socket with group `d2bd`, which made launcher users
@@ -524,7 +524,7 @@ pub fn daemon_version_file_path(config: &DaemonConfig) -> std::path::PathBuf {
 }
 
 /// Tiny RFC-3339 UTC formatter (`YYYY-MM-DDTHH:MM:SSZ`) so we can
-/// stamp `DaemonVersionFile. started_at` without pulling in `chrono`
+/// stamp `DaemonVersionFile.started_at` without pulling in `chrono`
 /// as a new top-level dependency. The daemon's startup is the only
 /// caller; precision to the second is sufficient.
 pub fn chrono_like_rfc3339() -> String {
@@ -751,7 +751,7 @@ mod runtime_acl_tests {
     /// `expect_root_owned_parent=true` chgrp actually mutated the
     /// socket's gid. The caller is a member of every group `getgroups`
     /// returns, so `chown(None, Some(supp_gid))` is permitted by POSIX.
-    /// Returns `None` when the runtime has only the primary gid (e. g.
+    /// Returns `None` when the runtime has only the primary gid (e.g.
     /// inside minimal CI containers); the caller skips the assertion in
     /// that case with a visible log line so the gap is documented
     /// rather than silently passing.

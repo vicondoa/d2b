@@ -69,7 +69,7 @@ pub enum EntryKind {
 /// clippy matches on (everything after the final `::`), and the counting
 /// class.
 pub struct DeniedApi {
-    /// Fully-qualified API path as configured, e. g. `std::sync::Mutex::lock`.
+    /// Fully-qualified API path as configured, e.g. `std::sync::Mutex::lock`.
     pub path: String,
     /// The bare tail clippy matches on: everything after the final `::`.
     pub tail: String,
@@ -323,7 +323,7 @@ pub struct SuppressionSite {
     pub blanket: bool,
     /// `#[expect(...)]` rather than `#[allow(...)]`.
     pub expect: bool,
-    /// The banned lint, e. g. `clippy::disallowed_methods`.
+    /// The banned lint, e.g. `clippy::disallowed_methods`.
     pub lint: String,
     /// The attribute's `reason = "..."` value, when present.
     pub reason: Option<String>,
@@ -639,7 +639,7 @@ fn reason_in_args(args: &[String]) -> Option<String> {
 /// suppression inventory.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CrateCensus {
-    /// Crate directory relative to the repo root, e. g. `packages/d2b-broker`.
+    /// Crate directory relative to the repo root, e.g. `packages/d2b-broker`.
     pub crate_dir: String,
     /// Package name from the manifest.
     pub package_name: String,
@@ -672,7 +672,7 @@ struct CensusFile {
     split: SplitContext,
 }
 
-/// The workspace member paths the root manifest declares, e. g.
+/// The workspace member paths the root manifest declares, e.g.
 /// `packages/d2b-broker`.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn workspace_member_paths(repo_root: &Path) -> Result<BTreeSet<String>, String> {
@@ -874,7 +874,7 @@ fn first_diagnostic(stderr: &str) -> Option<String> {
 /// before any warning is considered; `None` when the stream has no
 /// error-level record and no warning that carries a primary span (a
 /// spanless warning is dropped, so a spanless-warning-only stream also
-/// yields `None` - e. g. a cargo-level failure that never reached rustc).
+/// yields `None` - e.g. a cargo-level failure that never reached rustc).
 fn first_json_diagnostic(json: &str) -> Option<String> {
     let mut first_warning: Option<String> = None;
     let mut first_spanless_error: Option<String> = None;
@@ -931,7 +931,7 @@ fn first_json_diagnostic(json: &str) -> Option<String> {
 /// (run_clippy) consults it before accepting a warning-only JSON pick.
 fn first_stderr_error(stderr: &str) -> Option<String> {
     // First error-level header, span or spanless: cargo-level failures
-    // (e. g. `error: failed to run custom build command`) never carry a
+    // (e.g. `error: failed to run custom build command`) never carry a
     // `--> file:line` span, but they are the real cause when the JSON
     // stream holds only warnings.
     let lines: Vec<&str> = stderr.lines().collect();

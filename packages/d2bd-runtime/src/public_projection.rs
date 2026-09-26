@@ -302,7 +302,7 @@ fn public_pidfd_role_prefix_state(pidfd_table: &PidfdTable, vm: &str, prefix: &s
 /// Liveness of the qemu-media runner role as the public media row reports it.
 ///
 /// The pidfd table is the authority for both this projection and the
-/// per-service state map, so the typed state and the `services. qemuMedia`
+/// per-service state map, so the typed state and the `services.qemuMedia`
 /// string cannot disagree.
 pub fn public_qemu_media_runner_state(pidfd_table: &PidfdTable, vm: &str) -> QemuMediaRunnerState {
     if public_pidfd_role_running(pidfd_table, vm, RunnerRole::QemuMedia.as_str()) {

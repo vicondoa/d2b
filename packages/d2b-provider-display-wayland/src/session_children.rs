@@ -323,7 +323,7 @@ fn durable_display_suffix(session_uid: &ResourceUid, role: DisplayProcessRole) -
     suffix
 }
 
-/// The `status. resource` projection for one display session: the two worker
+/// The `status.resource` projection for one display session: the two worker
 /// Process references and the private Endpoint with its committed
 /// generation.
 pub fn wayland_session_resource_projection(

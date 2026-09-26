@@ -4,7 +4,7 @@
 //! ResourceType. The scope, audience, consumer, allowed-operation, rotation,
 //! expiry, revocation, and identity-Guest fields are Layer 2 base fields;
 //! non-secret implementation-only desired settings belong to the Layer 3
-//! `spec. provider` envelope on the universal `ResourceSpec`.
+//! `spec.provider` envelope on the universal `ResourceSpec`.
 //!
 //! The base spec is zero-secret by construction: it carries no token, key,
 //! pre-shared key, cookie, claim, or other credential byte. Sensitive bytes
