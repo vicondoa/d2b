@@ -313,13 +313,7 @@ where
             if cancellation.is_cancelled() {
                 return Ok(());
             }
-            let current_route = self
-                .authenticated_route
-                .lock()
-                .await
-                .clone()
-                .ok_or(ProviderToolkitError::SessionUnauthenticated)?;
-            if current_route != route {
+            if self.authenticated_route.lock().await.as_ref() != Some(&route) {
                 warn!(zone = ?route.zone(), "provider session loop aborted: bound controller route changed mid-session");
                 return Err(ProviderToolkitError::SessionUnauthenticated);
             }
