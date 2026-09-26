@@ -161,7 +161,6 @@ pub fn envelope_invoke_kernel(
     let envelope = BrokerRequestEnvelope {
         request,
         caller_role,
-        test_peer_uid: None,
         audit_join: None,
     };
     let frame = d2b_contracts::encode_frame(&envelope)

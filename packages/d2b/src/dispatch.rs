@@ -446,19 +446,21 @@ fn parse_audit_page(response: &[u8]) -> Result<(Vec<String>, AuditPageEnd), CliF
                     .entries
                     .into_iter()
                     .map(|entry| {
-                        entry
-                            .record
-                            .map(|record| match record {
+                        use d2b_contracts::audit_wire::AuditExportEntryPayload;
+
+                        match entry.payload {
+                            AuditExportEntryPayload::Record { record } => match record {
                                 Value::String(line) => line,
                                 record => record.to_string(),
-                            })
-                            .unwrap_or_else(|| {
+                            },
+                            AuditExportEntryPayload::Error { error } => {
                                 serde_json::json!({
-                                    "export_error": entry.error,
+                                    "export_error": error,
                                     "sequence": entry.sequence,
                                 })
                                 .to_string()
-                            })
+                            }
+                        }
                     })
                     .collect();
                 (lines, frame.payload.page_end)

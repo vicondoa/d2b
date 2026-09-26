@@ -832,7 +832,7 @@ pub fn run(command: BrokerMode) -> Result<(), RunError> {
             test_uid,
         } => run_probe(
             socket_path,
-            crate::bootstrap::wire::probe_hello(test_uid),
+            test_peer_uid_frame(crate::bootstrap::wire::probe_hello(), test_uid),
             true,
         ),
         #[cfg(feature = "layer1-bootstrap")]
@@ -841,9 +841,9 @@ pub fn run(command: BrokerMode) -> Result<(), RunError> {
             test_uid,
             operation,
         } => {
-            let request = crate::bootstrap::wire::probe_stub(&operation, test_uid)
+            let request = crate::bootstrap::wire::probe_stub(&operation)
                 .ok_or_else(|| RunError::Usage(format!("unknown stub operation: {operation}")))?;
-            run_probe(socket_path, request, true)
+            run_probe(socket_path, test_peer_uid_frame(request, test_uid), true)
         }
         #[cfg(feature = "layer1-bootstrap")]
         BrokerMode::ProbeExportAudit {
@@ -852,7 +852,10 @@ pub fn run(command: BrokerMode) -> Result<(), RunError> {
             caller_role,
         } => run_probe(
             socket_path,
-            crate::bootstrap::wire::probe_export_audit(test_uid, caller_role),
+            test_peer_uid_frame(
+                crate::bootstrap::wire::probe_export_audit(caller_role),
+                test_uid,
+            ),
             false,
         ),
     }
@@ -1381,8 +1384,9 @@ pub fn probe_bundle_load_response_with_policy(
 }
 
 /// Bind a kernel-authenticated peer to this broker instance before any wire
-/// bytes are decoded. Test mode keeps the existing simulated envelope UID
-/// support, but still requires the actual local test process credentials.
+/// bytes are decoded. Test mode keeps the existing simulated peer-uid support
+/// (the frame member [`TEST_PEER_UID_FIELD`]), but still requires the actual
+/// local test process credentials.
 fn peer_matches_instance(config: &ServerConfig, peer_uid: u32, peer_gid: u32) -> bool {
     if config.test_mode {
         return (peer_uid == nix::unistd::Uid::current().as_raw()
@@ -1391,6 +1395,75 @@ fn peer_matches_instance(config: &ServerConfig, peer_uid: u32, peer_gid: u32) ->
     }
     (peer_uid == config.d2bd_uid && peer_gid == config.d2bd_gid)
         || (config.profile == BrokerProfile::Host && peer_uid == 0)
+}
+
+/// The harness-only peer-uid override's frame member (RS-0328).
+///
+/// The broker's own harness - the bootstrap probe CLI and the integration
+/// tests - asks a `--test-mode` broker to treat one connection as a peer other
+/// than the uid `SO_PEERCRED` reports. The override rides beside the envelope
+/// as a sibling member of the same JSON frame rather than as a field of the
+/// wire contract: `d2b_contracts_broker::broker_wire::BrokerRequestEnvelope`
+/// carries no test seam, a broker that was not started with `--test-mode`
+/// never looks for this member, and its strict decode refuses a frame that
+/// carries one.
+pub const TEST_PEER_UID_FIELD: &str = "testPeerUid";
+
+/// Wrap one envelope in the frame the harness sends to a `--test-mode` broker.
+///
+/// `None` leaves the envelope's own frame untouched, so a harness run that
+/// overrides no uid sends exactly the production frame.
+///
+/// # Panics
+///
+/// Panics when `envelope` does not serialize to a JSON object; every broker
+/// envelope frame is one.
+pub fn test_peer_uid_frame<T: serde::Serialize>(
+    envelope: T,
+    test_peer_uid: Option<u32>,
+) -> Value {
+    let mut frame = serde_json::to_value(envelope).expect("a broker envelope serializes");
+    if let Some(test_peer_uid) = test_peer_uid {
+        frame
+            .as_object_mut()
+            .expect("a broker envelope frame is a JSON object")
+            .insert(
+                TEST_PEER_UID_FIELD.to_owned(),
+                Value::from(test_peer_uid),
+            );
+    }
+    frame
+}
+
+/// Unwrap the harness-only peer-uid override from a decoded frame.
+///
+/// `Ok(None)` means the frame carries no override, or spells it `null` - the
+/// absent value the retired envelope field accepted. A member of any other
+/// shape is refused with the same force as every other malformed wire member
+/// instead of being dropped.
+fn take_test_peer_uid(frame: &mut Value) -> io::Result<Option<u32>> {
+    let Some(member) = frame
+        .as_object_mut()
+        .and_then(|frame| frame.remove(TEST_PEER_UID_FIELD))
+    else {
+        return Ok(None);
+    };
+    match member {
+        Value::Null => Ok(None),
+        Value::Number(number) => number
+            .as_u64()
+            .and_then(|uid| u32::try_from(uid).ok())
+            .map(Some)
+            .ok_or_else(invalid_test_peer_uid),
+        _ => Err(invalid_test_peer_uid()),
+    }
+}
+
+fn invalid_test_peer_uid() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("{TEST_PEER_UID_FIELD} is not a peer uid"),
+    )
 }
 
 /// Accept and serve connections until the listener itself fails.
@@ -1463,14 +1536,14 @@ async fn handle_connection(connection: AsyncSeqpacket, server: &Server) -> io::R
         return Ok(());
     }
     #[cfg(not(feature = "layer1-bootstrap"))]
-    let (envelope, request_fds) = {
+    let (envelope, request_fds, test_peer_uid) = {
         // The frame decodes as JSON first so the retired-wire gate can
         // recognize a variant the current enum no longer carries: a retired
         // variant's frame is well-formed JSON but not a current
         // `RequestEnvelope`, and the gate refuses it with the typed
         // stale-wire-version code plus an audit record before the typed
         // decode can drop it as malformed wire (KTD10).
-        let Some((envelope_value, request_fds)) =
+        let Some((mut envelope_value, request_fds)) =
             connection.recv_json_frame_with_fds::<Value>().await?
         else {
             return Ok(());
@@ -1505,18 +1578,41 @@ async fn handle_connection(connection: AsyncSeqpacket, server: &Server) -> io::R
                 .await?;
             return Ok(());
         }
+        // The harness-only peer-uid override is unwrapped here, in front of
+        // the typed decode: the wire contract's envelope carries no such
+        // member, so only a broker that was started with `--test-mode` ever
+        // sees one and every other broker refuses the frame with it.
+        let test_peer_uid = if server.config.test_mode {
+            take_test_peer_uid(&mut envelope_value)?
+        } else {
+            None
+        };
         let envelope: RequestEnvelope = serde_json::from_value(envelope_value)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        (envelope, request_fds)
+        (envelope, request_fds, test_peer_uid)
     };
     #[cfg(feature = "layer1-bootstrap")]
-    let Some((envelope, request_fds)) = connection
-        .recv_json_frame::<RequestEnvelope>()
-        .await
-        .map(|frame| frame.map(|envelope| (envelope, Vec::new())))?
-    else {
-        return Ok(());
+    let (envelope, request_fds, test_peer_uid) = {
+        // The bootstrap wire decodes as JSON first for the same reason the
+        // production wire does: the harness-only peer-uid override is a frame
+        // member beside the envelope and is unwrapped before the strict
+        // decode.
+        let Some(mut envelope_value) = connection.recv_json_frame::<Value>().await? else {
+            return Ok(());
+        };
+        let test_peer_uid = if server.config.test_mode {
+            take_test_peer_uid(&mut envelope_value)?
+        } else {
+            None
+        };
+        let envelope: RequestEnvelope = serde_json::from_value(envelope_value)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        (envelope, Vec::new(), test_peer_uid)
     };
+    // The kernel `SO_PEERCRED` uid is the authenticated caller. The frame's
+    // harness-only override stands in for it only in a `--test-mode` broker,
+    // and only for the gates: `peer_uid` stays the audited frame source.
+    let effective_uid = test_peer_uid.unwrap_or(peer_uid);
 
     let config = Arc::clone(&server.config);
     let audit_log = Arc::clone(&server.audit_log);
@@ -1556,6 +1652,7 @@ async fn handle_connection(connection: AsyncSeqpacket, server: &Server) -> io::R
                     envelope,
                     request_fds,
                     peer_uid,
+                    effective_uid,
                     peer_gid,
                     peer_pid,
                     &config,
@@ -1569,6 +1666,7 @@ async fn handle_connection(connection: AsyncSeqpacket, server: &Server) -> io::R
                     envelope,
                     request_fds,
                     peer_uid,
+                    effective_uid,
                     peer_gid,
                     peer_pid,
                     &config,
@@ -1626,10 +1724,17 @@ enum RequestOutcome {
 /// the handlers' subprocess and filesystem work, the audit append - so they
 /// run on the dispatch pool, whose workers bound the work and whose queue
 /// bounds the waiters, rather than on a reactor worker or a thread per call.
+///
+/// The caller context arrives as two uids: `peer_uid` is the
+/// kernel-authenticated peer the refusals here audit as the frame's source,
+/// and `effective_uid` is the uid the gates decide on - the same value except
+/// in a `--test-mode` broker, where the harness-only frame override stands in
+/// for the kernel credential.
 async fn answer_request(
     envelope: RequestEnvelope,
     request_fds: Vec<OwnedFd>,
     peer_uid: u32,
+    effective_uid: u32,
     peer_gid: u32,
     peer_pid: i32,
     config: &ServerConfig,
@@ -1638,6 +1743,8 @@ async fn answer_request(
 ) -> io::Result<RequestOutcome> {
     #[cfg(feature = "layer1-bootstrap")]
     let _ = &request_fds; // the bootstrap wire carries no request descriptors
+    #[cfg(feature = "layer1-bootstrap")]
+    let _ = peer_uid; // the profile-refusal audit that names the kernel uid is production-wire only
     // Load the bundle resolver from the configured `bundle_path` for every
     // request. The broker is socket-activated but can remain alive across
     // `nixos-rebuild switch`; treating the bundle as process-lifetime
@@ -1652,11 +1759,6 @@ async fn answer_request(
         BundleSlot::Tampered { path, reason } => (None, Some((path, reason))),
     };
     let request = envelope.request;
-    let effective_uid = if config.test_mode {
-        envelope.test_peer_uid.unwrap_or(peer_uid)
-    } else {
-        peer_uid
-    };
     let operation = request.op_name();
     let opaque_target_id = request.opaque_target_id();
     #[cfg(not(feature = "layer1-bootstrap"))]
@@ -10390,11 +10492,11 @@ fn prepare_socket_path(path: &Path) -> io::Result<()> {
 #[cfg(feature = "layer1-bootstrap")]
 fn run_probe(
     socket_path: PathBuf,
-    request: RequestEnvelope,
+    frame: Value,
     expect_response: bool,
 ) -> Result<(), RunError> {
     let socket = connect_seqpacket(&socket_path)?;
-    send_json_frame(socket.as_raw_fd(), &request)?;
+    send_json_frame(socket.as_raw_fd(), &frame)?;
     let response = recv_json_frame::<BrokerResponse>(socket.as_raw_fd())?;
     if let Some(response) = response {
         println!(
@@ -17947,8 +18049,7 @@ mod tests {
                     uid: configured_daemon_uid,
                 },
                 // Ignored because config.test_mode=false: the broker must use the
-                // kernel SO_PEERCRED uid, not a caller-supplied envelope field.
-                test_peer_uid: Some(configured_daemon_uid),
+                // kernel SO_PEERCRED uid, not the envelope's claimed caller role.
                 audit_join: None,
             };
             let (client, server) = socketpair(
@@ -18149,7 +18250,6 @@ mod tests {
                     supported_features: Vec::new(),
                 }),
                 caller_role: BrokerCallerRole::RootUid { uid: 0 },
-                test_peer_uid: None,
                 audit_join: None,
             },
         )
@@ -20685,7 +20785,6 @@ mod tests {
                     supported_features: Vec::new(),
                 }),
                 caller_role: BrokerCallerRole::AdminUid { uid: caller_uid },
-                test_peer_uid: Some(caller_uid),
                 audit_join: None,
             };
             caller.send_json_frame(&envelope).await.expect("send Hello");

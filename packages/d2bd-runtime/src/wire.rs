@@ -696,8 +696,9 @@ mod tests {
         let private = || ExportBrokerAuditResponse {
             entries: vec![AuditExportEntry {
                 sequence: 42,
-                record: Some(json!({"operation": "ApplyNftables"})),
-                error: None,
+                payload: d2b_contracts_broker::AuditExportEntryPayload::Record {
+                    record: json!({"operation": "ApplyNftables"}),
+                },
             }],
             next_cursor: Some(AuditExportCursor {
                 day: "2026-08-13".to_owned(),
