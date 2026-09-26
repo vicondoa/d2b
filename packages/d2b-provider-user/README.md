@@ -49,12 +49,16 @@ with the decoder, the type's verbs, execution domain, reads, and the
 local identity it names, so the plane drives it in the Host domain. The
 crate's own bounded NSS probe (`src/probe.rs`) reads the local account
 database through `nix`'s `getpwnam`/`getgrnam` surface, behind the
-`UserDriverEffects` seam, over the preserved `UserReconciler`. No daemon
-adapter implements discovery for this family, and the daemon supplies no
-externally built port: the composition root hands the family's effects the
-declared facet set, which carries the crate's own probe.
+`UserDriverEffects` seam, over the preserved `UserReconciler`. The reads
+have no async form, so the probe runs them on `d2b-core`'s bounded loader
+probe seat (`loader_worker::run_probe`): a slow or wedged backend refuses
+later probes instead of parking an executor worker for the lookup. No
+daemon adapter implements discovery for this family, and the daemon
+supplies no externally built port: the composition root hands the family's
+effects the declared facet set, which carries the crate's own probe.
 
-The crate depends on `d2b-contracts-resource`, `d2b-provider-system-core`
+The crate depends on `d2b-contracts-resource`, `d2b-core` (the bounded
+loader probe seat the account reads run on), `d2b-provider-system-core`
 (the User reconciler the family's effects drive), `d2b-provider-toolkit`,
 `d2b-resource-runtime`, `d2b-resource-types`, `nix` (the bounded account
 reads), `sha2` (the identity digest), `serde_json`, and `tracing`. It
