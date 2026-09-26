@@ -351,7 +351,12 @@ where
     loop {
         match query() {
             Ok((scope, HelperScopeState::Starting | HelperScopeState::Active)) => return Ok(scope),
-            Ok(_) => return Err(ScopeError::IdentityMismatch),
+            // The scope exists but already left the starting/active states
+            // (the launched process exited, is stopping, or is degraded):
+            // an operational early exit, not an identity failure. Reported
+            // as create-failed so the daemon classifies it as
+            // scope-create-failed instead of a security identity mismatch.
+            Ok(_) => return Err(ScopeError::CreateFailed),
             Err(ScopeError::NotFound | ScopeError::QueryFailed | ScopeError::IdentityMismatch)
                 if Instant::now() < deadline =>
             {
@@ -439,6 +444,35 @@ mod tests {
 
         assert_eq!(observed, expected);
         assert_eq!(attempts, 2);
+    }
+
+    #[test]
+    fn early_exit_scope_reports_create_failed() {
+        let expected = VerifiedScope {
+            unit_name: "d2b-unsafe-local-app-test.scope".to_owned(),
+            invocation_id: "00112233445566778899aabbccddeeff".to_owned(),
+            control_group:
+                "/user.slice/user-1000.slice/[EMAIL]/app.slice/d2b-unsafe-local-app-test.scope"
+                    .to_owned(),
+            kind: HelperScopeKind::LauncherApp,
+        };
+        for state in [
+            HelperScopeState::Stopping,
+            HelperScopeState::Exited,
+            HelperScopeState::Degraded,
+        ] {
+            let error = await_scope_identity(
+                || Ok((expected.clone(), state)),
+                Duration::from_millis(50),
+                Duration::ZERO,
+            )
+            .unwrap_err();
+            assert_eq!(
+                error,
+                ScopeError::CreateFailed,
+                "an early-exit scope must not be reported as an identity mismatch"
+            );
+        }
     }
 
     #[test]
