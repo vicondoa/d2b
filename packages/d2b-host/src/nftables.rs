@@ -514,7 +514,7 @@ impl NftBatch {
         self.add_usbip_carveout_expr(
             ChainHook::Forward,
             bus_id,
-            &format!("meta iifname \"usbip-{bus_id}\" accept", bus_id = bus_id.0),
+            &format!("meta iifname \"usbip-{bus_id}\" accept", bus_id = bus_id.as_str()),
         )
     }
 
@@ -542,7 +542,7 @@ impl NftBatch {
 
         let rule = NftRule {
             expr: expr.to_owned(),
-            comment: format!("{}usbip-carveout-{}", NftBatch::COMMENT_PREFIX, bus_id.0),
+            comment: format!("{}usbip-carveout-{}", NftBatch::COMMENT_PREFIX, bus_id.as_str()),
             specific_carveout: true,
         };
 
@@ -617,16 +617,37 @@ impl NftBatch {
     }
 }
 
-/// USBIP busid newtype. The broker re-validates the busid lexical form
-/// against the trusted bundle before passing it down here.
+/// USBIP busid newtype. The lexical busid grammar
+/// ([`crate::media::validate_usb_busid`]) is enforced once here, at the
+/// type boundary; consumers never re-validate.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct BusId(pub String);
+pub struct BusId(String);
 
 impl BusId {
-    /// Wrap one USB busid string.
-    pub fn new(s: impl Into<String>) -> Self {
-        Self(s.into())
+    /// Validate `s` against the USB busid grammar and wrap it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::media::BusIdError`] when `s` is not a valid USB
+    /// busid.
+    pub fn new(s: impl Into<String>) -> Result<Self, crate::media::BusIdError> {
+        let s = s.into();
+        crate::media::validate_usb_busid(&s)?;
+        Ok(Self(s))
+    }
+
+    /// Borrow the wrapped busid string.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<&str> for BusId {
+    type Error = crate::media::BusIdError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::new(value)
     }
 }
 
@@ -1057,7 +1078,8 @@ mod tests {
 
     #[test]
     fn usbip_carveout_inserted_before_generic() {
-        let batch = add_usbip_firewall_carveout(&BusId::new("1-1.2")).expect("carveout");
+        let bus_id = BusId::new("1-1.2").expect("busid");
+        let batch = add_usbip_firewall_carveout(&bus_id).expect("carveout");
         let forward = batch
             .chains
             .iter()
@@ -1082,7 +1104,8 @@ mod tests {
 
     #[test]
     fn comment_marker_prefix_on_every_managed_rule() {
-        let batch = add_usbip_firewall_carveout(&BusId::new("2-1")).expect("carveout");
+        let bus_id = BusId::new("2-1").expect("busid");
+        let batch = add_usbip_firewall_carveout(&bus_id).expect("carveout");
         let forward = batch
             .chains
             .iter()
@@ -1221,9 +1244,8 @@ mod tests {
     #[test]
     fn parse_roundtrips_rendered_script() {
         let mut batch = build_inet_d2b_chains();
-        batch
-            .add_usbip_carveout(&BusId::new("1-1.2"))
-            .expect("carveout");
+        let bus_id = BusId::new("1-1.2").expect("busid");
+        batch.add_usbip_carveout(&bus_id).expect("carveout");
         let script = batch.render_nft_script();
         let parsed = NftBatch::parse(&script).expect("rendered script parses");
         assert_eq!(parsed, batch);
