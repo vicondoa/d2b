@@ -24,26 +24,34 @@ const INSTALLED_GENERATION: &str =
 
 /// Recording [`NetworkRuntime`] double.
 ///
-/// Every effect call is appended to an ordered [`Self::call_order`] log while
-/// the per-verb counters (`reconciled`, `finalized`) keep counting, so the
-/// plane can assert both event ordering and invocation counts. The double
-/// answers the trusted-bundle report from a fixture bundle (the same
-/// artifact shapes the daemon's own tests load); the broker facets are
-/// unreachable because the driver tests never invoke a kernel.
+/// Every effect call is appended to an ordered call log while the per-verb
+/// counters (`reconciled`, `finalized`) keep counting, so the plane can
+/// assert both event ordering and invocation counts. The log and both
+/// counters are async locks (`tokio::sync::Mutex`, awaited): the effect
+/// methods write them and the crate's async tests read them, so no
+/// synchronous accessor forces a blocking lock. The double answers the
+/// trusted-bundle report from a fixture bundle (the same artifact shapes the
+/// daemon's own tests load); the broker facets are unreachable because the
+/// driver tests never invoke a kernel.
 #[derive(Default)]
 pub struct RecordingRuntime {
     /// Ordered log of every effect call, oldest first.
-    calls: parking_lot::Mutex<Vec<&'static str>>,
+    calls: tokio::sync::Mutex<Vec<&'static str>>,
     /// Number of [`NetworkRuntime::reconcile_network`] invocations.
-    pub reconciled: parking_lot::Mutex<usize>,
+    pub reconciled: tokio::sync::Mutex<usize>,
     /// Number of [`NetworkRuntime::finalize_network`] invocations.
-    pub finalized: parking_lot::Mutex<usize>,
+    pub finalized: tokio::sync::Mutex<usize>,
 }
 
 impl RecordingRuntime {
     /// The ordered effect calls, oldest first.
-    pub fn call_order(&self) -> Vec<&'static str> {
-        self.calls.lock().clone()
+    pub async fn call_order(&self) -> Vec<&'static str> {
+        self.calls.lock().await.clone()
+    }
+
+    /// Append one effect call to the ordered log.
+    async fn record(&self, call: &'static str) {
+        self.calls.lock().await.push(call);
     }
 }
 
@@ -65,8 +73,8 @@ impl NetworkRuntime for RecordingRuntime {
         &self,
         _request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
-        self.calls.lock().push("reconcile"); // async-gate-allow: test-support recorder lock
-        *self.reconciled.lock() += 1; // async-gate-allow: test-support recorder lock
+        self.record("reconcile").await;
+        *self.reconciled.lock().await += 1;
         Ok(SharedProviderEffectOutcome::phase(
             SharedProviderEffectPhase::Ready,
         ))
@@ -76,8 +84,8 @@ impl NetworkRuntime for RecordingRuntime {
         &self,
         _request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
-        self.calls.lock().push("finalize"); // async-gate-allow: test-support recorder lock
-        *self.finalized.lock() += 1; // async-gate-allow: test-support recorder lock
+        self.record("finalize").await;
+        *self.finalized.lock().await += 1;
         Ok(SharedProviderFinalize::Complete)
     }
 }

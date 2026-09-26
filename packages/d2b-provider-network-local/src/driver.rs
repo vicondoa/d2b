@@ -504,15 +504,16 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingRequeue {
-        scheduled: parking_lot::Mutex<Vec<RequeueId>>,
+        next_id: std::sync::atomic::AtomicU64,
     }
 
 impl RequeueScheduler for RecordingRequeue {
         fn schedule(&self, _key: ResourceKey, _after: Duration) -> RequeueId {
-            let mut scheduled = self.scheduled.lock();
-            let id = RequeueId(scheduled.len() as u64 + 1);
-            scheduled.push(id);
-            id
+            let id = self
+                .next_id
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            RequeueId(id)
         }
 
         fn cancel(&self, _id: RequeueId) {}
@@ -643,7 +644,7 @@ impl RequeueScheduler for RecordingRequeue {
         ] {
             assert!(entries.contains(&expected), "{entries:?}");
         }
-        assert_eq!(*effects.reconciled.lock(), 1); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        assert_eq!(*effects.reconciled.lock().await, 1);
     }
 
     /// The family decoder yields the shared envelope the driver's verbs read.
@@ -742,9 +743,9 @@ impl RequeueScheduler for RecordingRequeue {
         driver.validate(&mut ctx).await.expect("network row validates");
         driver.reconcile(&mut ctx).await.expect("network row reconciles");
         driver.delete(&mut ctx).await.expect("network row finalizes");
-        assert_eq!(effects.call_order(), vec!["reconcile", "finalize"]);
-        assert_eq!(*effects.reconciled.lock(), 1); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-        assert_eq!(*effects.finalized.lock(), 1); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        assert_eq!(effects.call_order().await, vec!["reconcile", "finalize"]);
+        assert_eq!(*effects.reconciled.lock().await, 1);
+        assert_eq!(*effects.finalized.lock().await, 1);
     }
 }
 

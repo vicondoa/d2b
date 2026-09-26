@@ -1622,17 +1622,30 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct RecordingBroker {
-        events: Arc<parking_lot::Mutex<Vec<&'static str>>>,
+        events: Arc<std::sync::Mutex<Vec<&'static str>>>,
     }
 
     impl RecordingBroker {
 
+        /// Take the recorder lock, failing loudly on poisoning.
+        ///
+        /// This fake's recording happens from the synchronous
+        /// [`NetworkBroker`] trait methods, so the log cannot be an awaited
+        /// async lock; this is its one acquisition site and it carries the
+        /// recorded exception.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn recorder(&self) -> std::sync::MutexGuard<'_, Vec<&'static str>> {
+            self.events
+                .lock()
+                .expect("a test-support recorder lock is never poisoned")
+        }
+
         fn record(&self, event: &'static str) {
-            self.events.lock().push(event);
+            self.recorder().push(event);
         }
 
         fn events(&self) -> Vec<&'static str> {
-            self.events.lock().clone()
+            self.recorder().clone()
         }
     }
 

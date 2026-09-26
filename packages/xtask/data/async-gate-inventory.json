@@ -422,21 +422,6 @@
       "reason": "test-support recorder lock"
     },
     {
-      "file": "packages/d2b-provider-device/src/test_support.rs",
-      "line": 37,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2b-provider-device/src/test_support.rs",
-      "line": 49,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2b-provider-device/tests/device_family.rs",
-      "line": 167,
-      "reason": "test-support recorder lock"
-    },
-    {
       "file": "packages/d2b-provider-endpoint/src/test_support.rs",
       "line": 73,
       "reason": "test-support recorder lock"
@@ -499,51 +484,6 @@
     {
       "file": "packages/d2b-provider-guest/src/test_support.rs",
       "line": 271,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2b-provider-network-local/src/driver.rs",
-      "line": 646,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-network-local/src/driver.rs",
-      "line": 746,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-network-local/src/driver.rs",
-      "line": 747,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-network-local/src/test_support.rs",
-      "line": 68,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2b-provider-network-local/src/test_support.rs",
-      "line": 69,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2b-provider-network-local/src/test_support.rs",
-      "line": 79,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2b-provider-network-local/src/test_support.rs",
-      "line": 80,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2b-provider-network-local/tests/reconcile.rs",
-      "line": 99,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2b-provider-network-local/tests/reconcile.rs",
-      "line": 179,
       "reason": "test-support recorder lock"
     },
     {
@@ -750,56 +690,6 @@
       "file": "packages/d2b-provider-volume-binding/src/driver.rs",
       "line": 1336,
       "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-volume/src/driver.rs",
-      "line": 799,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-volume/src/driver.rs",
-      "line": 816,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-volume/src/driver.rs",
-      "line": 832,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-volume/src/driver.rs",
-      "line": 840,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-volume/src/driver.rs",
-      "line": 854,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-volume/src/driver.rs",
-      "line": 856,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-volume/src/driver.rs",
-      "line": 1123,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-volume/src/driver.rs",
-      "line": 1309,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-volume/src/test_support.rs",
-      "line": 99,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2b-provider-volume/src/test_support.rs",
-      "line": 112,
-      "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-resource-runtime/src/context.rs",

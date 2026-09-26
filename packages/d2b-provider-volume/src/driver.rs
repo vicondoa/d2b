@@ -761,12 +761,14 @@ mod tests {
 
     /// Recording manager endpoint over one shared ordered log so tests can
     /// assert commit-before-spawn (F1) and retire/retain behavior. The
-    /// in-memory row set emulates the manager's store.
+    /// in-memory row set emulates the manager's store. Both fields are async
+    /// locks: the endpoint methods and the test bodies that read them are
+    /// async, so every acquisition can await.
     #[derive(Clone)]
     struct RecordingManager {
         zone: String,
-        log: Arc<parking_lot::Mutex<Vec<String>>>,
-        rows: Arc<parking_lot::Mutex<Vec<StoredDesiredResource>>>,
+        log: Arc<tokio::sync::Mutex<Vec<String>>>,
+        rows: Arc<tokio::sync::Mutex<Vec<StoredDesiredResource>>>,
         next_uid: Arc<std::sync::atomic::AtomicU64>,
     }
 
@@ -774,14 +776,14 @@ mod tests {
         fn new() -> Self {
             Self {
                 zone: "work".to_owned(),
-                log: Arc::new(parking_lot::Mutex::new(Vec::new())),
-                rows: Arc::new(parking_lot::Mutex::new(Vec::new())),
+                log: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+                rows: Arc::new(tokio::sync::Mutex::new(Vec::new())),
                 next_uid: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             }
         }
 
-        fn order(&self) -> Vec<String> {
-            self.log.lock().clone()
+        async fn order(&self) -> Vec<String> {
+            self.log.lock().await.clone()
         }
     }
 
@@ -796,7 +798,7 @@ mod tests {
             // Record the ensure request first; the commit (this function's
             // row write) happens before the reply, and the spawn
             // notification is recorded only after it.
-            self.log.lock().push(format!("ensure:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.log.lock().await.push(format!("ensure:{id}"));
             let next = self
                 .next_uid
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -813,7 +815,7 @@ mod tests {
                 metadata: child.metadata,
                 created_at: 0,
             };
-            let mut rows = self.rows.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            let mut rows = self.rows.lock().await;
             let outcome = match rows.iter_mut().find(|existing| existing.key == row.key) {
                 Some(existing) => {
                     if existing.spec == row.spec {
@@ -829,7 +831,7 @@ mod tests {
                 }
             };
             drop(rows);
-            self.log.lock().push(format!("spawned:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.log.lock().await.push(format!("spawned:{id}"));
             Ok(outcome)
         }
 
@@ -837,7 +839,7 @@ mod tests {
             &self,
             key: &ResourceKey,
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            Ok(self.rows.lock().iter().find(|row| row.key == *key).cloned()) // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            Ok(self.rows.lock().await.iter().find(|row| row.key == *key).cloned())
         }
 
         async fn view(
@@ -851,9 +853,10 @@ mod tests {
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
             self.log
-                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+                .lock()
+                .await
                 .push(format!("delete:{}/{}", key.type_name, key.name));
-            self.rows.lock().retain(|row| row.key != *key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.rows.lock().await.retain(|row| row.key != *key);
             Ok(())
         }
 
@@ -864,6 +867,7 @@ mod tests {
             Ok(self
                 .rows
                 .lock()
+                .await
                 .iter()
                 .filter(|row| row.owner_uid.as_ref() == Some(&owner_uid))
                 .cloned()
@@ -1031,7 +1035,7 @@ mod tests {
 
         let outcome = reconcile_to_children(&mut d, &mut f).await;
         assert_eq!(outcome, ReconcileOutcome::Satisfied);
-        let order = manager.order();
+        let order = manager.order().await;
         assert_eq!(
             fake.call_order(),
             vec!["has-layout", "ensure-layout"],
@@ -1115,12 +1119,13 @@ mod tests {
         );
         let binding_ensures = manager
             .order()
+            .await
             .iter()
             .filter(|entry| entry.starts_with("ensure:VolumeBinding/"))
             .count();
         assert_eq!(binding_ensures, 2, "the adoption pass re-attaches the same binding child");
         assert_eq!(
-            manager.rows.lock().len(), // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            manager.rows.lock().await.len(),
             1,
             "re-attaching the deterministic child never mints a duplicate row"
         );
@@ -1159,6 +1164,7 @@ mod tests {
         assert!(
             !manager
                 .order()
+                .await
                 .iter()
                 .any(|entry| entry.starts_with("ensure:VolumeBinding/")),
             "a degraded layout derives no binding children"
@@ -1193,7 +1199,7 @@ mod tests {
             let mut d = driver(RecordingRuntime::new()).await;
             reconcile_to_children(&mut d, &mut f).await;
         }
-        let first = manager.order();
+        let first = manager.order().await;
         // Same parent + attachment -> exactly one child key, ensured again
         // as Unchanged (no duplicate identity, no churn).
         {
@@ -1202,7 +1208,7 @@ mod tests {
             d.recover(&mut f.ctx).await.expect("recover");
             reconcile_to_children(&mut d, &mut f).await;
         }
-        let second = manager.order();
+        let second = manager.order().await;
         let ensure_count = first
             .iter()
             .filter(|entry| entry.starts_with("ensure:VolumeBinding/"))
@@ -1239,6 +1245,7 @@ mod tests {
         reconcile_to_children(&mut d, &mut f).await;
         let first_child = manager
             .order()
+            .await
             .iter()
             .find_map(|entry| entry.strip_prefix("ensure:VolumeBinding/"))
             .expect("first binding name")
@@ -1260,6 +1267,7 @@ mod tests {
         d.reconcile(&mut ctx2).await.expect("reconcile grown");
         let ensured = manager
             .order()
+            .await
             .iter()
             .filter(|entry| entry.starts_with("ensure:VolumeBinding/"))
             .count();
@@ -1267,6 +1275,7 @@ mod tests {
         assert!(
             !manager
                 .order()
+                .await
                 .iter()
                 .any(|entry| entry.starts_with("delete:")),
             "matching child retained, no delete on growth"
@@ -1288,6 +1297,7 @@ mod tests {
         d.reconcile(&mut ctx3).await.expect("reconcile shrunk");
         let deletes = manager
             .order()
+            .await
             .iter()
             .filter(|entry| entry.starts_with("delete:VolumeBinding/"))
             .cloned()
@@ -1296,7 +1306,7 @@ mod tests {
         assert!(
             !deletes[0].contains(&first_child),
             "matching child never retired, order: {:?}",
-            manager.order()
+            manager.order().await
         );
     }
 
@@ -1306,7 +1316,7 @@ mod tests {
     #[tokio::test]
     async fn finalize_finalizes_owned_children_before_the_layout_teardown() {
         let manager = RecordingManager::new();
-        manager.rows.lock().push(StoredDesiredResource { // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        manager.rows.lock().await.push(StoredDesiredResource {
             key: ResourceKey::new("work", "VolumeBinding", "vol-binding-0"),
             uid: [0x77; 16],
             generation: 1,
@@ -1326,7 +1336,7 @@ mod tests {
         let failure = d.finalize(&mut f.ctx).await.expect_err("owned child still live");
         assert_eq!(failure.class(), FailureClass::Retryable);
         assert_eq!(
-            manager.order(),
+            manager.order().await,
             vec!["delete:VolumeBinding/vol-binding-0".to_owned()],
             "the owned child is nudged through its own finalize-before-delete pass"
         );
