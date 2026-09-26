@@ -81,7 +81,11 @@ const CELL_WORKER_QUEUE_DEPTH: usize = 256;
 pub const BROKER_PRINCIPAL: &str = "broker";
 
 /// The recorded outcome of one cell record.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// The serde shape is the durable wire spelling: `unknown` / `completed`,
+/// byte-identical to the strings the durable file has always carried.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum CellOutcome {
     /// The record is durably pre-committed but no completion has been
     /// recorded: either the effect is in flight or the owner crashed between
@@ -322,7 +326,7 @@ struct DurableFile {
 #[serde(rename_all = "camelCase")]
 struct DurableRecord {
     principal: String,
-    outcome: String,
+    outcome: CellOutcome,
     consumed_at_ms: u64,
     #[serde(default)]
     completed_at_ms: Option<u64>,
@@ -869,10 +873,7 @@ fn durable_snapshot(records: &BTreeMap<String, BTreeMap<String, CellRecord>>) ->
                 invocation_id.clone(),
                 DurableRecord {
                     principal: record.principal.clone(),
-                    outcome: match record.outcome {
-                        CellOutcome::Unknown => "unknown".to_owned(),
-                        CellOutcome::Completed => "completed".to_owned(),
-                    },
+                    outcome: record.outcome,
                     consumed_at_ms: record.consumed_ms,
                     completed_at_ms: record.completed_ms,
                 },
@@ -908,21 +909,11 @@ fn load(root: &Path) -> Result<BTreeMap<String, BTreeMap<String, CellRecord>>, C
     let mut records: BTreeMap<String, BTreeMap<String, CellRecord>> = BTreeMap::new();
     for (cell, invocations) in file.records {
         for (invocation_id, record) in invocations {
-            let outcome = match record.outcome.as_str() {
-                "unknown" => CellOutcome::Unknown,
-                "completed" => CellOutcome::Completed,
-                other => {
-                    return Err(CellStoreError::CorruptDurable(format!(
-                        "{}: record {cell}/{invocation_id} has unknown outcome {other}",
-                        path.display()
-                    )));
-                }
-            };
             records.entry(cell.clone()).or_default().insert(
                 invocation_id,
                 CellRecord {
                     principal: record.principal,
-                    outcome,
+                    outcome: record.outcome,
                     claimed: false,
                     durability: CellDurability::OneTime,
                     payload: None,
@@ -1705,6 +1696,18 @@ mod tests {
         store.complete(LEASES, "inv-1", "alice").expect("complete");
         let path = root.path().join(STATE_CELLS_FILE);
         std::fs::write(&path, b"not json").expect("corrupt the file");
+        assert!(matches!(
+            CellStore::open(root.path()),
+            Err(CellStoreError::CorruptDurable(_))
+        ));
+        // A syntactically valid file whose outcome string is not a known
+        // spelling must also fail closed: the enum derive rejects it the
+        // same way the old hand re-parse did.
+        std::fs::write(
+            &path,
+            br#"{"version":1,"records":{"lifecycle-leases":{"inv-1":{"principal":"alice","outcome":"bogus","consumedAtMs":1}}}}"#,
+        )
+        .expect("write unknown-outcome file");
         assert!(matches!(
             CellStore::open(root.path()),
             Err(CellStoreError::CorruptDurable(_))
