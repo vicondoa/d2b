@@ -45,6 +45,11 @@ The current authority is the Zone Resource store and authenticated session.
 The current line is a clean break from v1/v2 host state: these artifacts do
 not promise old-path adoption, data retention, or state conversion.
 
+A Network row in a Zone resource bundle whose spec does not parse is a
+producer-side drift: the resolver refuses with the typed
+`manifest-parse-error` kind instead of reporting the intent as absent, so
+the daemon journal names the artifact and the parse reason.
+
 ## Versioning
 
 | Field | Scope | Rule |

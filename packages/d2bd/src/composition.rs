@@ -7257,6 +7257,18 @@ fn dispatch_device_usb_resource_request(
     }
 }
 
+/// Map a trusted-bundle Network spec parse failure onto the resource
+/// runtime refusal surface, logging the manifest-parse-error reason.
+fn network_intent_parse_error(
+    error: d2b_core::error::Error,
+) -> resource_runtime::ResourceRuntimeError {
+    tracing::warn!(
+        error = %error,
+        "Network effect context could not resolve a trusted bundle intent"
+    );
+    resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+}
+
 pub(crate) fn resolve_network_effect_context(
     resource: &Value,
     resolver: &BundleResolver,
@@ -7303,15 +7315,18 @@ pub(crate) fn resolve_network_effect_context(
     );
     if resolver
         .resolve_network_bridge_intent(&bridge_id, &provenance)
+        .map_err(network_intent_parse_error)?
         .is_none()
         || resolver
             .resolve_network_bridge_intent(&uplink_bridge_id, &provenance)
+            .map_err(network_intent_parse_error)?
             .is_none()
     {
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
     let projection = resolver
         .resolve_network_projection_intent(&projection_id, &provenance)
+        .map_err(network_intent_parse_error)?
         .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
     let nm_id = intent_id_nm_unmanaged_host();
     if resolver.find_nm_unmanaged_intent(&nm_id).is_none() {
@@ -7324,6 +7339,7 @@ pub(crate) fn resolve_network_effect_context(
     );
     if resolver
         .resolve_network_hosts_intent(&hosts_id, &provenance)
+        .map_err(network_intent_parse_error)?
         .is_none()
     {
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
@@ -7338,12 +7354,14 @@ pub(crate) fn resolve_network_effect_context(
             ))
         })
         .collect::<Vec<_>>();
-    if route_ids.iter().any(|id| {
-        resolver
+    for id in &route_ids {
+        if resolver
             .resolve_network_route_intent(id.as_str(), &provenance)
+            .map_err(network_intent_parse_error)?
             .is_none()
-    }) {
-        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+        {
+            return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+        }
     }
     let sysctl_ids = ["lan", "uplink"]
         .into_iter()
@@ -7364,12 +7382,14 @@ pub(crate) fn resolve_network_effect_context(
                 })
         })
         .collect::<Vec<_>>();
-    if sysctl_ids.iter().any(|id| {
-        resolver
+    for id in &sysctl_ids {
+        if resolver
             .resolve_network_sysctl_intent(id.as_str(), &provenance)
+            .map_err(network_intent_parse_error)?
             .is_none()
-    }) {
-        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+        {
+            return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+        }
     }
     let generation = resolver
         .installed_generation_identity()
