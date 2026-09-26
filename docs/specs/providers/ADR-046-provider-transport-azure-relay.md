@@ -195,10 +195,12 @@ The transport Provider publishes a signed settings schema at:
 docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json
 ```
 
-This schema is committed alongside the crate and kept in sync by
-`make test-drift` (via `xtask gen-provider-transport-schemas && git diff --exit-code`).
-The Nix build phase validates every `ZoneLink.spec.transportSettings` object
-against it before emitting the resource bundle.
+This schema is a hand-authored committed artifact: the crate embeds it verbatim
+(`RelayTransportSettings::schema_json`) and applies the same admission rules to
+every settings object it deserializes, so the published schema and the runtime
+validator agree on the accepted set. The Nix zones contract validates every
+`ZoneLink.spec.transportSettings` object against the same identifier patterns
+before emitting the resource bundle.
 
 ### Canonical `spec.transportSettings` object
 
@@ -213,14 +215,17 @@ against it before emitting the resource bundle.
   "properties": {
     "relayNamespaceId": {
       "type": "string",
-      "description": "Plain Azure Relay namespace identifier (not the FQDN; no scheme or host suffix).  Example: 'relns-d2b-prod'.  Non-secret; validated against ^[a-zA-Z0-9][a-zA-Z0-9-]{2,48}[a-zA-Z0-9]$.",
-      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9-]{2,48}[a-zA-Z0-9]$",
+      "description": "Bare Relay namespace identifier: no scheme, no DNS suffix. Non-secret.",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9-]{1,48}[a-zA-Z0-9]$",
       "maxLength": 50
     },
     "relayEntityId": {
       "type": "string",
-      "description": "Hybrid Connection entity name within the namespace.  Example: 'hc-d2b-k2'.  Non-secret.  Validated against ^[a-z][a-z0-9-]{1,49}$.",
+      "description": "Hybrid Connection entity identifier: lowercase kebab. Non-secret, and never a SAS token shape.",
       "pattern": "^[a-z][a-z0-9-]{1,49}$",
+      "not": {
+        "pattern": "SharedAccessSignature"
+      },
       "maxLength": 50
     }
   }
@@ -232,7 +237,7 @@ against it before emitting the resource bundle.
 | Field | Required | Secret | Rules |
 | --- | --- | --- | --- |
 | `relayNamespaceId` | Yes | No | Plain Azure Relay namespace label only; no `.servicebus.windows.net` suffix, no scheme; validated by regex; max 50 chars |
-| `relayEntityId` | Yes | No | Hybrid Connection entity name; lowercase kebab; max 50 chars |
+| `relayEntityId` | Yes | No | Hybrid Connection entity name; lowercase kebab; max 50 chars; never a `SharedAccessSignature` token shape |
 
 The build emitter **rejects** any `spec.transportSettings` field:
 
