@@ -9,7 +9,7 @@ load(
 
 # Provider crates link only from the daemon composition root and the
 # enumerated consumers; broker/shared crates cannot depend on them (U14).
-package(default_visibility = [])
+package(default_visibility = ["//bazel/checks/vm:__pkg__"])
 
 exports_files(
     [

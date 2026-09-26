@@ -84,6 +84,61 @@
       in found;
 
       providerElfShim = import ./nix/provider-elf-shim.nix;
+
+      # Wire the Bazel-built d2b host binaries into a guest: one nix
+      # package for the bundle, one self override that hands the package to
+      # the guest's modules. Both guest entry points use it, so a guest
+      # realized from the declared-input action and a guest realized from
+      # the legacy environment handoff are built the same way.
+      mkBazelHostTools = system: rawBundle: rawCloudHypervisorController:
+        let
+          bundlePath = builtins.path {
+            path = /. + rawBundle;
+            name = "d2b-bazel-host-tools";
+          };
+          cloudHypervisorControllerPath =
+            if rawCloudHypervisorController == null then
+              null
+            else
+              builtins.path {
+                path = /. + rawCloudHypervisorController;
+                name = "d2b-bazel-cloud-hypervisor-controller";
+              };
+          tools = import ./nix/test-support/bazel-host-tools.nix {
+            pkgs = nixpkgsFor.${system};
+            rawBundle = bundlePath;
+            rawCloudHypervisorController = cloudHypervisorControllerPath;
+          };
+        in
+        {
+          inherit tools;
+          hostSelf = self // {
+            lib = self.lib // {
+              d2bHostToolOverrides = tools.d2bHostToolOverrides;
+              d2bHostToolBundle = tools.package;
+              evalGuest = args: self.lib.evalGuest (args // {
+                d2bHostToolOverrides = tools.d2bHostToolOverrides;
+              });
+            };
+            nixosModules = self.nixosModules // {
+              default = {
+                imports = [ self.nixosModules.default ];
+                _module.args.d2bHostToolOverrides = tools.d2bHostToolOverrides;
+              };
+            };
+            packages = self.packages // {
+              ${system} = self.packages.${system} // {
+                d2b-wayland-proxy = tools.package;
+              } // nixpkgs.lib.optionalAttrs
+                (tools.cloudHypervisorControllerPackage != null)
+                {
+                  d2b-cloud-hypervisor-controller =
+                    tools.cloudHypervisorControllerPackage;
+                };
+            };
+          };
+        };
+
       # The Guest static workspace mirrors the shared daemon/broker dependency
       # closure. Guest packaging contains only the shared daemon, broker,
       # and signed Provider workspace inputs.
@@ -608,60 +663,26 @@
         if system == "x86_64-linux" then
           let
             pkgs = nixpkgsFor.${system};
+            # The two environment reads are the legacy handoff. The
+            # Bazel-owned lane reaches the same package from the guest
+            # image action's declared label inputs; these reads stay until
+            # that lane replaces the recipe.
             hostToolBundleEnv = builtins.getEnv "D2B_HOST_TOOL_BUNDLE";
             cloudHypervisorControllerBundleEnv =
               builtins.getEnv "D2B_CH_CONTROLLER_BUNDLE";
-            bazelHostTools =
+            handoff =
               if hostToolBundleEnv == "" then
                 null
               else
-                import ./nix/test-support/bazel-host-tools.nix {
-                  inherit pkgs;
-                  rawBundle = builtins.path {
-                    path = /. + hostToolBundleEnv;
-                    name = "d2b-bazel-host-tools";
-                  };
-                  rawCloudHypervisorController =
-                    if cloudHypervisorControllerBundleEnv == "" then null else
-                    builtins.path {
-                      path = /. + cloudHypervisorControllerBundleEnv;
-                      name = "d2b-bazel-cloud-hypervisor-controller";
-                    };
-                };
+                mkBazelHostTools system hostToolBundleEnv
+                  (if cloudHypervisorControllerBundleEnv == "" then
+                    null
+                  else
+                    cloudHypervisorControllerBundleEnv);
             testSelf =
-              if bazelHostTools == null then
-                self
-              else
-                self // {
-                  lib = self.lib // {
-                    d2bHostToolOverrides =
-                      bazelHostTools.d2bHostToolOverrides;
-                    d2bHostToolBundle = bazelHostTools.package;
-                    evalGuest = args: self.lib.evalGuest (args // {
-                      d2bHostToolOverrides =
-                        bazelHostTools.d2bHostToolOverrides;
-                    });
-                  };
-                  nixosModules = self.nixosModules // {
-                    default = {
-                      imports = [ self.nixosModules.default ];
-                      _module.args.d2bHostToolOverrides =
-                        bazelHostTools.d2bHostToolOverrides;
-                    };
-                  };
-                  packages = self.packages // {
-                    ${system} = self.packages.${system}
-                      // {
-                        d2b-wayland-proxy = bazelHostTools.package;
-                      }
-                      // nixpkgs.lib.optionalAttrs
-                        (bazelHostTools.cloudHypervisorControllerPackage != null)
-                        {
-                          d2b-cloud-hypervisor-controller =
-                            bazelHostTools.cloudHypervisorControllerPackage;
-                        };
-                  };
-                };
+              if handoff == null then self else handoff.hostSelf;
+            bazelHostTools =
+              if handoff == null then null else handoff.tools;
             testDir = ./tests/host-integration;
             testFiles = if builtins.pathExists testDir
               then builtins.attrNames (nixpkgs.lib.filterAttrs
@@ -680,6 +701,29 @@
             };
           in builtins.listToAttrs (map mkTest testFiles)
         else { });
+
+      # The guest image for the Bazel-owned host-integration lane. It is a
+      # function, not a package: the lane's guest-image action calls it
+      # with the d2b host binaries it received as declared label inputs, so
+      # the guest closure is keyed on the Bazel graph rather than on a
+      # developer's shell. The staged directories are the same bundle the
+      # legacy environment handoff passes, and the same host-tool package
+      # consumes them, so both paths realize the same guest.
+      #
+      # `rawBundle` and `rawCloudHypervisorController` are paths to
+      # directories holding the binaries by output name. `extraModules`
+      # carries a check's own guest contributions.
+      guestImage = forAllSystems (system:
+        { rawBundle, rawCloudHypervisorController ? null, extraModules ? [ ] }:
+        let
+          handoff = mkBazelHostTools system rawBundle rawCloudHypervisorController;
+        in
+        import ./nix/test-support/guest-image.nix {
+          inherit extraModules rawBundle;
+          pkgs = nixpkgsFor.${system};
+          bazelHostTools = handoff.tools;
+          self = handoff.hostSelf;
+        });
 
       templates.default = {
         path = ./templates/default;

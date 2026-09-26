@@ -3,6 +3,10 @@
 let
   inherit (pkgs) lib;
 
+  # The inventory is the handoff contract between the Bazel targets that
+  # build these binaries and the guest closure that consumes them. It is
+  # exported so a producer can be checked against it before the guest is
+  # evaluated, rather than only once its closure has been built.
   inventory = [
     "d2b"
     "d2bd"
@@ -14,6 +18,7 @@ let
     "d2b-wayland-proxy"
     "d2b-provider-test-controller"
   ];
+  controllerName = "d2b-cloud-hypervisor-controller";
   inventoryShell = lib.escapeShellArgs inventory;
   overrideKeys = [
     "d2b"
@@ -194,22 +199,22 @@ let
       installPhase = ''
         runHook preInstall
         actual="$(find -P "$src" -mindepth 1 -maxdepth 1 -printf '%f\n')"
-        if [ "$actual" != "d2b-cloud-hypervisor-controller" ]; then
+        if [ "$actual" != "${controllerName}" ]; then
           echo "d2b-bazel-cloud-hypervisor-controller: raw bundle inventory mismatch" >&2
           exit 1
         fi
-        source="$src/d2b-cloud-hypervisor-controller"
+        source="$src/${controllerName}"
         if [ ! -f "$source" ] || [ -L "$source" ] || [ ! -x "$source" ]; then
           echo "d2b-bazel-cloud-hypervisor-controller: expected a regular executable" >&2
           exit 1
         fi
-        install -Dm755 "$source" "$out/bin/d2b-cloud-hypervisor-controller"
+        install -Dm755 "$source" "$out/bin/${controllerName}"
         runHook postInstall
       '';
       doInstallCheck = true;
       installCheckPhase = ''
         runHook preInstallCheck
-        bin="$out/bin/d2b-cloud-hypervisor-controller"
+        bin="$out/bin/${controllerName}"
         header="$(${pkgs.binutils}/bin/readelf -h "$bin")"
         grep -Eq 'Class:[[:space:]]+ELF64' <<< "$header"
         grep -Eq 'Machine:[[:space:]]+(Advanced Micro Devices X86-64|x86-64)' <<< "$header"
@@ -229,5 +234,8 @@ let
 in
 {
   inherit package cloudHypervisorControllerPackage;
+  # The handoff contract, exported so a caller can refuse an incomplete
+  # binary set before it evaluates a guest closure.
+  inherit inventory controllerName;
   d2bHostToolOverrides = lib.genAttrs overrideKeys (_: package);
 }

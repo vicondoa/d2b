@@ -184,6 +184,12 @@ generate:
 ## NixOS host; TCG software emulation is the slow fallback when /dev/kvm is
 ## absent). x86_64-linux only (a same-system VM builder is required).
 ## Set D2B_VM_CHECK=<name> to build one named vmChecks entry.
+## The host tools are built under the committed `guest` profile from
+## .bazelrc, so an exported Bazel profile cannot change the guest closure.
+## The Attic cache preflight and closure upload below belong to this nix
+## recipe: the Bazel-owned lane's guest-image action declares its own
+## substituters and preflights them itself, and the recipe retires with
+## the nix lane.
 test-host-integration:
 	@set -eu; \
 	system="$$(nix eval --raw --impure --expr builtins.currentSystem)"; \
@@ -256,8 +262,8 @@ test-host-integration:
 	fi; \
 	echo "test-host-integration: Attic cache preflight passed"; \
 	fi; \
-	echo "test-host-integration: building host tools with local Bazel"; \
-	'$(BAZEL_BIN)' build --config=local \
+	echo "test-host-integration: building host tools under the committed guest profile"; \
+	'$(BAZEL_BIN)' build --config=guest \
 	//packages/d2b:d2b \
 	//packages/d2bd:d2bd \
 	//packages/d2b-broker-composition:d2b-broker \

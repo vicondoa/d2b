@@ -1,0 +1,51 @@
+load(":defs.bzl", "guest_image")
+
+package(default_visibility = ["//visibility:public"])
+
+# Everything the guest evaluation reads. A guest image rebuilds when one
+# of these changes, so the set names what the guest is made of - the
+# flake, the d2b module tree, the host-tool sources, and the node
+# configuration - rather than the whole workspace.
+_GUEST_SOURCES = [
+    "//:Cargo.lock",
+    "//:Cargo.toml",
+    "//:d2b_resource_schemas_v3",
+    "//:generated_cli_shell_artifacts",
+    "//:flake.lock",
+    "//:flake.nix",
+    "//:nix_workspace_sources",
+    "//:nixos_modules_workspace_sources",
+    "//:packages_workspace_sources",
+    "//packages/d2b-broker:src/ops/state-posture-contract.json",
+    "//:rust-toolchain.toml",
+    "//:tests/host-integration/lib.nix",
+    "//tests/fixtures:fixture_sources",
+]
+
+guest_image(
+    name = "guest_image",
+    srcs = _GUEST_SOURCES,
+    cloud_hypervisor_controller = "//packages/d2b-provider-guest-cloud-hypervisor:d2b-cloud-hypervisor-controller",
+    flake = "//:flake.nix",
+    flake_lock = "//:flake.lock",
+    host_tools = [
+        "//packages/d2b:d2b",
+        "//packages/d2bd:d2bd",
+        "//packages/d2b-broker-composition:d2b-broker",
+        "//packages/d2b-host:d2b-activation-helper",
+        "//packages/d2b-host-activation-helper:d2b-host-activation-helper",
+        "//packages/d2b-unsafe-local-helper:d2b-unsafe-local-helper",
+        "//packages/d2b-resource-compiler:d2b-resource-compiler",
+        "//packages/d2b-provider-display-wayland:d2b-wayland-proxy",
+        "//packages/d2b-provider-test-controller:d2b-provider-test-controller",
+    ],
+    nix = "@nix//:bin/nix",
+    substituters = "https://cache.nixos.org/",
+    tags = [
+        "exclusive",
+        "local",
+        "no-remote-cache",
+        "no-remote-exec",
+        "no-sandbox",
+    ],
+)
