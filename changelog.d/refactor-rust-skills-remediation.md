@@ -6,6 +6,7 @@
 - The published v2 storage lifecycle report schema now names each issue field the way the daemon writes it, so a consumer validating a real report no longer rejects the five issue variants that carry a renamed field.
 - The daemon API reference now documents an audit response page as the wire carries it - entries, the continuing cursor, and completion - rather than as the daemon holds it in memory.
 - The device Provider's blocking-API `block_on` cap moved from 0 to 1: its one async test expands to that call, and the suppressive `allow` the base carried on that test is gone, so the census now counts it.
+- `d2b auth status` no longer reports retired commands as allowed: the read-only surface for a caller with no role, and the launcher and admin surfaces the daemon reports, now name only commands the CLI parser accepts, and both halves of the response read one shared list so they cannot disagree.
 
 ### Changed
 

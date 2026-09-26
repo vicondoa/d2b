@@ -702,17 +702,10 @@ pub(crate) fn allowed_subcommands(role: AuthRoleV2) -> BTreeSet<String> {
             .into_iter()
             .filter(|command| command != "audit")
             .collect(),
-        AuthRoleV2::None => [
-            "list",
-            "status",
-            "auth status",
-            "op inspect",
-            "realm list",
-            "realm inspect",
-        ]
-        .into_iter()
-        .map(str::to_owned)
-        .collect(),
+        AuthRoleV2::None => public_wire::READ_ONLY_CLI_COMMANDS
+            .iter()
+            .map(|command| (*command).to_owned())
+            .collect(),
     }
 }
 
@@ -1169,6 +1162,41 @@ mod tests {
         assert!(ModernCli::try_parse_from(["d2b", "vm", "start", "work"]).is_err());
         assert!(ModernCli::try_parse_from(["d2b", "realm", "list"]).is_err());
         assert!(ModernCli::try_parse_from(["d2b", "unknown-provider-command"]).is_err());
+    }
+
+    /// Whether the parser declares `path` as a chain of subcommand names.
+    /// Arguments are deliberately not supplied: a verb whose positional is
+    /// required (`list`, `status`) is still a command the parser declares,
+    /// and what this proves is that the name resolves at all.
+    fn parser_declares_command_path(path: &str) -> bool {
+        let mut command = ModernCli::command();
+        for name in path.split(' ') {
+            let Some(subcommand) = command.find_subcommand(name).cloned() else {
+                return false;
+            };
+            command = subcommand;
+        }
+        true
+    }
+
+    #[test]
+    fn every_reported_allowed_subcommand_is_a_command_the_parser_declares() {
+        for role in [AuthRoleV2::None, AuthRoleV2::Launcher, AuthRoleV2::Admin] {
+            for command in allowed_subcommands(role) {
+                assert!(
+                    parser_declares_command_path(&command),
+                    "role {role:?} reports `{command}` as allowed, but the parser declares no such command"
+                );
+            }
+        }
+        // The daemon half of the response reports the shared read-only list
+        // and does not own a parser, so its names are proved here instead.
+        for command in public_wire::READ_ONLY_CLI_COMMANDS {
+            assert!(
+                parser_declares_command_path(command),
+                "the daemon reports `{command}` as allowed, but the parser declares no such command"
+            );
+        }
     }
 
     #[test]

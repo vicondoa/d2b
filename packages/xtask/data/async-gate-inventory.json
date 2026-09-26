@@ -793,12 +793,12 @@
     },
     {
       "file": "packages/d2bd/src/composition.rs",
-      "line": 26649,
+      "line": 26641,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/composition.rs",
-      "line": 27046,
+      "line": 27038,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {

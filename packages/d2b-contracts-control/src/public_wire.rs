@@ -2256,6 +2256,16 @@ pub struct AuthStatusResponse {
     pub sockets: Vec<SocketReachability>,
 }
 
+/// The read-only `d2b` command paths a peer may run, spelled the way the CLI
+/// parser names them (`<top level>` or `<top level> <subcommand>`).
+///
+/// Both halves of the `auth status` response draw their read-only surface from
+/// this one list - the CLI's `none` role and the daemon's launcher report are
+/// the same set - so the two halves cannot name different surfaces. The CLI
+/// is the only side that owns the parser, so its own test parses every entry
+/// here: a retired verb cannot be added without that test failing.
+pub const READ_ONLY_CLI_COMMANDS: &[&str] = &["list", "status", "auth status", "op inspect"];
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListResponse {

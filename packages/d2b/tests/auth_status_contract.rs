@@ -141,15 +141,8 @@ fn auth_status_roles_match_schema_and_authz() {
     none_allowed.sort();
     assert_eq!(
         none_allowed,
-        vec![
-            "auth status",
-            "list",
-            "op inspect",
-            "realm inspect",
-            "realm list",
-            "status",
-        ],
-        "none role stays read-only"
+        vec!["auth status", "list", "op inspect", "status"],
+        "none role stays read-only, naming only commands the parser accepts"
     );
 
     // Case 3 - admin: gains `audit`, denies nothing.

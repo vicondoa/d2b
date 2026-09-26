@@ -50,7 +50,7 @@ use d2b_contracts_broker::kernel_client::{
 use d2b_resource_types::{KernelCaller, RunnerLookup};
 use d2b_contracts_control::public_wire::{
     self, AuthRole, AuthStatusResponse, DeniedCommandHint, PublicReadModelKind,
-    QemuMediaRegistryState, QemuMediaRunnerState, SocketReachability,
+    QemuMediaRegistryState, QemuMediaRunnerState, READ_ONLY_CLI_COMMANDS, SocketReachability,
 };
 use d2b_contracts_resource::resource_proto as resource_wire;
 use d2b_contracts_resource::v3::identity::ReconnectGeneration;
@@ -23260,38 +23260,30 @@ fn dispatch_audit(
     }
 }
 
+/// The read-only command names the CLI parser accepts. The daemon reports the
+/// same surface the CLI's `none` role does, so both halves of `auth status`
+/// name one list.
+fn read_only_command_names() -> Vec<String> {
+    READ_ONLY_CLI_COMMANDS
+        .iter()
+        .map(|command| (*command).to_owned())
+        .collect()
+}
+
 fn dispatch_auth_status(state: &ServerState, peer: &PeerIdentity) -> Value {
     let (role, allowed_subcommands, denied_subcommands) = if peer.role == PeerRole::Admin {
         (
             AuthRole::Admin,
-            vec![
-                "list",
-                "status",
-                "audit",
-                "host check",
-                "auth status",
-                "op inspect",
-                "realm list",
-                "realm inspect",
-                "realm enter",
-                "realm run",
-            ],
+            read_only_command_names()
+                .into_iter()
+                .chain(std::iter::once("audit".to_owned()))
+                .collect(),
             Vec::new(),
         )
     } else {
         (
             AuthRole::Launcher,
-            vec![
-                "list",
-                "status",
-                "host check",
-                "auth status",
-                "op inspect",
-                "realm list",
-                "realm inspect",
-                "realm enter",
-                "realm run",
-            ],
+            read_only_command_names(),
             vec![DeniedCommandHint {
                 command: "audit".to_owned(),
                 reason: "audit requires admin role in d2b.site.adminUsers".to_owned(),
@@ -23300,7 +23292,7 @@ fn dispatch_auth_status(state: &ServerState, peer: &PeerIdentity) -> Value {
     };
     serde_json::to_value(d2bd_runtime::wire::auth_status_response(
         AuthStatusResponse {
-            allowed_subcommands: allowed_subcommands.into_iter().map(str::to_owned).collect(),
+            allowed_subcommands,
             denied_subcommands,
             role,
             sockets: vec![

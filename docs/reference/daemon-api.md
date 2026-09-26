@@ -381,10 +381,10 @@ see the auto-generated tables above for the committed Rust variants.
 | `MutatingVerbResponse` | struct | [`MutatingVerbResponse`](../../packages/d2b-contracts-control/src/public_wire.rs#L2216) | struct { `verb`: `String`; `outcome`: `MutatingVerbOutcome`; `target_wave`: `Option<String>`; `summary`: `Option<String>`; `remediation`: `Option<String>`; `api_ready`: `Option<String>` } |
 | `CapabilitiesResponse` | struct | [`CapabilitiesResponse`](../../packages/d2b-contracts-control/src/public_wire.rs#L2242) | struct { `broker_socket`: `String`; `capabilities`: `Vec<FeatureFlag>`; `public_socket`: `String`; `server_version`: `Version`; `selected_version`: `Version` } |
 | `AuthStatusResponse` | struct | [`AuthStatusResponse`](../../packages/d2b-contracts-control/src/public_wire.rs#L2252) | struct { `allowed_subcommands`: `Vec<String>`; `denied_subcommands`: `Vec<DeniedCommandHint>`; `role`: `AuthRole`; `sockets`: `Vec<SocketReachability>` } |
-| `ListResponse` | struct | [`ListResponse`](../../packages/d2b-contracts-control/src/public_wire.rs#L2261) | struct { `vms`: `Vec<ListEntry>`; `read_model`: `Option<PublicReadModelMetadata>` } |
-| `StatusResponse` | struct | [`StatusResponse`](../../packages/d2b-contracts-control/src/public_wire.rs#L2269) | struct { `entries`: `Vec<VmStatus>`; `read_model`: `Option<PublicReadModelMetadata>` } |
-| `AuditResponse` | struct | [`AuditResponse`](../../packages/d2b-contracts-control/src/public_wire.rs#L2349) | struct { `entries`: `Vec<AuditExportEntry>`; `next_cursor`: `Option<AuditExportCursor>`; `complete`: `bool` } |
-| `UsbipProbeResponse` | struct | [`UsbipProbeResponse`](../../packages/d2b-contracts-control/src/public_wire.rs#L2664) | struct { `entries`: `Vec<UsbipProbeEntry>` } |
+| `ListResponse` | struct | [`ListResponse`](../../packages/d2b-contracts-control/src/public_wire.rs#L2271) | struct { `vms`: `Vec<ListEntry>`; `read_model`: `Option<PublicReadModelMetadata>` } |
+| `StatusResponse` | struct | [`StatusResponse`](../../packages/d2b-contracts-control/src/public_wire.rs#L2279) | struct { `entries`: `Vec<VmStatus>`; `read_model`: `Option<PublicReadModelMetadata>` } |
+| `AuditResponse` | struct | [`AuditResponse`](../../packages/d2b-contracts-control/src/public_wire.rs#L2359) | struct { `entries`: `Vec<AuditExportEntry>`; `next_cursor`: `Option<AuditExportCursor>`; `complete`: `bool` } |
+| `UsbipProbeResponse` | struct | [`UsbipProbeResponse`](../../packages/d2b-contracts-control/src/public_wire.rs#L2674) | struct { `entries`: `Vec<UsbipProbeEntry>` } |
 
 ### Broker socket response types
 
@@ -492,7 +492,7 @@ running live guest activation.
 
 | Type | Kind | Rust definition | Shape |
 | --- | --- | --- | --- |
-| `VmLifecycleState` | enum | [`VmLifecycleState`](../../packages/d2b-contracts-control/src/public_wire.rs#L2830) | `Stopped`; `Starting`; `Booted`; `Running`; `Stopping`; `Restarting`; `Failed`; `Unknown` |
+| `VmLifecycleState` | enum | [`VmLifecycleState`](../../packages/d2b-contracts-control/src/public_wire.rs#L2840) | `Stopped`; `Starting`; `Booted`; `Running`; `Stopping`; `Restarting`; `Failed`; `Unknown` |
 
 ### Other documented enums
 
@@ -542,23 +542,23 @@ running live guest activation.
 | `AudioOp` | enum | [`AudioOp`](../../packages/d2b-contracts-control/src/public_wire.rs#L2062) | `Status` - (AudioStatusArgs); `SetVolume` - (AudioSetVolumeArgs); `Mute` - (AudioMuteArgs) |
 | `AudioSetApplied` | enum | [`AudioSetApplied`](../../packages/d2b-contracts-control/src/public_wire.rs#L2125) | `HostAndGuest`; `HostOnly`; `GuestOnly`; `Unsupported` |
 | `MutatingVerbOutcome` | enum | [`MutatingVerbOutcome`](../../packages/d2b-contracts-control/src/public_wire.rs#L2231) | `DryRunPlanned`; `Applied`; `ApiReadyTimeout`; `NotYetImplemented`; `BrokerError`; `InvalidRequest` |
-| `PublicReadModelKind` | enum | [`PublicReadModelKind`](../../packages/d2b-contracts-control/src/public_wire.rs#L2295) | `List`; `Status` |
-| `AuditPageEnd` | enum | [`AuditPageEnd`](../../packages/d2b-contracts-control/src/public_wire.rs#L2310) | `Complete`; `More` - (AuditExportCursor) |
-| `UsbipProbeStatus` | enum | [`UsbipProbeStatus`](../../packages/d2b-contracts-control/src/public_wire.rs#L2423) | `Bound`; `Unbound`; `Degraded`; `Enrollable`; `Enrolled`; `Stale`; `DirectConfig`; `Unknown` |
-| `UsbipDurableClaimState` | enum | [`UsbipDurableClaimState`](../../packages/d2b-contracts-control/src/public_wire.rs#L2441) | `Missing`; `HeldByDesiredOwner`; `HeldByOtherOwner`; `StaleOwner`; `Corrupt`; `NotApplicable`; `Unknown` |
-| `UsbipHostBindState` | enum | [`UsbipHostBindState`](../../packages/d2b-contracts-control/src/public_wire.rs#L2466) | `Unbound`; `BoundToUsbipHost`; `BoundToUnexpectedDriver`; `DeviceMissing`; `NotApplicable`; `Unknown` |
-| `UsbipHostCarrierState` | enum | [`UsbipHostCarrierState`](../../packages/d2b-contracts-control/src/public_wire.rs#L2479) | `Absent`; `Unavailable`; `WithheldForOwner`; `Ready`; `DepartedDuringProbe`; `NotApplicable`; `Unknown` |
-| `UsbipProxyState` | enum | [`UsbipProxyState`](../../packages/d2b-contracts-control/src/public_wire.rs#L2493) | `NotDeclared`; `Stopped`; `Starting`; `Listening`; `Stale`; `Failed`; `NotApplicable`; `Unknown` |
-| `UsbipGuestImportState` | enum | [`UsbipGuestImportState`](../../packages/d2b-contracts-control/src/public_wire.rs#L2516) | `Detached`; `Imported`; `Unavailable`; `NotApplicable`; `Unknown` |
-| `UsbipTopologyState` | enum | [`UsbipTopologyState`](../../packages/d2b-contracts-control/src/public_wire.rs#L2534) | `Match`; `Mismatch`; `Incomplete`; `NotObserved`; `NotApplicable`; `Unknown` |
-| `UsbipPolicyState` | enum | [`UsbipPolicyState`](../../packages/d2b-contracts-control/src/public_wire.rs#L2547) | `Allowed`; `Denied`; `Missing`; `NotApplicable`; `Unknown` |
-| `UsbipProbeDegradedReasonCode` | enum | [`UsbipProbeDegradedReasonCode`](../../packages/d2b-contracts-control/src/public_wire.rs#L2566) | `PolicyFailed`; `DeviceDepartedBeforeClaim`; `DeviceDepartedAfterLock`; `DeviceDepartedDuringMutation`; `DeviceReappearedWithDifferentTopology`; `LockHeldByOtherOwner`; `InvalidPersistedLockClaim`; `CarrierUnavailable`; `HostBindUnavailable`; `ProxyUnavailable`; `GuestImportUnavailable`; `StaleHostState`; `StaleGuestState`; `ProbeIncomplete`; `Unknown` |
-| `UsbProbeEntryKind` | enum | [`UsbProbeEntryKind`](../../packages/d2b-contracts-control/src/public_wire.rs#L2602) | `Usbip`; `QemuMediaSlot` |
-| `AuditFormat` | enum | [`AuditFormat`](../../packages/d2b-contracts-control/src/public_wire.rs#L2685) | `Human`; `Json` |
-| `AuthRole` | enum | [`AuthRole`](../../packages/d2b-contracts-control/src/public_wire.rs#L2693) | `None`; `Launcher`; `Admin` |
-| `VmAutostartMode` | enum | [`VmAutostartMode`](../../packages/d2b-contracts-control/src/public_wire.rs#L2873) | `ManualOnly` |
-| `QemuMediaRunnerState` | enum | [`QemuMediaRunnerState`](../../packages/d2b-contracts-control/src/public_wire.rs#L2907) | `Running`; `Stopped` |
-| `QemuMediaRegistryState` | enum | [`QemuMediaRegistryState`](../../packages/d2b-contracts-control/src/public_wire.rs#L2942) | `DirectConfig`; `Present`; `Stale`; `Missing` |
+| `PublicReadModelKind` | enum | [`PublicReadModelKind`](../../packages/d2b-contracts-control/src/public_wire.rs#L2305) | `List`; `Status` |
+| `AuditPageEnd` | enum | [`AuditPageEnd`](../../packages/d2b-contracts-control/src/public_wire.rs#L2320) | `Complete`; `More` - (AuditExportCursor) |
+| `UsbipProbeStatus` | enum | [`UsbipProbeStatus`](../../packages/d2b-contracts-control/src/public_wire.rs#L2433) | `Bound`; `Unbound`; `Degraded`; `Enrollable`; `Enrolled`; `Stale`; `DirectConfig`; `Unknown` |
+| `UsbipDurableClaimState` | enum | [`UsbipDurableClaimState`](../../packages/d2b-contracts-control/src/public_wire.rs#L2451) | `Missing`; `HeldByDesiredOwner`; `HeldByOtherOwner`; `StaleOwner`; `Corrupt`; `NotApplicable`; `Unknown` |
+| `UsbipHostBindState` | enum | [`UsbipHostBindState`](../../packages/d2b-contracts-control/src/public_wire.rs#L2476) | `Unbound`; `BoundToUsbipHost`; `BoundToUnexpectedDriver`; `DeviceMissing`; `NotApplicable`; `Unknown` |
+| `UsbipHostCarrierState` | enum | [`UsbipHostCarrierState`](../../packages/d2b-contracts-control/src/public_wire.rs#L2489) | `Absent`; `Unavailable`; `WithheldForOwner`; `Ready`; `DepartedDuringProbe`; `NotApplicable`; `Unknown` |
+| `UsbipProxyState` | enum | [`UsbipProxyState`](../../packages/d2b-contracts-control/src/public_wire.rs#L2503) | `NotDeclared`; `Stopped`; `Starting`; `Listening`; `Stale`; `Failed`; `NotApplicable`; `Unknown` |
+| `UsbipGuestImportState` | enum | [`UsbipGuestImportState`](../../packages/d2b-contracts-control/src/public_wire.rs#L2526) | `Detached`; `Imported`; `Unavailable`; `NotApplicable`; `Unknown` |
+| `UsbipTopologyState` | enum | [`UsbipTopologyState`](../../packages/d2b-contracts-control/src/public_wire.rs#L2544) | `Match`; `Mismatch`; `Incomplete`; `NotObserved`; `NotApplicable`; `Unknown` |
+| `UsbipPolicyState` | enum | [`UsbipPolicyState`](../../packages/d2b-contracts-control/src/public_wire.rs#L2557) | `Allowed`; `Denied`; `Missing`; `NotApplicable`; `Unknown` |
+| `UsbipProbeDegradedReasonCode` | enum | [`UsbipProbeDegradedReasonCode`](../../packages/d2b-contracts-control/src/public_wire.rs#L2576) | `PolicyFailed`; `DeviceDepartedBeforeClaim`; `DeviceDepartedAfterLock`; `DeviceDepartedDuringMutation`; `DeviceReappearedWithDifferentTopology`; `LockHeldByOtherOwner`; `InvalidPersistedLockClaim`; `CarrierUnavailable`; `HostBindUnavailable`; `ProxyUnavailable`; `GuestImportUnavailable`; `StaleHostState`; `StaleGuestState`; `ProbeIncomplete`; `Unknown` |
+| `UsbProbeEntryKind` | enum | [`UsbProbeEntryKind`](../../packages/d2b-contracts-control/src/public_wire.rs#L2612) | `Usbip`; `QemuMediaSlot` |
+| `AuditFormat` | enum | [`AuditFormat`](../../packages/d2b-contracts-control/src/public_wire.rs#L2695) | `Human`; `Json` |
+| `AuthRole` | enum | [`AuthRole`](../../packages/d2b-contracts-control/src/public_wire.rs#L2703) | `None`; `Launcher`; `Admin` |
+| `VmAutostartMode` | enum | [`VmAutostartMode`](../../packages/d2b-contracts-control/src/public_wire.rs#L2883) | `ManualOnly` |
+| `QemuMediaRunnerState` | enum | [`QemuMediaRunnerState`](../../packages/d2b-contracts-control/src/public_wire.rs#L2917) | `Running`; `Stopped` |
+| `QemuMediaRegistryState` | enum | [`QemuMediaRegistryState`](../../packages/d2b-contracts-control/src/public_wire.rs#L2952) | `DirectConfig`; `Present`; `Stale`; `Missing` |
 | `TerminalStream` | enum | [`TerminalStream`](../../packages/d2b-contracts-control/src/terminal_wire.rs#L13) | `Stdout`; `Stderr` |
 | `HelperScopeKind` | enum | [`HelperScopeKind`](../../packages/d2b-contracts-control/src/unsafe_local_wire.rs#L68) | `LauncherApp`; `WaylandProxy` |
 | `HelperScopeState` | enum | [`HelperScopeState`](../../packages/d2b-contracts-control/src/unsafe_local_wire.rs#L95) | `Starting`; `Active`; `Stopping`; `Exited`; `Degraded` |
