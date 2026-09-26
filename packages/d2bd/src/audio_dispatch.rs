@@ -374,9 +374,14 @@ pub(crate) fn combined_audio_applied(
     ///
     /// Status collects a per-VM result (entries and per-VM errors) from
     /// the provider's state; SetVolume and Mute apply a state transition under
-    /// the audio serialization lock, and return [`TypedError::InternalIo`]
-    /// for manifest, capability, lock, read, write, or enforcement
-    /// failures.
+    /// the audio serialization lock.
+    ///
+    /// A mutation refuses a target that is not declared in the public manifest
+    /// through [`TypedError::AudioVmNotFound`], and a target whose manifest
+    /// entry does not declare audio through [`TypedError::AudioNotEnabled`] -
+    /// the same classes the status path reports per VM through `AudioVmError`
+    /// (RS-0537). Lock, read, write, and enforcement failures keep returning
+    /// [`TypedError::InternalIo`].
     pub fn dispatch_audio(
     state: &ServerState,
     caller_role: BrokerCallerRole,
@@ -495,14 +500,12 @@ fn dispatch_audio_set_volume(
     let vm = manifest
         .vms
         .get(vm_name)
-        .ok_or_else(|| TypedError::InternalIo {
-            context: format!("audio set-volume {vm_name}"),
-            detail: "VM not present in public manifest".to_owned(),
+        .ok_or_else(|| TypedError::AudioVmNotFound {
+            vm: vm_name.clone(),
         })?;
 
-    let cap = audio_capability_for_vm(vm).ok_or_else(|| TypedError::InternalIo {
-        context: format!("audio set-volume {vm_name}"),
-        detail: "audio not enabled for this VM".to_owned(),
+    let cap = audio_capability_for_vm(vm).ok_or_else(|| TypedError::AudioNotEnabled {
+        vm: vm_name.clone(),
     })?;
 
     let state_dir = std::path::PathBuf::from(&vm.state_dir);
@@ -602,14 +605,12 @@ fn dispatch_audio_mute(
     let vm = manifest
         .vms
         .get(vm_name)
-        .ok_or_else(|| TypedError::InternalIo {
-            context: format!("audio mute {vm_name}"),
-            detail: "VM not present in public manifest".to_owned(),
+        .ok_or_else(|| TypedError::AudioVmNotFound {
+            vm: vm_name.clone(),
         })?;
 
-    let cap = audio_capability_for_vm(vm).ok_or_else(|| TypedError::InternalIo {
-        context: format!("audio mute {vm_name}"),
-        detail: "audio not enabled for this VM".to_owned(),
+    let cap = audio_capability_for_vm(vm).ok_or_else(|| TypedError::AudioNotEnabled {
+        vm: vm_name.clone(),
     })?;
 
     let state_dir = std::path::PathBuf::from(&vm.state_dir);
