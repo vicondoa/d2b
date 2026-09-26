@@ -4,7 +4,10 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     future::Future,
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use async_trait::async_trait;
@@ -527,8 +530,17 @@ impl SessionIdentity {
     }
 }
 
+/// Route-lease revocation latch.
+///
+/// Revocation is one-way and is only ever read as "is this lease dead yet",
+/// so the flag needs no mutual exclusion: a `Release` store at revocation and
+/// `Acquire` loads at every check are the weakest correct ordering. The
+/// acquire-load that observes the revocation also observes everything written
+/// before the release-store; a `Relaxed` load would drop that edge, and a
+/// `SeqCst` fence would buy nothing because no other memory location is
+/// ordered against the latch.
 struct RouteLeaseState {
-    revoked: Mutex<bool>,
+    revoked: AtomicBool,
 }
 
 pub(crate) struct RevocableRouteLease {
@@ -554,7 +566,7 @@ impl RevocableRouteLease {
             generation,
             endpoint,
             state: Arc::new(RouteLeaseState {
-                revoked: Mutex::new(false),
+                revoked: AtomicBool::new(false),
             }),
         }
     }
@@ -575,16 +587,8 @@ impl RevocableRouteLease {
         Arc::clone(&self.endpoint)
     }
 
-    // Route-lease revocation is a brief non-suspending critical section shared
-    // with synchronous teardown paths;the lease flag has no async form here.
-    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub(crate) fn with_active<T>(&self, action: impl FnOnce() -> T) -> Result<T, RegistryError> {
-        let revoked = self
-            .state
-            .revoked
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if *revoked {
+        if self.state.revoked.load(Ordering::Acquire) {
             return Err(RegistryError::RouteRevoked);
         }
         Ok(action())
@@ -738,24 +742,20 @@ impl Registry {
                 routes,
                 endpoint: registration.endpoint,
                 route_lease: Arc::new(RouteLeaseState {
-                    revoked: Mutex::new(false),
+                    revoked: AtomicBool::new(false),
                 }),
             },
         );
     }
 
-    // Session removal marks the lease revoked in a brief non-suspending critical
-    // section;the lease flag has no async form (see with_active).
-    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub(crate) fn remove(&mut self, session: SessionId) -> bool {
         let Some(registered) = self.sessions.remove(&session) else {
             return false;
         };
-        *registered
+        registered
             .route_lease
             .revoked
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+            .store(true, Ordering::Release);
         for route in registered.routes {
             self.routes.remove(&route);
         }
