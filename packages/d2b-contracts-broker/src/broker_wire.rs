@@ -4219,6 +4219,83 @@ mod tests {
         assert_eq!(request.domain, UnitDomain::User);
     }
 
+    fn pidfd_test_unit() -> UnitRequest {
+        UnitRequest {
+            vm_id: VmId::new("corp-vm"),
+            role_id: RoleId::new("audio"),
+            resource_ref: None,
+            resource_uid: None,
+            role: RunnerRole::Audio,
+            bundle_runner_intent_ref: BundleOpId::new("runner:corp-vm:audio"),
+            bundle_content_identity: "sha256:bundle".to_owned(),
+            provider_identity: [1; 32],
+            template_identity: [2; 32],
+            generation: 3,
+            domain: UnitDomain::System,
+            execution_ref: None,
+            user_ref: None,
+            guest_execution: None,
+            sandbox_plan: None,
+            tracing_span_id: None,
+        }
+    }
+
+    fn pidfd_test_identity() -> UnitIdentity {
+        UnitIdentity {
+            invocation_id: [3; 16],
+            cgroup_identity: [4; 32],
+            main_pid: 4242,
+            start_time_ticks: 987_654_321,
+            provider_identity: [1; 32],
+            template_identity: [2; 32],
+            generation: 3,
+            bundle_content_identity: "sha256:bundle".to_owned(),
+            guest_execution: None,
+        }
+    }
+
+    /// Adds one member no unit request declares to an encoded request frame.
+    fn with_unknown_member(value: serde_json::Value) -> serde_json::Value {
+        let mut frame = value.as_object().expect("request frame object").clone();
+        frame.insert("unknownMember".to_owned(), serde_json::json!(1));
+        serde_json::Value::Object(frame)
+    }
+
+    #[test]
+    fn flattened_unit_requests_refuse_unknown_members() {
+        // The container's `deny_unknown_fields` is the only guard these two
+        // flattened requests have: a flattened type's own
+        // `deny_unknown_fields` is the one serde ignores, so an unknown
+        // member is refused here only while the container keeps its own
+        // (`UnitRequest`'s is inert through the flatten).
+        let pidfd = OpenUnitPidfdRequest {
+            unit: pidfd_test_unit(),
+            expected: pidfd_test_identity(),
+        };
+        let encoded = serde_json::to_value(&pidfd).expect("OpenUnitPidfdRequest encodes");
+        assert_eq!(
+            serde_json::from_value::<OpenUnitPidfdRequest>(encoded.clone())
+                .expect("the encoded request decodes"),
+            pidfd
+        );
+        serde_json::from_value::<OpenUnitPidfdRequest>(with_unknown_member(encoded))
+            .expect_err("an unknown member must be refused");
+
+        let stop = StopUnitRequest {
+            unit: pidfd_test_unit(),
+            expected: pidfd_test_identity(),
+            class: UnitStopClass::Drain,
+        };
+        let encoded = serde_json::to_value(&stop).expect("StopUnitRequest encodes");
+        assert_eq!(
+            serde_json::from_value::<StopUnitRequest>(encoded.clone())
+                .expect("the encoded request decodes"),
+            stop
+        );
+        serde_json::from_value::<StopUnitRequest>(with_unknown_member(encoded))
+            .expect_err("an unknown member must be refused");
+    }
+
     #[test]
     fn signal_runner_response_round_trips() {
         // U10: the typed response is the envelope result now.
