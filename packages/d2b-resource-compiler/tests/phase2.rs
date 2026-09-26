@@ -243,7 +243,6 @@ fn manifest(
         1,
         config_digest.clone(),
         [],
-        false,
     )
     .unwrap()
     .with_execution(execution)

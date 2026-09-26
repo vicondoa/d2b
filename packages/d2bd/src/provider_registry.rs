@@ -744,7 +744,6 @@ mod tests {
             8,
             digest.clone(),
             [],
-            false,
         )
         .unwrap()
         .with_execution(ComponentExecution::Launchable {

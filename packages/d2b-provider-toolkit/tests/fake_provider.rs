@@ -84,7 +84,6 @@ pub fn controller() -> ComponentDescriptor {
             alias: DependencyAlias::Volume,
             required: true,
         }],
-        false,
     )
     .expect("a controller owning one ResourceType is valid")
     .with_execution(ComponentExecution::Launchable {

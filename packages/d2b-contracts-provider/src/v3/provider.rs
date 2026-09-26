@@ -1372,11 +1372,7 @@ impl ComponentDescriptor {
         cardinality: u32,
         config_digest: ArtifactDigest,
         dependencies: impl IntoIterator<Item = DependencyDeclaration>,
-        declares_state_volume: bool,
     ) -> Result<Self, ProviderContractError> {
-        if declares_state_volume {
-            return Err(ProviderContractError::MissingRequiredField);
-        }
         let exported_resource_types: BTreeSet<_> = exported_resource_types.into_iter().collect();
         let exported_methods: BTreeSet<_> = exported_methods.into_iter().collect();
         let allowed_domains: BTreeSet<_> = allowed_domains.into_iter().collect();
@@ -1436,7 +1432,7 @@ impl ComponentDescriptor {
             target_capabilities: Vec::new(),
             config_digest,
             dependencies: dependency_set,
-            declares_state_volume,
+            declares_state_volume: false,
             state_namespaces: Vec::new(),
         })
     }
@@ -1724,7 +1720,6 @@ impl<'de> Deserialize<'de> for ComponentDescriptor {
             wire.cardinality,
             wire.config_digest,
             wire.dependencies,
-            false,
         )
         .map(|descriptor| descriptor.with_execution(execution))
         .and_then(|descriptor| {
@@ -2873,7 +2868,6 @@ mod tests {
                 alias: DependencyAlias::Volume,
                 required: true,
             }],
-            false,
         )
         .unwrap()
         .with_execution(ComponentExecution::Launchable {
@@ -3063,7 +3057,6 @@ mod tests {
             1,
             ArtifactDigest::parse(DIGEST_A).unwrap(),
             [],
-            false,
         )
         .unwrap();
         let controller = controller
@@ -3124,7 +3117,6 @@ mod tests {
             32,
             ArtifactDigest::parse(DIGEST_A).unwrap(),
             [],
-            false,
         )
         .unwrap()
         .with_execution(ComponentExecution::Launchable {
@@ -3449,24 +3441,6 @@ mod tests {
 
     #[test]
     fn declared_state_volume_requires_at_least_one_namespace() {
-        assert_eq!(
-            ComponentDescriptor::new(
-                BoundedToken::parse("volume-controller").unwrap(),
-                ComponentType::Controller,
-                [ResourceTypeName::parse("Volume").unwrap()],
-                [BoundedToken::parse("assess-update").unwrap()],
-                [ExecutionDomain::System],
-                1,
-                ArtifactDigest::parse(DIGEST_B).unwrap(),
-                [DependencyDeclaration {
-                    alias: DependencyAlias::Volume,
-                    required: true,
-                }],
-                true,
-            ),
-            Err(ProviderContractError::MissingRequiredField)
-        );
-
         let mut descriptor = controller();
         descriptor.declares_state_volume = true;
         assert_eq!(
@@ -3765,7 +3739,6 @@ mod tests {
                 4,
                 ArtifactDigest::parse(DIGEST_A).unwrap(),
                 dependencies,
-                false,
             )
         };
         assert!(worker(vec![], vec![]).is_ok());
@@ -3793,7 +3766,6 @@ mod tests {
                 1,
                 ArtifactDigest::parse(DIGEST_A).unwrap(),
                 [],
-                false,
             ),
             Err(ProviderContractError::ConflictingFields)
         );
@@ -3807,7 +3779,6 @@ mod tests {
                 1,
                 ArtifactDigest::parse(DIGEST_A).unwrap(),
                 [],
-                false,
             ),
             Err(ProviderContractError::MissingRequiredField)
         );
@@ -3825,7 +3796,6 @@ mod tests {
                 u32::MAX,
                 ArtifactDigest::parse(DIGEST_A).unwrap(),
                 [],
-                false,
             ),
             Err(ProviderContractError::BoundExceeded)
         );
@@ -4149,7 +4119,6 @@ mod tests {
             1,
             ArtifactDigest::parse(DIGEST_A).unwrap(),
             [],
-            false,
         )
         .unwrap();
         let duplicate_controller = duplicate_controller
