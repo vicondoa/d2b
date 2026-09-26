@@ -30,6 +30,14 @@ One controller, shipped as a library type: `SystemdProcessProvider` and its
 `ProcessLaunchEffectPort`. Lifecycle, drain, audit, and metric helpers remain
 typed and path-free.
 
+The library target exports what production composes today: the controller,
+the `lifecycle` root re-exports, `effects_service`, and `operations`. The
+controller family, drain, metrics, audit, launch, and sandbox helpers have no
+production consumer - the conformance tests exercise the controller family,
+drain, and metrics, and the daemon reconcile composition has not landed on
+any of the six - so they compile behind the `test-support` feature and are
+absent from the plain library build.
+
 ## Placement and dependencies
 
 Runs under a Host or a Guest whose service manager is systemd. It depends on
@@ -73,4 +81,11 @@ closed enumerations only.
 
 ```bash
 bazel test //packages/d2b-provider-process-systemd:all
+```
+
+The conformance tests that consume the test-only modules run under the
+`test-support` feature:
+
+```bash
+cargo test -p d2b-provider-process-systemd --features test-support
 ```

@@ -33,3 +33,18 @@ zbus = "5.16"
 [dev-dependencies]
 d2b-process-conformance = { path = "../d2b-process-conformance", version = "0.0.0-bootstrap", features = ["test-support"] }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "test-util", "time"] }
+
+[features]
+test-support = []
+
+# The modules `boundaries` and `controller` consume compile only under the
+# `test-support` feature, so these tests need it.
+[[test]]
+name = "boundaries"
+path = "tests/boundaries.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "controller"
+path = "tests/controller.rs"
+required-features = ["test-support"]
