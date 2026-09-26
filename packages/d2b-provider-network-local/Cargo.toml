@@ -32,7 +32,6 @@ serde.workspace = true
 tracing = "0.1"
 serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "process", "rt-multi-thread", "sync", "time"] }
-parking_lot = "0.12"
 
 [dev-dependencies]
 rustix = { workspace = true, features = ["std", "net", "pipe"] }

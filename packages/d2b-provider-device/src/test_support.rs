@@ -18,12 +18,16 @@ use crate::facets::{DeviceEffectFacets, DeviceRuntime};
 /// Recording [`DeviceRuntime`] double: answers Pending/Complete for every
 /// effect call and records the driven components, so `d2bd`'s plane tests
 /// can build a facet set without a daemon.
+///
+/// Both recorders are async locks (`tokio::sync::Mutex`, awaited): every
+/// reader and writer here is an async effect method or an async test, so no
+/// synchronous accessor forces a blocking lock.
 #[derive(Default)]
 pub struct RecordingRuntime {
     /// Components reconciled, in call order.
-    pub reconciled: parking_lot::Mutex<Vec<DeviceComponent>>,
+    pub reconciled: tokio::sync::Mutex<Vec<DeviceComponent>>,
     /// Components finalized, in call order.
-    pub finalized: parking_lot::Mutex<Vec<DeviceComponent>>,
+    pub finalized: tokio::sync::Mutex<Vec<DeviceComponent>>,
 }
 
 #[async_trait]
@@ -34,7 +38,7 @@ impl DeviceRuntime for RecordingRuntime {
         _request: &SharedProviderEffectRequest<'_>,
         _state: &DeviceResourceState,
     ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
-        self.reconciled.lock().push(component); // async-gate-allow: test-support recorder lock
+        self.reconciled.lock().await.push(component);
         Ok(SharedProviderEffectOutcome::phase(
             SharedProviderEffectPhase::Pending,
         ))
@@ -46,7 +50,7 @@ impl DeviceRuntime for RecordingRuntime {
         _request: &SharedProviderEffectRequest<'_>,
         _state: &DeviceResourceState,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
-        self.finalized.lock().push(component); // async-gate-allow: test-support recorder lock
+        self.finalized.lock().await.push(component);
         Ok(SharedProviderFinalize::Complete)
     }
 }

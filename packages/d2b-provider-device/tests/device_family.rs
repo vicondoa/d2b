@@ -154,7 +154,6 @@ fn descriptor_declares_the_device_type_over_four_providers() {
 
 /// A row is driven by the component its Provider reference selects, and a
 /// Provider outside the four is terminal.
-#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn a_row_runs_the_effect_of_the_provider_its_spec_names() {
     let runtime = Arc::new(RecordingRuntime::default());
@@ -164,7 +163,7 @@ async fn a_row_runs_the_effect_of_the_provider_its_spec_names() {
     driver.validate(&mut ctx).await.expect("tpm row validates");
     driver.reconcile(&mut ctx).await.expect("tpm row reconciles");
     assert_eq!(
-        *runtime.reconciled.lock(), // async-gate-allow: test-support recorder lock
+        *runtime.reconciled.lock().await,
         vec![DeviceComponent::Tpm],
         "the tpm Provider reference selects the tpm component"
     );

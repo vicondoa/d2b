@@ -7,7 +7,7 @@
 //! which layout effects the Volume driver ran.
 
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use d2b_contracts_resource::v3::volume::VolumeSpec;
@@ -47,8 +47,14 @@ impl VolumeRuntime for RefusingRuntime {
 }
 
 /// Scripted layout runtime: records every call in order.
+///
+/// The call log is the blocking lock: [`VolumeRuntime::has_layout`] is a
+/// synchronous trait method and [`RecordingRuntime::call_order`] a
+/// synchronous accessor, so neither can await an async lock. Both
+/// acquisitions sit behind one sync appender and one sync snapshot, and
+/// each carries its own recorded exception.
 pub struct RecordingRuntime {
-    calls: parking_lot::Mutex<Vec<&'static str>>,
+    calls: Mutex<Vec<&'static str>>,
     /// Whether the runtime currently reports a Ready layout
     /// (`has_layout` returns this).
     pub ready: AtomicBool,
@@ -61,7 +67,7 @@ impl RecordingRuntime {
     /// A fresh runtime: no layout yet, every call recorded.
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            calls: parking_lot::Mutex::new(Vec::new()),
+            calls: Mutex::new(Vec::new()),
             ready: AtomicBool::new(false),
             degraded: AtomicBool::new(false),
         })
@@ -75,8 +81,21 @@ impl RecordingRuntime {
     }
 
     /// The ordered log of layout-probe calls made through this runtime.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn call_order(&self) -> Vec<&'static str> {
-        self.calls.lock().clone()
+        self.calls
+            .lock()
+            .expect("a test-support recorder lock is never poisoned")
+            .clone()
+    }
+
+    /// Append one layout-probe call to the ordered log.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn record(&self, call: &'static str) {
+        self.calls
+            .lock()
+            .expect("a test-support recorder lock is never poisoned")
+            .push(call);
     }
 }
 
@@ -96,7 +115,7 @@ impl VolumeRuntime for RecordingRuntime {
         _provider: Option<&serde_json::Value>,
         _owner_ref: Option<&ResourceRef>,
     ) -> Result<bool, String> {
-        self.calls.lock().push("ensure-layout"); // async-gate-allow: test-support recorder lock
+        self.record("ensure-layout");
         if self.degraded.load(std::sync::atomic::Ordering::SeqCst) {
             return Ok(false);
         }
@@ -109,12 +128,12 @@ impl VolumeRuntime for RecordingRuntime {
         _volume_uid: &ResourceUid,
         _spec: &VolumeSpec,
     ) -> Result<(), String> {
-        self.calls.lock().push("remove-layout"); // async-gate-allow: test-support recorder lock
+        self.record("remove-layout");
         Ok(())
     }
 
     fn has_layout(&self, _volume_uid: &ResourceUid) -> bool {
-        self.calls.lock().push("has-layout");
+        self.record("has-layout");
         self.ready.load(std::sync::atomic::Ordering::SeqCst)
     }
 }

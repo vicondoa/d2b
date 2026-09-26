@@ -1497,7 +1497,6 @@ dependencies = [
  "d2b-provider-toolkit",
  "d2b-resource-runtime",
  "d2b-resource-types",
- "parking_lot",
  "rustix 0.38.44",
  "serde",
  "serde_json",
@@ -1892,7 +1891,6 @@ dependencies = [
  "d2b-provider-volume-virtiofs",
  "d2b-resource-runtime",
  "d2b-resource-types",
- "parking_lot",
  "serde_json",
  "tokio",
 ]

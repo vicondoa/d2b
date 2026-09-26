@@ -14,8 +14,7 @@ use std::collections::BTreeMap;
 use std::io::IoSlice;
 use std::os::fd::AsFd;
 use std::path::PathBuf;
-use parking_lot::Mutex;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -146,13 +145,15 @@ let handle = std::thread::spawn(move || {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn answer(&self, response: BrokerResponse) {
-        *self.reply.lock() = Some(response);
+        *self.reply.lock().expect("a fake-socket lock is never poisoned") = Some(response);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn answer_with_fds(&self, response: BrokerResponse, fds: Vec<std::os::fd::OwnedFd>) {
-        *self.reply.lock() = Some(response);
-        *self.reply_fds.lock() = fds;
+        *self.reply.lock().expect("a fake-socket lock is never poisoned") = Some(response);
+        *self.reply_fds.lock().expect("a fake-socket lock is never poisoned") = fds;
     }
 
     // Joining the fake kernel server's thread is the sync test harness's own
@@ -167,6 +168,7 @@ let handle = std::thread::spawn(move || {
             .expect("kernel server completes");
         self.captured
             .lock()
+            .expect("a fake-socket lock is never poisoned")
             .clone()
             .expect("the kernel server captured one frame")
     }
@@ -193,15 +195,15 @@ fn serve_kernel_call(
     let envelope: BrokerRequestEnvelope =
         d2b_contracts::decode_frame("BrokerRequestEnvelope", &buf[..read])
             .expect("decode kernel frame");
-    *captured.lock() = Some(envelope);
+    *captured.lock().expect("a fake-socket lock is never poisoned") = Some(envelope);
     let response = loop {
-        if let Some(response) = reply.lock().take() {
+        if let Some(response) = reply.lock().expect("a fake-socket lock is never poisoned").take() {
             break response;
         }
         std::thread::sleep(Duration::from_millis(5));
     };
     let frame = d2b_contracts::encode_frame(&response).expect("encode kernel reply");
-    let fds = std::mem::take(&mut *reply_fds.lock());
+    let fds = std::mem::take(&mut *reply_fds.lock().expect("a fake-socket lock is never poisoned"));
     if fds.is_empty() {
         connection.write_all(&frame).expect("write kernel reply");
     } else {
