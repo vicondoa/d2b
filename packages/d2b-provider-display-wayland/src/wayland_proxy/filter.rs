@@ -77,8 +77,9 @@ use wl_proxy::{
 
 use crate::wayland_proxy::{
     bridge::{
-        BridgeConfig, BridgeConnectionState, BridgeHandoff, BridgeReconnectMachine,
-        BridgeTransferKind, BridgeTransferMetadata, LocalTransferFd,
+        BridgeConfig, BridgeConnectionState, BridgeHandoff, BridgeInboundFrame,
+        BridgeReconnectMachine, BridgeTransferKind, BridgeTransferMetadata, LocalTransferFd,
+        decode_bridge_frame,
     },
     clipboard::{
         ClipboardGlobalDisposition, ClipboardMimePolicy, ClipboardRoute, MimeDecision,
@@ -801,21 +802,8 @@ impl VirtualClipboardState {
                 }
             }
             state.bridge_read_buffer.extend_from_slice(&read_bytes);
-            while let Some(newline) = state
-                .bridge_read_buffer
-                .iter()
-                .position(|byte| *byte == b'\n')
-            {
-                let frame = state
-                    .bridge_read_buffer
-                    .drain(..=newline)
-                    .collect::<Vec<_>>();
-                if frame
-                    .windows(br#""type":"refresh_selection""#.len())
-                    .any(|window| window == br#""type":"refresh_selection""#)
-                {
-                    refresh = true;
-                }
+            if state.drain_buffered_bridge_frames() > 0 {
+                refresh = true;
             }
             if state.bridge_read_buffer.len() > 4096 {
                 state.bridge_read_buffer.clear();
@@ -827,6 +815,45 @@ impl VirtualClipboardState {
         if refresh {
             broadcast_selection(clipboard);
         }
+    }
+
+    /// Decodes every complete newline-delimited frame already buffered and
+    /// returns how many of them asked for a selection refresh.
+    ///
+    /// A frame that does not decode as a [`BridgeInboundFrame`] - bad JSON, a
+    /// truncated write, or a `type` tag this side does not know - is logged
+    /// through the rate limiter and dropped. One unreadable frame must never
+    /// disable the refresh frames around it and must never tear the bridge
+    /// down, so the failure stays visible in diagnostics instead of being
+    /// silently skipped. Bytes after the last newline stay buffered for the
+    /// next read.
+    fn drain_buffered_bridge_frames(&mut self) -> usize {
+        let mut refreshes = 0;
+        while let Some(newline) = self
+            .bridge_read_buffer
+            .iter()
+            .position(|byte| *byte == b'\n')
+        {
+            let decoded = decode_bridge_frame(&self.bridge_read_buffer[..newline]);
+            self.bridge_read_buffer.drain(..=newline);
+            match decoded {
+                Ok(BridgeInboundFrame::RefreshSelection) => refreshes += 1,
+                Err(error) => {
+                    let identity_label = self.identity_label.clone();
+                    let error = bounded_error_detail(error.to_string());
+                    self.diag.borrow_mut().warn(
+                        "clipboard-bridge",
+                        "frame-decode-failed",
+                        || {
+                            format!(
+                                "[d2b-wlproxy] target={identity_label} event=clipboard-bridge reason=frame-decode-failed error={error}"
+                            )
+                        },
+                    );
+                }
+            }
+        }
+        refreshes
     }
 
     fn mark_bridge_disconnected(&mut self) {
@@ -2899,6 +2926,94 @@ mod tests {
 
     fn policy() -> Rc<FilterPolicy> {
         Rc::new(FilterPolicy::build(PolicyInput::new(local_identity())))
+    }
+
+    fn bridge_diag() -> Rc<RefCell<DiagRateLimiter>> {
+        Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())))
+    }
+
+    fn bridge_state(diag: Rc<RefCell<DiagRateLimiter>>) -> VirtualClipboardState {
+        VirtualClipboardState::new(local_identity(), diag, disabled_bridge_config())
+    }
+
+    #[test]
+    fn buffered_refresh_frame_is_decoded_and_consumed() {
+        let mut clipboard = bridge_state(bridge_diag());
+        clipboard
+            .bridge_read_buffer
+            .extend_from_slice(br#"{"type":"refresh_selection"}"#);
+        clipboard.bridge_read_buffer.push(b'\n');
+
+        assert_eq!(clipboard.drain_buffered_bridge_frames(), 1);
+        assert!(clipboard.bridge_read_buffer.is_empty());
+    }
+
+    #[test]
+    fn refresh_detection_survives_whitespace_key_order_and_extra_fields() {
+        for frame in [
+            br#"{"type": "refresh_selection"}"#.as_slice(),
+            br#"{ "type" : "refresh_selection" }"#.as_slice(),
+            br#"{"source_id":7,"type":"refresh_selection"}"#.as_slice(),
+            br#"{"type":"refresh_selection","source_id":7}"#.as_slice(),
+        ] {
+            let mut clipboard = bridge_state(bridge_diag());
+            clipboard.bridge_read_buffer.extend_from_slice(frame);
+            clipboard.bridge_read_buffer.push(b'\n');
+
+            assert_eq!(
+                clipboard.drain_buffered_bridge_frames(),
+                1,
+                "{} must decode as a refresh request",
+                String::from_utf8_lossy(frame)
+            );
+        }
+    }
+
+    #[test]
+    fn incomplete_bridge_frame_stays_buffered_until_its_newline_arrives() {
+        let mut clipboard = bridge_state(bridge_diag());
+        clipboard
+            .bridge_read_buffer
+            .extend_from_slice(br#"{"type":"refresh_selec"#);
+
+        assert_eq!(clipboard.drain_buffered_bridge_frames(), 0);
+        assert_eq!(
+            clipboard.bridge_read_buffer.as_slice(),
+            br#"{"type":"refresh_selec"#
+        );
+
+        clipboard.bridge_read_buffer.extend_from_slice(b"tion\"}\n");
+        assert_eq!(clipboard.drain_buffered_bridge_frames(), 1);
+        assert!(clipboard.bridge_read_buffer.is_empty());
+    }
+
+    #[test]
+    fn unreadable_bridge_frames_are_skipped_without_losing_later_refresh() {
+        let mut clipboard = bridge_state(bridge_diag());
+        clipboard.bridge_read_buffer.extend_from_slice(
+            b"{not-json}\n{\"type\":\"host_selection_changed\"}\n\
+              {\"type\":\"refresh_selection\"}\n",
+        );
+
+        assert_eq!(clipboard.drain_buffered_bridge_frames(), 1);
+        assert!(clipboard.bridge_read_buffer.is_empty());
+    }
+
+    #[test]
+    fn unreadable_bridge_frames_are_diagnosed_through_the_rate_limiter() {
+        let diag = bridge_diag();
+        let mut clipboard = bridge_state(diag.clone());
+        let malformed = b"{not-json}\n";
+        for _ in 0..6 {
+            clipboard.bridge_read_buffer.extend_from_slice(malformed);
+            assert_eq!(clipboard.drain_buffered_bridge_frames(), 0);
+        }
+
+        assert_eq!(
+            diag.borrow().suppressed_total_for_tests(),
+            1,
+            "decode failures are logged, so the sixth is rate-limited instead of dropped silently"
+        );
     }
 
     fn clipboard() -> Rc<RefCell<VirtualClipboardState>> {
