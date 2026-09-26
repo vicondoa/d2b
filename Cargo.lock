@@ -2174,6 +2174,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-vm-harness"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "d2b-zone-routing"
 version = "0.0.0-bootstrap"
 dependencies = [

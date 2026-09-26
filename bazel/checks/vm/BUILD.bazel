@@ -1,4 +1,4 @@
-load(":defs.bzl", "guest_image")
+load(":defs.bzl", "guest_boot_test", "guest_image")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -21,30 +21,100 @@ _GUEST_SOURCES = [
     "//tests/fixtures:fixture_sources",
 ]
 
+# The d2b host binaries every guest image is built against.
+_HOST_TOOLS = [
+    "//packages/d2b:d2b",
+    "//packages/d2bd:d2bd",
+    "//packages/d2b-broker-composition:d2b-broker",
+    "//packages/d2b-host:d2b-activation-helper",
+    "//packages/d2b-host-activation-helper:d2b-host-activation-helper",
+    "//packages/d2b-unsafe-local-helper:d2b-unsafe-local-helper",
+    "//packages/d2b-resource-compiler:d2b-resource-compiler",
+    "//packages/d2b-provider-display-wayland:d2b-wayland-proxy",
+    "//packages/d2b-provider-test-controller:d2b-provider-test-controller",
+]
+
+# The Cloud Hypervisor controller the nested-guest checks enroll.
+_CONTROLLER = "//packages/d2b-provider-guest-cloud-hypervisor:d2b-cloud-hypervisor-controller"
+
+# The image action realizes a guest closure through nix, which cannot build
+# inside a sandboxed action, so the action is unsandboxed, local, and
+# uncacheable on any remote cache.
+_IMAGE_TAGS = [
+    "exclusive",
+    "local",
+    "no-remote-cache",
+    "no-remote-exec",
+    "no-sandbox",
+]
+
+# The default guest shape: the node the daemon and broker host checks boot.
 guest_image(
     name = "guest_image",
     srcs = _GUEST_SOURCES,
-    cloud_hypervisor_controller = "//packages/d2b-provider-guest-cloud-hypervisor:d2b-cloud-hypervisor-controller",
+    cloud_hypervisor_controller = _CONTROLLER,
     flake = "//:flake.nix",
     flake_lock = "//:flake.lock",
-    host_tools = [
-        "//packages/d2b:d2b",
-        "//packages/d2bd:d2bd",
-        "//packages/d2b-broker-composition:d2b-broker",
-        "//packages/d2b-host:d2b-activation-helper",
-        "//packages/d2b-host-activation-helper:d2b-host-activation-helper",
-        "//packages/d2b-unsafe-local-helper:d2b-unsafe-local-helper",
-        "//packages/d2b-resource-compiler:d2b-resource-compiler",
-        "//packages/d2b-provider-display-wayland:d2b-wayland-proxy",
-        "//packages/d2b-provider-test-controller:d2b-provider-test-controller",
-    ],
+    host_tools = _HOST_TOOLS,
     nix = "@nix//:bin/nix",
+    node_shape = "daemon",
     substituters = "https://cache.nixos.org/",
-    tags = [
-        "exclusive",
-        "local",
-        "no-remote-cache",
-        "no-remote-exec",
-        "no-sandbox",
+    tags = _IMAGE_TAGS,
+)
+
+# The writable-store shape: the node the two nested-guest checks boot, which
+# replaces the root drive with a writable overlay on an installed system
+# image and boots through a bootloader. It is a second graph output rather
+# than a runtime switch, so a guest is always built from the shape its
+# configuration declared.
+guest_image(
+    name = "guest_image_writable_store",
+    srcs = _GUEST_SOURCES,
+    cloud_hypervisor_controller = _CONTROLLER,
+    flake = "//:flake.nix",
+    flake_lock = "//:flake.lock",
+    host_tools = _HOST_TOOLS,
+    nix = "@nix//:bin/nix",
+    node_shape = "writable-store",
+    substituters = "https://cache.nixos.org/",
+    tags = _IMAGE_TAGS,
+)
+
+# The emulator every lane guest boots, taken from the same pinned nix
+# package set the guest closure is realized from, so the emulator and the
+# guest are at one nixpkgs revision and a snapshot taken by one version is
+# never assumed restorable by another.
+_EMULATOR = "@qemu_kvm//:bin/qemu-kvm"
+
+# The lane's harness, which is the thing that spawns a guest.
+_HARNESS = "//packages/d2b-vm-harness:d2b-vm-harness"
+
+guest_boot_test(
+    name = "guest_boot_daemon",
+    emulator = _EMULATOR,
+    harness = _HARNESS,
+    image = ":guest_image",
+)
+
+guest_boot_test(
+    name = "guest_boot_writable_store",
+    emulator = _EMULATOR,
+    harness = _HARNESS,
+    image = ":guest_image_writable_store",
+)
+
+# The lane's own suite. The harness crate deliberately carries no test
+# aggregate - the repository's test census would force-register such a crate
+# into the main package suite - so the targets that lint and exercise it are
+# named here instead, and the crate is still covered by the repository's
+# Rust gates.
+test_suite(
+    name = "host_integration_lane",
+    tests = [
+        "//packages/d2b-vm-harness:d2b-vm-harness_clippy",
+        "//packages/d2b-vm-harness:d2b_vm_harness_clippy",
+        "//packages/d2b-vm-harness:d2b_vm_harness_test",
+        ":guest_boot_daemon",
+        ":guest_boot_writable_store",
     ],
 )

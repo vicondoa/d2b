@@ -12,3 +12,7 @@
 ### Removed
 
 - Retired the recipe's Attic closure upload from the new guest-image path: a network side effect would make the image uncacheable, and the build cache the image lands in replaces it. The upload stays with the nix recipe and retires with the lane, which is recorded here rather than left for the next reader to rediscover.
+
+### Fixed
+
+- The image carries the kernel and initrd its manifest names. The rewrite that split the action across the two node shapes dropped the two copies, so the manifest declared artifacts relative to the image root that the image did not contain, and the emulator refused the launch on the missing kernel - which surfaces as `Connection reset by peer` on the monitor, because the monitor socket is created before the kernel is opened. The kernel and initrd are copied in from the paths the NixOS VM module's own run script names: the toplevel's `kernel` link, and `virtualisation.directBoot.initrd`, so a node that redirects the payload redirects it here too. An image whose kernel or initrd cannot be copied now fails to build rather than producing an image that cannot be booted.

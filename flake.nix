@@ -712,14 +712,18 @@
       #
       # `rawBundle` and `rawCloudHypervisorController` are paths to
       # directories holding the binaries by output name. `extraModules`
-      # carries a check's own guest contributions.
+      # carries a check's own guest contributions. `nodeShape` names which
+      # of the re-homed node's two guest shapes to evaluate - `daemon` for
+      # the daemon/broker host checks, `writable-store` for the two that
+      # boot a nested guest - so the shape is a declared input of the image
+      # rather than a second record of the numbers behind it.
       guestImage = forAllSystems (system:
-        { rawBundle, rawCloudHypervisorController ? null, extraModules ? [ ] }:
+        { rawBundle, rawCloudHypervisorController ? null, extraModules ? [ ], nodeShape ? "daemon" }:
         let
           handoff = mkBazelHostTools system rawBundle rawCloudHypervisorController;
         in
         import ./nix/test-support/guest-image.nix {
-          inherit extraModules rawBundle;
+          inherit extraModules nodeShape rawBundle;
           pkgs = nixpkgsFor.${system};
           bazelHostTools = handoff.tools;
           self = handoff.hostSelf;

@@ -16,9 +16,12 @@ from, and the build-users setting are all set here, and the flake arrives
 as a copied input rather than as a working-tree reference.
 """
 
+load("@bazel_skylib//rules:native_binary.bzl", "native_test")
+
 _GUEST_IMAGE_COMMAND = """\
 set -eu
 label="%s"
+node_shape="%s"
 
 # Resolved before the fixed PATH is installed: on NixOS the setuid sudo is
 # the wrapper, and the profile entry is not.
@@ -123,7 +126,7 @@ done
 [ "$reachable" -eq 1 ] || fail "none of the declared substituters ($substituters) is reachable"
 
 system="$("$nix_bin" eval --raw --impure --expr builtins.currentSystem)" || fail "could not read the nix system"
-expr="(builtins.getFlake \\"path:$root\\").guestImage.\\"$system\\" { rawBundle = \\"$bundle\\"; rawCloudHypervisorController = $controller_argument; }"
+expr="(builtins.getFlake \\"path:$root\\").guestImage.\\"$system\\" { rawBundle = \\"$bundle\\"; rawCloudHypervisorController = $controller_argument; nodeShape = \\"$node_shape\\"; }"
 echo "guest-image $label: realizing the guest from declared inputs" >&2
 image="$(nix_run "$nix_bin" build \\
   --option store "local?store=$store_dir" \\
@@ -168,7 +171,10 @@ def _guest_image_impl(ctx):
             ctx.attr.substituters,
             controller.path if controller else "",
         ] + [tool.path for tool in ctx.files.host_tools],
-        command = _GUEST_IMAGE_COMMAND % {"label": str(ctx.label)},
+        command = _GUEST_IMAGE_COMMAND % (
+            str(ctx.label),
+            ctx.attr.node_shape,
+        ),
         mnemonic = "GuestImage",
         progress_message = "Building d2b guest image %s" % ctx.label.name,
     )
@@ -188,6 +194,16 @@ guest_image = rule(
         "flake_lock": attr.label(
             allow_single_file = True,
             mandatory = True,
+        ),
+        # Which of the re-homed node's two guest shapes this image evaluates:
+        # `daemon` for the daemon/broker host checks, `writable-store` for
+        # the checks that boot a nested guest, which replaces the root drive
+        # and boots through a bootloader. It is a declared attribute rather
+        # than a lane constant, so the shape a guest is built from is part of
+        # the action's key rather than an ambient fact.
+        "node_shape": attr.string(
+            default = "daemon",
+            values = ["daemon", "writable-store"],
         ),
         # The guest's own binaries, taken in the target configuration: the
         # guest runs the binaries this build produces, not a second copy
@@ -212,3 +228,107 @@ guest_image = rule(
         ),
     },
 )
+
+
+
+_LANE_RUNNER_SCRIPT = """\
+#!/bin/sh
+set -eu
+
+# A test runs with its working directory inside the runfiles tree, not at its
+# root, so the root is derived from this script's own location rather than
+# assumed - a wrong guess here is a guest that never boots, with a path error
+# instead of a boot error.
+runfiles="$(CDPATH= cd -- "$(dirname -- "$0")/../../../.." && pwd -P)"
+
+export D2B_VM_HARNESS_CYCLES="{cycles}"
+export D2B_VM_HARNESS_EMULATOR="$runfiles/{emulator}"
+export D2B_VM_HARNESS_IMAGE="$runfiles/{image}"
+# A lane-scoped working directory that outlives each individual guest, and is
+# this test's own rather than the sandboxed temporary directory the current
+# Bazel release does not expose to a sandboxed action. The harness resolves a
+# relative one against its own working directory.
+export D2B_VM_HARNESS_WORK_ROOT="{work_root}"
+
+exec "$runfiles/{harness}" "$@"
+"""
+
+_LANE_TAGS = [
+    "exclusive",
+    "local",
+    "no-remote-cache",
+    "no-remote-exec",
+    "no-sandbox",
+]
+
+def guest_boot_test(name, image, emulator, harness, timeout = "eternal"):
+    """Boot one guest shape, wait for its activation contract, and tear it down.
+
+    The guest is booted by the lane's own harness, against the image the
+    guest-image action produced from the re-homed guest node. The emulator
+    arrives as a declared runfile from the pinned nix package set, so the
+    emulator and the guest closure are at one nixpkgs revision.
+
+    The image, the emulator, and the lane's working directory are handed to
+    the harness through a generated runner rather than through the test
+    rule's `env`: a runfile location is only expanded where a rule expands
+    it, and the harness is a binary, not a shell script that could resolve
+    its own runfiles.
+
+    The target runs unsandboxed and local: a guest opens `/dev/kvm`, may run
+    a nested guest, and owns a working directory that outlives an individual
+    check, none of which a sandboxed action can provide. The tags keep it off
+    remote execution and out of any aggregate that would replay a guest's
+    verdict.
+    """
+    runner = name + "_runner.sh"
+    script = _LANE_RUNNER_SCRIPT.format(
+        cycles = "2",
+        emulator = "$(rlocationpath %s)" % emulator,
+        harness = "$(rlocationpath %s)" % harness,
+        image = "$(rlocationpath %s)" % image,
+        work_root = "d2b-vm-lane-work/%s" % name,
+    )
+
+    # The runner is written through a genrule rather than handed to the test
+    # rule's `env`, following `nix_native_test`: a runfile location is
+    # expanded only where a rule expands it, and a binary cannot resolve its
+    # own runfiles. Each location becomes a placeholder first so the `$`
+    # escaping genrule's own expansion needs does not touch the shell script
+    # around it.
+    make_vars = {
+        "$(rlocationpath %s)" % harness: "__HARNESS__",
+        "$(rlocationpath %s)" % emulator: "__EMULATOR__",
+        "$(rlocationpath %s)" % image: "__IMAGE__",
+    }
+    for make_var, placeholder in make_vars.items():
+        script = script.replace(make_var, placeholder)
+    script = script.replace("$", "$$")
+    for make_var, placeholder in make_vars.items():
+        script = script.replace(placeholder, make_var)
+
+    native.genrule(
+        name = runner,
+        srcs = [
+            emulator,
+            harness,
+            image,
+        ],
+        outs = [name + "_runner"],
+        cmd = "\"$(execpath @python3//:bin/python3)\" -c 'import pathlib,sys; p=pathlib.Path(sys.argv[1]); p.write_text(sys.stdin.read()); p.chmod(0o755)' \"$(OUTS)\" <<'EOF'\n%s\nEOF" % script,
+        tags = _LANE_TAGS,
+        tools = ["@python3//:bin/python3"],
+    )
+    native_test(
+        name = name,
+        src = ":" + name + "_runner",
+        data = [
+            ":" + name + "_runner",
+            harness,
+            image,
+            emulator,
+        ],
+        size = "large",
+        tags = _LANE_TAGS,
+        timeout = timeout,
+    )

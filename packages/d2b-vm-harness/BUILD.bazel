@@ -1,0 +1,61 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+)
+
+# The lane's guest launcher is not a main-package crate: the repository's
+# test census force-registers any crate that carries a test aggregate into the
+# main package suite, and this crate's tests run as part of the lane, not as
+# part of `make check`. The lane's own suite in `bazel/checks/vm` names the
+# targets below directly, so they are still built, linted, and run.
+package(default_visibility = ["//bazel/checks:__pkg__", "//bazel/checks/vm:__pkg__"])
+
+exports_files(
+    ["BUILD.bazel", "Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
+
+d2b_rust_library(
+    name = "d2b_vm_harness",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**/*.rs"],
+        allow_empty = True,
+    ),
+    compile_data = ["Cargo.toml"],
+    deps = all_crate_deps(normal = True, cargo_only = True),
+)
+
+d2b_rust_binary(
+    name = "d2b-vm-harness",
+    srcs = ["src/bin/d2b-vm-harness.rs"],
+    compile_data = ["Cargo.toml"],
+    deps = [
+        ":d2b_vm_harness",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+d2b_rust_test(
+    name = "d2b_vm_harness_test",
+    crate = ":d2b_vm_harness",
+    compile_data = ["Cargo.toml"],
+    deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

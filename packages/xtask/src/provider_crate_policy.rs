@@ -8984,6 +8984,8 @@ const COMMITTED_SCOPE: &[CommittedScopeEntry] = &[
         reason: "the daemon composition root (and its runtime)" },
     CommittedScopeEntry { crate_name: "xtask", class: CommittedScopeClass::Tooling,
         reason: "the check's own home; every U-unit touches the tooling" },
+    CommittedScopeEntry { crate_name: "d2b-vm-harness", class: CommittedScopeClass::Tooling,
+        reason: "the host-integration lane's own harness; the check's tooling, booted against a lane-owned guest" },
     CommittedScopeEntry { crate_name: "d2b-broker", class: CommittedScopeClass::Broker,
         reason: "the broker binary and its composition/fixture support crates" },
     CommittedScopeEntry { crate_name: "d2b-broker-composition", class: CommittedScopeClass::Broker,
