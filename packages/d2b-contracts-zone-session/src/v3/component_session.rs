@@ -24,42 +24,79 @@ use std::{
 use d2b_contracts_resource::v3::identity::SessionPurpose;
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneId};
 
+/// Length in bytes of the fixed ComponentSession preface.
 pub const PREFACE_LEN: usize = 16;
+/// Fixed magic bytes identifying a ComponentSession v3 preface.
 pub const PREFACE_MAGIC: [u8; 8] = *b"D2BCS3\r\n";
+/// Canonical ComponentSession wire major version.
 pub const COMPONENT_SESSION_MAJOR: u16 = 3;
+/// Canonical ComponentSession wire minor version.
 pub const COMPONENT_SESSION_MINOR: u16 = 0;
+/// Maximum serialized bytes of one HandshakeOffer on the wire.
 pub const MAX_HANDSHAKE_OFFER_BYTES: usize = 16 * 1024;
+/// Canonical encoded length in bytes of a HandshakeOffer.
 pub const HANDSHAKE_OFFER_CANONICAL_LEN: usize = 148;
+/// Canonical encoded length in bytes of the EndpointPolicy identity portion of a HandshakeOffer.
 pub const ENDPOINT_POLICY_IDENTITY_CANONICAL_LEN: usize = HANDSHAKE_OFFER_CANONICAL_LEN - 8;
+/// Maximum ciphertext bytes in one protected record.
 pub const MAX_PROTECTED_CIPHERTEXT_BYTES: u32 = u16::MAX as u32;
+/// Noise protocol authentication tag bytes per protected record.
 pub const NOISE_TAG_BYTES: u32 = 16;
+/// Length-prefix bytes in each record framing header.
 pub const RECORD_LENGTH_BYTES: u32 = 2;
+/// Maximum plaintext bytes in one protected record after Noise tag removal.
 pub const MAX_PROTECTED_PLAINTEXT_BYTES: u32 = MAX_PROTECTED_CIPHERTEXT_BYTES - NOISE_TAG_BYTES;
+/// Maximum bytes of one logical message across record fragments.
 pub const MAX_LOGICAL_MESSAGE_BYTES: u32 = 1024 * 1024;
+/// Maximum concurrently active named streams per session.
 pub const MAX_ACTIVE_NAMED_STREAMS: u16 = 128;
+/// Maximum attachments in one packet.
 pub const MAX_PACKET_ATTACHMENTS: u16 = 32;
+/// Maximum attachments in one request.
 pub const MAX_REQUEST_ATTACHMENTS: u16 = 64;
+/// Maximum attachments in one operation.
 pub const MAX_OPERATION_ATTACHMENTS: u16 = 128;
+/// Maximum attachments held by one session.
 pub const MAX_SESSION_ATTACHMENTS: u16 = 256;
+/// Maximum attachment credits granted to a process.
 pub const MAX_PROCESS_ATTACHMENT_CREDITS: u16 = 2_048;
+/// Maximum attachment credits granted to the host.
 pub const MAX_HOST_ATTACHMENT_CREDITS: u16 = 8_192;
+/// File descriptors reserved for session control transport.
 pub const RESERVED_CONTROL_FDS: u16 = 64;
+/// Maximum queued bytes for one named stream.
 pub const MAX_NAMED_STREAM_QUEUE_BYTES: u32 = 256 * 1024;
+/// Maximum aggregate queued bytes across all named streams.
 pub const MAX_AGGREGATE_NAMED_STREAM_QUEUE_BYTES: u32 = 4 * 1024 * 1024;
+/// Maximum queued bytes on the TTRPC control channel.
 pub const MAX_TTRPC_CONTROL_QUEUE_BYTES: u32 = 2 * 1024 * 1024;
+/// Maximum queued bytes on the session control channel.
 pub const MAX_SESSION_CONTROL_QUEUE_BYTES: u32 = 64 * 1024;
+/// Maximum tolerated clock skew in milliseconds.
 pub const MAX_CLOCK_SKEW_MS: u64 = 30_000;
+/// Maximum lifetime of one request in milliseconds.
 pub const MAX_REQUEST_LIFETIME_MS: u64 = 15 * 60 * 1_000;
+/// Local handshake deadline in milliseconds.
 pub const LOCAL_HANDSHAKE_DEADLINE_MS: u32 = 5_000;
+/// Remote handshake deadline in milliseconds.
 pub const REMOTE_HANDSHAKE_DEADLINE_MS: u32 = 15_000;
+/// Local reconnect deadline in milliseconds.
 pub const LOCAL_RECONNECT_DEADLINE_MS: u32 = 5_000;
+/// Remote reconnect deadline in milliseconds.
 pub const REMOTE_RECONNECT_DEADLINE_MS: u32 = 30_000;
+/// Maximum reconnect attempts before the session fails.
 pub const MAX_RECONNECT_ATTEMPTS: u16 = 10;
+/// Maximum reconnect window in milliseconds.
 pub const MAX_RECONNECT_WINDOW_MS: u32 = 5 * 60 * 1_000;
+/// Maximum keepalive interval in milliseconds.
 pub const MAX_KEEPALIVE_INTERVAL_MS: u32 = 60_000;
+/// Maximum keepalive timeout in milliseconds.
 pub const MAX_KEEPALIVE_TIMEOUT_MS: u32 = 30_000;
+/// Maximum bytes of one wire identifier.
 pub const MAX_ID_BYTES: usize = 64;
+/// Length in bytes of a record header.
 pub const RECORD_HEADER_LEN: usize = 24;
+/// Length in bytes of a fragment header.
 pub const FRAGMENT_HEADER_LEN: usize = 24;
 const HANDSHAKE_BINARY_VERSION: u8 = 1;
 const NAMED_STREAM_CHANNEL_MIN: u16 = 0x0100;
