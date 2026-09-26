@@ -980,6 +980,23 @@ pub(crate) fn modern_run(raw_args: Vec<OsString>) -> i32 {
             Err(error) => report_dispatch_failure(None, &cli, mode, error),
         };
     }
+    // A mutating `host` verb that selected no mode is a usage error the
+    // operator is owed before any connection. Refusing it here keeps
+    // `--apply-or-dry-run-required` at exit 78 whether or not the public
+    // socket answers: resolved after the Zone, a missing `--dry-run`/
+    // `--apply` would be reported as a transport failure instead.
+    if let ModernCommand::Host(host::HostArgs { command }) = &cli.command
+        && let Some(verb) = host::missing_mutation_mode(command)
+    {
+        let mode = match output_mode(cli.json, cli.human) {
+            Ok(mode) => mode,
+            Err(error) => return crate::report_failure(error),
+        };
+        return match emit_host_error(&missing_mutation_flag_envelope(verb), mode.is_json()) {
+            Ok(code) => code,
+            Err(error) => crate::report_failure(error),
+        };
+    }
     let local_host_command = matches!(
         &cli.command,
         ModernCommand::Host(host::HostArgs {

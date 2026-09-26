@@ -7,7 +7,7 @@ use crate::{
     CliFailure,
     context::{CliContext, OutputMode, RequestDeadline, ZoneContext},
     dispatch::{GenericGetArgs, GenericListArgs},
-    dispatch::{emit_host_error, host_error_envelope, missing_mutation_flag_envelope},
+    dispatch::{emit_host_error, host_error_envelope},
     doctor, host_validate, print_json, print_stdout, resource,
 };
 
@@ -68,6 +68,25 @@ pub(crate) struct HostReconcileArgs {
     pub(crate) dry_run: bool,
     #[arg(long, conflicts_with = "dry_run")]
     pub(crate) apply: bool,
+}
+
+/// The `host` verb a mutation-mode refusal names, for a subcommand that
+/// mutates state and selected neither `--dry-run` nor `--apply`.
+///
+/// The rule belongs to the invocation rather than to the runtime, so
+/// [`crate::dispatch::modern_run`] asks this before it resolves a Zone: a
+/// missing mode is owed the `--apply-or-dry-run-required` envelope even when
+/// the public socket cannot be reached.
+pub(crate) fn missing_mutation_mode(command: &HostCommand) -> Option<&'static str> {
+    let (verb, dry_run, apply) = match command {
+        HostCommand::Prepare(args) => ("host prepare", args.dry_run, args.apply),
+        HostCommand::Destroy(args) => ("host destroy", args.dry_run, args.apply),
+        HostCommand::Reconcile(args) => ("host reconcile", args.dry_run, args.apply),
+        HostCommand::Validate(args) => ("host validate", args.dry_run, args.apply),
+        HostCommand::Get(_) | HostCommand::List(_) | HostCommand::Status(_) => return None,
+        HostCommand::Doctor(_) => return None,
+    };
+    (!dry_run && !apply).then_some(verb)
 }
 
 pub(crate) fn run(
@@ -271,10 +290,6 @@ fn mutation(
     mode: OutputMode,
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
-    if !args.dry_run && !args.apply {
-        let verb = format!("host {operation}");
-        return emit_host_error(&missing_mutation_flag_envelope(&verb), mode.is_json());
-    }
     let value = context.invoke(
         "Reconcile",
         json!({
@@ -296,12 +311,6 @@ fn reconcile(
     mode: OutputMode,
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
-    if !args.dry_run && !args.apply {
-        return emit_host_error(
-            &missing_mutation_flag_envelope("host reconcile"),
-            mode.is_json(),
-        );
-    }
     if !args.network {
         return Err(context.failure("ref-invalid", "host reconcile requires --network", mode, 78));
     }
@@ -323,12 +332,6 @@ fn reconcile(
 }
 
 fn validate(args: &HostValidateArgs, mode: OutputMode) -> Result<i32, CliFailure> {
-    if !args.dry_run && !args.apply {
-        return emit_host_error(
-            &missing_mutation_flag_envelope("host validate"),
-            mode.is_json(),
-        );
-    }
     let validation_mode = if args.apply {
         host_validate::ValidateMode::Apply
     } else {
