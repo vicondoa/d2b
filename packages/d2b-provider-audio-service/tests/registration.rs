@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef};
+use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ZoneId};
 use d2b_provider_audio_pipewire::AudioServiceSpec;
 use d2b_provider_audio_service::{
     AudioService, audio_service_descriptor, audio_service_spec_decoder,
@@ -43,7 +43,7 @@ impl InteractionDriverEffects for UnusedEffects {
 
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
     audio_service_descriptor(InteractionDriverArgs {
-        zone: "work".to_owned(),
+        zone: ZoneId::parse("work").expect("zone"),
         controller_generation: ControllerGeneration::new(3).expect("generation"),
         effects: Arc::new(UnusedEffects),
         behavior: AudioService,

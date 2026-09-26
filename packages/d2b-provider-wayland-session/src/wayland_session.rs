@@ -156,7 +156,8 @@ impl InteractionType for WaylandSession {
         envelope: &InteractionSpecEnvelope,
     ) -> Result<Vec<ChildEnsure>, InteractionEffectError> {
         let spec = envelope.base_spec::<WaylandSessionSpec>()?;
-        let session_ref = key_ref(children.key);
+        let session_ref = key_ref(children.key)
+            .map_err(|_| InteractionEffectError::InvalidResource)?;
         let session_uid = resource_uid(children.uid)
             .ok_or(InteractionEffectError::InvalidResource)?;
         let intents = self.children.display_children(&DisplayChildRequest {

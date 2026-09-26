@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef};
+use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ZoneId};
 use d2b_provider_wayland_policy::{
     InteractionChildContext, InteractionDriver, InteractionDriverArgs, InteractionDriverEffects,
     InteractionDriverStatus, InteractionEffectError, InteractionKind, InteractionSpecEnvelope,
@@ -263,12 +263,11 @@ fn build_fixture(
         notify_tx,
     );
     let driver = InteractionDriver::new(InteractionDriverArgs {
-        zone: "work".to_owned(),
+        zone: ZoneId::parse("work").expect("zone"),
         controller_generation: ControllerGeneration::new(3).unwrap(),
         effects: Arc::clone(&effects) as Arc<dyn InteractionDriverEffects>,
         behavior: TestType { valid },
-    })
-    .expect("driver");
+    });
     (
         Fixture {
             ctx,
@@ -322,7 +321,7 @@ fn the_factory_serves_only_its_declared_type() {
     let effects = ScriptedEffects::shared(Arc::new(tokio::sync::Mutex::new(Vec::new())));
     let factory = d2b_provider_wayland_policy::InteractionDriverFactory::new(
         InteractionDriverArgs {
-            zone: "work".to_owned(),
+            zone: ZoneId::parse("work").expect("zone"),
             controller_generation: ControllerGeneration::new(3).unwrap(),
             effects,
             behavior: TestType { valid: true },
@@ -334,21 +333,6 @@ fn the_factory_serves_only_its_declared_type() {
         .map(|resource_type| resource_type.as_str().to_owned())
         .collect::<Vec<_>>();
     assert_eq!(served, vec!["test.d2bus.org.Row".to_owned()]);
-}
-
-/// A malformed zone token is refused at the driver boundary instead of
-/// panicking.
-#[test]
-fn the_driver_refuses_a_malformed_zone_token() {
-    let effects = ScriptedEffects::shared(Arc::new(tokio::sync::Mutex::new(Vec::new())));
-    let refusal = InteractionDriver::new(InteractionDriverArgs {
-        zone: "not a zone token".to_owned(),
-        controller_generation: ControllerGeneration::new(3).unwrap(),
-        effects: Arc::clone(&effects) as Arc<dyn InteractionDriverEffects>,
-        behavior: TestType { valid: true },
-    })
-    .expect_err("a malformed zone token is a typed refusal, not a panic");
-    assert_eq!(refusal.to_string(), "interaction-spec-invalid");
 }
 
 // -- validate ---------------------------------------------------------------
@@ -629,7 +613,7 @@ fn the_driver_registers_the_declared_type_with_the_registry() {
     let effects = ScriptedEffects::shared(Arc::new(tokio::sync::Mutex::new(Vec::new())));
     let descriptor =
         d2b_provider_wayland_policy::wayland_policy_descriptor(InteractionDriverArgs {
-            zone: "work".to_owned(),
+            zone: ZoneId::parse("work").expect("zone"),
             controller_generation: ControllerGeneration::new(3).unwrap(),
             effects,
             behavior: d2b_provider_wayland_policy::WaylandPolicy,
@@ -643,5 +627,10 @@ fn the_driver_registers_the_declared_type_with_the_registry() {
             .decoders()
             .contains_key(&ResourceTypeName::new("display-wayland.d2bus.org.WaylandPolicy"))
     );
-    assert_eq!(key_ref(&row().key).to_canonical_string(), "test.d2bus.org.Row/row");
+    assert_eq!(
+        key_ref(&row().key)
+            .expect("canonical test key")
+            .to_canonical_string(),
+        "test.d2bus.org.Row/row"
+    );
 }

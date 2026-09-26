@@ -160,7 +160,8 @@ impl InteractionType for AudioBinding {
         envelope: &InteractionSpecEnvelope,
     ) -> Result<Vec<ChildEnsure>, InteractionEffectError> {
         let spec = envelope.spec_with_provider_ref::<AudioBindingSpec>()?;
-        let binding_ref = d2b_provider_wayland_policy::interaction::key_ref(children.key);
+        let binding_ref = d2b_provider_wayland_policy::interaction::key_ref(children.key)
+            .map_err(|_| InteractionEffectError::InvalidResource)?;
         self.children
             .binding_children(&AudioBindingChildRequest {
                 zone: children.zone,

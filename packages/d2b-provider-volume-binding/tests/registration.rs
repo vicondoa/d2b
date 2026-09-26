@@ -2,6 +2,7 @@
 //! the plane registers, and the registry serves this type's decoder and
 //! factory from it.
 
+use d2b_contracts_resource::v3::ZoneId;
 use d2b_provider_volume_binding::{
     BINDING_CREATIONS, BINDING_EFFECTS_SERVICE, BINDING_TYPE_NAME, BindingDriverArgs,
     binding_descriptor,
@@ -13,7 +14,7 @@ use d2b_resource_types::{AllowedSources, ChildCustody, WellKnownType};
 
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
     binding_descriptor(BindingDriverArgs {
-        zone: "work".to_owned(),
+        zone: ZoneId::parse("work").expect("zone"),
         facets: FakeServingEffects::new().facet_set(),
         vcpu_count: 1,
     })
