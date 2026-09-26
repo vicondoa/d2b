@@ -1964,9 +1964,9 @@ pub mod pidfd_sys {
         reply: tokio::sync::oneshot::Sender<io::Result<()>>,
     }
 
-    /// The bounded worker that owns the blocking `setfacl` fork/exec/wait
-    /// (plan R4: a blocking `sync_channel` recv on the worker's own
-    /// dedicated thread, with `tokio::sync::oneshot` replies). The shellout
+    /// The bounded worker that owns the blocking `setfacl` fork/exec/wait:
+    /// a blocking `sync_channel` recv on the worker's own
+    /// dedicated thread, with `tokio::sync::oneshot` replies. The shellout
     /// has no async form and can take arbitrarily long (a wedged host can
     /// stall the child), so it must not run on an executor worker; the
     /// dedicated thread blocks instead, and the caller awaits the outcome.

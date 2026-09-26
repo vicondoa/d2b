@@ -237,7 +237,7 @@ struct RegistryState {
 /// Tracks per-UID helper generations, snapshots, and operation
 /// completions; all peer contact flows through [`Self::accept_loop`].
 ///
-/// The mutexes are `tokio::sync` primitives (async purity, plan U17)
+/// The mutexes are `tokio::sync` primitives (kept off async contexts)
 /// reached through the `lock_registry` helper: the accept loop, its
 /// per-connection handler threads, and the daemon's `d2b-conn` dispatch
 /// thread park on the blocking seat, while a runtime worker (the `--once`

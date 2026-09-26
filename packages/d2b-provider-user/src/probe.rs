@@ -9,7 +9,7 @@
 //! The reads have no async form, so the probe runs the whole blocking body
 //! on `d2b-core`'s bounded loader probe seat: a slow or wedged backend
 //! (LDAP/NIS) refuses later probes rather than parking this executor
-//! worker for the lookup (`spawn_blocking` is banned by plan KD2; the seat
+//! worker for the lookup (`spawn_blocking` is banned; the seat
 //! is the house replacement).
 
 use d2b_contracts_resource::v3::{ResourceRef, user::UserSpec};

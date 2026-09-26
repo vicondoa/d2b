@@ -276,8 +276,8 @@ struct HandoffLockJob {
 }
 
 /// The bounded worker that owns the blocking `flock(2)` wait for the
-/// per-state-dir handoff lock (plan R4: a blocking `sync_channel` recv on
-/// the worker's own dedicated thread, with `tokio::sync::oneshot` replies).
+/// per-state-dir handoff lock: a blocking `sync_channel` recv on
+/// the worker's own dedicated thread, with `tokio::sync::oneshot` replies.
 /// The wait can be long - the lock is held for the whole apply/replay
 /// critical section of the previous holder - so it must not park an
 /// executor worker; the dedicated thread blocks instead, and the caller

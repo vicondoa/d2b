@@ -1,9 +1,8 @@
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
-# Accepted duplicate clusters (rust-skills audit, reviewed 2026-09-25). cargo-deny
-# reports these on every run; each entry names the versions, the pullers, and
-# the re-check trigger. The clusters
+# Accepted duplicate clusters. cargo-deny reports these on every run; each
+# entry names the versions, the pullers, and the re-check trigger. The clusters
 # below are accepted because the pullers' version ranges genuinely do not
 # unify (no lower-bound raise reaches both legs). multiple-versions stays
 # "warn" until the workspace-direct clusters resolve; a warn-to-deny flip

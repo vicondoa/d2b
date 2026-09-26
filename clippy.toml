@@ -86,9 +86,9 @@ disallowed-methods = [
     # definition the call ends up at, so the three entries below name the
     # resolved `lock_api` paths. `parking_lot::Condvar` below is a real type,
     # not an alias, and keeps its own name.
-    { path = "lock_api::Mutex::lock", reason = "Blocking lock reached through the parking_lot alias (`parking_lot::Mutex` is `lock_api::Mutex<RawMutex, T>`), and the guard it returns cannot be held across an await; the parking_lot carve-out is revoked (plan KD3)", replacement = "tokio::sync::Mutex::lock" },
-    { path = "lock_api::RwLock::read", reason = "Blocking read lock reached through the parking_lot alias (`parking_lot::RwLock` is `lock_api::RwLock<RawRwLock, T>`), and the guard it returns cannot be held across an await; the parking_lot carve-out is revoked (plan KD3)", replacement = "tokio::sync::RwLock::read" },
-    { path = "lock_api::RwLock::write", reason = "Blocking write lock reached through the parking_lot alias (`parking_lot::RwLock` is `lock_api::RwLock<RawRwLock, T>`), and the guard it returns cannot be held across an await; the parking_lot carve-out is revoked (plan KD3)", replacement = "tokio::sync::RwLock::write" },
+    { path = "lock_api::Mutex::lock", reason = "Blocking lock reached through the parking_lot alias (`parking_lot::Mutex` is `lock_api::Mutex<RawMutex, T>`), and the guard it returns cannot be held across an await; the parking_lot carve-out is revoked", replacement = "tokio::sync::Mutex::lock" },
+    { path = "lock_api::RwLock::read", reason = "Blocking read lock reached through the parking_lot alias (`parking_lot::RwLock` is `lock_api::RwLock<RawRwLock, T>`), and the guard it returns cannot be held across an await; the parking_lot carve-out is revoked", replacement = "tokio::sync::RwLock::read" },
+    { path = "lock_api::RwLock::write", reason = "Blocking write lock reached through the parking_lot alias (`parking_lot::RwLock` is `lock_api::RwLock<RawRwLock, T>`), and the guard it returns cannot be held across an await; the parking_lot carve-out is revoked", replacement = "tokio::sync::RwLock::write" },
 
     # --- Condition variables ---------------------------------------------
     { path = "std::sync::Condvar::wait", reason = "Parks the caller until another thread notifies; on a single-threaded runtime the notifier is the parked worker itself, so the wait can never be satisfied", replacement = "arm tokio::sync::Notify before the check, then tokio::time::timeout" },

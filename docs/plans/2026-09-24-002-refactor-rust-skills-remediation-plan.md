@@ -328,7 +328,9 @@ Each gate is the KTD3 set. Ratchet reconciliation (KTD6) and ledger rows (R8) ha
 
 ### Wave to cluster map
 
-Counts are the audit's own cluster membership (`README.md` section 6); each wave executes the lane files behind them.
+Counts are the per-lens cluster membership this plan applied, recorded here
+because the audit record itself is not part of the shipped tree; each wave
+executes the rows behind them.
 
 | wave | lenses and clusters | findings |
 | --- | --- | ---: |

@@ -443,7 +443,7 @@ impl LiveTpmResourceEffectPort<'_> {
                 // resolution runs on the bounded probe seat: a slow or wedged
                 // backend (LDAP/NIS) refuses later probes rather than parking
                 // this executor worker for the lookup (`spawn_blocking` is
-                // banned by plan KD2; the seat is the house replacement).
+                // banned; the seat is the house replacement).
                 let (owner_uid, owner_gid, mode) = {
                     let spec = spec.clone();
                     loader_worker::run_probe(move || row_posture(&spec))
@@ -479,7 +479,7 @@ impl LiveTpmResourceEffectPort<'_> {
         // write, reply poll, frame read) with no async form in the tree, so
         // it runs on the bounded kernel seat under the same io budget: the
         // executor worker is never parked for the leg (`spawn_blocking` is
-        // banned by plan KD2; the seat is the house replacement).
+        // banned; the seat is the house replacement).
         let socket_path = self.facets.runtime.broker_socket_path().to_path_buf();
         let io_timeout = self.facets.runtime.kernel_io_timeout();
         let caller_role = self.facets.runtime.caller_role();

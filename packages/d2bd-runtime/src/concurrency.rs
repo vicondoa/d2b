@@ -117,7 +117,7 @@ pub enum OpLockClass {
 /// Per-VM + global in-process op locks. Cheaply [`Clone`]able (all state
 /// behind `Arc`) so it can live inside the `Clone` `ServerState`.
 ///
-/// The locks are `tokio::sync` primitives (async purity, plan U17).
+/// The locks are `tokio::sync` primitives (kept off async contexts).
 /// Production dispatch runs on dedicated `d2b-conn` handler threads, so
 /// `acquire` parks them on the blocking seats; the `--once` serve path
 /// dispatches inline on the accept loop's runtime worker, where those seats
