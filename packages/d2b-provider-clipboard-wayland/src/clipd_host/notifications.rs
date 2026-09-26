@@ -21,7 +21,7 @@ impl Notifier for DesktopNotifier {
             .body(&notification.body)
             .show()
         {
-            log::warn!("d2b-clipd: desktop notification failed: {error}");
+            tracing::warn!(error = %error, "d2b-clipd: desktop notification failed");
         }
     }
 }

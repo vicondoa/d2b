@@ -63,11 +63,11 @@ impl<P: crate::clipd_host::niri::FocusedWindowProvider> HostClipboard<P> {
         has_secret: bool,
     ) {
         let attribution = self.attributor.on_host_selection_changed();
-        log::debug!(
-            "d2b-clipd: host selection changed, attribution={:?}, mimes={}, secret={}",
-            attribution.quality,
-            allowed_mimes.len(),
-            has_secret
+        tracing::debug!(
+            quality = ?attribution.quality,
+            mimes = allowed_mimes.len(),
+            secret = has_secret,
+            "d2b-clipd: host selection changed"
         );
         // Replace any old offer (drops it, sending destroy).
         self.current_selection = Some(HostSelection {

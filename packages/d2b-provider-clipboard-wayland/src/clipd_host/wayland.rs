@@ -551,9 +551,9 @@ impl DataControlClient {
             .roundtrip(&mut state)
             .map_err(|e| DataControlError::Protocol(e.to_string()))?;
 
-        log::info!(
-            "d2b-clipd: data-control connected via {}",
-            state.manager_state.protocol_name()
+        tracing::info!(
+            protocol = %state.manager_state.protocol_name(),
+            "d2b-clipd: data-control connected"
         );
 
         Ok(Self {

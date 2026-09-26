@@ -9,7 +9,7 @@ use crate::clipd_host::policy::{AttributionQuality, ReasonCode};
 // audit line.
 const MAX_AUDIT_MIME_BYTES: usize = 64;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AuditEvent {
     pub request_id: String,
     pub source_realm: String,
