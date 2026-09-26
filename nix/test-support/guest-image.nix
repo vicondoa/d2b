@@ -68,6 +68,15 @@ let
     inherit (pkgs) lib;
   };
 
+  # The nixpkgs module that carries the lane's command channel, named here
+  # rather than inside the module that imports it. The module system's own
+  # `pkgs` argument is resolved by asking the configuration it is building,
+  # so a module whose `imports` reaches for that argument is a module read
+  # while the fixpoint that reads it is still being computed. This binding
+  # sees the package set this file was called with instead, which is the
+  # same pinned set the guest closure is realized from.
+  testInstrumentation = pkgs.path + "/nixos/modules/testing/test-instrumentation.nix";
+
   # `d2bDaemonNode` declares `virtualisation.*`, so the guest is evaluated
   # with the same QEMU VM module the runNixOSTest nodes carry. Evaluating
   # the node module directly, rather than through the test driver, is what
@@ -249,6 +258,24 @@ let
   laneGuestModule =
     { config, lib, pkgs, ... }:
     {
+      # The lane's command channel is nixpkgs' own test instrumentation, the
+      # module the nix lane's guests got when the test driver booted them.
+      # It is imported here rather than reimplemented because the unit it
+      # declares is the whole channel: `backdoor.service` is a root shell on
+      # `/dev/hvc0` - a virtio serial console - and it announces itself with
+      # the greeting the lane's guest-control surface waits for before it
+      # sends anything. Writing that unit here would be a second greeting and
+      # a second shell for the same channel.
+      #
+      # `testing.backdoor` is left at its default, which is
+      # `!config.boot.isContainer` and therefore true for a guest that was
+      # booted, so the unit is declared rather than switched on. What the
+      # module also brings - a root password for an interactive login, no
+      # default gateway, the journal forwarded to the serial console - is
+      # what these guests have always had, and the checks were written
+      # against that guest rather than against a network-reachable one.
+      imports = [ testInstrumentation ];
+
       # The direct-boot shape gets its serial console from the `-append` the
       # VM module builds. The bootloader shape reads its command line off
       # the disk instead, so the same console list is declared as kernel

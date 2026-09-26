@@ -507,134 +507,16 @@ rec {
   # was asserting on; `explain` entries are (journal unit or null, token) whose
   # last daemon lines explain those rows. Diagnostics only: every assertion and
   # timeout is passed through unchanged.
-  fixtureDiagnostics = ''
-      # ---- d2b fixture diagnostics (issue #513) --------------------------
-      # The test driver discards machine.execute output and does not re-print
-      # the output a timed-out wait_until_succeeds last saw, so a failed lane
-      # used to leave only the command text in the log. These helpers push the
-      # row set and the daemon explanation lines into the driver log (stdout
-      # and stderr of the test driver, that is the lane log).
-      #
-      # Diagnostics only: no assertion and no timeout is changed here.
-      import time as _diag_time
-
-      _diag_t0 = _diag_time.monotonic()
-      _diag_stage = "startup"
-
-      def _diag_elapsed():
-          return f"{_diag_time.monotonic() - _diag_t0:.1f}s"
-
-      def _diag_print(*lines):
-          for line in lines:
-              print(line, flush=True)
-
-      def stage(name):
-          global _diag_stage
-          _diag_stage = name
-          _diag_print(f"[d2b] stage={name} t={_diag_elapsed()}")
-
-      def diag(command, label="diagnostic output"):
-          try:
-              status, output = machine.execute(command, timeout=120)
-          except Exception as error:
-              _diag_print(
-                  f"[d2b] stage={_diag_stage} t={_diag_elapsed()} {label}: "
-                  f"diagnostic command failed: {error}"
-              )
-              return -1
-          _diag_print(
-              f"[d2b] stage={_diag_stage} t={_diag_elapsed()} {label} "
-              f"(exit {status}):"
-          )
-          _diag_print(command)
-          for line in output.rstrip().splitlines():
-              _diag_print("    " + line)
-          return status
-
-      def _diag_journal(unit, token):
-          scope = f"-u {unit} " if unit else ""
-          select = f"| grep -F -- {token!r} " if token else ""
-          return (
-              f"journalctl {scope}--no-pager -o cat -b -n 4000 2>/dev/null "
-              f"{select}| tail -n 60 || true"
-          )
-
-      def unit_dumps(unit):
-          """Row dumps for a systemd unit waiting to become active."""
-          return [
-              (
-                  f"{unit} status",
-                  f"systemctl status {unit} --no-pager 2>&1 | tail -n 40 "
-                  "|| true",
-              ),
-          ]
-
-      # Every fixture drives one zone as one linux user through the same
-      # public socket, so the composed explanation is available without each
-      # stage listing the rows it asserted on: `d2b debug` reads the whole
-      # zone and prints the ownership tree, the row that is not settled, and
-      # the structured failure behind it.
-      _diag_zone = "work"
-      _diag_user = "alice"
-
-      def diag_debug_zone(label="zone explanation"):
-          """The composed `d2b debug` report, always diagnostic and never
-          fatal: a failure that happened before the daemon was reachable must
-          still print its own stage rather than a diagnostic error. Bounded,
-          because a failure can happen before there is anything to explain."""
-          status = diag(
-              f"runuser -u {_diag_user} -- env "
-              f"D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
-              f"timeout 60 d2b --zone {_diag_zone} debug {_diag_zone} 2>&1 "
-              f"|| true",
-              label,
-          )
-          return status
-
-      def diag_step(name, action, rows=(), explain=(), wait=None, debug=True):
-          stage(name)
-          try:
-              return action()
-          except Exception as error:
-              labels = ", ".join(label for label, _ in rows) or "none"
-              failing = f" wait={name}" if wait else ""
-              _diag_print(
-                  f"[d2b] FAIL stage={name} t={_diag_elapsed()}{failing} "
-                  f"rows=[{labels}]: {error}"
-              )
-              if wait:
-                  _diag_print(f"[d2b] failing wait: {wait}")
-              for label, command in rows:
-                  diag(command, f"row dump: {label}")
-              for unit, token in explain:
-                  detail = f"journal {unit or 'all'}"
-                  if token:
-                      detail += f" lines matching {token!r}"
-                  diag(_diag_journal(unit, token), detail)
-              if debug:
-                  diag_debug_zone()
-              raise
-
-      def diag_unit(name, unit, timeout, debug=True):
-          """wait_for_unit with the unit status and journal on timeout."""
-          return diag_step(
-              name,
-              lambda: machine.wait_for_unit(unit, timeout=timeout),
-              unit_dumps(unit),
-              [(unit, None)],
-              debug=debug,
-          )
-
-      def diag_wait(name, command, timeout, rows=(), explain=(), debug=True):
-          return diag_step(
-              name,
-              lambda: machine.wait_until_succeeds(command, timeout=timeout),
-              rows,
-              explain,
-              command,
-              debug=debug,
-          )
-  '';
+  #
+  # The text itself lives with the lane's own assertion surface, in
+  # `packages/d2b-vm-harness/src/diagnostics.py`, and is read from there
+  # rather than kept here. The Bazel lane runs these very same evaluated
+  # scripts, so a check that has not been ported yet reports its failure
+  # through this text under either lane; a second copy of it would be a
+  # second dialect of the same diagnostics, and the two would drift the first
+  # time one of them gained a helper the other did not.
+  fixtureDiagnostics =
+    builtins.readFile ../../packages/d2b-vm-harness/src/diagnostics.py;
 
   # Re-exported so tests can assert against the shared declaration.
   inherit mkGuestSystem mkRuntimeCloudHypervisorArtifact

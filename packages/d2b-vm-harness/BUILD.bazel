@@ -25,7 +25,17 @@ d2b_rust_library(
         exclude = ["src/bin/**/*.rs"],
         allow_empty = True,
     ),
-    compile_data = ["Cargo.toml"],
+    # The two Python files the legacy guest-control surface carries, declared
+    # as compile-time data because that is what embeds them: the diagnostics
+    # prelude is the one copy the nix lane's fixtures interpolate as well, and
+    # the bridge is the `machine` object an unported check's assertions call.
+    # A check cannot be handed a lane whose diagnostics text differs from the
+    # one its fixture was evaluated with.
+    compile_data = [
+        "Cargo.toml",
+        "src/diagnostics.py",
+        "src/legacy_bridge.py",
+    ],
     deps = all_crate_deps(normal = True, cargo_only = True),
 )
 

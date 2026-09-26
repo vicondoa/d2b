@@ -20,9 +20,11 @@ pub mod guest;
 pub mod host;
 pub mod manifest;
 pub mod monitor;
+pub mod legacy;
 
 pub use error::{HarnessError, Result, UnsnapshottableDevice};
 pub use guest::{ActiveGuest, GuestSpec, boot, report, reserve_loopback_port};
+pub use legacy::{LegacyCheck, LegacyError, LegacyGuest, LegacyOutcome};
 pub use host::{Capability, HostFacts, require_this_host};
 pub use manifest::GuestManifest;
 pub use monitor::{BlockDevice, Monitor};

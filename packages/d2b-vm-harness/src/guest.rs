@@ -29,6 +29,7 @@ use std::{
     io::Write,
     net::TcpListener,
     os::unix::fs::PermissionsExt,
+    os::unix::net::UnixListener,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     thread::sleep,
@@ -49,6 +50,19 @@ const WORK_DIR_PATH_BUDGET: usize = 88;
 /// The short, lane-scoped root a guest falls back to when its own directory
 /// cannot carry a socket.
 const LANE_TEMP_DIR: &str = "d2b-vm-lane";
+
+/// The guest's command channel: the chardev the launch declares it under,
+/// and the socket file that chardev connects to, in the working directory
+/// the guest owns.
+///
+/// These are the launcher's, not a caller's: the console is part of the
+/// invocation, so the socket path is a function of the guest's own working
+/// directory and the chardev id is a name the command line and the guest's
+/// surface have to agree on. The guest side of the channel is the nix test
+/// framework's `backdoor.service` - a root shell on this console - which
+/// the guest image carries.
+pub const CONSOLE_ID: &str = "d2b-lane-console";
+pub const CONSOLE_SOCKET: &str = "lane-console.sock";
 
 /// How often the launcher re-reads the guest's console while waiting for
 /// activation.
@@ -189,8 +203,19 @@ impl GuestSpec {
         }
 
         // The lane's own plumbing: no display, the guest's console captured
-        // for the activation wait and for diagnostics, and a monitor socket
-        // the launcher owns.
+        // for the activation wait and for diagnostics, a monitor socket the
+        // launcher owns, and the guest's command channel.
+        //
+        // The channel is on the command line for the same reason the nix test
+        // driver put it there. Its guest side is a unit that declares
+        // `requires = [ "dev-hvc0.device" ]`, and a unit whose device is
+        // absent when systemd reaches it is not reliably restarted when the
+        // device turns up later: a console hot-attached through the monitor
+        // after the boot leaves a guest whose root shell never ran. So the
+        // device exists before the guest executes its first instruction, and
+        // the host is already listening before the emulator starts at all -
+        // a chardev with nobody on the other end of its socket blocks the
+        // launch rather than reaching the guest.
         push("-display");
         push("none");
         push("-serial");
@@ -202,6 +227,16 @@ impl GuestSpec {
             "unix:{},server=on,wait=off",
             work_dir.join("qmp.sock").display()
         ));
+
+        push("-chardev");
+        push(&format!(
+            "socket,id={CONSOLE_ID},path={}",
+            work_dir.join(CONSOLE_SOCKET).display()
+        ));
+        push("-device");
+        push("virtio-serial");
+        push("-device");
+        push(&format!("virtconsole,chardev={CONSOLE_ID}"));
 
         // The guest's clock follows the emulator's virtual clock, which
         // stops while the guest does. That is what keeps a restored guest's
@@ -424,11 +459,30 @@ fn resolve_share(source: &str, work_dir: &Path) -> Result<String> {
         .into_owned())
 }
 
+/// Bind the host end of the guest's command channel.
+///
+/// The working directory is created by the launch that precedes this, so a
+/// socket file still there is the working directory's own: it is removed
+/// before the bind rather than around it, because a bind that fails on a
+/// stale file would be a launch that failed for a reason its own diagnostics
+/// do not name.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+fn bind_command_channel(work_dir: &Path) -> Result<UnixListener> {
+    let path = work_dir.join(CONSOLE_SOCKET);
+    if path.exists() {
+        fs::remove_file(&path)
+            .map_err(|error| HarnessError::io(format!("removing {}", path.display()), error))?;
+    }
+    UnixListener::bind(&path)
+        .map_err(|error| HarnessError::io(format!("binding {}", path.display()), error))
+}
+
 /// A booted guest that has reported its activation contract.
 pub struct ActiveGuest {
     child: Child,
     monitor: Option<Monitor>,
     work_dir: PathBuf,
+    command_channel: Option<UnixListener>,
     shut_down: bool,
 }
 
@@ -446,6 +500,25 @@ impl ActiveGuest {
     /// The working directory this guest owns.
     pub fn work_dir(&self) -> &Path {
         &self.work_dir
+    }
+
+    /// Hand this guest's command channel to whoever will run a check's
+    /// assertions against it.
+    ///
+    /// The socket was bound and put on the launch's command line before the
+    /// emulator was started, and the emulator has connected to it since; what
+    /// is left is accepting the connection and waiting for the guest's shell
+    /// to announce itself. It is taken rather than borrowed because one guest
+    /// carries one command channel, and a second reader of it would interleave
+    /// two commands' output into one block.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    pub fn take_command_channel(&mut self) -> Result<UnixListener> {
+        self.command_channel.take().ok_or_else(|| {
+            HarnessError::Configuration(
+                "the guest's command channel has already been handed to a guest-control surface"
+                    .to_owned(),
+            )
+        })
     }
 
     /// Refuse a guest whose attached writable devices cannot carry an
@@ -525,6 +598,11 @@ impl Drop for ActiveGuest {
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn boot(spec: &GuestSpec) -> Result<ActiveGuest> {
     let work_dir = spec.prepare_work_dir()?;
+    // The host end of the guest's command channel, bound and listening
+    // before the emulator exists: the chardev the command line declares
+    // connects here, and a socket with nobody listening on it is a launch
+    // that blocks at machine start rather than a guest that boots.
+    let command_channel = bind_command_channel(&work_dir)?;
     let command_line = spec.command_line()?;
     let program = command_line
         .first()
@@ -555,6 +633,7 @@ pub fn boot(spec: &GuestSpec) -> Result<ActiveGuest> {
             child,
             monitor: Some(monitor),
             work_dir,
+            command_channel: Some(command_channel),
             shut_down: false,
         }),
         Err(error) => {
@@ -802,9 +881,18 @@ fn wait_for_exit(child: &mut Child, bound: Duration) -> Result<()> {
     }
 }
 
-/// Reserve a loopback port for a forwarded guest port. The lane forwards the
-/// guest's ssh port so a check's assertions have the same reach the nix test
-/// driver gave them.
+/// Reserve a loopback port and hand back its number, with nothing listening
+/// on it once this returns.
+///
+/// This is a convenience for a caller that is about to bind that port itself,
+/// so it never has to choose one and race another guest for it. The lane's
+/// own guest-control channel is not one of those ports: a check's assertions
+/// reach the guest over the virtio serial console the launch declared, not
+/// over a forwarded TCP port, so the guest's ssh capability - which the
+/// guest node declares on its own and the lane does not depend on - is
+/// neither reached nor forwarded here. Nothing in the lane calls this today;
+/// it is the launcher's small piece of the vocabulary a caller would use to
+/// add a host-side port of its own.
 pub fn reserve_loopback_port() -> Result<u16> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .map_err(|error| HarnessError::io("reserving a loopback port", error))?;
@@ -1141,6 +1229,35 @@ mod tests {
         assert_eq!(
             value_of(&argv, "-qmp"),
             "unix:/run/lane/work/lane-member-0/qmp.sock,server=on,wait=off"
+        );
+    }
+
+    #[test]
+    fn the_guests_command_channel_is_declared_on_the_command_line() {
+        // The guest's root shell is a unit that requires `dev-hvc0.device`,
+        // and a unit whose device is absent when systemd reaches it is not
+        // reliably restarted when the device appears later. A channel added
+        // to a running guest therefore leaves a guest with no shell at all,
+        // so the device and the socket the host listens on both belong to the
+        // launch rather than to whatever drives the booted guest.
+        let argv = argv(&spec(manifest(3, 3072, &[])));
+        assert_eq!(
+            value_of(&argv, "-chardev"),
+            "socket,id=d2b-lane-console,path=/run/lane/work/lane-member-0/lane-console.sock"
+        );
+        let devices: Vec<&str> = argv
+            .iter()
+            .zip(argv.iter().skip(1))
+            .filter(|(flag, _)| flag.as_str() == "-device")
+            .map(|(_, value)| value.as_str())
+            .collect();
+        assert!(
+            devices.contains(&"virtio-serial"),
+            "the console's bus is attached: {devices:?}"
+        );
+        assert!(
+            devices.contains(&"virtconsole,chardev=d2b-lane-console"),
+            "the console is attached to the channel the launch declared: {devices:?}"
         );
     }
 
