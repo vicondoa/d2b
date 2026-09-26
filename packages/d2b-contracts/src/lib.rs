@@ -51,8 +51,6 @@ pub use ids::{
     AllocatorLeaseId, CorrelationId, ExecutionId, HostResourceId, IdempotencyKey, OperationId,
     PrincipalId, StreamCursor, StreamId,
 };
-pub use opaque_payload::OpaquePayload;
-pub use privileges_w3::W3BrokerOperation;
 pub use token::{ProtocolToken, TokenError};
 pub use workload::{
     DisplayEnvironmentPosture, EnvironmentPosture, ExecutionIdentityPosture, IsolationPosture,

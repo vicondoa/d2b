@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use d2b_contracts_resource::v3::ResourceRef;
 
-pub mod adoption;
+mod adoption;
 pub mod bootstrap_graph;
 pub mod config;
 pub mod controller;

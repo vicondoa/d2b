@@ -6,7 +6,7 @@
 pub mod adapter;
 mod admission;
 pub mod authz;
-pub mod client;
+mod client;
 pub mod error;
 pub mod generated;
 mod identity;

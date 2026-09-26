@@ -4,10 +4,6 @@ pub mod broker_wire;
 pub mod host_generation;
 pub mod kernel_client;
 
-pub use broker_wire::BrokerRequest;
-pub use broker_wire::{
-    FORWARD_SOCKET_ENV, ForwardOperationOutcome, ForwardOperationRequest, ForwardOperationResponse,
-};
 pub use d2b_contracts::audit_wire::{AuditExportCursor, AuditExportEntry, AuditExportErrorCode};
 pub use d2b_contracts::privileges_w3::W3BrokerOperation;
 

@@ -3537,21 +3537,21 @@ mod tests {
                         )) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
                     ),
                     (
-                        d2b_provider_device_usbip::USBIP_EFFECTS_SERVICE.id,
+                        d2b_provider_device_usbip::effects_service::USBIP_EFFECTS_SERVICE.id,
                         Arc::new(d2b_provider_device_usbip::effects_service::
                             UsbipEffectsServiceFactory::new(
                                 usbip_facets,
                             )) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
                     ),
                     (
-                        d2b_provider_device_security_key::SECURITY_KEY_EFFECTS_SERVICE.id,
+                        d2b_provider_device_security_key::effects_service::SECURITY_KEY_EFFECTS_SERVICE.id,
                         Arc::new(d2b_provider_device_security_key::effects_service::
                             SecurityKeyEffectsServiceFactory::new(
                                 security_key_facets,
                             )) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
                     ),
                     (
-                        d2b_provider_device::DEVICE_EFFECTS_SERVICE.id,
+                        d2b_provider_device::effects_service::DEVICE_EFFECTS_SERVICE.id,
                         Arc::new(d2b_provider_device::effects_service::
                             DeviceEffectsServiceFactory::new(device_facets))
                             as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,

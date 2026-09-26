@@ -46,4 +46,3 @@ pub use facets::{DeviceWorkerEvidenceSource, EndpointEffectFacets, EndpointSocke
 
 /// The Endpoint ResourceType spec and status shapes owned by this crate.
 pub mod endpoint;
-pub use endpoint::*;

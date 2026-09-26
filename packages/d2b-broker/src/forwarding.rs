@@ -39,7 +39,7 @@ use crate::envelope::{DispatchFailure, DispatchOutcome, ERRORED};
 ///
 /// The deployment fact is declared with the carrier it configures, so the
 /// broker and the peer that binds the socket cannot drift apart.
-pub use d2b_contracts_broker::FORWARD_SOCKET_ENV;
+pub use d2b_contracts_broker::broker_wire::FORWARD_SOCKET_ENV;
 
 /// The environment variable that bounds one forward round trip, in
 /// milliseconds.
