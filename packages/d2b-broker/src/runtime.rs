@@ -6897,7 +6897,6 @@ impl DispatchBackend for LiveDispatchBackend {
                 &intent.bus_id,
                 &intent.lock_path,
                 &intent.vm_name,
-                self.daemon_uid,
                 self.daemon_gid,
             )
             .await
@@ -15840,7 +15839,6 @@ mod tests {
         crate::ops::usbip_lock::acquire_lock(
             &lock_root.join("1-2.3"),
             "corp-vm",
-            nix::unistd::Uid::current().as_raw(),
             Gid::current().as_raw(),
         )
         .expect("seed the busid lock");
@@ -18783,7 +18781,6 @@ mod tests {
         crate::ops::usbip_lock::acquire_lock(
             &intent.lock_path,
             &intent.vm_name,
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .expect("seed post-bind lock");
@@ -18826,7 +18823,6 @@ mod tests {
         crate::ops::usbip_lock::acquire_lock(
             &intent.lock_path,
             &intent.vm_name,
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .expect("seed same-VM replay lock");
@@ -18869,7 +18865,6 @@ mod tests {
         crate::ops::usbip_lock::acquire_lock(
             &intent.lock_path,
             &intent.vm_name,
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .expect("seed same-VM replay lock");
@@ -18920,7 +18915,6 @@ mod tests {
         crate::ops::usbip_lock::acquire_lock(
             &intent.lock_path,
             &intent.vm_name,
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .expect("seed lock for absent device");
@@ -18955,7 +18949,6 @@ mod tests {
         crate::ops::usbip_lock::acquire_lock(
             &intent.lock_path,
             &intent.vm_name,
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .expect("seed lock");
@@ -19000,7 +18993,6 @@ mod tests {
         crate::ops::usbip_lock::acquire_lock(
             &intent.lock_path,
             &intent.vm_name,
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .expect("seed lock");

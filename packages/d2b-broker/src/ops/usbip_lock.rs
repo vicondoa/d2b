@@ -44,7 +44,12 @@ pub enum UsbipLockError {
         observed: String,
     },
     /// Underlying I/O error (e.g. parent dir missing).
-    Io { path: PathBuf, detail: String },
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    /// The lock path cannot be resolved to a parent directory.
+    PathSafetyViolation { path: PathBuf },
 }
 
 impl std::fmt::Display for UsbipLockError {
@@ -70,12 +75,27 @@ impl std::fmt::Display for UsbipLockError {
                 expected,
                 observed
             ),
-            Self::Io { path, detail } => write!(f, "usbip lock io {}: {}", path.display(), detail),
+            Self::Io { path, source } => write!(f, "usbip lock io {}: {}", path.display(), source),
+            Self::PathSafetyViolation { path } => write!(
+                f,
+                "usbip lock io {}: path-safety-violation: {} has no parent",
+                path.display(),
+                path.display()
+            ),
         }
     }
 }
 
-impl std::error::Error for UsbipLockError {}
+impl std::error::Error for UsbipLockError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io { source, .. } => Some(source),
+            Self::LockAlreadyHeld { .. }
+            | Self::OwnerMismatch { .. }
+            | Self::PathSafetyViolation { .. } => None,
+        }
+    }
+}
 
 /// Open the pre-created parent dir for a busid lock file.
 ///
@@ -86,7 +106,7 @@ impl std::error::Error for UsbipLockError {}
 pub fn ensure_lock_root(parent: &Path) -> Result<OwnedFd, UsbipLockError> {
     open_existing_lock_parent(parent).map_err(|e| UsbipLockError::Io {
         path: parent.to_path_buf(),
-        detail: e.to_string(),
+        source: e,
     })
 }
 
@@ -95,30 +115,28 @@ pub fn ensure_lock_root(parent: &Path) -> Result<OwnedFd, UsbipLockError> {
 /// # Errors
 ///
 /// Returns [`UsbipLockError::LockAlreadyHeld`] when another VM already
-/// owns the lock file, and [`UsbipLockError::Io`] for path resolution or
-/// lock-file creation failures.
+/// owns the lock file, [`UsbipLockError::PathSafetyViolation`] when the
+/// lock path has no parent directory, and [`UsbipLockError::Io`] for
+/// path resolution or lock-file creation failures.
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn acquire_lock(
     lock_path: &Path,
     owner_vm: &str,
-    _daemon_uid: u32,
     daemon_gid: u32,
 ) -> Result<(), UsbipLockError> {
     let full_lock_path = resolve_lock_path(lock_path).map_err(|e| UsbipLockError::Io {
         path: lock_path.to_path_buf(),
-        detail: e.to_string(),
+        source: e,
     })?;
-    let parent = full_lock_path.parent().ok_or_else(|| UsbipLockError::Io {
-        path: full_lock_path.clone(),
-        detail: format!(
-            "path-safety-violation: {} has no parent",
-            full_lock_path.display()
-        ),
-    })?;
+    let parent = full_lock_path
+        .parent()
+        .ok_or_else(|| UsbipLockError::PathSafetyViolation {
+            path: full_lock_path.clone(),
+        })?;
     let parent_fd = ensure_lock_root(parent)?;
     let lock_name = lock_basename(&full_lock_path).map_err(|e| UsbipLockError::Io {
         path: full_lock_path.clone(),
-        detail: e.to_string(),
+        source: e,
     })?;
     match crate::sys::path_safe::create_file_at_safe(
         &parent_fd,
@@ -130,27 +148,27 @@ pub fn acquire_lock(
             let mut f = File::from(fd);
             crate::sys::path_safe::fchmod(f.as_fd(), 0o640).map_err(|e| UsbipLockError::Io {
                 path: full_lock_path.clone(),
-                detail: e.to_string(),
+                source: e,
             })?;
             let broker_uid = nix::unistd::Uid::current().as_raw();
             crate::sys::path_safe::fchown(f.as_fd(), Some(broker_uid), Some(daemon_gid)).map_err(
                 |e| UsbipLockError::Io {
                     path: full_lock_path.clone(),
-                    detail: e.to_string(),
+                    source: e,
                 },
             )?;
             f.write_all(owner_vm.as_bytes())
                 .map_err(|e| UsbipLockError::Io {
                     path: full_lock_path.clone(),
-                    detail: e.to_string(),
+                    source: e,
                 })?;
             f.write_all(b"\n").map_err(|e| UsbipLockError::Io {
                 path: full_lock_path.clone(),
-                detail: e.to_string(),
+                source: e,
             })?;
             f.sync_all().map_err(|e| UsbipLockError::Io {
                 path: full_lock_path.clone(),
-                detail: e.to_string(),
+                source: e,
             })?;
             Ok(())
         }
@@ -170,7 +188,7 @@ pub fn acquire_lock(
         }
         Err(e) => Err(UsbipLockError::Io {
             path: full_lock_path,
-            detail: e.to_string(),
+            source: e,
         }),
     }
 }
@@ -189,12 +207,12 @@ pub fn acquire_lock(
 pub fn release_lock(lock_path: &Path, expected_owner: &str) -> Result<(), UsbipLockError> {
     let full_lock_path = resolve_lock_path(lock_path).map_err(|e| UsbipLockError::Io {
         path: lock_path.to_path_buf(),
-        detail: e.to_string(),
+        source: e,
     })?;
     let (parent_fd, lock_name) =
         parent_fd_and_name(&full_lock_path).map_err(|e| UsbipLockError::Io {
             path: full_lock_path.clone(),
-            detail: e.to_string(),
+            source: e,
         })?;
     let observed = match read_owner_at(&parent_fd, &lock_name) {
         Ok(v) => v,
@@ -202,7 +220,7 @@ pub fn release_lock(lock_path: &Path, expected_owner: &str) -> Result<(), UsbipL
         Err(e) => {
             return Err(UsbipLockError::Io {
                 path: full_lock_path.clone(),
-                detail: e.to_string(),
+                source: e,
             });
         }
     };
@@ -223,7 +241,7 @@ pub fn release_lock(lock_path: &Path, expected_owner: &str) -> Result<(), UsbipL
         })
         .map_err(|e| UsbipLockError::Io {
             path: full_lock_path.clone(),
-            detail: e.to_string(),
+            source: e,
         })
 }
 
@@ -357,7 +375,7 @@ mod tests {
         let lock = tmp.path().join("1-2");
         let uid = nix::unistd::Uid::current().as_raw();
         let gid = nix::unistd::Gid::current().as_raw();
-        acquire_lock(&lock, "work-vm", uid, gid).unwrap();
+        acquire_lock(&lock, "work-vm", gid).unwrap();
         assert!(lock.exists());
         assert_eq!(peek_owner(&lock).unwrap(), "work-vm");
         let metadata = fs::symlink_metadata(&lock).expect("lock metadata");
@@ -373,9 +391,8 @@ mod tests {
         let tmp = temp_lock_dir();
         let lock = tmp.path().join("1-2.3");
         let broker_uid = nix::unistd::Uid::current().as_raw();
-        let daemon_uid = if broker_uid == 0 { 1 } else { 0 };
         let daemon_gid = nix::unistd::Gid::current().as_raw();
-        acquire_lock(&lock, "work-vm", daemon_uid, daemon_gid).unwrap();
+        acquire_lock(&lock, "work-vm", daemon_gid).unwrap();
         let metadata = fs::symlink_metadata(&lock).expect("lock metadata");
         assert_eq!(metadata.uid(), broker_uid);
         assert_eq!(metadata.gid(), daemon_gid);
@@ -389,9 +406,8 @@ mod tests {
         fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o750))
             .expect("chmod lock root");
         let lock = tmp.path().join("1-2.4");
-        let uid = nix::unistd::Uid::current().as_raw();
         let gid = nix::unistd::Gid::current().as_raw();
-        acquire_lock(&lock, "work-vm", uid, gid).unwrap();
+        acquire_lock(&lock, "work-vm", gid).unwrap();
         let metadata = fs::symlink_metadata(tmp.path()).expect("lock root metadata");
         assert_eq!(metadata.permissions().mode() & 0o777, 0o750);
     }
@@ -400,9 +416,8 @@ mod tests {
     fn acquire_requires_precreated_lock_root() {
         let tmp = temp_lock_dir();
         let lock = tmp.path().join("missing").join("1-2.5");
-        let uid = nix::unistd::Uid::current().as_raw();
         let gid = nix::unistd::Gid::current().as_raw();
-        let err = acquire_lock(&lock, "work-vm", uid, gid).unwrap_err();
+        let err = acquire_lock(&lock, "work-vm", gid).unwrap_err();
         assert!(matches!(err, UsbipLockError::Io { .. }));
         assert!(!tmp.path().join("missing").exists());
     }
@@ -411,10 +426,9 @@ mod tests {
     fn acquire_refuses_when_lock_already_held() {
         let tmp = temp_lock_dir();
         let lock = tmp.path().join("2-3");
-        let uid = nix::unistd::Uid::current().as_raw();
         let gid = nix::unistd::Gid::current().as_raw();
-        acquire_lock(&lock, "vm-a", uid, gid).unwrap();
-        let err = acquire_lock(&lock, "vm-b", uid, gid).unwrap_err();
+        acquire_lock(&lock, "vm-a", gid).unwrap();
+        let err = acquire_lock(&lock, "vm-b", gid).unwrap_err();
         match err {
             UsbipLockError::LockAlreadyHeld { existing_owner, .. } => {
                 assert_eq!(existing_owner, "vm-a")
@@ -427,9 +441,8 @@ mod tests {
     fn release_removes_lock_on_matching_owner() {
         let tmp = temp_lock_dir();
         let lock = tmp.path().join("3-1");
-        let uid = nix::unistd::Uid::current().as_raw();
         let gid = nix::unistd::Gid::current().as_raw();
-        acquire_lock(&lock, "vm-c", uid, gid).unwrap();
+        acquire_lock(&lock, "vm-c", gid).unwrap();
         release_lock(&lock, "vm-c").unwrap();
         assert!(!lock.exists());
     }
@@ -438,9 +451,8 @@ mod tests {
     fn release_refuses_on_owner_mismatch() {
         let tmp = temp_lock_dir();
         let lock = tmp.path().join("4-2");
-        let uid = nix::unistd::Uid::current().as_raw();
         let gid = nix::unistd::Gid::current().as_raw();
-        acquire_lock(&lock, "vm-d", uid, gid).unwrap();
+        acquire_lock(&lock, "vm-d", gid).unwrap();
         let err = release_lock(&lock, "vm-other").unwrap_err();
         assert!(matches!(err, UsbipLockError::OwnerMismatch { .. }));
         // Lock is preserved on mismatch.
@@ -455,9 +467,8 @@ mod tests {
         fs::create_dir_all(&real).expect("real dir");
         let link = tmp.path().join("link");
         symlink(&real, &link).expect("symlink parent");
-        let uid = nix::unistd::Uid::current().as_raw();
         let gid = nix::unistd::Gid::current().as_raw();
-        let err = acquire_lock(&link.join("5-5"), "vm-z", uid, gid).unwrap_err();
+        let err = acquire_lock(&link.join("5-5"), "vm-z", gid).unwrap_err();
         assert!(matches!(err, UsbipLockError::Io { .. }));
     }
 
@@ -465,11 +476,10 @@ mod tests {
     fn acquire_idempotent_when_same_vm_owns_lock() {
         let tmp = temp_lock_dir();
         let lock = tmp.path().join("6-1");
-        let uid = nix::unistd::Uid::current().as_raw();
         let gid = nix::unistd::Gid::current().as_raw();
-        acquire_lock(&lock, "work-aad", uid, gid).unwrap();
+        acquire_lock(&lock, "work-aad", gid).unwrap();
         // Re-acquire by the same VM succeeds (e.g. after VM restart).
-        acquire_lock(&lock, "work-aad", uid, gid).unwrap();
+        acquire_lock(&lock, "work-aad", gid).unwrap();
         assert_eq!(peek_owner(&lock).unwrap(), "work-aad");
     }
 
