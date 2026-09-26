@@ -203,11 +203,41 @@ struct ZoneNativeBundleRef {
     path: String,
 }
 
+/// The cross-Zone index (`index.json`) emitted by `nixos-modules/index.nix`.
+///
+/// The reader consumes `zones` and `topology` only, but every other key the
+/// emitter writes is declared here so `deny_unknown_fields` can refuse an
+/// undeclared top-level key without refusing the emitted document itself.
+/// The declared-but-unread keys tolerate absence: admission rests on the
+/// sealed topology, and a partial index that omits them still carries it.
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ZoneNativeIndexDocument {
+    /// `schemaVersion` of the emitted index. Declared, not read: the reader
+    /// trusts the index version the bundle's own `schemaVersion` pins.
+    #[serde(default)]
+    #[allow(dead_code)]
+    schema_version: String,
     zones: BTreeMap<String, serde_json::Value>,
     topology: ZoneNativeTopology,
+    /// `executionIndex`: Host/Guest ref -> Zone, Provider, and Process refs.
+    /// Declared, not read: execution facts are resolved from the resource
+    /// bundles and `processes.json`.
+    #[serde(default)]
+    #[allow(dead_code)]
+    execution_index: BTreeMap<String, serde_json::Value>,
+    /// `networkIndex`: Network ref -> Zone, LAN subnet, attached Guests.
+    /// Declared, not read: network facts are resolved from the resource
+    /// bundles.
+    #[serde(default)]
+    #[allow(dead_code)]
+    network_index: BTreeMap<String, serde_json::Value>,
+    /// `closureIndex`: Guest ref -> Zone, closure artifact, closure path,
+    /// toplevel, and store view. Declared, not read: closure facts are
+    /// resolved from the resource bundles.
+    #[serde(default)]
+    #[allow(dead_code)]
+    closure_index: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -7542,6 +7572,131 @@ mod tests {
                 .map(ZoneId::as_str),
             Some("local-root")
         );
+
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// The `/etc/d2b/index.json` body `nixos-modules/index.nix` emits for a
+    /// single sealed root Zone, with one entry in each index map.
+    fn emitted_zone_native_index_document() -> serde_json::Value {
+        let parent_map = BTreeMap::from([("work".to_owned(), None::<String>)]);
+        let parent_map_bytes = serde_json::to_vec(&parent_map).expect("serialize parent map");
+        serde_json::json!({
+            "schemaVersion": "v1",
+            "zones": {
+                "work": {
+                    "hosts": ["work-host"],
+                    "guests": ["work-guest"],
+                    "networks": ["work-lan"],
+                    "providers": ["system-core"]
+                }
+            },
+            "topology": {
+                "sealed": true,
+                "parentMap": parent_map,
+                "parentMapDigest": framed_canonical_digest(
+                    "d2b:v3:parent-topology",
+                    &parent_map_bytes,
+                ),
+                "generationByZone": {
+                    "work": format!("sha256:{}", "a".repeat(64))
+                }
+            },
+            "executionIndex": {
+                "Host/work-host": {
+                    "zone": "work",
+                    "providerRef": "Provider/system-core",
+                    "processes": []
+                }
+            },
+            "networkIndex": {
+                "Network/work-lan": {
+                    "zone": "work",
+                    "lanSubnet": null,
+                    "attachedGuests": ["Guest/work-guest"]
+                }
+            },
+            "closureIndex": {
+                "Guest/work-guest": {
+                    "zone": "work",
+                    "guest": "work-guest",
+                    "closureArtifact": null,
+                    "closurePath": "/etc/d2b/closures/zones/work/work-guest.json",
+                    "toplevel": null,
+                    "storeView": null
+                }
+            }
+        })
+    }
+
+    /// Writes an index body under `root` with the production posture and
+    /// returns the v3 bundle that hash-pins it.
+    fn write_zone_native_index(root: &Path, index: &serde_json::Value) -> Bundle {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let index_bytes = serde_json::to_vec(index).expect("serialize index");
+        let index_path = root.join("index.json");
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fs::write(&index_path, &index_bytes).expect("write index");
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fs::set_permissions(&index_path, fs::Permissions::from_mode(0o640)).expect("chmod index");
+        site_test_bundle(Some(BTreeMap::from([(
+            "index.json".to_owned(),
+            sha256_hex(&index_bytes),
+        )])))
+    }
+
+    #[test]
+    fn zone_native_index_admits_the_emitted_keys_and_refuses_a_foreign_one() {
+        let root = test_root("zone-native-index-unknown-key");
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fs::create_dir_all(&root).expect("create bundle root");
+        let zone_bundles = BTreeMap::from([("work".to_owned(), Vec::new())]);
+
+        // Every emitted key is declared, so the emitted document loads.
+        let emitted = emitted_zone_native_index_document();
+        let bundle = write_zone_native_index(&root, &emitted);
+        let topology =
+            load_zone_native_topology(&bundle, &zone_bundles, &root, &current_user_bundle_policy())
+                .expect("the emitted index shape loads")
+                .expect("topology present");
+        assert_eq!(topology.root.as_str(), "work");
+
+        // An index that omits the declared-but-unread keys still loads: the
+        // broker seam pilot writes `zones` and `topology` only.
+        let mut partial = emitted_zone_native_index_document();
+        {
+            let object = partial.as_object_mut().expect("index body is an object");
+            for key in [
+                "schemaVersion",
+                "executionIndex",
+                "networkIndex",
+                "closureIndex",
+            ] {
+                assert!(object.remove(key).is_some(), "{key} must be emitted");
+            }
+        }
+        let bundle = write_zone_native_index(&root, &partial);
+        load_zone_native_topology(&bundle, &zone_bundles, &root, &current_user_bundle_policy())
+            .expect("a partial index loads")
+            .expect("topology present");
+
+        // The emitted document plus one undeclared top-level key is refused;
+        // that key is the only difference from the admitted document.
+        let mut foreign = emitted;
+        foreign
+            .as_object_mut()
+            .expect("index body is an object")
+            .insert(
+                "topologyDigest".to_owned(),
+                serde_json::Value::String("sha256:deadbeef".to_owned()),
+            );
+        let bundle = write_zone_native_index(&root, &foreign);
+        let error =
+            load_zone_native_topology(&bundle, &zone_bundles, &root, &current_user_bundle_policy())
+                .expect_err("an undeclared top-level key must refuse the index");
+        assert_eq!(error.kind().as_str(), "manifest-parse-error");
 
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         let _ = fs::remove_dir_all(root);
