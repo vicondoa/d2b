@@ -15,6 +15,7 @@ use d2b_core::storage_lifecycle::{
     SyncContractValidationReason,
 };
 use serde_json::Value;
+use std::collections::BTreeSet;
 
 /// The committed consumer-facing schema, not a fresh generator run.
 const PUBLISHED_SCHEMA: &str =
@@ -80,14 +81,34 @@ fn every_issue_variant_satisfies_the_published_schema() {
         .issues
         .iter()
         .map(StorageLifecycleIssue::kind_name)
-        .collect::<Vec<_>>();
+        .collect::<BTreeSet<_>>();
     assert_eq!(
-        variants.len(),
-        8,
-        "one serialized issue per declared variant, so a new variant cannot skip the schema"
+        variants,
+        declared_issue_kinds(&schema),
+        "the fixtures must exercise every issue kind the published schema declares, so a new \
+         variant cannot skip the schema"
     );
 
     validate(&schema, &schema, &bytes).expect("serialized report satisfies the published schema");
+}
+
+/// The issue kinds the published schema declares, read from its `oneOf`
+/// alternatives rather than from the Rust enum, so a kind the fixtures do not
+/// exercise fails here instead of passing unvalidated.
+fn declared_issue_kinds(schema: &Value) -> BTreeSet<&str> {
+    schema
+        .pointer("/definitions/StorageLifecycleIssue/oneOf")
+        .and_then(Value::as_array)
+        .map(|alternatives| {
+            alternatives
+                .iter()
+                .filter_map(|alternative| alternative.pointer("/properties/kind/enum"))
+                .filter_map(Value::as_array)
+                .filter_map(|declared| declared.first())
+                .filter_map(Value::as_str)
+                .collect()
+        })
+        .expect("the published schema declares one alternative per issue kind")
 }
 
 /// Validate `instance` against `schema`, both borrowed from the published

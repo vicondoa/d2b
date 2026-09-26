@@ -10,8 +10,9 @@
 //!     typed deserialize equivalent to the schema check the bash gate did via
 //!     docs/reference/cli-output/auth-status.schema.json);
 //!   * the per-role allowed/denied subcommand authz surface matches the binary's
-//!     contract (launcher gets `up` but keeps `audit` denied; `none` stays
-//!     read-only; admin gains `audit` and denies nothing);
+//!     contract (launcher gains `list`, does not report the retired v2 verb
+//!     `up` as allowed, and keeps `audit` denied; `none` stays read-only; admin
+//!     gains `audit` and denies nothing);
 //!   * `auth status --human` summarizes the role and the denied `audit` access.
 //!
 //! Unlike the `list` gate, `auth status` is driven entirely by env-file fixtures

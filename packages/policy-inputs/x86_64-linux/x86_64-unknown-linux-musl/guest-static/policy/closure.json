@@ -11,7 +11,7 @@
   "features": [],
   "default_features": false,
   "source_authority": "packages/Cargo.guest.lock",
-  "lock_sha256": "a67f038b0ff8824e30bc4f1e6cefb5b5817391c66e54ac4088802c3424c73027",
+  "lock_sha256": "9db1081561f765badba0a9f7432156f246cbd3f50b5ba8bd558917b4a354b835",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -5350,6 +5350,12 @@
     {
       "from": "d2b-core@0.0.0-bootstrap#path",
       "to": "tokio@1.53.1#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-core@0.0.0-bootstrap#path",
+      "to": "tracing@0.1.44#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
