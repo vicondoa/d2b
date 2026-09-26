@@ -20367,12 +20367,47 @@ enum HostActivationMarkerState {
     Indeterminate,
 }
 
+/// The `mode` a host activation marker records.
+///
+/// The labels mirror the public activation verbs (`switch`, `boot`, `test`,
+/// `rollback`) so a marker's mode is validated instead of accepted as a free
+/// string. The marker itself is written by the activation machinery outside
+/// this workspace, so an unrecognized future mode still parses into
+/// `Unknown` rather than invalidating every other field of the marker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum HostActivationMarkerMode {
+    Switch,
+    Boot,
+    Test,
+    Rollback,
+    #[serde(other)]
+    Unknown,
+}
+
+impl std::fmt::Display for HostActivationMarkerMode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            HostActivationMarkerMode::Switch => "switch",
+            HostActivationMarkerMode::Boot => "boot",
+            HostActivationMarkerMode::Test => "test",
+            HostActivationMarkerMode::Rollback => "rollback",
+            HostActivationMarkerMode::Unknown => "unknown",
+        })
+    }
+}
+
+/// The only activation-marker `schemaVersion` this daemon understands.
+/// The version, not the field set, decides whether a marker is adopted: a
+/// newer version may add, drop, or repurpose fields while still parsing.
+const ACTIVATION_MARKER_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct HostActivationPendingMarker {
     schema_version: u32,
     vm: String,
-    mode: String,
+    mode: HostActivationMarkerMode,
     generation_number: Option<u64>,
     activation_id: String,
     switch_script_basename: String,
@@ -20487,11 +20522,29 @@ fn activation_marker_path(state: &ServerState, vm: &str) -> PathBuf {
     activation_marker_dir(state).join(format!("{vm}.json"))
 }
 
+/// Parse one activation marker body, refusing a `schemaVersion` this daemon
+/// does not understand so a future marker version with a compatible field set
+/// cannot silently parse as current. Every activation-marker parse site goes
+/// through here, so no caller can adopt a marker without the version check.
+fn parse_activation_marker(bytes: &[u8]) -> Option<HostActivationPendingMarker> {
+    let marker: HostActivationPendingMarker = serde_json::from_slice(bytes).ok()?;
+    if marker.schema_version == ACTIVATION_MARKER_SCHEMA_VERSION {
+        return Some(marker);
+    }
+    tracing::warn!(
+        vm = %marker.vm,
+        schema_version = marker.schema_version,
+        supported_schema_version = ACTIVATION_MARKER_SCHEMA_VERSION,
+        "activation marker refused: unsupported schema_version"
+    );
+    None
+}
+
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn read_activation_marker(state: &ServerState, vm: &str) -> Option<HostActivationPendingMarker> {
     let path = activation_marker_path(state, vm);
     let bytes = fs::read(path).ok()?;
-    serde_json::from_slice(&bytes).ok()
+    parse_activation_marker(&bytes)
 }
 
 async fn refresh_activation_marker_metrics_on_startup(state: &ServerState) {
@@ -20503,7 +20556,7 @@ async fn refresh_activation_marker_metrics_on_startup(state: &ServerState) {
         let Ok(bytes) = tokio::fs::read(entry.path()).await else {
             continue;
         };
-        let Ok(marker) = serde_json::from_slice::<HostActivationPendingMarker>(&bytes) else {
+        let Some(marker) = parse_activation_marker(&bytes) else {
             continue;
         };
         tracing::warn!(
@@ -20526,7 +20579,7 @@ async fn restore_configuration_staging_on_startup(state: &ServerState) {
         let Ok(bytes) = tokio::fs::read(entry.path()).await else {
             continue;
         };
-        let Ok(marker) = serde_json::from_slice::<HostActivationPendingMarker>(&bytes) else {
+        let Some(marker) = parse_activation_marker(&bytes) else {
             continue;
         };
         let Some(ordinal) = marker.generation_number else {
@@ -22991,6 +23044,103 @@ mod public_status_tests {
             Err(provider_effects::ProviderEffectError::StateUnavailable)
         );
         server.join().expect("status server");
+    }
+
+    /// A marker body shaped exactly as the activation machinery writes it.
+    fn activation_marker_json(schema_version: u32, mode: &str) -> Value {
+        json!({
+            "schemaVersion": schema_version,
+            "vm": "vm-a",
+            "mode": mode,
+            "generationNumber": 3,
+            "activationId": "activation-1",
+            "switchScriptBasename": "switch.sh",
+            "switchScriptSha256": "sha256:0",
+            "state": "pending",
+            "createdUnixSecs": 1,
+            "updatedUnixSecs": 2,
+        })
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn write_activation_marker(state: &ServerState, schema_version: u32, mode: &str) {
+        let dir = activation_marker_dir(state);
+        fs::create_dir_all(&dir).expect("activation marker dir");
+        fs::write(
+            activation_marker_path(state, "vm-a"),
+            serde_json::to_vec(&activation_marker_json(schema_version, mode))
+                .expect("serialize activation marker"),
+        )
+        .expect("write activation marker");
+    }
+
+    #[test]
+    fn unknown_activation_marker_mode_parses_into_the_catch_all_variant() {
+        let marker: HostActivationPendingMarker =
+            serde_json::from_value(activation_marker_json(1, "warp-drive"))
+                .expect("marker with an unrecognized mode still parses");
+        assert_eq!(marker.mode, HostActivationMarkerMode::Unknown);
+        assert_eq!(marker.mode.to_string(), "unknown");
+
+        for (label, mode) in [
+            ("switch", HostActivationMarkerMode::Switch),
+            ("boot", HostActivationMarkerMode::Boot),
+            ("test", HostActivationMarkerMode::Test),
+            ("rollback", HostActivationMarkerMode::Rollback),
+        ] {
+            let marker: HostActivationPendingMarker =
+                serde_json::from_value(activation_marker_json(1, label))
+                    .expect("known mode label parses");
+            assert_eq!(marker.mode, mode, "mode label {label}");
+            assert_eq!(marker.mode.to_string(), label, "mode label {label}");
+            assert_eq!(
+                serde_json::to_value(mode).expect("mode serializes"),
+                Value::String(label.to_owned()),
+                "mode label {label}"
+            );
+        }
+    }
+
+    #[test]
+    fn activation_marker_parse_refuses_an_unsupported_schema_version() {
+        let current = serde_json::to_vec(&activation_marker_json(1, "switch")).expect("marker body");
+        assert!(parse_activation_marker(&current).is_some());
+
+        // A newer version with a still-compatible field set must not parse as
+        // the current version.
+        let future = serde_json::to_vec(&activation_marker_json(2, "switch")).expect("marker body");
+        assert!(parse_activation_marker(&future).is_none());
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn read_activation_marker_refuses_an_unsupported_schema_version() {
+        let (state, _state_dir) = test_state();
+        write_activation_marker(&state, 1, "switch");
+        assert!(read_activation_marker(&state, "vm-a").is_some());
+
+        write_activation_marker(&state, 2, "switch");
+        assert!(read_activation_marker(&state, "vm-a").is_none());
+    }
+
+    #[test]
+    fn startup_marker_metric_refresh_ignores_an_unsupported_schema_version() {
+        let (state, _state_dir) = test_state();
+        write_activation_marker(&state, 2, "switch");
+        // Driven from this non-async test thread; the adoption path records a
+        // gauge through `MetricsRegistry`'s blocking seat, so the refusal path
+        // is the one this runtime-free test can observe.
+        drive_sync(
+            &state.runtime_handle,
+            refresh_activation_marker_metrics_on_startup(&state),
+        );
+        assert!(
+            !state
+                .metrics_registry
+                .render()
+                .contains("d2b_daemon_vm_degraded{reason=\"activation-pending\"}"),
+            "an unsupported marker version must not record degraded activation"
+        );
     }
 }
 
