@@ -329,8 +329,7 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
         &self,
         request: HelperLaunchRequest,
     ) -> Result<HelperOperationResult, RuntimeError> {
-        request
-            .validate_bounds()
+        validate_unsafe_local_resource_identity(&request.workload)
             .map_err(|_| RuntimeError::InvalidRequest)?;
         let fingerprint = launch_fingerprint(&request)?;
         let reservation = match self
