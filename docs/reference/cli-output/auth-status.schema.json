@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "AuthStatusOutputV2",
+  "description": "`d2b auth status` output for the caller.",
   "type": "object",
   "required": [
     "allowedSubcommands",
@@ -40,6 +41,7 @@
   "additionalProperties": false,
   "definitions": {
     "AuthDeniedSubcommandV2": {
+      "description": "One subcommand denied to the caller, with the refusal reason.",
       "type": "object",
       "required": [
         "name",
@@ -56,14 +58,33 @@
       "additionalProperties": false
     },
     "AuthRoleV2": {
-      "type": "string",
-      "enum": [
-        "none",
-        "launcher",
-        "admin"
+      "description": "The caller's authenticated role.",
+      "oneOf": [
+        {
+          "description": "No role is held.",
+          "type": "string",
+          "enum": [
+            "none"
+          ]
+        },
+        {
+          "description": "Launcher scope only.",
+          "type": "string",
+          "enum": [
+            "launcher"
+          ]
+        },
+        {
+          "description": "Admin scope.",
+          "type": "string",
+          "enum": [
+            "admin"
+          ]
+        }
       ]
     },
     "AuthSocketStatusV2": {
+      "description": "One admin socket's reachability evidence.",
       "type": "object",
       "required": [
         "name",

@@ -1348,10 +1348,10 @@ fn validate_spawn_runner_request_matches_intent(
 fn bind_cloud_hypervisor_guest_uid(
     role: RunnerRole,
     owner_uid: Option<&ResourceUid>,
-    argv: &[String],
+    argv: Vec<String>,
 ) -> Result<Vec<String>, OperationFailure> {
     if role != RunnerRole::CloudHypervisor {
-        return Ok(argv.to_vec());
+        return Ok(argv);
     }
     let owner_uid = owner_uid.ok_or_else(|| {
         OperationFailure::with_detail(
@@ -1359,7 +1359,7 @@ fn bind_cloud_hypervisor_guest_uid(
             "owner_uid: required-for-cloud-hypervisor".to_owned(),
         )
     })?;
-    let mut bound = argv.to_vec();
+    let mut bound = argv;
     let cmdline_index = bound
         .iter()
         .position(|argument| argument == "--cmdline")
@@ -2482,7 +2482,7 @@ impl OperationHandler for SpawnRunnerHandler {
                     "bundle_content_identity: required".to_owned(),
                 ));
             };
-            let resolved = kernel.bundle.bundle.bundle_hash.as_deref().ok_or_else(|| {
+            let resolved = kernel.bundle.bundle().bundle_hash.as_deref().ok_or_else(|| {
                 OperationFailure::with_detail(
                     INTENT_MISMATCH,
                     "bundle_content_identity: missing".to_owned(),
@@ -2503,12 +2503,6 @@ impl OperationHandler for SpawnRunnerHandler {
         }
         match (&request.activation_input, request.role) {
             (Some(input), RunnerRole::ActivationNixos) => {
-                if input.target_generation == 0 {
-                    return Err(OperationFailure::with_detail(
-                        INTENT_MISMATCH,
-                        "activation_input.target_generation: 0 vs nonzero".to_owned(),
-                    ));
-                }
                 if request.generation.is_none() {
                     return Err(OperationFailure::with_detail(
                         INTENT_MISMATCH,
@@ -2582,13 +2576,13 @@ impl OperationHandler for SpawnRunnerHandler {
         // declares; any other target would let a tampered bundle redirect
         // host OTLP egress (the retired arm's fail-closed fence).
         if matches!(request.role, RunnerRole::OtelHostBridge)
-            && intent.vm_name != kernel.bundle.manifest.observability.vm_name
+            && intent.vm_name != kernel.bundle.manifest().observability.vm_name
         {
             return Err(OperationFailure::with_detail(
                 INTENT_MISMATCH,
                 format!(
                     "OtelHostBridge: intent vm {} does not match the obs VM {}",
-                    intent.vm_name, kernel.bundle.manifest.observability.vm_name
+                    intent.vm_name, kernel.bundle.manifest().observability.vm_name
                 ),
             ));
         }
@@ -2649,7 +2643,7 @@ impl OperationHandler for SpawnRunnerHandler {
         let argv = bind_cloud_hypervisor_guest_uid(
             request.role,
             request.owner_uid.as_ref(),
-            &launch_argv,
+            launch_argv,
         )?;
         // The launch identity is the trusted intent's principal for every
         // posture (the retired arm's `prepare_runner_launch_identity`).

@@ -882,7 +882,7 @@
           "$ref": "#/definitions/OwnershipRule"
         },
         "reloadBehavior": {
-          "type": "string"
+          "$ref": "#/definitions/NmReloadBehavior"
         }
       },
       "additionalProperties": false
@@ -957,6 +957,25 @@
         }
       },
       "additionalProperties": false
+    },
+    "NmReloadBehavior": {
+      "description": "The closed reload contract a NetworkManager unmanaged drop-in declares.\n\n`atomic-reload` reloads NetworkManager after the drop-in write, `none` writes it without reloading, and `unspecified` is the empty-string sentinel a bundle that declares no host contract carries. Every other wire value is a hand-declared bundle defect that fails when the artifact is resolved, so a typo can no longer silently skip the reload while the apply acks success.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "atomic-reload",
+            "none"
+          ]
+        },
+        {
+          "description": "The empty-string sentinel; a real wire value that round-trips.",
+          "type": "string",
+          "enum": [
+            ""
+          ]
+        }
+      ]
     },
     "OwnershipRule": {
       "description": "File ownership policy for host materialized files.",

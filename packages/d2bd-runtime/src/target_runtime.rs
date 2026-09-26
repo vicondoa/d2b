@@ -253,6 +253,12 @@ pub struct AdmissionBudget {
 }
 
 impl AdmissionBudget {
+    /// Construct a budget from validated limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AdmissionError` when the limits fail self-consistency
+    /// validation (cf. [`AdmissionLimits::validate`]).
     pub fn new(limits: AdmissionLimits) -> Result<Self, AdmissionError> {
         Ok(Self {
             limits: limits.validate()?,
@@ -267,8 +273,9 @@ impl AdmissionBudget {
         })
     }
 
+    /// The validated limits this budget admits against.
     pub const fn limits(&self) -> AdmissionLimits {
-        self.limits
+       self.limits
     }
 
     /// Reserve a non-reconnect class without allocating class state first.
@@ -308,6 +315,8 @@ impl AdmissionBudget {
         Ok(permit(AdmissionKind::Reconnect, Arc::clone(&self.counters)))
     }
 
+    /// How many admissions of `kind` are currently held (reserved and not yet
+    /// released).
     pub fn active(&self, kind: AdmissionKind) -> usize {
         match kind {
             AdmissionKind::Session => self.counters.sessions.load(Ordering::Acquire),
@@ -351,10 +360,16 @@ pub struct AdmissionPermit {
 }
 
 impl AdmissionPermit {
+    /// The admission class this permit reserved.
     pub fn kind(&self) -> AdmissionKind {
-        self.inner.kind
+       self.inner.kind
     }
 
+    /// Release this reservation, decrementing the live counter exactly once.
+    ///
+    /// Repeated calls are idempotent: only the first release touches the
+    /// counter; later calls are no-ops, so a drop-order race cannot
+    /// double-free an admission slot.
     pub fn release(&self) {
         if !self.inner.released.swap(true, Ordering::AcqRel) {
             let counter = match self.inner.kind {
@@ -1105,16 +1120,20 @@ impl ProviderDeployment {
         })
     }
 
+    /// The daemon mode this deployment is bound to.
     pub const fn mode(&self) -> DaemonMode {
-        self.mode
+       self.mode
     }
 
+    /// The target kind implied by this deployment's mode.
     pub const fn target_kind(&self) -> TargetKind {
-        self.mode.target_kind()
+       self.mode.target_kind()
     }
 
+    /// The shared admission budget for this deployment's target-scoped
+    /// operations.
     pub fn admission(&self) -> &AdmissionBudget {
-        &self.admission
+       &self.admission
     }
 
     /// Admit exactly one target-scoped controller assignment.
@@ -2428,7 +2447,6 @@ mod tests {
             8,
             digest.clone(),
             [],
-            false,
         )
         .unwrap()
         .with_execution(d2b_contracts_provider::v3::ComponentExecution::Launchable {

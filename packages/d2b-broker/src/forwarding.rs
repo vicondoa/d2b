@@ -39,7 +39,7 @@ use crate::envelope::{DispatchFailure, DispatchOutcome, ERRORED};
 ///
 /// The deployment fact is declared with the carrier it configures, so the
 /// broker and the peer that binds the socket cannot drift apart.
-pub use d2b_contracts_broker::FORWARD_SOCKET_ENV;
+pub use d2b_contracts_broker::broker_wire::FORWARD_SOCKET_ENV;
 
 /// The environment variable that bounds one forward round trip, in
 /// milliseconds.
@@ -82,7 +82,7 @@ pub struct ForwardedOperation<'a> {
     pub fds: &'a [OwnedFd],
 
     /// The kernel kind the row's fd facet declares for those descriptors,
-    /// when it declares one;the envelope validated every attached descriptor
+    /// when it declares one; the envelope validated every attached descriptor
     /// against it before dispatch, so the forwarder can declare it back to
     /// the peer verbatim.
     pub fd_kind: Option<FdKind>,

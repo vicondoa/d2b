@@ -1,4 +1,4 @@
-use d2b_contracts_control::public_wire::{AuditResponse, PublicRequest};
+use d2b_contracts_control::public_wire::{AuditPageEnd, AuditResponse, PublicRequest};
 
 #[test]
 fn public_wire_round_trips_strict_request_and_audit_page() {
@@ -11,5 +11,5 @@ fn public_wire_round_trips_strict_request_and_audit_page() {
         "complete": true
     });
     let decoded: AuditResponse = serde_json::from_value(page).expect("page decodes");
-    assert!(decoded.complete);
+    assert_eq!(decoded.page_end, AuditPageEnd::Complete);
 }

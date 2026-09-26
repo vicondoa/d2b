@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef};
+use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ZoneId};
 use d2b_provider_wayland_policy::{
     InteractionChildContext, InteractionDriver, InteractionDriverArgs, InteractionDriverEffects,
     InteractionDriverStatus, InteractionEffectError, InteractionKind, InteractionSpecEnvelope,
@@ -30,7 +30,6 @@ use d2b_resource_runtime::identity::{
     ResourceKey, ResourceProvenance, ResourceTypeName, StoredDesiredResource,
 };
 use d2b_resource_runtime::spec_store::EnsureOutcome;
-use d2b_resource_runtime::target::TargetHandle;
 use serde_json::json;
 
 // -- the test type ----------------------------------------------------------
@@ -257,7 +256,6 @@ fn build_fixture(
     let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
     let ctx = ResourceContext::new(
         row,
-        TargetHandle::Host,
         spec_decoder(),
         Arc::new(manager.clone()),
         Arc::new(requeue),
@@ -265,7 +263,7 @@ fn build_fixture(
         notify_tx,
     );
     let driver = InteractionDriver::new(InteractionDriverArgs {
-        zone: "work".to_owned(),
+        zone: ZoneId::parse("work").expect("zone"),
         controller_generation: ControllerGeneration::new(3).unwrap(),
         effects: Arc::clone(&effects) as Arc<dyn InteractionDriverEffects>,
         behavior: TestType { valid },
@@ -323,7 +321,7 @@ fn the_factory_serves_only_its_declared_type() {
     let effects = ScriptedEffects::shared(Arc::new(tokio::sync::Mutex::new(Vec::new())));
     let factory = d2b_provider_wayland_policy::InteractionDriverFactory::new(
         InteractionDriverArgs {
-            zone: "work".to_owned(),
+            zone: ZoneId::parse("work").expect("zone"),
             controller_generation: ControllerGeneration::new(3).unwrap(),
             effects,
             behavior: TestType { valid: true },
@@ -615,7 +613,7 @@ fn the_driver_registers_the_declared_type_with_the_registry() {
     let effects = ScriptedEffects::shared(Arc::new(tokio::sync::Mutex::new(Vec::new())));
     let descriptor =
         d2b_provider_wayland_policy::wayland_policy_descriptor(InteractionDriverArgs {
-            zone: "work".to_owned(),
+            zone: ZoneId::parse("work").expect("zone"),
             controller_generation: ControllerGeneration::new(3).unwrap(),
             effects,
             behavior: d2b_provider_wayland_policy::WaylandPolicy,
@@ -629,5 +627,10 @@ fn the_driver_registers_the_declared_type_with_the_registry() {
             .decoders()
             .contains_key(&ResourceTypeName::new("display-wayland.d2bus.org.WaylandPolicy"))
     );
-    assert_eq!(key_ref(&row().key).to_canonical_string(), "test.d2bus.org.Row/row");
+    assert_eq!(
+        key_ref(&row().key)
+            .expect("canonical test key")
+            .to_canonical_string(),
+        "test.d2bus.org.Row/row"
+    );
 }

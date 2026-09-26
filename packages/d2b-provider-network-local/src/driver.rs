@@ -30,7 +30,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use d2b_contracts_resource::v3::{
-    ControllerGeneration, ResourceRef, ResourceUid, execution_policy::ExecutionPolicy,
+    ControllerGeneration, ResourceRef, ResourceUid, ZoneId, execution_policy::ExecutionPolicy,
     network::NetworkSpec,
 };
 use d2b_provider_guest::GuestSpec;
@@ -151,7 +151,7 @@ pub trait NetworkDriverEffects: Send + Sync + 'static {
 /// plus the zone-authority inputs every derived identity folds in (U14).
 pub struct NetworkDriverArgs {
     /// The zone the driver serves.
-    pub zone: String,
+    pub zone: ZoneId,
     /// The controller generation every effect call binds (KTD7).
     pub controller_generation: ControllerGeneration,
     /// The daemon-supplied facet set the family's effects implementation is
@@ -183,7 +183,8 @@ impl SharedProviderFamily for NetworkFamily {
     ) -> Result<Option<Vec<ChildEnsure>>, SharedProviderDeclarationError> {
         match component {
             NetworkComponent::Network => {
-                let owner = key_ref(ctx.key());
+                let owner = key_ref(ctx.key())
+                    .map_err(|_| SharedProviderDeclarationError::SpecInvalid)?;
                 let uid =
                     resource_uid(ctx.uid()).map_err(|_| SharedProviderDeclarationError::SpecInvalid)?;
                 let spec =
@@ -286,7 +287,12 @@ fn network_spec(spec: &Value) -> Result<NetworkSpec, ()> {
             spec.remove(field);
         }
     }
-    serde_json::from_value(spec_value).map_err(|_| ())
+    serde_json::from_value(spec_value).map_err(|error| {
+        tracing::warn!(
+            error = %error,
+            "stored network spec failed to parse",
+        );
+    })
 }
 
 /// The Network family's desired children: the config Volume, the net-VM
@@ -375,19 +381,18 @@ pub fn declared_dependency_refs(
     spec: &Value,
     _metadata: &Value,
 ) -> Vec<ResourceRef> {
-    let mut refs = Vec::new();
-    if let Some(attachments) = spec.pointer("/spec/attachments").and_then(Value::as_array) {
-        for attachment in attachments {
-            if let Some(reference) = attachment
+    spec
+        .pointer("/spec/attachments")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|attachment| {
+            attachment
                 .get("executionRef")
                 .and_then(Value::as_str)
                 .and_then(|value| ResourceRef::parse(value).ok())
-            {
-                refs.push(reference);
-            }
-        }
-    }
-    refs
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -401,12 +406,11 @@ mod tests {
     use d2b_resource_runtime::identity::{
         ResourceKey, ResourceProvenance, ResourceTypeName, StoredDesiredResource,
     };
-    use d2b_resource_runtime::target::TargetHandle;
     use serde_json::json;
 
     use super::{
-        NETWORK_PROVIDER_REF, NETWORK_TYPE_NAME, NetworkDriverArgs, declared_dependency_refs,
-        network_descriptor, network_spec,
+        NETWORK_PROVIDER_REF, NETWORK_TYPE_NAME, NetworkDriverArgs, ZoneId,
+        declared_dependency_refs, network_descriptor, network_spec,
     };
     use crate::test_support::{RecordingRuntime, recording_facets};
 
@@ -441,7 +445,7 @@ mod tests {
 
     fn descriptor(runtime: Arc<RecordingRuntime>) -> d2b_resource_types::DriverDescriptor {
         network_descriptor(NetworkDriverArgs {
-            zone: "dev".to_owned(),
+            zone: ZoneId::parse("dev").expect("valid test zone"),
             controller_generation: d2b_contracts_resource::v3::ControllerGeneration::new(1)
                 .expect("generation"),
             facets: recording_facets(runtime),
@@ -460,7 +464,6 @@ mod tests {
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
         d2b_resource_runtime::context::ResourceContext::new(
             row,
-            TargetHandle::Host,
             descriptor.decoder.clone(),
             manager,
             Arc::new(RecordingRequeue::default()),
@@ -535,7 +538,7 @@ mod tests {
         ] {
             assert!(entries.contains(&expected), "{entries:?}");
         }
-        assert_eq!(*effects.reconciled.lock(), 1); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        assert_eq!(*effects.reconciled.lock().await, 1);
     }
 
     /// The family decoder yields the shared envelope the driver's verbs read.
@@ -634,9 +637,9 @@ mod tests {
         driver.validate(&mut ctx).await.expect("network row validates");
         driver.reconcile(&mut ctx).await.expect("network row reconciles");
         driver.delete(&mut ctx).await.expect("network row finalizes");
-        assert_eq!(effects.call_order(), vec!["reconcile", "finalize"]);
-        assert_eq!(*effects.reconciled.lock(), 1); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-        assert_eq!(*effects.finalized.lock(), 1); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        assert_eq!(effects.call_order().await, vec!["reconcile", "finalize"]);
+        assert_eq!(*effects.reconciled.lock().await, 1);
+        assert_eq!(*effects.finalized.lock().await, 1);
     }
 }
 

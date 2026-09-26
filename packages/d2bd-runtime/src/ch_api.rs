@@ -6,18 +6,32 @@ use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::Path;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use tokio::net::UnixStream;
 
+/// Default per-request timeout for Cloud Hypervisor HTTP control calls,
+/// mirroring the legacy `ch_http_timeout` exporter budget.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Cap on a Cloud Hypervisor HTTP response body: a control payload that
+/// large is malformed rather than tolerable (the unix API stays unbounded
+/// otherwise).
 pub const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChApiError {
+    /// The control socket is unreachable or the I/O failed, citing the
+    /// underlying error kind (not full paths or payloads).
     Unavailable(String),
+    /// The control request exceeded its deadline.
     Timeout,
+    /// The response body exceeded `MAX_RESPONSE_BYTES`.
     ResponseTooLarge,
+    /// The response is not a well-formed HTTP control reply.
     MalformedResponse,
+    /// The API answered a non-2xx status code.
     Rejected(u16),
+    /// The `vm.info` payload did not deserialize into the expected shape.
     InvalidJson(String),
 }
 
@@ -33,18 +47,36 @@ impl ChApiError {
     }
 }
 
+/// The subset of the Cloud Hypervisor `vm.info` payload this crate
+/// consumes; fields absent from the reply stay `None`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChVmInfo {
+    /// The VM run state (e.g. `Running`, `Stopped`) as reported by CH.
     pub state: Option<String>,
+    /// The configured vCPU count, when the reply reports one.
     pub vcpu_count: Option<u64>,
+    /// The configured memory size in MiB, when the reply reports one.
     pub memory_mib: Option<u64>,
 }
 
+/// Fetch and parse the Cloud Hypervisor `vm.info` payload over the control
+/// socket.
+///
+/// # Errors
+///
+/// Returns `ChApiError` for socket failures, timeouts, oversized or
+/// malformed replies, and JSON that does not match the expected shape.
 pub async fn get_vm_info(socket: &Path, timeout: Duration) -> Result<ChVmInfo, ChApiError> {
     let body = request(socket, "GET", "/api/v1/vm.info", timeout).await?;
     parse_vm_info(&body)
 }
 
+/// Request an ACPI shutdown from the Cloud Hypervisor control socket.
+///
+/// # Errors
+///
+/// Returns `ChApiError` when the control request cannot be delivered or the
+/// API answers a non-2xx status.
 pub async fn shutdown_vm(socket: &Path, timeout: Duration) -> Result<(), ChApiError> {
     request(socket, "PUT", "/api/v1/vm.shutdown", timeout)
         .await
@@ -76,24 +108,46 @@ pub fn blocking_get_json(
     split_http_body(&raw)
 }
 
+/// Raw Cloud Hypervisor `vm.info` payload shape, deserialized at the
+/// boundary; fields absent from the reply default to `None`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct ChVmInfoRaw {
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    config: ChVmInfoRawConfig,
+}
+
+/// Nested `config` object of the raw `vm.info` payload.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct ChVmInfoRawConfig {
+    #[serde(default)]
+    cpus: ChVmInfoRawCpus,
+    #[serde(default)]
+    memory: ChVmInfoRawMemory,
+}
+
+/// Nested `config.cpus` object of the raw `vm.info` payload.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct ChVmInfoRawCpus {
+    #[serde(default)]
+    boot_vcpus: Option<u64>,
+}
+
+/// Nested `config.memory` object of the raw `vm.info` payload.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct ChVmInfoRawMemory {
+    #[serde(default)]
+    size: Option<u64>,
+}
+
 pub fn parse_vm_info(body: &[u8]) -> Result<ChVmInfo, ChApiError> {
-    let v: serde_json::Value =
+    let raw: ChVmInfoRaw =
         serde_json::from_slice(body).map_err(|err| ChApiError::InvalidJson(err.to_string()))?;
-    let state = v.get("state").and_then(|s| s.as_str()).map(str::to_owned);
-    let vcpu_count = v
-        .get("config")
-        .and_then(|c| c.get("cpus"))
-        .and_then(|c| c.get("boot_vcpus"))
-        .and_then(|n| n.as_u64());
-    let memory_mib = v
-        .get("config")
-        .and_then(|c| c.get("memory"))
-        .and_then(|m| m.get("size"))
-        .and_then(|n| n.as_u64());
     Ok(ChVmInfo {
-        state,
-        vcpu_count,
-        memory_mib,
+        state: raw.state,
+        vcpu_count: raw.config.cpus.boot_vcpus,
+        memory_mib: raw.config.memory.size,
     })
 }
 
@@ -257,5 +311,23 @@ mod tests {
             let info = parse_vm_info(body.as_bytes()).expect("parse vm.info");
             assert_eq!(info.state.as_deref(), Some(state));
         }
+    }
+
+    #[test]
+    fn vm_info_raw_shape_round_trips_through_parse() {
+        let raw = ChVmInfoRaw {
+            state: Some("Running".to_owned()),
+            config: ChVmInfoRawConfig {
+                cpus: ChVmInfoRawCpus {
+                    boot_vcpus: Some(2),
+                },
+                memory: ChVmInfoRawMemory { size: Some(4096) },
+            },
+        };
+        let body = serde_json::to_vec(&raw).expect("serialize vm.info shape");
+        let info = parse_vm_info(&body).expect("parse vm.info");
+        assert_eq!(info.state.as_deref(), Some("Running"));
+        assert_eq!(info.vcpu_count, Some(2));
+        assert_eq!(info.memory_mib, Some(4096));
     }
 }

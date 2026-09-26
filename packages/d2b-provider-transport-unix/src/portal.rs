@@ -14,8 +14,8 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     error::Error,
     fmt,
+    sync::Mutex,
 };
-use tokio::sync::Mutex;
 
 const MAX_OPEN_TRANSPORTS: usize = 256;
 
@@ -199,6 +199,13 @@ impl TransportPortal {
     /// The portal retains request binding, peer evidence, and a close-on-exec
     /// duplicate for observation. The original accepted descriptor has exactly
     /// one transfer destination.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AttachmentPolicyConflict`, `SocketKindMismatch`,
+    /// `Cloexec`, or `PeerCredentials` when the descriptor fails admission,
+    /// `HandleTableFull` when the per-service monitor table is full, and
+    /// `MonitorUnavailable` when the portal monitor lock is poisoned.
     pub fn open(
         &self,
         binding: TransportRequestBinding,
@@ -213,9 +220,10 @@ impl TransportPortal {
             );
             PortalError::from(error)
         })?;
-        let accepted = AcceptedTransport::bind(binding, fd).map_err(|_| {
+        let accepted = AcceptedTransport::bind(binding, fd).map_err(|error| {
             tracing::warn!(
                 provider = "transport-unix",
+                reason = %error,
                 "transport open rejected: peer credentials unavailable on accepted socket"
             );
             PortalError::PeerCredentials
@@ -240,9 +248,10 @@ impl TransportPortal {
             );
             return Err(PortalError::HandleTableFull);
         }
-        let monitor_fd = fcntl_dupfd_cloexec(fd.as_fd(), 3).map_err(|_| {
+        let monitor_fd = fcntl_dupfd_cloexec(fd.as_fd(), 3).map_err(|error| {
             tracing::warn!(
                 provider = "transport-unix",
+                reason = %error,
                 "transport monitor fd duplication failed; open rejected"
             );
             PortalError::Cloexec
@@ -264,6 +273,12 @@ impl TransportPortal {
     }
 
     /// Close a monitored transport, refusing handles owned by another portal.
+    ///
+    /// # Errors
+    ///
+    /// Returns `UnknownHandle` when the handle is not owned by this
+    /// portal instance, and `MonitorUnavailable` when the portal monitor
+    /// lock is poisoned. A finalized handle closes idempotently.
     pub fn close(&self, handle: TransportHandle) -> Result<(), PortalError> {
         let mut state = self
             .state
@@ -284,6 +299,12 @@ impl TransportPortal {
     }
 
     /// Return the current socket-level monitor state for one portal-owned fd.
+    ///
+    /// # Errors
+    ///
+    /// Returns `UnknownHandle` when the handle is not owned by this
+    /// portal instance, and `MonitorUnavailable` when the portal monitor
+    /// lock is poisoned.
     pub fn observe(&self, handle: TransportHandle) -> Result<TransportObservation, PortalError> {
         let state = self
             .state
@@ -297,9 +318,10 @@ impl TransportPortal {
             &entry.monitor_fd,
             PollFlags::ERR | PollFlags::HUP | PollFlags::RDHUP,
         )];
-        poll(&mut fds, 0).map_err(|_| {
+        poll(&mut fds, 0).map_err(|error| {
             tracing::warn!(
                 provider = "transport-unix",
+                reason = %error,
                 "transport observation poll failed"
             );
             PortalError::MonitorUnavailable
@@ -344,9 +366,10 @@ impl fmt::Debug for TransportPortal {
 fn next_handle(state: &PortalState) -> Result<TransportHandle, PortalError> {
     for _ in 0..8 {
         let mut bytes = [0_u8; 16];
-        fill(&mut bytes).map_err(|_| {
+        fill(&mut bytes).map_err(|error| {
             tracing::warn!(
                 provider = "transport-unix",
+                reason = %error,
                 "transport handle generation failed: entropy source unavailable"
             );
             PortalError::MonitorUnavailable

@@ -42,6 +42,8 @@ impl std::fmt::Display for PrepareStateDirError {
 
 impl std::error::Error for PrepareStateDirError {}
 
+/// Which broker-managed directory tree an op prepares:a per-VM state
+/// root or a per-VM runtime root.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DirKind {
@@ -49,15 +51,22 @@ pub enum DirKind {
     RuntimeDir,
 }
 
+/// One state/runtime directory preparation request:which root to
+/// prepare, the mode/owner posture to apply, and the relative
+/// subdirectories to create under it.
 #[derive(Debug, Clone)]
 pub struct PrepareDirRequest {
+    /// Whether the op prepares the state or runtime tree.
     pub kind: DirKind,
+    /// The tree root under which the subdirectories are created.
     pub base_dir: PathBuf,
     /// Per-VM or global scope (`global` if `vm_id` is `None`).
     pub vm_id_or_scope: String,
     /// 0o-mode (e.g. 0o750 for state, 0o755 for runtime).
     pub mode: u32,
+    /// The owner uid to apply to created directories.
     pub owner_uid: u32,
+    /// The owner gid to apply to created directories.
     pub owner_gid: u32,
     /// Directories to create under `base_dir` (relative paths).
     pub created_paths: Vec<PathBuf>,
@@ -66,6 +75,8 @@ pub struct PrepareDirRequest {
     pub daemon_uid: Option<u32>,
 }
 
+/// The audit record of one prepared directory:what the op created or
+/// reused, under which base root, with which posture.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct PrepareDirAudit {
     pub kind: DirKind,
@@ -78,14 +89,29 @@ pub struct PrepareDirAudit {
     pub replace_or_create_result: ReplaceOrCreateResult,
 }
 
+/// Whether a prepare pass created, reused, or mixed both across the
+/// directories it walked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ReplaceOrCreateResult {
+    /// Every walked directory was freshly created.
     Created,
+    /// Every walked directory already existed and was reused.
     Reused,
+    /// Some walked directories were created and others reused.
     MixedCreatedAndReused,
 }
 
+/// Prepare one state/runtime directory tree:optionally refuse non-root
+/// parents for production roots, reuse the base dir without re-stamping its
+/// posture, and create the requested relative subdirectories with the
+/// requested mode/owner, returning the audit record.
+///
+/// # Errors
+///
+/// Returns [`io::ErrorKind::InvalidInput`] for absolute or `..`-bearing
+/// created paths, the parent-ownership guard, or the underlying
+/// mkdir/fchmod/fchown failures as `io::Error`s.
 pub fn prepare_dir(req: &PrepareDirRequest) -> io::Result<PrepareDirAudit> {
     // Refuse non-root parent for production paths. Tests pass a scratch
     // base_dir so the refuse_non_root_parent guard is wired via the
@@ -158,10 +184,19 @@ fn production_path(p: &Path) -> bool {
     p.starts_with("/var/lib/d2b") || p.starts_with("/run/d2b")
 }
 
+/// Prepare one VM's runtime root directory:requires the wire
+/// `pathClass=runtime`, resolves the bundle intent, and reuses the existing
+/// base dir without re-stamping its posture.
+///
+/// # Errors
+///
+/// Returns [`super::OpError::InvalidInput`] for a non-runtime path class,
+/// [`super::OpError::UnknownSubject`] for unmanaged VMs, and
+/// [`super::OpError::Io`] for the directory preparation failures.
 pub fn live_prepare_runtime_dir(
     _exec: &SystemLiveExec,
     resolver: &BundleResolver,
-    req: &d2b_contracts_broker::broker_wire::PrepareDirRequest,
+    req:&d2b_contracts_broker::broker_wire::PrepareDirRequest,
     _audit_log: &crate::audit::AuditLog,
 ) -> Result<(), super::OpError> {
     if req.path_class != PathClass::Runtime {
@@ -208,11 +243,23 @@ pub struct PreparedStateDir {
     pub mode: u32,
 }
 
+/// Prepare one VM's state directory:requires the wire `pathClass=vm`;
+/// a legacy VM resolves its bundle intent and creates the declared
+/// directories, while a zone-native Guest resolves the trusted
+/// `path:swtpm-state:<guest>` storage row and records its posture
+/// without creating anything.
+///
+/// # Errors
+///
+/// Returns [`super::OpError::InvalidInput`] for a non-VM path class,
+/// [`super::OpError::UnknownSubject`] / [`super::OpError::Refused`]
+/// for unresolvable subjects, and the swtpm-hardening refusal as
+/// [`PrepareStateDirError::SwtpmDirHardening`]. Where applicable.
 pub fn live_prepare_state_dir(
-    _exec: &SystemLiveExec,
-    resolver: &BundleResolver,
-    req: &d2b_contracts_broker::broker_wire::PrepareDirRequest,
-    _audit_log: &crate::audit::AuditLog,
+    _exec:&SystemLiveExec,
+    resolver:&BundleResolver,
+    req:&d2b_contracts_broker::broker_wire::PrepareDirRequest,
+    _audit_log:&crate::audit::AuditLog,
 ) -> Result<PreparedStateDir, PrepareStateDirError> {
     if req.path_class != PathClass::Vm {
         return Err(super::OpError::InvalidInput {
@@ -324,7 +371,7 @@ fn fixture_content_hash(resources: &[serde_json::Value]) -> String {
 #[cfg(test)]
 pub(crate) fn resolver_with_swtpm_state_row(guest: &str) -> BundleResolver {
     use d2b_core::bundle::{Bundle, BundleGeneration};
-    use d2b_core::contract_id::{ContractId, PathTemplate};
+    use d2b_contracts::contract_id::{ContractId, PathTemplate};
     use d2b_core::host::HostJson;
     use d2b_core::manifest_v04::ManifestV04;
     use d2b_core::processes::ProcessesJson;
@@ -437,7 +484,7 @@ pub(crate) fn resolver_with_swtpm_state_row(guest: &str) -> BundleResolver {
     // Storage travels on the same resolver: the production loader carries both
     // artifacts, and this fixture needs the trusted row and the Device scope
     // to resolve together.
-    resolver.storage = Some(storage);
+    resolver.set_storage(storage);
     resolver
 }
 

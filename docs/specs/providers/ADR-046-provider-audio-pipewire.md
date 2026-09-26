@@ -745,7 +745,7 @@ single-flight priority lane.
 | `resource.channels.mic.liveEnforced` | bool | True when confirmed through the referenced AudioService this reconcile |
 | `resource.channels.mic.arbitrationState` | enum | `inactive\|queued\|active\|blocked`; `active` is possible for at most one consumer of an owner Service |
 | `resource.enforcementPosture` | enum | `HostAndGuest\|HostOnly\|GuestOnly\|None` |
-| `resource.lastSetApplied` | enum | `HostAndGuest\|HostOnly\|GuestOnly\|OfflineOnly` |
+| `resource.lastSetApplied` | enum | `HostAndGuest\|HostOnly\|GuestOnly\|NotApplied` |
 | `resource.observedServiceRef` | ResourceRef | Last resolved same-Zone AudioService; must equal `spec.serviceRef` |
 | `resource.realizationRefs` | list[ResourceRef] | At most 32 same-Zone owned `Process`/`Endpoint` refs; no implementation locator or identity |
 | `outcome.code` | string | Closed enum; see error codes |

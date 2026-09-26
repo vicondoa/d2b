@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use d2b_core::workload_identity::WorkloadTarget;
+use d2b_contracts::workload_identity::WorkloadTarget;
 use crate::WorkloadProviderKind;
 use serde::{Deserialize, Serialize};
 

@@ -421,15 +421,16 @@ impl<R: NodeRunner> DagExecutor<R> {
                                 .runner
                                 .probe_api_ready(&dag.vm, node, &node.readiness, api_timeout)
                                 .await;
-                            api_ready = Some(state.clone());
-                            match state {
+                            let outcome = match &state {
                                 ApiReadyState::Yes => Ok(()),
                                 ApiReadyState::Pending => Err("api-ready pending".to_owned()),
                                 ApiReadyState::Timeout => Err("api-ready timeout".to_owned()),
                                 ApiReadyState::Error { reason } => {
                                     Err(format!("api-ready error: {reason}"))
                                 }
-                            }
+                            };
+                            api_ready = Some(state);
+                            outcome
                         }
                     },
                     Err(reason) => Err(reason),

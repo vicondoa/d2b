@@ -6,7 +6,7 @@
 //! traits below it. [`linux`] contains the production Linux adapter, while
 //! tests can provide an in-memory adapter without creating a Nix store.
 //!
-//! A compiler diagnostic is a stable `d2b_core::error::Kind` plus a bounded
+//! A compiler diagnostic is a stable `d2b_contracts::error::Kind` plus a bounded
 //! message. It never contains the selected store path, manifest bytes, config
 //! bytes, key material, or process data.
 //!
@@ -37,8 +37,8 @@ use d2b_contracts_resource::v3::{
     process::{ExecutionSpec, ProcessClass, ProcessSpec, SandboxSpec, TelemetrySpec},
 };
 use d2b_contracts_zone_session::v3::resource_bundle::ProcessTemplateBinding;
+use d2b_contracts::error::Kind;
 use d2b_core::{
-    error::Kind,
     provider_artifact::{
         AnchoredDir, Argv, Envp, LaunchError, LayoutDir, LayoutError, LayoutPath, ProcessLauncher,
         ReadableFile,
@@ -1721,16 +1721,14 @@ fn check_metadata_closure(
         "provider-manifest.json",
         "provider-manifest.json.sig",
     ]);
-    let mut unexpected = Vec::new();
-    for entry_name in entries {
-        let Some(name) = entry_name.to_str() else {
-            unexpected.push("<non-utf8>".to_owned());
-            continue;
-        };
-        if !expected.contains(name) {
-            unexpected.push(truncate_entry(name));
-        }
-    }
+    let mut unexpected: Vec<String> = entries
+        .into_iter()
+        .filter_map(|entry_name| match entry_name.to_str() {
+            Some(name) if expected.contains(name) => None,
+            Some(name) => Some(truncate_entry(name)),
+            None => Some("<non-utf8>".to_owned()),
+        })
+        .collect();
     if unexpected.is_empty() {
         return Ok(());
     }
@@ -1910,13 +1908,15 @@ fn validate_executables<A: AnchoredDir>(
     if let Some(declared) = declared.as_ref() {
         let declared_names: BTreeSet<_> = declared.keys().cloned().collect();
         if names != declared_names {
-            let mut difference = Vec::new();
-            for name in names.difference(&declared_names) {
-                difference.push(format!("bin={}", truncate_entry(name)));
-            }
-            for name in declared_names.difference(&names) {
-                difference.push(format!("manifest={}", truncate_entry(name)));
-            }
+            let difference: Vec<String> = names
+                .difference(&declared_names)
+                .map(|name| format!("bin={}", truncate_entry(name)))
+                .chain(
+                    declared_names
+                        .difference(&names)
+                        .map(|name| format!("manifest={}", truncate_entry(name))),
+                )
+                .collect();
             return Err(executable_set_mismatch(
                 entry,
                 &difference,
@@ -2398,17 +2398,21 @@ fn safe_label(value: &str) -> String {
     sanitize_token(value)
 }
 
-fn sanitize_token(value: &str) -> String {
-    let mut output = String::new();
-    for character in value.chars() {
-        if (character.is_ascii_graphic() && character != '/' && character != '\\')
-            || character == ' '
-        {
-            output.push(character);
-        } else {
-            output.push('?');
-        }
-    }
+/// Sanitize a token for diagnostic output, replacing non-graphic characters
+/// with `?` and bounding the result.
+pub fn sanitize_token(value: &str) -> String {
+    let output: String = value
+        .chars()
+        .map(|character| {
+            if (character.is_ascii_graphic() && character != '/' && character != '\\')
+                || character == ' '
+            {
+                character
+            } else {
+                '?'
+            }
+        })
+        .collect();
     bound_message(&output)
 }
 
@@ -2435,7 +2439,8 @@ fn magic_hex(bytes: &[u8]) -> String {
     output
 }
 
-fn bound_message(value: &str) -> String {
+/// Bound a diagnostic message to ASCII within the diagnostic byte limit.
+pub fn bound_message(value: &str) -> String {
     let mut output = String::new();
     for character in value.chars() {
         let character = if character.is_control() {
@@ -2540,4 +2545,94 @@ mod tests {
         assert!(decode_ed25519_spki(spki_pem(truncated).as_bytes()).is_none());
     }
 
+    /// The committed cloud-hypervisor Provider artifact trio, relative to the
+    /// repository root. `flake.nix` pairs these three files into
+    /// `providerArtifact`, so they are one reviewable unit.
+    const COMMITTED_ARTIFACT: [&str; 3] = [
+        "provider-manifest.json",
+        "provider-manifest.json.sig",
+        "publisher-public-key.pem",
+    ];
+    const COMMITTED_ARTIFACT_DIR: &str = "packages/d2b-provider-guest-cloud-hypervisor";
+
+    /// The repository root, from the Bazel runfiles tree, the gate's
+    /// `D2B_REPO_ROOT`, or the cargo manifest directory. The first candidate
+    /// that carries the artifact directory wins, so the same test runs under
+    /// `make check` and under `cargo test`.
+    fn repository_root() -> std::path::PathBuf {
+        let mut candidates = Vec::new();
+        if let (Some(runfiles), Some(workspace)) = (
+            std::env::var_os("RUNFILES_DIR"),
+            std::env::var_os("TEST_WORKSPACE"),
+        ) {
+            candidates.push(std::path::PathBuf::from(runfiles).join(workspace));
+        }
+        candidates.extend(std::env::var_os("D2B_REPO_ROOT").map(std::path::PathBuf::from));
+        if let Some(manifest_dir) = std::env::var_os("CARGO_MANIFEST_DIR") {
+            candidates.extend(
+                std::path::PathBuf::from(manifest_dir)
+                    .parent()
+                    .and_then(std::path::Path::parent)
+                    .map(std::path::Path::to_path_buf),
+            );
+        }
+        candidates
+            .into_iter()
+            .find(|root| {
+                COMMITTED_ARTIFACT
+                    .iter()
+                    .all(|name| root.join(COMMITTED_ARTIFACT_DIR).join(name).is_file())
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "{COMMITTED_ARTIFACT_DIR} is not discoverable from the runfiles tree, \
+                     D2B_REPO_ROOT, or CARGO_MANIFEST_DIR"
+                )
+            })
+    }
+
+    /// The committed signature must verify over the committed manifest under
+    /// the committed publisher key. Nothing in the Nix build re-signs the
+    /// manifest, so an edit that changes the manifest or its schema without
+    /// re-signing used to ship a Provider whose signature no longer verified.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn committed_artifact_signature_verifies_over_the_committed_manifest() {
+        let root = repository_root().join(COMMITTED_ARTIFACT_DIR);
+        let read = |name: &str| {
+            std::fs::read(root.join(name))
+                .unwrap_or_else(|error| panic!("committed {name} is unreadable: {error}"))
+        };
+        let (manifest, signature, public_key) = (
+            read(COMMITTED_ARTIFACT[0]),
+            read(COMMITTED_ARTIFACT[1]),
+            read(COMMITTED_ARTIFACT[2]),
+        );
+        assert_eq!(
+            signature.len(),
+            64,
+            "the committed provider-manifest.json.sig is a raw 64-byte Ed25519 signature"
+        );
+        assert!(
+            verify_ed25519(&public_key, &manifest, &signature),
+            "the committed publisher-public-key.pem does not verify the committed \
+             provider-manifest.json.sig over provider-manifest.json; re-sign the manifest \
+             whenever it changes"
+        );
+
+        // Neither half may move alone. These two probes keep the assertion
+        // above from passing on a verifier that accepts everything.
+        let mut moved_manifest = manifest.clone();
+        moved_manifest[0] ^= 0x01;
+        assert!(
+            !verify_ed25519(&public_key, &moved_manifest, &signature),
+            "a manifest that moves without a matching re-signature must not verify"
+        );
+        let mut moved_signature = signature.clone();
+        moved_signature[0] ^= 0x01;
+        assert!(
+            !verify_ed25519(&public_key, &manifest, &moved_signature),
+            "a signature that moves without a matching manifest must not verify"
+        );
+    }
 }

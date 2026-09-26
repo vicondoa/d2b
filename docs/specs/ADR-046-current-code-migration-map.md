@@ -776,7 +776,7 @@ Source: `packages/d2b/src/` `NativeCommand` enum + subcommand handlers.
 | `tests/unit/nix/cases/` (nix-unit) | Nix option eval cases; includes `niri-vm-borders.nix`, assertions | ADAPT | Update realm→zone in all cases; `make nix-unit-pin` after changes |
 | `tests/unit/smoke/` (smoke evals) | Flake-check smoke evals including `smoke-eval-tpm.nix` | ADAPT | Update option names |
 | `packages/d2b-realm-core/src/**` (`#[cfg(test)]`) | `RealmId`, `WorkloadId`, `AllocatorLease`, `HostResourceKind` unit tests | ADAPT | Update names to `ZoneId`, `ResourceName` |
-| `packages/d2b-core/src/workload_identity.rs` (tests) | `WorkloadTarget::parse`, `WorkloadIdentity` serde | ADAPT | Update to `ResourceRef` format |
+| `packages/d2b-contracts/src/workload_identity.rs` (tests) | `WorkloadTarget::parse`, `WorkloadIdentity` serde | ADAPT | Update to `ResourceRef` format |
 | `packages/d2bd/src/` (hermetic exec tests) | `exec_session` / `exec_client` matrices | RETAIN | Keep; update transport to ComponentSession |
 | `packages/d2b-contracts/` (tests) | Wire type serde | ADAPT | Update `WorkloadOp` → `ResourceOp`; add handler wire test |
 | `packages/d2b-contract-tests/tests/` | Rendered-artifact contract tests; drift checks | ADAPT | Update for renamed/split artifacts per §4.2 |

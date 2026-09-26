@@ -5,24 +5,40 @@ use std::fmt;
 use async_trait::async_trait;
 use serde::{Deserialize, Deserializer, Serialize};
 
-pub use d2b_contracts_provider::v3::credential::{CredentialLeaseHandle, OpaqueAzureRef};
-pub use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
+use d2b_contracts_provider::v3::credential::{CredentialLeaseHandle, OpaqueAzureRef};
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 
+/// Maximum length of an ACA resource identifier.
 pub const MAX_ACA_RESOURCE_ID_LEN: usize = 60;
+/// Maximum number of sandbox or disk image candidates accepted from a control plane query.
 pub const MAX_ACA_CANDIDATES: usize = 8;
+/// Maximum readiness attempts before a sandbox generation is marked failed.
 pub const MAX_ACA_READY_ATTEMPTS: u8 = 60;
+/// Maximum readiness probe interval in milliseconds.
 pub const MAX_ACA_READY_INTERVAL_MS: u32 = 10_000;
+/// Maximum plan time-to-live in milliseconds.
 pub const MAX_ACA_PLAN_TTL_MS: u32 = 300_000;
+/// Maximum completed operations retained by the ledger.
 pub const MAX_ACA_COMPLETED_OPERATIONS: usize = 1_024;
 
+/// Errors produced by validated ACA type constructors.
+///
+/// Each variant renders as a stable error code via `Display`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AcaTypeError {
+    /// The identifier violates the opaque-id character or length rules.
     InvalidIdentifier,
+    /// A CPU or memory bound falls outside the validated range.
     InvalidResourceBounds,
+    /// The readiness policy violates the attempt or interval bounds.
     InvalidReadinessPolicy,
+    /// The plan TTL is zero or exceeds [`MAX_ACA_PLAN_TTL_MS`].
     InvalidPlanTtl,
+    /// The completed-operation capacity is zero or exceeds [`MAX_ACA_COMPLETED_OPERATIONS`].
     InvalidOperationCapacity,
+    /// The candidate list exceeds [`MAX_ACA_CANDIDATES`].
     CandidateBoundExceeded,
+    /// A reference points at a resource type outside the execution boundary.
     InvalidExecutionBoundary,
 }
 
@@ -53,11 +69,18 @@ fn valid_opaque_id(value: &str, max: usize, lowercase_lead: bool) -> bool {
 
 macro_rules! opaque_id {
     ($name:ident, $max:expr, $lowercase_lead:expr) => {
+        /// Opaque identifier validated against the ACA character rules.
         #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
         #[serde(transparent)]
         pub struct $name(String);
 
         impl $name {
+            /// Parse and validate an opaque identifier.
+            ///
+            /// # Errors
+            ///
+            /// Returns [`AcaTypeError::InvalidIdentifier`] when the value is empty,
+            /// exceeds the length bound, or contains a disallowed character.
             pub fn parse(value: impl Into<String>) -> Result<Self, AcaTypeError> {
                 let value = value.into();
                 if valid_opaque_id(&value, $max, $lowercase_lead) {
@@ -67,6 +90,7 @@ macro_rules! opaque_id {
                 }
             }
 
+            /// Borrow the validated identifier text.
             pub fn as_str(&self) -> &str {
                 &self.0
             }
@@ -100,9 +124,16 @@ opaque_id!(AcaOperationId, 96, true);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", try_from = "u16")]
+/// CPU allocation in millicores, validated to the 250..=4_000 range in 250 increments.
 pub struct AcaCpuMillis(u16);
 
 impl AcaCpuMillis {
+    /// Construct validated CPU millicores.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AcaTypeError::InvalidResourceBounds`] when `value` is outside
+    /// 250..=4_000 or not a multiple of 250.
     pub fn new(value: u16) -> Result<Self, AcaTypeError> {
         if (250..=4_000).contains(&value) && value.is_multiple_of(250) {
             Ok(Self(value))
@@ -122,9 +153,16 @@ impl AcaCpuMillis {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", try_from = "u32")]
+/// Memory allocation in MiB, validated to the 512..=16_384 range in 256 increments.
 pub struct AcaMemoryMib(u32);
 
 impl AcaMemoryMib {
+    /// Construct validated memory MiB.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AcaTypeError::InvalidResourceBounds`] when `value` is outside
+    /// 512..=16_384 or not a multiple of 256.
     pub fn new(value: u32) -> Result<Self, AcaTypeError> {
         if (512..=16_384).contains(&value) && value.is_multiple_of(256) {
             Ok(Self(value))
@@ -144,13 +182,20 @@ impl AcaMemoryMib {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Source of a disk image: a configured disk or a configured container image.
 pub enum AcaDiskImageSource {
+    /// A pre-configured disk binding.
     ConfiguredDisk {
+        /// The configured disk binding id.
         binding_id: AcaConfiguredDiskId,
     },
+    /// A container image pulled by an optional managed identity.
     ConfiguredContainerImage {
+        /// The image binding id.
         image_binding_id: AcaConfiguredImageId,
+        /// The disk name the image is materialized as.
         disk_name: AcaDiskImageName,
+        /// The managed identity used for the pull, when one is configured.
         pull_identity_binding_id: Option<AcaManagedIdentityBindingId>,
     },
 }
@@ -168,6 +213,7 @@ impl fmt::Debug for AcaDiskImageSource {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", try_from = "RawAcaSandboxProfile")]
+/// Validated sandbox profile: identity, disk image, CPU, memory, and suspend policy.
 pub struct AcaSandboxProfile {
     profile_id: AcaProfileId,
     disk_image: AcaDiskImageSource,
@@ -179,6 +225,12 @@ pub struct AcaSandboxProfile {
 
 impl AcaSandboxProfile {
     #[allow(clippy::too_many_arguments)]
+    /// Construct a validated sandbox profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AcaTypeError::InvalidResourceBounds`] when `auto_suspend_secs`
+    /// is outside 60..=86_400.
     pub fn new(
         profile_id: AcaProfileId,
         disk_image: AcaDiskImageSource,
@@ -200,10 +252,12 @@ impl AcaSandboxProfile {
         })
     }
 
+    /// Borrow the profile id.
     pub fn profile_id(&self) -> &AcaProfileId {
         &self.profile_id
     }
 
+    /// Borrow the disk image source.
     pub fn disk_image(&self) -> &AcaDiskImageSource {
         &self.disk_image
     }
@@ -259,6 +313,7 @@ impl fmt::Debug for AcaSandboxProfile {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", try_from = "RawAcaReadinessPolicy")]
+/// Validated readiness policy: bounded attempts and probe interval.
 pub struct AcaReadinessPolicy {
     attempts: u8,
     interval_ms: u32,
@@ -280,6 +335,13 @@ impl TryFrom<RawAcaReadinessPolicy> for AcaReadinessPolicy {
 }
 
 impl AcaReadinessPolicy {
+    /// Construct a validated readiness policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AcaTypeError::InvalidReadinessPolicy`] when `attempts` or
+    /// `interval_ms` is zero or exceeds the [`MAX_ACA_READY_ATTEMPTS`] /
+    /// [`MAX_ACA_READY_INTERVAL_MS`] bounds.
     pub fn new(attempts: u8, interval_ms: u32) -> Result<Self, AcaTypeError> {
         if attempts == 0
             || attempts > MAX_ACA_READY_ATTEMPTS
@@ -294,10 +356,12 @@ impl AcaReadinessPolicy {
         })
     }
 
+    /// Return the readiness attempt bound.
     pub const fn attempts(self) -> u8 {
         self.attempts
     }
 
+    /// Return the readiness probe interval in milliseconds.
     pub const fn interval_ms(self) -> u32 {
         self.interval_ms
     }
@@ -305,6 +369,7 @@ impl AcaReadinessPolicy {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", try_from = "RawAcaRuntimeConfig")]
+/// Validated runtime configuration: profile, readiness, plan TTL, and ledger capacity.
 pub struct AcaRuntimeConfig {
     profile: AcaSandboxProfile,
     readiness: AcaReadinessPolicy,
@@ -335,6 +400,14 @@ impl TryFrom<RawAcaRuntimeConfig> for AcaRuntimeConfig {
 }
 
 impl AcaRuntimeConfig {
+    /// Construct a validated runtime configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AcaTypeError::InvalidPlanTtl`] when `plan_ttl_ms` is zero or
+    /// exceeds [`MAX_ACA_PLAN_TTL_MS`], and [`AcaTypeError::InvalidOperationCapacity`]
+    /// when `completed_operation_capacity` is zero or exceeds
+    /// [`MAX_ACA_COMPLETED_OPERATIONS`].
     pub fn new(
         profile: AcaSandboxProfile,
         readiness: AcaReadinessPolicy,
@@ -357,18 +430,22 @@ impl AcaRuntimeConfig {
         })
     }
 
+    /// Borrow the sandbox profile.
     pub fn profile(&self) -> &AcaSandboxProfile {
         &self.profile
     }
 
+    /// Return the readiness policy.
     pub const fn readiness(&self) -> AcaReadinessPolicy {
         self.readiness
     }
 
+    /// Return the plan time-to-live in milliseconds.
     pub const fn plan_ttl_ms(&self) -> u32 {
         self.plan_ttl_ms
     }
 
+    /// Return the completed-operation ledger capacity.
     pub const fn completed_operation_capacity(&self) -> usize {
         self.completed_operation_capacity
     }
@@ -391,21 +468,40 @@ impl fmt::Debug for AcaRuntimeConfig {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", try_from = "RawAcaProviderConfig")]
+/// Validated Provider configuration for the runtime-azure-container-apps provider.
 pub struct AcaProviderConfig {
-    pub gateway_execution_ref: ResourceRef,
-    pub tenant_id: OpaqueAzureRef,
-    pub client_id: OpaqueAzureRef,
-    pub subscription_id: OpaqueAzureRef,
-    pub control_credential_ref: ResourceRef,
-    pub pull_credential_ref: Option<ResourceRef>,
-    pub environment_id: AcaConfiguredImageId,
-    pub resource_group_id: AcaConfiguredImageId,
-    pub network_ref: Option<ResourceRef>,
-    pub sandbox_transport_alias: AcaProfileId,
-    pub defaults: AcaRuntimeConfig,
+    /// Reference to the Guest execution boundary this provider serves.
+    gateway_execution_ref: ResourceRef,
+    /// Azure tenant id.
+    tenant_id: OpaqueAzureRef,
+    /// Azure client id.
+    client_id: OpaqueAzureRef,
+    /// Azure subscription id.
+    subscription_id: OpaqueAzureRef,
+    /// Reference to the credential used to acquire control-plane leases.
+    control_credential_ref: ResourceRef,
+    /// Reference to the credential used to pull sandbox images, when configured.
+    pull_credential_ref: Option<ResourceRef>,
+    /// Configured container-apps environment id.
+    environment_id: AcaConfiguredImageId,
+    /// Configured resource group id.
+    resource_group_id: AcaConfiguredImageId,
+    /// Reference to the network the sandbox joins, when configured.
+    network_ref: Option<ResourceRef>,
+    /// Profile alias used for the sandbox transport.
+    sandbox_transport_alias: AcaProfileId,
+    /// Runtime defaults applied to every controller created from this config.
+    defaults: AcaRuntimeConfig,
 }
 
 impl AcaProviderConfig {
+    /// Construct a validated Provider configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AcaTypeError::InvalidExecutionBoundary`] when a reference
+    /// points outside the execution boundary (Guest gateway, Credential
+    /// control, optional Credential pull, optional Network).
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         gateway_execution_ref: ResourceRef,
@@ -420,17 +516,12 @@ impl AcaProviderConfig {
         sandbox_transport_alias: AcaProfileId,
         defaults: AcaRuntimeConfig,
     ) -> Result<Self, AcaTypeError> {
-        if gateway_execution_ref.resource_type().as_str() != "Guest"
-            || control_credential_ref.resource_type().as_str() != "Credential"
-            || pull_credential_ref
-                .as_ref()
-                .is_some_and(|reference| reference.resource_type().as_str() != "Credential")
-            || network_ref
-                .as_ref()
-                .is_some_and(|reference| reference.resource_type().as_str() != "Network")
-        {
-            return Err(AcaTypeError::InvalidExecutionBoundary);
-        }
+        Self::validate_refs(
+            &gateway_execution_ref,
+            &control_credential_ref,
+            &pull_credential_ref,
+            &network_ref,
+        )?;
         Ok(Self {
             gateway_execution_ref,
             tenant_id,
@@ -447,21 +538,93 @@ impl AcaProviderConfig {
     }
 
     /// Revalidate a Provider configuration at the admission boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AcaTypeError::InvalidExecutionBoundary`] when a reference
+    /// points outside the execution boundary.
     pub fn validate(&self) -> Result<(), AcaTypeError> {
-        Self::new(
-            self.gateway_execution_ref.clone(),
-            self.tenant_id.clone(),
-            self.client_id.clone(),
-            self.subscription_id.clone(),
-            self.control_credential_ref.clone(),
-            self.pull_credential_ref.clone(),
-            self.environment_id.clone(),
-            self.resource_group_id.clone(),
-            self.network_ref.clone(),
-            self.sandbox_transport_alias.clone(),
-            self.defaults.clone(),
+        Self::validate_refs(
+            &self.gateway_execution_ref,
+            &self.control_credential_ref,
+            &self.pull_credential_ref,
+            &self.network_ref,
         )
-        .map(|_| ())
+    }
+
+    /// Borrow the Guest execution boundary reference.
+    pub fn gateway_execution_ref(&self) -> &ResourceRef {
+        &self.gateway_execution_ref
+    }
+
+    /// Borrow the Azure tenant id.
+    pub fn tenant_id(&self) -> &OpaqueAzureRef {
+        &self.tenant_id
+    }
+
+    /// Borrow the Azure client id.
+    pub fn client_id(&self) -> &OpaqueAzureRef {
+        &self.client_id
+    }
+
+    /// Borrow the Azure subscription id.
+    pub fn subscription_id(&self) -> &OpaqueAzureRef {
+        &self.subscription_id
+    }
+
+    /// Borrow the control credential reference.
+    pub fn control_credential_ref(&self) -> &ResourceRef {
+        &self.control_credential_ref
+    }
+
+    /// Borrow the pull credential reference, when configured.
+    pub fn pull_credential_ref(&self) -> Option<&ResourceRef> {
+        self.pull_credential_ref.as_ref()
+    }
+
+    /// Borrow the container-apps environment id.
+    pub fn environment_id(&self) -> &AcaConfiguredImageId {
+        &self.environment_id
+    }
+
+    /// Borrow the resource group id.
+    pub fn resource_group_id(&self) -> &AcaConfiguredImageId {
+        &self.resource_group_id
+    }
+
+    /// Borrow the network reference, when configured.
+    pub fn network_ref(&self) -> Option<&ResourceRef> {
+        self.network_ref.as_ref()
+    }
+
+    /// Borrow the sandbox transport profile alias.
+    pub fn sandbox_transport_alias(&self) -> &AcaProfileId {
+        &self.sandbox_transport_alias
+    }
+
+    /// Borrow the runtime defaults applied to every controller created from this config.
+    pub fn defaults(&self) -> &AcaRuntimeConfig {
+        &self.defaults
+    }
+
+    fn validate_refs(
+        gateway_execution_ref: &ResourceRef,
+        control_credential_ref: &ResourceRef,
+        pull_credential_ref: &Option<ResourceRef>,
+        network_ref: &Option<ResourceRef>,
+    ) -> Result<(), AcaTypeError> {
+        if gateway_execution_ref.resource_type().as_str() != "Guest"
+            || control_credential_ref.resource_type().as_str() != "Credential"
+            || pull_credential_ref
+                .as_ref()
+                .is_some_and(|reference| reference.resource_type().as_str() != "Credential")
+            || network_ref
+                .as_ref()
+                .is_some_and(|reference| reference.resource_type().as_str() != "Network")
+        {
+            return Err(AcaTypeError::InvalidExecutionBoundary);
+        }
+        Ok(())
     }
 }
 
@@ -526,35 +689,53 @@ impl fmt::Debug for AcaProviderConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Identity of the Guest resource a controller reconciles.
 pub struct AcaResourceBinding {
+    /// The Guest resource uid.
     pub guest_uid: ResourceUid,
+    /// The provider generation the binding was created for.
     pub provider_generation: u64,
+    /// Fingerprint of the config the binding was created from.
     pub config_fingerprint: [u8; 32],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Query describing which sandboxes belong to a Guest.
 pub struct AcaWorkloadQuery {
+    /// The Guest binding the query scopes to.
     pub binding: AcaResourceBinding,
+    /// The profile alias the sandbox must carry.
     pub profile_id: AcaProfileId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Desired disk image for a sandbox.
 pub struct AcaDesiredDiskImage {
+    /// The image source.
     pub source: AcaDiskImageSource,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Desired sandbox state passed to the create effect.
 pub struct AcaDesiredSandbox {
+    /// The Guest binding the sandbox belongs to.
     pub binding: AcaResourceBinding,
+    /// The validated profile to apply.
     pub profile: AcaSandboxProfile,
+    /// The disk image record the sandbox boots from.
     pub disk_image: AcaDiskImageRecord,
+    /// The network to join, when configured.
     pub network_ref: Option<ResourceRef>,
+    /// The sandbox transport profile alias.
     pub sandbox_transport_alias: AcaProfileId,
 }
 
 #[derive(Clone, PartialEq, Eq)]
+/// Observed disk image identity and generation.
 pub struct AcaDiskImageRecord {
+    /// The disk image id.
     pub id: AcaDiskImageId,
+    /// The generation the image was created for.
     pub generation: u64,
 }
 
@@ -569,9 +750,16 @@ impl fmt::Debug for AcaDiskImageRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Bounded candidate list of disk images returned by a control plane query.
 pub struct AcaDiskImageCandidates(Vec<AcaDiskImageRecord>);
 
 impl AcaDiskImageCandidates {
+    /// Construct a bounded candidate list.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AcaTypeError::CandidateBoundExceeded`] when `records` is
+    /// longer than [`MAX_ACA_CANDIDATES`].
     pub fn new(records: Vec<AcaDiskImageRecord>) -> Result<Self, AcaTypeError> {
         if records.len() > MAX_ACA_CANDIDATES {
             return Err(AcaTypeError::CandidateBoundExceeded);
@@ -579,27 +767,49 @@ impl AcaDiskImageCandidates {
         Ok(Self(records))
     }
 
+    /// Borrow the candidate records.
     pub fn as_slice(&self) -> &[AcaDiskImageRecord] {
         &self.0
     }
 }
 
+impl IntoIterator for AcaDiskImageCandidates {
+    type Item = AcaDiskImageRecord;
+    type IntoIter = std::vec::IntoIter<AcaDiskImageRecord>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Observed lifecycle of an ACA sandbox.
 pub enum AcaSandboxLifecycle {
+    /// The sandbox is being created.
     Creating,
+    /// The sandbox is running.
     Running,
+    /// The sandbox is suspended.
     Suspended,
+    /// The sandbox is stopping.
     Stopping,
+    /// The sandbox is stopped.
     Stopped,
+    /// The sandbox failed.
     Failed,
+    /// The lifecycle could not be determined.
     Unknown,
 }
 
 #[derive(Clone, PartialEq, Eq)]
+/// Observed sandbox state returned by control plane effects.
 pub struct AcaSandboxRecord {
+    /// The sandbox id.
     pub id: AcaSandboxId,
+    /// The observed lifecycle.
     pub lifecycle: AcaSandboxLifecycle,
+    /// The generation the sandbox was created for.
     pub generation: u64,
 }
 
@@ -615,9 +825,16 @@ impl fmt::Debug for AcaSandboxRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Bounded candidate list of sandboxes returned by a control plane query.
 pub struct AcaSandboxCandidates(Vec<AcaSandboxRecord>);
 
 impl AcaSandboxCandidates {
+    /// Construct a bounded candidate list.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AcaTypeError::CandidateBoundExceeded`] when `records` is
+    /// longer than [`MAX_ACA_CANDIDATES`].
     pub fn new(records: Vec<AcaSandboxRecord>) -> Result<Self, AcaTypeError> {
         if records.len() > MAX_ACA_CANDIDATES {
             return Err(AcaTypeError::CandidateBoundExceeded);
@@ -625,37 +842,60 @@ impl AcaSandboxCandidates {
         Ok(Self(records))
     }
 
+    /// Borrow the candidate records.
     pub fn as_slice(&self) -> &[AcaSandboxRecord] {
         &self.0
     }
 }
 
+impl IntoIterator for AcaSandboxCandidates {
+    type Item = AcaSandboxRecord;
+    type IntoIter = std::vec::IntoIter<AcaSandboxRecord>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Outcome of a delete effect.
 pub enum AcaDeleteOutcome {
+    /// The sandbox was deleted.
     Deleted,
+    /// The sandbox was already absent.
     AlreadyAbsent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Purpose of a credential lease; drives lease acquisition policy.
 pub enum AcaCredentialPurpose {
+    /// Health probe.
     Health,
+    /// Sandbox or disk image ensure.
     Ensure,
+    /// Sandbox resume.
     Start,
+    /// Sandbox stop.
     Stop,
+    /// Sandbox inspection.
     Inspect,
+    /// Sandbox adoption.
     Adopt,
+    /// Sandbox destroy.
     Destroy,
 }
 
 
 
 #[derive(Clone, PartialEq, Eq)]
+/// A lease on the control-plane credential, valid until an absolute expiry.
 pub struct AcaCredentialLease {
     metadata: CredentialLeaseHandle,
     expires_at_unix_ms: u64,
 }
 
 impl AcaCredentialLease {
+    /// Construct a lease from credential metadata and an absolute expiry.
     pub fn from_metadata(metadata: CredentialLeaseHandle, expires_at_unix_ms: u64) -> Self {
         Self {
             metadata,
@@ -663,6 +903,7 @@ impl AcaCredentialLease {
         }
     }
 
+    /// Return the absolute lease expiry in unix milliseconds.
     pub const fn expires_at_unix_ms(&self) -> u64 {
         self.expires_at_unix_ms
     }
@@ -679,6 +920,7 @@ impl fmt::Debug for AcaCredentialLease {
 }
 
 #[derive(Clone, PartialEq, Eq)]
+/// Request for a credential lease with a requested absolute expiry.
 pub struct AcaCredentialLeaseRequest {
     operation_id: AcaOperationId,
     purpose: AcaCredentialPurpose,
@@ -686,6 +928,7 @@ pub struct AcaCredentialLeaseRequest {
 }
 
 impl AcaCredentialLeaseRequest {
+    /// Construct a lease request.
     pub fn new(
         operation_id: AcaOperationId,
         purpose: AcaCredentialPurpose,
@@ -698,6 +941,7 @@ impl AcaCredentialLeaseRequest {
         }
     }
 
+    /// Return the requested expiry in unix milliseconds.
     pub const fn requested_expiry_unix_ms(&self) -> u64 {
         self.requested_expiry_unix_ms
     }
@@ -715,12 +959,14 @@ impl fmt::Debug for AcaCredentialLeaseRequest {
 }
 
 #[derive(Clone, PartialEq, Eq)]
+/// Context passed to every control effect call.
 pub struct AcaControlContext {
     operation_id: AcaOperationId,
     deadline_remaining_ms: u32,
 }
 
 impl AcaControlContext {
+    /// Construct a control context for one operation.
     pub fn new(operation_id: AcaOperationId, deadline_remaining_ms: u32) -> Self {
         Self {
             operation_id,
@@ -741,27 +987,43 @@ impl fmt::Debug for AcaControlContext {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Health of the ACA control plane for one sandbox.
 pub enum AcaControlHealth {
+    /// The sandbox is ready.
     Ready,
+    /// The sandbox is degraded.
     Degraded,
+    /// The sandbox is unavailable.
     Unavailable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Kind of failure returned by a control effect.
 pub enum AcaControlErrorKind {
+    /// Authentication with the control plane failed.
     Authentication,
+    /// Authorization was denied.
     Authorization,
+    /// The control plane rate-limited the call.
     RateLimited,
+    /// The control plane is unavailable.
     Unavailable,
+    /// The call conflicted with concurrent state.
     Conflict,
+    /// The addressed resource was not found.
     NotFound,
+    /// The control plane returned an invalid response.
     InvalidResponse,
+    /// The call was cancelled.
     Cancelled,
+    /// The operation deadline expired.
     DeadlineExpired,
+    /// The result was ambiguous.
     Ambiguous,
 }
 
 impl AcaControlErrorKind {
+    /// Return the stable error code for this kind.
     pub const fn code(self) -> &'static str {
         match self {
             Self::Authentication => "aca-control-authentication",
@@ -777,25 +1039,30 @@ impl AcaControlErrorKind {
         }
     }
 
+    /// Return whether a retry may succeed.
     pub const fn retryable(self) -> bool {
         matches!(self, Self::RateLimited | Self::Unavailable)
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Error returned by a control effect, carrying a stable code.
 pub struct AcaControlError {
     kind: AcaControlErrorKind,
 }
 
 impl AcaControlError {
+    /// Construct a control error from a kind.
     pub const fn new(kind: AcaControlErrorKind) -> Self {
         Self { kind }
     }
 
+    /// Return the error kind.
     pub const fn kind(self) -> AcaControlErrorKind {
         self.kind
     }
 
+    /// Return the stable error code.
     pub const fn code(self) -> &'static str {
         self.kind.code()
     }
@@ -809,24 +1076,34 @@ impl fmt::Display for AcaControlError {
 
 impl std::error::Error for AcaControlError {}
 
+/// Client for acquiring and revoking credential leases.
+///
+/// Both methods return [`AcaControlError`] when the lease operation fails.
 #[async_trait]
 pub trait AcaCredentialLeaseClient: Send + Sync {
+    /// Acquire a credential lease for one operation.
     async fn acquire(
         &self,
         request: &AcaCredentialLeaseRequest,
     ) -> Result<AcaCredentialLease, AcaControlError>;
 
+    /// Revoke a previously acquired credential lease.
     async fn revoke(&self, lease: &AcaCredentialLease) -> Result<(), AcaControlError>;
 }
 
+/// Effect port for the Azure Container Apps control plane.
+///
+/// Every method returns [`AcaControlError`] when the control plane call fails.
 #[async_trait]
 pub trait AcaControl: Send + Sync {
+    /// Probe sandbox health.
     async fn health(
         &self,
         lease: &AcaCredentialLease,
         context: &AcaControlContext,
     ) -> Result<AcaControlHealth, AcaControlError>;
 
+    /// List sandbox candidates matching a workload query.
     async fn find_sandboxes(
         &self,
         lease: &AcaCredentialLease,
@@ -834,6 +1111,7 @@ pub trait AcaControl: Send + Sync {
         query: &AcaWorkloadQuery,
     ) -> Result<AcaSandboxCandidates, AcaControlError>;
 
+    /// List disk image candidates matching a desired image.
     async fn find_disk_images(
         &self,
         lease: &AcaCredentialLease,
@@ -841,6 +1119,7 @@ pub trait AcaControl: Send + Sync {
         desired: &AcaDesiredDiskImage,
     ) -> Result<AcaDiskImageCandidates, AcaControlError>;
 
+    /// Create a disk image for a desired image.
     async fn create_disk_image(
         &self,
         lease: &AcaCredentialLease,
@@ -848,6 +1127,7 @@ pub trait AcaControl: Send + Sync {
         desired: &AcaDesiredDiskImage,
     ) -> Result<AcaDiskImageRecord, AcaControlError>;
 
+    /// Create a sandbox from a desired state.
     async fn create_sandbox(
         &self,
         lease: &AcaCredentialLease,
@@ -855,6 +1135,7 @@ pub trait AcaControl: Send + Sync {
         desired: &AcaDesiredSandbox,
     ) -> Result<AcaSandboxRecord, AcaControlError>;
 
+    /// Resume a suspended or stopped sandbox.
     async fn resume_sandbox(
         &self,
         lease: &AcaCredentialLease,
@@ -862,6 +1143,7 @@ pub trait AcaControl: Send + Sync {
         sandbox_id: &AcaSandboxId,
     ) -> Result<AcaSandboxRecord, AcaControlError>;
 
+    /// Stop a running sandbox.
     async fn stop_sandbox(
         &self,
         lease: &AcaCredentialLease,
@@ -869,6 +1151,7 @@ pub trait AcaControl: Send + Sync {
         sandbox_id: &AcaSandboxId,
     ) -> Result<AcaSandboxRecord, AcaControlError>;
 
+    /// Delete a sandbox.
     async fn delete_sandbox(
         &self,
         lease: &AcaCredentialLease,

@@ -7,6 +7,7 @@
 //! invocation is ever pointed at one of them.
 
 use std::{
+    cmp::Ordering,
     collections::{BTreeMap, BTreeSet, VecDeque},
     fs,
     path::{Path, PathBuf},
@@ -71,22 +72,90 @@ impl ContextSpec {
         format!("{}/{}/{}", self.system, self.target, self.name)
     }
 
-    fn production_kinds(&self) -> BTreeSet<&'static str> {
-        ["normal", "build", "proc-macro"].into_iter().collect()
+    fn production_kinds(&self) -> BTreeSet<EdgeKind> {
+        [EdgeKind::Normal, EdgeKind::Build, EdgeKind::ProcMacro]
+            .into_iter()
+            .collect()
     }
 
-    fn policy_kinds(&self) -> BTreeSet<&'static str> {
+    fn policy_kinds(&self) -> BTreeSet<EdgeKind> {
         [
-            "normal",
-            "build",
-            "proc-macro",
-            "dev",
-            "test",
-            "example",
-            "bench",
+            EdgeKind::Normal,
+            EdgeKind::Build,
+            EdgeKind::ProcMacro,
+            EdgeKind::Dev,
+            EdgeKind::Test,
+            EdgeKind::Example,
+            EdgeKind::Bench,
         ]
         .into_iter()
         .collect()
+    }
+}
+
+/// The closed Cargo dependency-kind vocabulary this module reasons about.
+///
+/// Cargo metadata hands the kind over as a string and the checked-in closures
+/// keep it as a string, so the enum carries that spelling in both directions:
+/// parsing at the metadata boundary is how a string becomes a kind, and the
+/// serde rename is how a kind becomes a string again.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum EdgeKind {
+    Normal,
+    Build,
+    Dev,
+    Test,
+    Example,
+    Bench,
+    ProcMacro,
+}
+
+impl EdgeKind {
+    /// The spelling the closure files use.
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Build => "build",
+            Self::Dev => "dev",
+            Self::Test => "test",
+            Self::Example => "example",
+            Self::Bench => "bench",
+            Self::ProcMacro => "proc-macro",
+        }
+    }
+
+    /// Map a Cargo metadata dependency kind onto the vocabulary.
+    ///
+    /// Total over everything Cargo emits: a dependency without a `kind` field
+    /// is normal, and a spelling outside the vocabulary is reported instead of
+    /// silently dropping the edge.
+    fn parse(raw: &str) -> Result<Self, String> {
+        match raw {
+            "normal" => Ok(Self::Normal),
+            "build" => Ok(Self::Build),
+            "dev" => Ok(Self::Dev),
+            "test" => Ok(Self::Test),
+            "example" => Ok(Self::Example),
+            "bench" => Ok(Self::Bench),
+            "proc-macro" => Ok(Self::ProcMacro),
+            other => Err(format!("unknown dependency kind: {other}")),
+        }
+    }
+}
+
+/// Ordering is the wire spelling, not the declaration order: one package can
+/// depend on another both normally and as a dev dependency, and the emitted
+/// order for such a pair has always been the spelling order.
+impl Ord for EdgeKind {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
+
+impl PartialOrd for EdgeKind {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -104,7 +173,7 @@ struct PackageRecord {
 struct EdgeRecord {
     from: String,
     to: String,
-    kind: String,
+    kind: EdgeKind,
     target: Option<String>,
 }
 
@@ -135,8 +204,8 @@ struct ApprovalProjection {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct ComputedContext {
-    spec: ContextSpec,
+struct ComputedContext<'a> {
+    spec: &'a ContextSpec,
     production: Closure,
     policy: Closure,
     metadata: Value,
@@ -260,7 +329,7 @@ fn generate_outputs(root: &Path) -> Result<Vec<PathBuf>, String> {
         .collect::<BTreeSet<_>>();
     let mut written = Vec::new();
     for spec in &contexts {
-        let computed = compute_context(root, spec.clone())?;
+        let computed = compute_context(root, spec)?;
         let approval = policy
             .get(&spec.key())
             .map(|context| context.approval.clone());
@@ -375,15 +444,14 @@ fn check_outputs(root: &Path) -> Result<Vec<PathBuf>, String> {
     }
 
     let mut checked = Vec::new();
-    for spec in contexts {
-        let computed = compute_context(root, spec.clone())?;
+    for spec in &contexts {
+        let computed = compute_context(root, spec)?;
         let advisory = policy
             .get(&spec.key())
             .ok_or_else(|| format!("missing advisory context {}", spec.key()))?;
-        let approval = advisory.approval.clone();
         let expected_production = serde_json::to_string_pretty(&with_approval(
             &computed.production,
-            Some(approval.clone()),
+            Some(advisory.approval.clone()),
         ))
         .map_err(|error| format!("serialize production closure: {error}"))?
             + "\n";
@@ -423,7 +491,7 @@ fn check_outputs(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(checked)
 }
 
-fn compute_context(root: &Path, spec: ContextSpec) -> Result<ComputedContext, String> {
+fn compute_context<'a>(root: &Path, spec: &'a ContextSpec) -> Result<ComputedContext<'a>, String> {
     if spec.roots.is_empty() {
         return Err(format!("context {} has no roots", spec.key()));
     }
@@ -489,7 +557,7 @@ fn compute_context(root: &Path, spec: ContextSpec) -> Result<ComputedContext, St
     let lock_sha256 = sha256_file(&root.join(PRODUCT_LOCK))?;
     let lock_packages = lock_packages(root, PRODUCT_LOCK)?;
     let production = make_closure(
-        &spec,
+        spec,
         &by_id,
         &production_ids,
         &production_edges,
@@ -498,7 +566,7 @@ fn compute_context(root: &Path, spec: ContextSpec) -> Result<ComputedContext, St
         None,
     )?;
     let policy = make_closure(
-        &spec,
+        spec,
         &by_id,
         &policy_ids,
         &policy_edges,
@@ -506,7 +574,7 @@ fn compute_context(root: &Path, spec: ContextSpec) -> Result<ComputedContext, St
         &lock_packages,
         None,
     )?;
-    let metadata = metadata_projection(&spec, &production, &policy, &metadata);
+    let metadata = metadata_projection(spec, &production, &policy, &metadata);
     Ok(ComputedContext {
         spec,
         production,
@@ -524,7 +592,10 @@ struct LockPackage {
     dependencies: Vec<String>,
 }
 
-fn compute_lock_context(root: &Path, spec: ContextSpec) -> Result<ComputedContext, String> {
+fn compute_lock_context<'a>(
+    root: &Path,
+    spec: &'a ContextSpec,
+) -> Result<ComputedContext<'a>, String> {
     let lock_packages = parse_lock_packages(root.join(&spec.lock_path))?;
     let mut by_name = BTreeMap::<String, Vec<String>>::new();
     let mut packages = BTreeMap::<String, Value>::new();
@@ -600,7 +671,7 @@ fn compute_lock_context(root: &Path, spec: ContextSpec) -> Result<ComputedContex
             edges.push(EdgeRecord {
                 from: from.clone(),
                 to: to.clone(),
-                kind: "normal".to_owned(),
+                kind: EdgeKind::Normal,
                 target: None,
             });
             if selected.insert(to.clone()) {
@@ -609,10 +680,10 @@ fn compute_lock_context(root: &Path, spec: ContextSpec) -> Result<ComputedContex
         }
     }
     let lock_sha256 = sha256_file(&root.join(&spec.lock_path))?;
-    let production = make_lock_closure(&spec, &records, &selected, &edges, &lock_sha256)?;
+    let production = make_lock_closure(spec, &records, &selected, &edges, &lock_sha256)?;
     let policy = production.clone();
     let metadata = metadata_projection(
-        &spec,
+        spec,
         &production,
         &policy,
         &json!({ "resolve": { "nodes": [] } }),
@@ -629,12 +700,12 @@ fn traverse(
     roots: &BTreeSet<String>,
     nodes: &BTreeMap<String, Value>,
     packages: &BTreeMap<String, Value>,
-    allowed_kinds: &BTreeSet<&'static str>,
+    allowed_kinds: &BTreeSet<EdgeKind>,
     target: &str,
 ) -> Result<(BTreeSet<String>, Vec<EdgeRecord>), String> {
     let mut selected = roots.clone();
     let mut queue = roots.iter().cloned().collect::<VecDeque<_>>();
-    let mut edges = BTreeSet::<(String, String, String, Option<String>)>::new();
+    let mut edges = BTreeSet::<(String, String, EdgeKind, Option<String>)>::new();
     while let Some(from_id) = queue.pop_front() {
         let node = nodes
             .get(&from_id)
@@ -657,23 +728,22 @@ fn traverse(
                 .and_then(Value::as_array)
                 .ok_or_else(|| format!("dependency from {from_id} has no dep_kinds"))?;
             for dep_kind in dep_kinds {
-                let raw_kind = dep_kind
-                    .get("kind")
-                    .and_then(Value::as_str)
-                    .unwrap_or("normal");
+                let kind = match dep_kind.get("kind").and_then(Value::as_str) {
+                    Some(raw_kind) => EdgeKind::parse(raw_kind)?,
+                    None => EdgeKind::Normal,
+                };
                 let cfg = dep_kind
                     .get("target")
                     .and_then(Value::as_str)
                     .map(str::to_owned);
-                if !allowed_kinds.contains(raw_kind) || !target_matches(cfg.as_deref(), target) {
+                if !allowed_kinds.contains(&kind) || !target_matches(cfg.as_deref(), target) {
                     continue;
                 }
                 let kind = if package_is_proc_macro(packages.get(&to_id).expect("checked")) {
-                    "proc-macro"
+                    EdgeKind::ProcMacro
                 } else {
-                    raw_kind
-                }
-                .to_owned();
+                    kind
+                };
                 edges.insert((from_id.clone(), to_id.clone(), kind, cfg));
                 if selected.insert(to_id.clone()) {
                     queue.push_back(to_id.clone());
@@ -721,7 +791,7 @@ fn make_closure(
         .map(|edge| EdgeRecord {
             from: stable_id(packages.get(&edge.from).expect("edge source package")),
             to: stable_id(packages.get(&edge.to).expect("edge target package")),
-            kind: edge.kind.clone(),
+            kind: edge.kind,
             target: edge.target.clone(),
         })
         .collect::<Vec<_>>();
@@ -1017,7 +1087,7 @@ fn metadata_projection(
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn write_context(
     root: &Path,
-    computed: &ComputedContext,
+    computed: &ComputedContext<'_>,
     approval: Option<ApprovalProjection>,
     written: &mut Vec<PathBuf>,
 ) -> Result<(), String> {
@@ -1745,10 +1815,42 @@ mod tests {
             source_authority: "Cargo.lock".to_owned(),
             lock_path: PRODUCT_LOCK.to_owned(),
         };
-        assert!(spec.production_kinds().contains("normal"));
-        assert!(spec.production_kinds().contains("build"));
-        assert!(spec.production_kinds().contains("proc-macro"));
-        assert!(!spec.production_kinds().contains("dev"));
+        assert!(spec.production_kinds().contains(&EdgeKind::Normal));
+        assert!(spec.production_kinds().contains(&EdgeKind::Build));
+        assert!(spec.production_kinds().contains(&EdgeKind::ProcMacro));
+        assert!(!spec.production_kinds().contains(&EdgeKind::Dev));
+    }
+
+    /// The first dependency of one package on another can be both a dev and a
+    /// normal dependency, so the edge sort is what decides their order in the
+    /// emitted file: it orders by the wire spelling, and a reordering here
+    /// rewrites checked-in closures.
+    #[test]
+    fn edge_kind_orders_by_its_wire_spelling() {
+        assert!(EdgeKind::Dev < EdgeKind::Normal);
+        assert!(EdgeKind::Bench < EdgeKind::Build);
+        assert!(EdgeKind::Normal < EdgeKind::ProcMacro);
+    }
+
+    #[test]
+    fn edge_kind_spelling_is_the_wire_spelling() {
+        for kind in [
+            EdgeKind::Normal,
+            EdgeKind::Build,
+            EdgeKind::Dev,
+            EdgeKind::Test,
+            EdgeKind::Example,
+            EdgeKind::Bench,
+            EdgeKind::ProcMacro,
+        ] {
+            assert_eq!(
+                serde_json::to_string(&kind).unwrap(),
+                format!("\"{}\"", kind.as_str())
+            );
+            assert_eq!(EdgeKind::parse(kind.as_str()).unwrap(), kind);
+        }
+        assert_eq!(EdgeKind::ProcMacro.as_str(), "proc-macro");
+        assert!(EdgeKind::parse("workspace").is_err());
     }
 
     #[test]

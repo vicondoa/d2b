@@ -110,51 +110,116 @@ opaque_id! {
     MediaRef
 }
 
+/// Failure classes for [`MediaRef`] shape validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaRefError {
+    Empty,
+    TooLong { max: usize },
+    BadStart,
+    BadShape,
+}
+
+impl core::fmt::Display for MediaRefError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            MediaRefError::Empty => f.write_str("media ref must not be empty"),
+            MediaRefError::TooLong { max } => write!(f, "media ref must be at most {max} bytes"),
+            MediaRefError::BadStart => {
+                f.write_str("media ref must start with a lowercase ASCII letter")
+            }
+            MediaRefError::BadShape => f.write_str(
+                "media ref may contain only lowercase ASCII letters, digits, and '-'",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for MediaRefError {}
+
 impl MediaRef {
-    pub fn validate_value(value: &str) -> Result<(), String> {
+    /// Validate a media-ref spelling. Returns [`MediaRefError`] on malformed
+    /// input (fail-closed).
+    pub fn validate_value(value: &str) -> Result<(), MediaRefError> {
         if value.is_empty() {
-            return Err("media ref must not be empty".to_owned());
+            return Err(MediaRefError::Empty);
         }
         if value.len() > 63 {
-            return Err("media ref must be at most 63 bytes".to_owned());
+            return Err(MediaRefError::TooLong { max: 63 });
         }
         let mut chars = value.chars();
-        let first = chars
-            .next()
-            .ok_or_else(|| "media ref must not be empty".to_owned())?;
+        let first = chars.next().ok_or(MediaRefError::Empty)?;
         if !first.is_ascii_lowercase() {
-            return Err("media ref must start with a lowercase ASCII letter".to_owned());
+            return Err(MediaRefError::BadStart);
         }
         if !std::iter::once(first)
             .chain(chars)
             .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
         {
-            return Err(
-                "media ref may contain only lowercase ASCII letters, digits, and '-'".to_owned(),
-            );
+            return Err(MediaRefError::BadShape);
         }
         Ok(())
     }
 }
 
-pub fn validate_usb_bus_id(value: &str) -> Result<(), String> {
+/// Parse-gate construction: a media ref can only be built from a spelling
+/// that passes [`MediaRef::validate_value`].
+impl TryFrom<&str> for MediaRef {
+    type Error = MediaRefError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::validate_value(value)?;
+        Ok(Self(value.to_owned()))
+    }
+}
+
+/// Failure classes for USB bus-id shape validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsbBusIdError {
+    Empty,
+    TooLong { max: usize },
+    InvalidEdgePunctuation,
+    InvalidCharacter,
+    MissingSeparator,
+}
+
+impl core::fmt::Display for UsbBusIdError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            UsbBusIdError::Empty => f.write_str("USB busid must not be empty"),
+            UsbBusIdError::TooLong { max } => write!(f, "USB busid must be at most {max} bytes"),
+            UsbBusIdError::InvalidEdgePunctuation => {
+                f.write_str("USB busid has invalid edge punctuation")
+            }
+            UsbBusIdError::InvalidCharacter => {
+                f.write_str("USB busid may contain only digits, '-' and '.'")
+            }
+            UsbBusIdError::MissingSeparator => {
+                f.write_str("USB busid must include a bus-port separator '-'")
+            }
+        }
+    }
+}
+
+impl std::error::Error for UsbBusIdError {}
+
+pub fn validate_usb_bus_id(value: &str) -> Result<(), UsbBusIdError> {
     if value.is_empty() {
-        return Err("USB busid must not be empty".to_owned());
+        return Err(UsbBusIdError::Empty);
     }
     if value.len() > 64 {
-        return Err("USB busid must be at most 64 bytes".to_owned());
+        return Err(UsbBusIdError::TooLong { max: 64 });
     }
     if value.starts_with('-') || value.ends_with('-') || value.ends_with('.') {
-        return Err("USB busid has invalid edge punctuation".to_owned());
+        return Err(UsbBusIdError::InvalidEdgePunctuation);
     }
     if !value
         .chars()
         .all(|ch| ch.is_ascii_digit() || ch == '-' || ch == '.')
     {
-        return Err("USB busid may contain only digits, '-' and '.'".to_owned());
+        return Err(UsbBusIdError::InvalidCharacter);
     }
     if !value.contains('-') {
-        return Err("USB busid must include a bus-port separator '-'".to_owned());
+        return Err(UsbBusIdError::MissingSeparator);
     }
     Ok(())
 }

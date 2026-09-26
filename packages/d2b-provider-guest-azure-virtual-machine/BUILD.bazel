@@ -65,6 +65,17 @@ d2b_rust_test(
         ":d2b_provider_guest_azure_virtual_machine",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
+d2b_rust_test(
+    name = "recovery_decode",
+    srcs = [
+        "tests/recovery_decode.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    deps = [
+        ":d2b_provider_guest_azure_virtual_machine",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
 
 d2b_rust_test(
     name = "lifecycle_hermetic",

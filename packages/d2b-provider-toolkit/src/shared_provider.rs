@@ -402,9 +402,9 @@ pub fn resource_uid(bytes: &[u8; 16]) -> Result<ResourceUid, SharedProviderEffec
 }
 
 /// The resource reference of one manager key.
-pub fn key_ref(key: &ResourceKey) -> ResourceRef {
+pub fn key_ref(key: &ResourceKey) -> Result<ResourceRef, SharedProviderEffectError> {
     ResourceRef::parse(&format!("{}/{}", key.type_name, key.name))
-        .expect("manager keys carry canonical resource references")
+        .map_err(|_| SharedProviderEffectError::InvalidResource)
 }
 
 // ---------------------------------------------------------------------------
@@ -506,8 +506,8 @@ pub struct SharedProviderEffectRequest<'a> {
     pub generation: ResourceGeneration,
     /// Runtime-only operation id (never persisted).
     pub operation_id: String,
-    /// Canonical spec document of the row.
-    pub spec: Value,
+    /// Canonical spec document of the row (borrowed from the row's envelope).
+    pub spec: &'a Value,
     /// Decoded metadata envelope of the row (`ownerRef`, ...).
     pub metadata: Value,
     /// The driver's last in-memory status projection, when one was published.
@@ -521,14 +521,6 @@ impl SharedProviderEffectRequest<'_> {
     pub fn owner_ref(&self) -> Result<ResourceRef, SharedProviderEffectError> {
         owner_ref(&self.metadata)
     }
-
-    /// The old-shape owner-envelope document of one effect request.
-    pub fn envelope(&self) -> Value {
-        json!({
-            "spec": self.spec.clone(),
-            "metadata": self.metadata.clone(),
-        })
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -538,7 +530,7 @@ impl SharedProviderEffectRequest<'_> {
 /// Construction arguments shared by every driver of one shared family.
 pub struct SharedProviderDriverArgs<C: 'static, S: 'static> {
     /// The zone the family's rows live in.
-    pub zone: String,
+    pub zone: ZoneId,
     /// The controller generation every effect call binds (KTD7).
     pub controller_generation: ControllerGeneration,
     /// The family's declarations and typed Provider effect.
@@ -612,9 +604,8 @@ impl<C: Copy + core::fmt::Debug + Eq + Send + Sync + 'static, S: Default + Send 
     SharedProviderDriver<C, S>
 {
     fn new(args: SharedProviderDriverArgs<C, S>) -> Self {
-        let zone = ZoneId::parse(args.zone).expect("driver zone was validated at construction");
         Self {
-            zone,
+            zone: args.zone,
             controller_generation: args.controller_generation,
             family: args.family,
             state: Arc::new(S::default()),
@@ -768,7 +759,11 @@ impl<C: Copy + core::fmt::Debug + Eq + Send + Sync + 'static, S: Default + Send 
                         .any(|child| owned_child_matches_child_ensure(row, child))
             })
             .collect::<Vec<_>>();
-        obsolete.sort_by_key(|row| (teardown_rank(&row.key.type_name), row.key.name.clone()));
+        obsolete.sort_by(|a, b| {
+            teardown_rank(&a.key.type_name)
+                .cmp(&teardown_rank(&b.key.type_name))
+                .then_with(|| a.key.name.cmp(&b.key.name))
+        });
         let mut mutated = false;
         for row in obsolete {
             ctx.delete(&row.key)
@@ -941,7 +936,7 @@ impl<C: Copy + core::fmt::Debug + Eq + Send + Sync + 'static, S: Default + Send 
                 uid,
                 generation,
                 operation_id,
-                spec: envelope.value().clone(),
+                spec: envelope.value(),
                 metadata,
                 status,
                 children: &surface,
@@ -1021,7 +1016,7 @@ impl<C: Copy + core::fmt::Debug + Eq + Send + Sync + 'static, S: Default + Send 
                 uid,
                 generation,
                 operation_id,
-                spec: envelope.value().clone(),
+                spec: envelope.value(),
                 metadata,
                 status,
                 children: &surface,
@@ -1060,8 +1055,8 @@ mod tests {
     use std::time::Duration;
 
     use async_trait::async_trait;
-    use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef};
-    use crate::testing::fakes::{RecordingManagerEndpoint, RecordingRequeue};
+    use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ZoneId};
+    use crate::testing::fakes::{RecordingManagerEndpoint, RecordingRequeue, SharedLog};
     use d2b_resource_runtime::context::{
         ChildEnsure, ManagerEndpoint, RequeueScheduler, ResourceContext, SpecDecoder,
     };
@@ -1069,7 +1064,6 @@ mod tests {
     use d2b_resource_runtime::identity::{
         ResourceKey, ResourceProvenance, ResourceTypeName, StoredDesiredResource,
     };
-    use d2b_resource_runtime::target::TargetHandle;
     use serde_json::json;
 
     use super::{
@@ -1080,9 +1074,6 @@ mod tests {
         shared_provider_spec_decoder,
     };
     use d2b_resource_runtime::driver::ReconcileOutcome;
-
-    /// Ordered log every fake writes to, so ordering is one assertion.
-    type Log = Arc<parking_lot::Mutex<Vec<String>>>;
 
     /// The fixture's closed component vocabulary.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1122,7 +1113,7 @@ mod tests {
     ];
 
     struct RecordingFamily {
-        log: Log,
+        log: SharedLog,
         phase: tokio::sync::Mutex<SharedProviderEffectPhase>,
         finalize: tokio::sync::Mutex<SharedProviderFinalize>,
         declares_children: bool,
@@ -1130,7 +1121,7 @@ mod tests {
 
     impl RecordingFamily {
         fn new(
-            log: Log,
+            log: SharedLog,
             phase: SharedProviderEffectPhase,
             finalize: SharedProviderFinalize,
             declares_children: bool,
@@ -1185,7 +1176,7 @@ mod tests {
             _request: &SharedProviderEffectRequest<'_>,
             _state: &(),
         ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
-            self.log.lock().push(format!("effect:{}", component.effect_id())); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.log.record(format!("effect:{}", component.effect_id()));
             Ok(SharedProviderEffectOutcome::phase(*self.phase.lock().await))
         }
 
@@ -1195,7 +1186,7 @@ mod tests {
             _request: &SharedProviderEffectRequest<'_>,
             _state: &(),
         ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
-            self.log.lock().push(format!("finalize:{}", component.effect_id())); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.log.record(format!("finalize:{}", component.effect_id()));
             Ok(*self.finalize.lock().await)
         }
     }
@@ -1229,7 +1220,7 @@ mod tests {
         ctx: ResourceContext,
         family: Arc<RecordingFamily>,
         requeue: Arc<RecordingRequeue>,
-        log: Log,
+        log: SharedLog,
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1239,7 +1230,7 @@ mod tests {
         spec: serde_json::Value,
         manager: Arc<RecordingManagerEndpoint>,
         requeue: Arc<RecordingRequeue>,
-        log: Log,
+        log: SharedLog,
         phase: SharedProviderEffectPhase,
         finalize: SharedProviderFinalize,
         declares_children: bool,
@@ -1248,10 +1239,9 @@ mod tests {
         row.spec = serde_json::to_vec(&spec).expect("spec json");
         let (effects_tx, _effects_rx) = tokio::sync::mpsc::unbounded_channel();
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
-        let family = RecordingFamily::new(Arc::clone(&log), phase, finalize, declares_children);
+        let family = RecordingFamily::new(log.clone(), phase, finalize, declares_children);
         let ctx = ResourceContext::new(
             row,
-            TargetHandle::Host,
             decoder(),
             Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
             Arc::clone(&requeue) as Arc<dyn RequeueScheduler>,
@@ -1270,7 +1260,7 @@ mod tests {
         let family: Arc<dyn SharedProviderFamily<Component = Component, State = ()>> =
             fixture.family.clone();
         let factory = SharedProviderDriverFactory::new(SharedProviderDriverArgs {
-            zone: "dev".to_owned(),
+            zone: ZoneId::parse("dev").expect("valid test zone"),
             controller_generation: ControllerGeneration::new(1).expect("generation"),
             family,
         });
@@ -1282,10 +1272,10 @@ mod tests {
     #[test]
     fn factory_serves_the_declared_rows() {
         let factory = SharedProviderDriverFactory::new(SharedProviderDriverArgs {
-            zone: "dev".to_owned(),
+            zone: ZoneId::parse("dev").expect("valid test zone"),
             controller_generation: ControllerGeneration::new(1).expect("generation"),
             family: RecordingFamily::new(
-                Arc::new(parking_lot::Mutex::new(Vec::new())),
+                SharedLog::new(),
                 SharedProviderEffectPhase::Pending,
                 SharedProviderFinalize::Complete,
                 false,
@@ -1306,12 +1296,12 @@ mod tests {
 
     #[tokio::test]
     async fn validate_rejects_a_provider_outside_the_family() {
-        let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let log = SharedLog::new();
         let mut fixture = fixture(
             "FixtureOne",
             "row-a",
             json!({"providerRef": "Provider/elsewhere"}),
-            Arc::new(RecordingManagerEndpoint::with_log(Arc::clone(&log))),
+            Arc::new(RecordingManagerEndpoint::with_log(log.clone())),
             Arc::new(RecordingRequeue::default()),
             log,
             SharedProviderEffectPhase::Pending,
@@ -1337,14 +1327,14 @@ mod tests {
 
     #[tokio::test]
     async fn reconcile_commits_the_child_set_then_runs_the_effect() {
-        let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let log = SharedLog::new();
         let mut fixture = fixture(
             "FixtureOne",
             "row-a",
             json!({"providerRef": "Provider/fixture-one"}),
-            Arc::new(RecordingManagerEndpoint::with_log(Arc::clone(&log))),
+            Arc::new(RecordingManagerEndpoint::with_log(log.clone())),
             Arc::new(RecordingRequeue::default()),
-            Arc::clone(&log),
+            log.clone(),
             SharedProviderEffectPhase::Pending,
             SharedProviderFinalize::Complete,
             true,
@@ -1362,7 +1352,7 @@ mod tests {
              pass published, which is what dependents read"
         );
 
-        let entries = fixture.log.lock().clone(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        let entries = fixture.log.entries();
         let child_at = entries
             .iter()
             .position(|entry| entry == "ensure:Volume/fixture-child")
@@ -1390,9 +1380,9 @@ mod tests {
 
     #[tokio::test]
     async fn reconcile_leaves_rows_of_a_child_less_component_alone() {
-        let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let log = SharedLog::new();
         let manager = Arc::new(
-            RecordingManagerEndpoint::with_log(Arc::clone(&log))
+            RecordingManagerEndpoint::with_log(log.clone())
                 .with_rows(vec![owned_row("dev", "Process", "declared-worker")]),
         );
         let mut fixture = fixture(
@@ -1401,7 +1391,7 @@ mod tests {
             json!({"providerRef": "Provider/fixture-two"}),
             Arc::clone(&manager),
             Arc::new(RecordingRequeue::default()),
-            Arc::clone(&log),
+            log.clone(),
             SharedProviderEffectPhase::Ready,
             SharedProviderFinalize::Complete,
             false,
@@ -1411,7 +1401,7 @@ mod tests {
             .reconcile(&mut fixture.ctx)
             .await
             .expect("reconcile");
-        let entries = log.lock().clone(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        let entries = log.entries();
         assert!(
             !entries.iter().any(|entry| entry.starts_with("delete:")),
             "the declared rows are not this driver's to retire: {entries:?}"
@@ -1431,9 +1421,9 @@ mod tests {
 
     #[tokio::test]
     async fn delete_runs_provider_teardown_then_retires_children() {
-        let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let log = SharedLog::new();
         let manager = Arc::new(
-            RecordingManagerEndpoint::with_log(Arc::clone(&log)).with_rows(vec![
+            RecordingManagerEndpoint::with_log(log.clone()).with_rows(vec![
                 owned_row("dev", "Process", "stale-proxy"),
                 owned_row("dev", "Endpoint", "stale-endpoint"),
             ]),
@@ -1444,14 +1434,14 @@ mod tests {
             json!({"providerRef": "Provider/fixture-one"}),
             Arc::clone(&manager),
             Arc::new(RecordingRequeue::default()),
-            Arc::clone(&log),
+            log.clone(),
             SharedProviderEffectPhase::Ready,
             SharedProviderFinalize::Complete,
             true,
         );
         let mut driver = driver(&fixture).await;
         driver.delete(&mut fixture.ctx).await.expect("teardown");
-        let entries = log.lock().clone(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        let entries = log.entries();
         let finalize_at = entries
             .iter()
             .position(|entry| entry == "finalize:one")
@@ -1476,12 +1466,12 @@ mod tests {
 
     #[tokio::test]
     async fn delete_is_retryable_while_the_provider_stage_is_pending() {
-        let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let log = SharedLog::new();
         let mut fixture = fixture(
             "FixtureTwo",
             "row-b",
             json!({"providerRef": "Provider/fixture-two"}),
-            Arc::new(RecordingManagerEndpoint::with_log(Arc::clone(&log))),
+            Arc::new(RecordingManagerEndpoint::with_log(log.clone())),
             Arc::new(RecordingRequeue::default()),
             log,
             SharedProviderEffectPhase::Ready,
@@ -1508,15 +1498,15 @@ mod tests {
 
     #[tokio::test]
     async fn recover_adopts_the_committed_child_set() {
-        let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
-        let manager = Arc::new(RecordingManagerEndpoint::with_log(Arc::clone(&log)));
+        let log = SharedLog::new();
+        let manager = Arc::new(RecordingManagerEndpoint::with_log(log.clone()));
         let mut fixture = fixture(
             "FixtureOne",
             "row-a",
             json!({"providerRef": "Provider/fixture-one"}),
             Arc::clone(&manager),
             Arc::new(RecordingRequeue::default()),
-            Arc::clone(&log),
+            log.clone(),
             SharedProviderEffectPhase::Ready,
             SharedProviderFinalize::Complete,
             true,
@@ -1533,7 +1523,7 @@ mod tests {
             RecoveryOutcome::Adopted
         );
         assert!(
-            !log.lock().iter().any(|entry| entry.starts_with("effect:")), // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            !log.entries().iter().any(|entry| entry.starts_with("effect:")),
             "recovery adoption runs no provider effect"
         );
     }

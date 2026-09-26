@@ -41,6 +41,11 @@ pub struct RedactionGuard {
 
 impl RedactionGuard {
     /// Validate resource attributes against the closed allowlist.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RedactionError::AttributeNotAllowlisted` when an
+    /// attribute is not allowlisted, invalid-shaped, or duplicated.
     pub fn new(
         attributes: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
     ) -> Result<Self, RedactionError> {
@@ -92,6 +97,11 @@ impl RedactionGuard {
     }
 
     /// Validate a span field name before it is emitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RedactionError::ForbiddenSpanField` when the name is
+    /// forbidden or carries a forbidden suffix.
     pub fn validate_span_field(key: &str) -> Result<(), RedactionError> {
         const FORBIDDEN: &[&str] = &[
             "path",
@@ -137,6 +147,13 @@ impl RedactionGuard {
     }
 
     /// Validate all span fields and return an owned redacted map.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ForbiddenSpanField` for a forbidden, invalid-shaped, or
+    /// duplicated field, and `SemanticFieldNotAllowlisted` or
+    /// `SemanticValueNotAllowlisted` for a field or value outside the
+    /// closed semantic set.
     pub fn span_attributes(
         fields: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
     ) -> Result<BTreeMap<String, String>, RedactionError> {

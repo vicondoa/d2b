@@ -68,7 +68,7 @@ impl AsyncHidrawDevice {
     }
 
     /// Read a single 64-byte CTAPHID report from the physical token.
-    // Readiness-gated non-blocking read inside `AsyncFd::try_io`;the std
+    // Readiness-gated non-blocking read inside `AsyncFd::try_io`; the std
     // `Read` impl over the raw fd is the sanctioned AsyncFd shape.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub async fn read_report(&self) -> std::io::Result<CtaphidReport> {
@@ -94,7 +94,7 @@ impl AsyncHidrawDevice {
     }
 
     /// Write a single 64-byte CTAPHID report to the physical token.
-    // Readiness-gated non-blocking write inside `AsyncFd::try_io`;the std
+    // Readiness-gated non-blocking write inside `AsyncFd::try_io`; the std
     // `Write` impl over the raw fd is the sanctioned AsyncFd shape.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub async fn write_report(&self, report: &CtaphidReport) -> std::io::Result<()> {
@@ -126,6 +126,7 @@ fn track_response_cid(report: &CtaphidReport, cids: &parking_lot::Mutex<HashSet<
     }
     let allocated = u32::from_be_bytes([report[15], report[16], report[17], report[18]]);
     if allocated != 0 && allocated != CTAPHID_BROADCAST_CID {
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         cids.lock().insert(allocated);
     }
 }
@@ -238,7 +239,7 @@ pub fn authenticate_peer<F: std::os::fd::AsFd>(
 
 /// Bind (and tighten) the per-VM relay socket the accept loop serves.
 // Short mkdir/unlink/chmod on the socket path at a sync public surface;
-    // converting to async would ripple the crate's exported API beyond scope。
+    // converting to async would ripple the crate's exported API beyond scope.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn bind_accept_socket(path: &Path) -> std::io::Result<StdUnixListener> {
     if let Some(parent) = path.parent() {
@@ -278,6 +279,7 @@ impl SkAcceptAbort {
 
     /// Signal the accept loop to stop (idempotent).
     pub fn abort(&self) {
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         if let Some(tx) = self.stop.lock().take() {
             let _ = tx.send(());
         }
@@ -294,9 +296,16 @@ impl Drop for SkAcceptAbort {
 /// One registered VM relay: its ceremony state and its accept-loop handle.
 pub struct SkAcceptHandle {
     /// The VM's relay ceremony state, shared with the connection loop.
-    pub state: Arc<parking_lot::Mutex<SecurityKeyState>>,
+    state: Arc<parking_lot::Mutex<SecurityKeyState>>,
     /// The accept loop's stop handle.
     pub abort: SkAcceptAbort,
+}
+
+impl SkAcceptHandle {
+    /// The VM's relay ceremony state, shared with the connection loop.
+    pub fn state(&self) -> &parking_lot::Mutex<SecurityKeyState> {
+        &self.state
+    }
 }
 
 #[derive(Debug, Default)]
@@ -486,6 +495,7 @@ pub(crate) async fn run_connection(
         return;
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     if !state.lock().enabled_vms.contains(&vm_id) { // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         info!(vm = %vm_id, "security-key: rejecting connection for disabled vm");
         return;
@@ -494,6 +504,7 @@ pub(crate) async fn run_connection(
     let deadline = Instant::now() + QUEUE_WAIT_TIMEOUT;
     let lease_id = loop {
         if let Some(lease_id) = {
+            #[allow(clippy::disallowed_methods, reason = "synchronous path")]
             let mut guard = state.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             guard.try_acquire_lease(&vm_id)
         } {
@@ -524,11 +535,13 @@ pub(crate) async fn run_connection(
                     CtaphidPacket::Init(packet)
                         if packet.cid != 0 && packet.cid != CTAPHID_BROADCAST_CID =>
                     {
+                        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
                         active_cids.lock().insert(packet.cid); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                     }
                     CtaphidPacket::Cont(packet)
                         if packet.cid != 0 && packet.cid != CTAPHID_BROADCAST_CID =>
                     {
+                        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
                         active_cids.lock().insert(packet.cid); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                     }
                     _ => {}
@@ -589,6 +602,7 @@ pub(crate) async fn run_connection(
         let _ = guest_to_hidraw.await;
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     let cancel_cids: Vec<u32> = active_cids.lock().iter().copied().collect(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
     for cid in cancel_cids {
         let cancel_packet = build_cancel_packet(cid);
@@ -596,6 +610,7 @@ pub(crate) async fn run_connection(
         let _ = hidraw.write_report(&cancel_packet).await;
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     state.lock().release_lease(&vm_id, lease_id); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
 }
 

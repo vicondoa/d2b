@@ -1,3 +1,10 @@
+//! The broker process entry point.
+//!
+//! [`parse_command`] turns the process arguments into a [`BrokerMode`]
+//! carrying a [`ServerConfig`]; [`run`] executes that mode, serving the
+//! broker's socket until termination or returning a [`RunError`] on
+//! failure.
+
 use std::env;
 use std::fs;
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -320,6 +327,8 @@ fn stale_wire_refusal(retired: &RetiredWireVariant) -> BrokerResponse {
     })
 }
 
+/// Process-start configuration for one broker run, resolved from CLI
+/// flags and environment defaults by [`parse_command`].
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     /// Fixed process-start authority profile. Requests cannot change it.
@@ -371,6 +380,8 @@ pub struct ServerConfig {
     pub retired_wire_variants: &'static [RetiredWireVariant],
 }
 
+/// The process mode selected by [`parse_command`]: host or guest serving,
+/// or a bootstrap probe.
 #[derive(Debug, Clone)]
 pub enum BrokerMode {
     Host(ServerConfig),
@@ -394,6 +405,8 @@ pub enum BrokerMode {
     },
 }
 
+/// A process-entry failure surfaced by [`parse_command`] or [`run`]:
+/// usage, I/O, or protocol.
 #[derive(Debug)]
 pub enum RunError {
     Usage(String),
@@ -562,6 +575,13 @@ impl core::fmt::Debug for BrokerError {
     }
 }
 
+/// Parse process arguments into the [`BrokerMode`] to run.
+///
+/// # Errors
+///
+/// Returns [`RunError::Usage`] when the first argument is not a known
+/// profile (or probe subcommand), a flag is missing or malformed, or the
+/// d2bd uid/gid cannot be resolved.
 pub fn parse_command<I>(args: I) -> Result<BrokerMode, RunError>
 where
     I: IntoIterator<Item = String>,
@@ -796,6 +816,13 @@ where
     })
 }
 
+/// Run the broker in the parsed [`BrokerMode`], serving until termination.
+///
+/// # Errors
+///
+/// Returns [`RunError::Io`] when the socket cannot be adopted or bound,
+/// [`RunError::Protocol`] when the wire negotiation or a request fails
+/// fatally, and [`RunError::Usage`] for a malformed probe invocation.
 pub fn run(command: BrokerMode) -> Result<(), RunError> {
     match command {
         BrokerMode::Host(config) | BrokerMode::Guest(config) => run_server(config),
@@ -805,7 +832,7 @@ pub fn run(command: BrokerMode) -> Result<(), RunError> {
             test_uid,
         } => run_probe(
             socket_path,
-            crate::bootstrap::wire::probe_hello(test_uid),
+            test_peer_uid_frame(crate::bootstrap::wire::probe_hello(), test_uid),
             true,
         ),
         #[cfg(feature = "layer1-bootstrap")]
@@ -814,9 +841,9 @@ pub fn run(command: BrokerMode) -> Result<(), RunError> {
             test_uid,
             operation,
         } => {
-            let request = crate::bootstrap::wire::probe_stub(&operation, test_uid)
+            let request = crate::bootstrap::wire::probe_stub(&operation)
                 .ok_or_else(|| RunError::Usage(format!("unknown stub operation: {operation}")))?;
-            run_probe(socket_path, request, true)
+            run_probe(socket_path, test_peer_uid_frame(request, test_uid), true)
         }
         #[cfg(feature = "layer1-bootstrap")]
         BrokerMode::ProbeExportAudit {
@@ -825,7 +852,10 @@ pub fn run(command: BrokerMode) -> Result<(), RunError> {
             caller_role,
         } => run_probe(
             socket_path,
-            crate::bootstrap::wire::probe_export_audit(test_uid, caller_role),
+            test_peer_uid_frame(
+                crate::bootstrap::wire::probe_export_audit(caller_role),
+                test_uid,
+            ),
             false,
         ),
     }
@@ -1275,7 +1305,7 @@ pub(crate) fn try_load_resolver_with_policy(
     bundle_path: &Path,
     policy: &d2b_core::bundle_resolver::BundleVerifyPolicy,
 ) -> BundleSlot {
-    use d2b_core::error::{BundleError, Error as CoreError};
+    use d2b_contracts::error::{BundleError, Error as CoreError};
     // Per the tracing contract, span attributes MUST NOT include
     // filesystem paths (high cardinality + can leak host layout). The
     // bundle path is bounded operational context handled by the typed
@@ -1354,8 +1384,9 @@ pub fn probe_bundle_load_response_with_policy(
 }
 
 /// Bind a kernel-authenticated peer to this broker instance before any wire
-/// bytes are decoded. Test mode keeps the existing simulated envelope UID
-/// support, but still requires the actual local test process credentials.
+/// bytes are decoded. Test mode keeps the existing simulated peer-uid support
+/// (the frame member [`TEST_PEER_UID_FIELD`]), but still requires the actual
+/// local test process credentials.
 fn peer_matches_instance(config: &ServerConfig, peer_uid: u32, peer_gid: u32) -> bool {
     if config.test_mode {
         return (peer_uid == nix::unistd::Uid::current().as_raw()
@@ -1364,6 +1395,75 @@ fn peer_matches_instance(config: &ServerConfig, peer_uid: u32, peer_gid: u32) ->
     }
     (peer_uid == config.d2bd_uid && peer_gid == config.d2bd_gid)
         || (config.profile == BrokerProfile::Host && peer_uid == 0)
+}
+
+/// The harness-only peer-uid override's frame member.
+///
+/// The broker's own harness - the bootstrap probe CLI and the integration
+/// tests - asks a `--test-mode` broker to treat one connection as a peer other
+/// than the uid `SO_PEERCRED` reports. The override rides beside the envelope
+/// as a sibling member of the same JSON frame rather than as a field of the
+/// wire contract: `d2b_contracts_broker::broker_wire::BrokerRequestEnvelope`
+/// carries no test seam, a broker that was not started with `--test-mode`
+/// never looks for this member, and its strict decode refuses a frame that
+/// carries one.
+pub const TEST_PEER_UID_FIELD: &str = "testPeerUid";
+
+/// Wrap one envelope in the frame the harness sends to a `--test-mode` broker.
+///
+/// `None` leaves the envelope's own frame untouched, so a harness run that
+/// overrides no uid sends exactly the production frame.
+///
+/// # Panics
+///
+/// Panics when `envelope` does not serialize to a JSON object; every broker
+/// envelope frame is one.
+pub fn test_peer_uid_frame<T: serde::Serialize>(
+    envelope: T,
+    test_peer_uid: Option<u32>,
+) -> Value {
+    let mut frame = serde_json::to_value(envelope).expect("a broker envelope serializes");
+    if let Some(test_peer_uid) = test_peer_uid {
+        frame
+            .as_object_mut()
+            .expect("a broker envelope frame is a JSON object")
+            .insert(
+                TEST_PEER_UID_FIELD.to_owned(),
+                Value::from(test_peer_uid),
+            );
+    }
+    frame
+}
+
+/// Unwrap the harness-only peer-uid override from a decoded frame.
+///
+/// `Ok(None)` means the frame carries no override, or spells it `null` - the
+/// absent value the retired envelope field accepted. A member of any other
+/// shape is refused with the same force as every other malformed wire member
+/// instead of being dropped.
+fn take_test_peer_uid(frame: &mut Value) -> io::Result<Option<u32>> {
+    let Some(member) = frame
+        .as_object_mut()
+        .and_then(|frame| frame.remove(TEST_PEER_UID_FIELD))
+    else {
+        return Ok(None);
+    };
+    match member {
+        Value::Null => Ok(None),
+        Value::Number(number) => number
+            .as_u64()
+            .and_then(|uid| u32::try_from(uid).ok())
+            .map(Some)
+            .ok_or_else(invalid_test_peer_uid),
+        _ => Err(invalid_test_peer_uid()),
+    }
+}
+
+fn invalid_test_peer_uid() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("{TEST_PEER_UID_FIELD} is not a peer uid"),
+    )
 }
 
 /// Accept and serve connections until the listener itself fails.
@@ -1436,14 +1536,14 @@ async fn handle_connection(connection: AsyncSeqpacket, server: &Server) -> io::R
         return Ok(());
     }
     #[cfg(not(feature = "layer1-bootstrap"))]
-    let (envelope, request_fds) = {
+    let (envelope, request_fds, test_peer_uid) = {
         // The frame decodes as JSON first so the retired-wire gate can
         // recognize a variant the current enum no longer carries: a retired
         // variant's frame is well-formed JSON but not a current
         // `RequestEnvelope`, and the gate refuses it with the typed
         // stale-wire-version code plus an audit record before the typed
         // decode can drop it as malformed wire (KTD10).
-        let Some((envelope_value, request_fds)) =
+        let Some((mut envelope_value, request_fds)) =
             connection.recv_json_frame_with_fds::<Value>().await?
         else {
             return Ok(());
@@ -1478,18 +1578,41 @@ async fn handle_connection(connection: AsyncSeqpacket, server: &Server) -> io::R
                 .await?;
             return Ok(());
         }
+        // The harness-only peer-uid override is unwrapped here, in front of
+        // the typed decode: the wire contract's envelope carries no such
+        // member, so only a broker that was started with `--test-mode` ever
+        // sees one and every other broker refuses the frame with it.
+        let test_peer_uid = if server.config.test_mode {
+            take_test_peer_uid(&mut envelope_value)?
+        } else {
+            None
+        };
         let envelope: RequestEnvelope = serde_json::from_value(envelope_value)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        (envelope, request_fds)
+        (envelope, request_fds, test_peer_uid)
     };
     #[cfg(feature = "layer1-bootstrap")]
-    let Some((envelope, request_fds)) = connection
-        .recv_json_frame::<RequestEnvelope>()
-        .await
-        .map(|frame| frame.map(|envelope| (envelope, Vec::new())))?
-    else {
-        return Ok(());
+    let (envelope, request_fds, test_peer_uid) = {
+        // The bootstrap wire decodes as JSON first for the same reason the
+        // production wire does: the harness-only peer-uid override is a frame
+        // member beside the envelope and is unwrapped before the strict
+        // decode.
+        let Some(mut envelope_value) = connection.recv_json_frame::<Value>().await? else {
+            return Ok(());
+        };
+        let test_peer_uid = if server.config.test_mode {
+            take_test_peer_uid(&mut envelope_value)?
+        } else {
+            None
+        };
+        let envelope: RequestEnvelope = serde_json::from_value(envelope_value)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        (envelope, Vec::new(), test_peer_uid)
     };
+    // The kernel `SO_PEERCRED` uid is the authenticated caller. The frame's
+    // harness-only override stands in for it only in a `--test-mode` broker,
+    // and only for the gates: `peer_uid` stays the audited frame source.
+    let effective_uid = test_peer_uid.unwrap_or(peer_uid);
 
     let config = Arc::clone(&server.config);
     let audit_log = Arc::clone(&server.audit_log);
@@ -1529,6 +1652,7 @@ async fn handle_connection(connection: AsyncSeqpacket, server: &Server) -> io::R
                     envelope,
                     request_fds,
                     peer_uid,
+                    effective_uid,
                     peer_gid,
                     peer_pid,
                     &config,
@@ -1542,6 +1666,7 @@ async fn handle_connection(connection: AsyncSeqpacket, server: &Server) -> io::R
                     envelope,
                     request_fds,
                     peer_uid,
+                    effective_uid,
                     peer_gid,
                     peer_pid,
                     &config,
@@ -1599,10 +1724,17 @@ enum RequestOutcome {
 /// the handlers' subprocess and filesystem work, the audit append - so they
 /// run on the dispatch pool, whose workers bound the work and whose queue
 /// bounds the waiters, rather than on a reactor worker or a thread per call.
+///
+/// The caller context arrives as two uids: `peer_uid` is the
+/// kernel-authenticated peer the refusals here audit as the frame's source,
+/// and `effective_uid` is the uid the gates decide on - the same value except
+/// in a `--test-mode` broker, where the harness-only frame override stands in
+/// for the kernel credential.
 async fn answer_request(
     envelope: RequestEnvelope,
     request_fds: Vec<OwnedFd>,
     peer_uid: u32,
+    effective_uid: u32,
     peer_gid: u32,
     peer_pid: i32,
     config: &ServerConfig,
@@ -1611,6 +1743,8 @@ async fn answer_request(
 ) -> io::Result<RequestOutcome> {
     #[cfg(feature = "layer1-bootstrap")]
     let _ = &request_fds; // the bootstrap wire carries no request descriptors
+    #[cfg(feature = "layer1-bootstrap")]
+    let _ = peer_uid; // the profile-refusal audit that names the kernel uid is production-wire only
     // Load the bundle resolver from the configured `bundle_path` for every
     // request. The broker is socket-activated but can remain alive across
     // `nixos-rebuild switch`; treating the bundle as process-lifetime
@@ -1625,11 +1759,6 @@ async fn answer_request(
         BundleSlot::Tampered { path, reason } => (None, Some((path, reason))),
     };
     let request = envelope.request;
-    let effective_uid = if config.test_mode {
-        envelope.test_peer_uid.unwrap_or(peer_uid)
-    } else {
-        peer_uid
-    };
     let operation = request.op_name();
     let opaque_target_id = request.opaque_target_id();
     #[cfg(not(feature = "layer1-bootstrap"))]
@@ -2413,14 +2542,17 @@ impl DispatchAuditContext {
         }
         #[cfg(not(feature = "layer1-bootstrap"))]
         {
-            let join = request
-                .authoritative_audit_join()
-                .map(|(zone_id, operation_identity)| AuditJoinContext {
+            let join = match request.authoritative_audit_join() {
+                Some((zone_id, operation_identity)) => Some(AuditJoinContext {
                     zone_id: CanonicalAuditDigest::parse(zone_id)
-                        .expect("authoritative zone digest"),
+                        .map_err(|_| BrokerError::Protocol("audit zone identity invalid".to_owned()))?,
                     operation_identity: CanonicalAuditDigest::parse(operation_identity)
-                        .expect("authoritative operation digest"),
-                });
+                        .map_err(|_| {
+                            BrokerError::Protocol("audit operation identity invalid".to_owned())
+                        })?,
+                }),
+                None => None,
+            };
             Self::from_request_with_join(request, peer_pid, caller_role, join.as_ref())
         }
     }
@@ -3838,7 +3970,7 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             let resolver = require_resolver(resolver)?;
             let outcome = crate::ops::security_key::live_open_hidraw_security_key(
                 &req,
-                &resolver.host.security_key_selectors,
+                &resolver.host().security_key_selectors,
                 audit_log,
             )
             .await
@@ -4796,13 +4928,13 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             let expected_hash = persisted_nft_hash()
                 .await
                 .map_err(|err| BrokerError::LiveHandler(err.to_string()))?
-                .or_else(|| resolver.host.nftables.table_hash_after_apply.clone());
+                .or_else(|| resolver.host().nftables.table_hash_after_apply.clone());
             crate::ops::nft::apply_with_coexistence(
                 &exec,
                 &nft_binary,
                 &nft_script,
-                resolver.host.nftables.ownership_id.as_str(),
-                resolver.host.firewall_coexistence_policy.as_ref(),
+                resolver.host().nftables.ownership_id.as_str(),
+                resolver.host().firewall_coexistence_policy.as_ref(),
                 expected_hash.as_deref(),
             )
             .await
@@ -4836,8 +4968,8 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             crate::ops::nft::persist_live_nft_hash(
                 &exec,
                 &nft_binary,
-                &resolver.host.nftables.family,
-                &resolver.host.nftables.table,
+                &resolver.host().nftables.family,
+                &resolver.host().nftables.table,
                 &nft_hash_sidecar_path(),
             )
             .await
@@ -6048,11 +6180,6 @@ fn register_runner_pidfd(runner_id: &str, pidfd: &OwnedFd) -> Result<(), BrokerE
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn remove_runner_registration(runner_id: &str) {
-    runner_pidfds().remove(runner_id);
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn remove_runner_registries(runner_id: &str) -> bool {
     // Keep the metadata ordering aligned with observation and deregistration
     // so reap cleanup cannot deadlock with a concurrent registry update; the
@@ -6403,7 +6530,7 @@ async fn prepare_runner_preopened_fds(
             })?;
         let intents = resolver
             .resolve_macvtap_intents(req.vm_id.as_str(), runner_intent.role_id.as_str())
-            .map_err(BrokerError::LiveHandler)?;
+            .map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
         if intents.is_empty() {
             return Ok(RunnerPreopenedFds {
                 child_fds: Vec::new(),
@@ -6539,8 +6666,8 @@ impl DispatchBackend for LiveDispatchBackend {
             let destroy_script;
             let script_body = if destroy {
                 destroy_script = render_nft_destroy_script(
-                    &resolver.host.nftables.family,
-                    &resolver.host.nftables.table,
+                    &resolver.host().nftables.family,
+                    &resolver.host().nftables.table,
                 );
                 destroy_script.as_str()
             } else {
@@ -6552,7 +6679,7 @@ impl DispatchBackend for LiveDispatchBackend {
                 persisted_nft_hash()
                     .await
                     .map_err(|err| BrokerError::LiveHandler(err.to_string()))?
-                    .or_else(|| resolver.host.nftables.table_hash_after_apply.clone())
+                    .or_else(|| resolver.host().nftables.table_hash_after_apply.clone())
             };
             let expected_hash = if destroy {
                 None
@@ -6564,7 +6691,7 @@ impl DispatchBackend for LiveDispatchBackend {
                 &nft_binary,
                 script_body,
                 intent.ownership_id.as_str(),
-                resolver.host.firewall_coexistence_policy.as_ref(),
+                resolver.host().firewall_coexistence_policy.as_ref(),
                 expected_hash,
             )
             .await
@@ -6598,8 +6725,8 @@ impl DispatchBackend for LiveDispatchBackend {
             crate::ops::nft::persist_live_nft_hash(
                 &exec,
                 &nft_binary,
-                &resolver.host.nftables.family,
-                &resolver.host.nftables.table,
+                &resolver.host().nftables.family,
+                &resolver.host().nftables.table,
                 &nft_hash_sidecar_path(),
             )
             .await
@@ -6872,7 +6999,6 @@ impl DispatchBackend for LiveDispatchBackend {
                 &intent.bus_id,
                 &intent.lock_path,
                 &intent.vm_name,
-                self.daemon_uid,
                 self.daemon_gid,
             )
             .await
@@ -6920,13 +7046,13 @@ impl DispatchBackend for LiveDispatchBackend {
             let expected_hash = persisted_nft_hash()
                 .await
                 .map_err(|err| BrokerError::LiveHandler(err.to_string()))?
-                .or_else(|| resolver.host.nftables.table_hash_after_apply.clone());
+                .or_else(|| resolver.host().nftables.table_hash_after_apply.clone());
             crate::ops::nft::apply_with_coexistence(
                 &exec,
                 &nft_binary,
                 &nft_script,
-                resolver.host.nftables.ownership_id.as_str(),
-                resolver.host.firewall_coexistence_policy.as_ref(),
+                resolver.host().nftables.ownership_id.as_str(),
+                resolver.host().firewall_coexistence_policy.as_ref(),
                 expected_hash.as_deref(),
             )
             .await
@@ -6960,8 +7086,8 @@ impl DispatchBackend for LiveDispatchBackend {
             crate::ops::nft::persist_live_nft_hash(
                 &exec,
                 &nft_binary,
-                &resolver.host.nftables.family,
-                &resolver.host.nftables.table,
+                &resolver.host().nftables.family,
+                &resolver.host().nftables.table,
                 &nft_hash_sidecar_path(),
             )
             .await
@@ -7142,7 +7268,7 @@ fn install_live_operation_envelope(
         // than being served by a process that does not declare it.
         None => crate::envelope::ForwardingDispatcher::default(),
     };
-    let kernels = crate::kernel_ops::kernel_table(&crate::kernel_ops::KernelConfig {
+    let kernels = crate::kernel_ops::kernel_table(crate::kernel_ops::KernelConfig {
         state_dir: config.state_dir.clone(),
         runtime_root: config
             .socket_path
@@ -7582,27 +7708,51 @@ async fn usb_audit_serial_hmac_keyring(
     test_mode: bool,
 ) -> Result<UsbAuditSerialHmacKeyring, BrokerError> {
     let key_dir = usb_audit_serial_hmac_key_dir(state_dir);
-    ensure_usb_audit_serial_hmac_key_dir(&key_dir, test_mode)?;
+    // The build is blocking filesystem work: the `path_safe` directory
+    // prepare and the dir-fd key create are openat chains with no async
+    // form, and the descriptor-open `O_NOFOLLOW` reads interleave them. It
+    // runs as one job on the bounded probe seat, so admission is a
+    // non-blocking `try_send` and a saturated seat refuses the call instead
+    // of growing threads or parking an executor worker.
+    let keyring = d2b_core::loader_worker::run_probe(move || {
+        build_usb_audit_serial_hmac_keyring(&key_dir, test_mode)
+    })
+    .await
+    .map_err(|err| {
+        BrokerError::LiveHandler(format!(
+            "USB audit serial HMAC keyring worker refused: {err}"
+        ))
+    })??;
+    // Logged from the async seat so the event keeps the caller's span
+    // context; the built keyring is all this needs.
+    log_usb_audit_serial_hmac_rotation_window(&keyring);
+    Ok(keyring)
+}
+
+/// Build the keyring. Blocking-work body: reached only through
+/// [`usb_audit_serial_hmac_keyring`], whose job runs it on the bounded probe
+/// seat, so the directory ensures, the `O_NOFOLLOW` opens, the dir-fd key
+/// create, and the dir-fd fsync never run on an executor worker.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn build_usb_audit_serial_hmac_keyring(
+    key_dir: &Path,
+    test_mode: bool,
+) -> Result<UsbAuditSerialHmacKeyring, BrokerError> {
+    ensure_usb_audit_serial_hmac_key_dir(key_dir, test_mode)?;
     let current = match read_usb_audit_serial_hmac_key_file(
         &key_dir.join(USB_AUDIT_SERIAL_HMAC_CURRENT_KEY_FILE),
         UsbAuditSerialHmacKeySlot::Current,
         test_mode,
-    )
-    .await?
-    {
+    )? {
         Some(key) => key,
-        None => create_usb_audit_serial_hmac_key(&key_dir, test_mode).await?,
+        None => create_usb_audit_serial_hmac_key(key_dir, test_mode)?,
     };
     let previous = read_usb_audit_serial_hmac_key_file(
         &key_dir.join(USB_AUDIT_SERIAL_HMAC_PREVIOUS_KEY_FILE),
         UsbAuditSerialHmacKeySlot::Previous,
         test_mode,
-    )
-    .await?;
-
-    let keyring = UsbAuditSerialHmacKeyring { current, previous };
-    log_usb_audit_serial_hmac_rotation_window(&keyring);
-    Ok(keyring)
+    )?;
+    Ok(UsbAuditSerialHmacKeyring { current, previous })
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -7612,6 +7762,10 @@ fn usb_audit_serial_hmac_key_dir(state_dir: &Path) -> PathBuf {
         .join(USB_AUDIT_SERIAL_HMAC_KEY_DIR)
 }
 
+/// Prepare the secrets and key directories at 0o700 with the key directory
+/// owned by root outside test mode. Blocking-work body: reached only from
+/// [`build_usb_audit_serial_hmac_keyring`] on the bounded probe seat, so the
+/// openat walk, the mkdir, and the mode/owner stamp stay off the executor.
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn ensure_usb_audit_serial_hmac_key_dir(
     key_dir: &Path,
@@ -7634,12 +7788,17 @@ fn ensure_usb_audit_serial_hmac_key_dir(
     Ok(())
 }
 
+/// Read one key slot. Blocking-work body: reached only from
+/// [`build_usb_audit_serial_hmac_keyring`] on the bounded probe seat. The
+/// open is `O_NOFOLLOW | O_CLOEXEC`, and the descriptor it returns is
+/// validated as a root-only regular file before any byte is read.
 #[cfg(not(feature = "layer1-bootstrap"))]
-async fn read_usb_audit_serial_hmac_key_file(
+fn read_usb_audit_serial_hmac_key_file(
     path: &Path,
     slot: UsbAuditSerialHmacKeySlot,
     test_mode: bool,
 ) -> Result<Option<UsbAuditSerialHmacKey>, BrokerError> {
+    use std::io::Read as _;
     let fd = match nix::fcntl::open(
         path,
         nix::fcntl::OFlag::O_RDONLY | nix::fcntl::OFlag::O_CLOEXEC | nix::fcntl::OFlag::O_NOFOLLOW,
@@ -7653,22 +7812,23 @@ async fn read_usb_audit_serial_hmac_key_file(
             )));
         }
     };
-    use tokio::io::AsyncReadExt as _;
-    let file = tokio::fs::File::from_std(fs::File::from(owned_fd_from_raw(fd)));
-    validate_usb_audit_serial_hmac_key_metadata(&file, test_mode).await?;
+    let mut file = fs::File::from(owned_fd_from_raw(fd));
+    validate_usb_audit_serial_hmac_key_metadata(&file, test_mode)?;
     let mut contents = String::new();
-    file.take(u64::MAX).read_to_string(&mut contents).await.map_err(|err| {
+    file.read_to_string(&mut contents).map_err(|err| {
         BrokerError::LiveHandler(format!("read USB audit serial HMAC key failed: {err}"))
     })?;
     parse_usb_audit_serial_hmac_key(&contents, slot).map(Some)
 }
 
+/// The root-only regular-file check, on the descriptor the caller already
+/// holds: no path is re-resolved between the open and the check.
 #[cfg(not(feature = "layer1-bootstrap"))]
-async fn validate_usb_audit_serial_hmac_key_metadata(
-    file: &tokio::fs::File,
+fn validate_usb_audit_serial_hmac_key_metadata(
+    file: &fs::File,
     test_mode: bool,
 ) -> Result<(), BrokerError> {
-    let metadata = file.metadata().await.map_err(|err| {
+    let metadata = file.metadata().map_err(|err| {
         BrokerError::LiveHandler(format!("stat USB audit serial HMAC key failed: {err}"))
     })?;
     if !metadata.is_file() || metadata.mode() & 0o077 != 0 || (!test_mode && metadata.uid() != 0) {
@@ -7679,18 +7839,20 @@ async fn validate_usb_audit_serial_hmac_key_metadata(
     Ok(())
 }
 
+/// Create the current key through the dir-fd `openat` create, then read it
+/// back so the caller uses exactly the bytes that reached the disk.
 #[cfg(not(feature = "layer1-bootstrap"))]
-async fn create_usb_audit_serial_hmac_key(
+fn create_usb_audit_serial_hmac_key(
     key_dir: &Path,
     test_mode: bool,
 ) -> Result<UsbAuditSerialHmacKey, BrokerError> {
-    let key = generate_usb_audit_serial_hmac_key().await?;
+    let key = generate_usb_audit_serial_hmac_key()?;
     let dir_fd = crate::sys::path_safe::open_dir_path_safe(key_dir).map_err(|err| {
         BrokerError::LiveHandler(format!(
             "open USB audit serial HMAC key directory failed: {err}"
         ))
     })?;
-    match write_new_usb_audit_serial_hmac_key_file(&dir_fd, &key).await {
+    match write_new_usb_audit_serial_hmac_key_file(&dir_fd, &key) {
         Ok(()) => {}
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
         Err(err) => {
@@ -7703,36 +7865,40 @@ async fn create_usb_audit_serial_hmac_key(
         &key_dir.join(USB_AUDIT_SERIAL_HMAC_CURRENT_KEY_FILE),
         UsbAuditSerialHmacKeySlot::Current,
         test_mode,
-    )
-    .await?
+    )?
     .ok_or_else(|| {
         BrokerError::LiveHandler("USB audit serial HMAC key disappeared after creation".to_owned())
     })
 }
 
+/// Write the current key file. Blocking-work body: reached only from
+/// [`build_usb_audit_serial_hmac_keyring`] on the bounded probe seat, so the
+/// dir-fd create, the 0o400 stamp, and the file and directory fsyncs stay
+/// off the executor.
 #[cfg(not(feature = "layer1-bootstrap"))]
-async fn write_new_usb_audit_serial_hmac_key_file(
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
+fn write_new_usb_audit_serial_hmac_key_file(
     dir_fd: &OwnedFd,
     key: &UsbAuditSerialHmacKey,
 ) -> io::Result<()> {
-    use tokio::io::AsyncWriteExt as _;
+    use std::io::Write as _;
     let fd = crate::sys::path_safe::create_file_at_safe(
         dir_fd,
         USB_AUDIT_SERIAL_HMAC_CURRENT_KEY_FILE,
         libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
         0o400,
     )?;
-    let mut file = tokio::fs::File::from_std(fs::File::from(fd));
-    file.write_all(render_usb_audit_serial_hmac_key(key).as_bytes()).await?;
+    let mut file = fs::File::from(fd);
+    file.write_all(render_usb_audit_serial_hmac_key(key).as_bytes())?;
     crate::sys::path_safe::fchmod(file.as_fd(), 0o400)?;
-    file.sync_all().await?;
+    file.sync_all()?;
     rustix::fs::fsync(dir_fd).map_err(|err| io::Error::from_raw_os_error(err.raw_os_error()))?;
     Ok(())
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-async fn generate_usb_audit_serial_hmac_key() -> Result<UsbAuditSerialHmacKey, BrokerError> {
-    let random = read_high_entropy_bytes(USB_AUDIT_SERIAL_HMAC_RANDOM_BYTES).await?;
+fn generate_usb_audit_serial_hmac_key() -> Result<UsbAuditSerialHmacKey, BrokerError> {
+    let random = read_high_entropy_bytes(USB_AUDIT_SERIAL_HMAC_RANDOM_BYTES)?;
     let (key, id_bytes) = random.split_at(USB_AUDIT_SERIAL_HMAC_KEY_BYTES);
     Ok(UsbAuditSerialHmacKey {
         slot: UsbAuditSerialHmacKeySlot::Current,
@@ -7741,16 +7907,19 @@ async fn generate_usb_audit_serial_hmac_key() -> Result<UsbAuditSerialHmacKey, B
     })
 }
 
+/// Read `len` bytes from the kernel CSPRNG. Blocking-work body: reached only
+/// from [`build_usb_audit_serial_hmac_keyring`] on the bounded probe seat.
 #[cfg(not(feature = "layer1-bootstrap"))]
-async fn read_high_entropy_bytes(len: usize) -> Result<Vec<u8>, BrokerError> {
-    use tokio::io::AsyncReadExt as _;
-    let mut file = tokio::fs::File::open("/dev/urandom").await.map_err(|err| {
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
+fn read_high_entropy_bytes(len: usize) -> Result<Vec<u8>, BrokerError> {
+    use std::io::Read as _;
+    let mut file = fs::File::open("/dev/urandom").map_err(|err| {
         BrokerError::LiveHandler(format!(
             "open kernel CSPRNG for USB audit key failed: {err}"
         ))
     })?;
     let mut bytes = vec![0u8; len];
-    file.read_exact(&mut bytes).await.map_err(|err| {
+    file.read_exact(&mut bytes).map_err(|err| {
         BrokerError::LiveHandler(format!(
             "read kernel CSPRNG for USB audit key failed: {err}"
         ))
@@ -8620,10 +8789,12 @@ async fn build_usbip_explicit_firewall_decision(
         let Some(active_firewall) = resolver.find_usbip_firewall_intent(&firewall_id) else {
             continue;
         };
+        let bus_id = d2b_host::media::BusId::new(active_firewall.bus_id.as_str())
+            .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
         batch
             .add_usbip_carveout_expr(
                 d2b_host::nftables::ChainHook::Input,
-                &d2b_host::nftables::BusId::new(active_firewall.bus_id.as_str()),
+                &bus_id,
                 active_firewall.nft_rule_body.as_str(),
             )
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
@@ -8642,10 +8813,12 @@ async fn build_usbip_explicit_firewall_decision(
         else {
             continue;
         };
+        let bus_id = d2b_host::media::BusId::new(active_firewall.bus_id.as_str())
+            .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
         batch
             .add_usbip_carveout_expr(
                 d2b_host::nftables::ChainHook::Input,
-                &d2b_host::nftables::BusId::new(active_firewall.bus_id.as_str()),
+                &bus_id,
                 active_firewall.nft_rule_body.as_str(),
             )
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
@@ -8660,22 +8833,22 @@ async fn build_usbip_explicit_firewall_decision(
         if !inserted.insert(carveout_id) {
             continue;
         }
+        let bus_id = d2b_host::media::BusId::new(explicit_bus_id.as_str())
+            .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
         batch
             .add_usbip_carveout_expr(
                 d2b_host::nftables::ChainHook::Input,
-                &d2b_host::nftables::BusId::new(explicit_bus_id.as_str()),
+                &bus_id,
                 explicit_rule_body.as_str(),
             )
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
     }
 
     // Insert the new explicit carveout last.
-    crate::ops::usbip_firewall::bind_firewall_rule(
-        batch,
-        &d2b_host::nftables::BusId::new(bus_id),
-        rule_body,
-    )
-    .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+    let bus_id = d2b_host::media::BusId::new(bus_id)
+        .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+    crate::ops::usbip_firewall::bind_firewall_rule(batch, &bus_id, rule_body)
+        .map_err(|err| BrokerError::LiveHandler(err.to_string()))
 }
 
 fn runner_role_for_process_role(
@@ -10031,10 +10204,12 @@ async fn build_usbip_firewall_decision(
                 intent_id: firewall_id,
             });
         };
+        let bus_id = d2b_host::media::BusId::new(active_firewall.bus_id.as_str())
+            .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
         batch
             .add_usbip_carveout_expr(
                 d2b_host::nftables::ChainHook::Input,
-                &d2b_host::nftables::BusId::new(active_firewall.bus_id.as_str()),
+                &bus_id,
                 active_firewall.nft_rule_body.as_str(),
             )
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
@@ -10054,21 +10229,21 @@ async fn build_usbip_firewall_decision(
                 intent_id: firewall_id,
             });
         };
+        let bus_id = d2b_host::media::BusId::new(active_firewall.bus_id.as_str())
+            .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
         batch
             .add_usbip_carveout_expr(
                 d2b_host::nftables::ChainHook::Input,
-                &d2b_host::nftables::BusId::new(active_firewall.bus_id.as_str()),
+                &bus_id,
                 active_firewall.nft_rule_body.as_str(),
             )
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
     }
 
-    crate::ops::usbip_firewall::bind_firewall_rule(
-        batch,
-        &d2b_host::nftables::BusId::new(current.bus_id.as_str()),
-        current.nft_rule_body.as_str(),
-    )
-    .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+    let bus_id = d2b_host::media::BusId::new(current.bus_id.as_str())
+        .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+    crate::ops::usbip_firewall::bind_firewall_rule(batch, &bus_id, current.nft_rule_body.as_str())
+        .map_err(|err| BrokerError::LiveHandler(err.to_string()))
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -10130,13 +10305,14 @@ async fn active_locked_usbip_bind_intents(
     resolver: &BundleResolver,
 ) -> Result<Vec<d2b_core::bundle_resolver::ResolvedUsbipBindIntent>, BrokerError> {
     let mut out = Vec::new();
-    for id in resolver.usbip_bind_intent_ids() {
-        let Some(intent) = resolver.find_usbip_bind_intent(id) else {
-            continue;
-        };
-        let Some(owner) = crate::ops::usbip_lock::peek_owner(&intent.lock_path) else {
-            continue;
-        };
+    for (intent, owner) in resolver
+        .usbip_bind_intent_ids()
+        .filter_map(|id| resolver.find_usbip_bind_intent(id))
+        .filter_map(|intent| {
+            let owner = crate::ops::usbip_lock::peek_owner(&intent.lock_path)?;
+            Some((intent, owner))
+        })
+    {
         if owner != intent.vm_name {
             return Err(BrokerError::LiveHandler(format!(
                 "usbip proxy reconcile refused foreign lock for opaque intent {}",
@@ -10365,11 +10541,11 @@ fn prepare_socket_path(path: &Path) -> io::Result<()> {
 #[cfg(feature = "layer1-bootstrap")]
 fn run_probe(
     socket_path: PathBuf,
-    request: RequestEnvelope,
+    frame: Value,
     expect_response: bool,
 ) -> Result<(), RunError> {
     let socket = connect_seqpacket(&socket_path)?;
-    send_json_frame(socket.as_raw_fd(), &request)?;
+    send_json_frame(socket.as_raw_fd(), &frame)?;
     let response = recv_json_frame::<BrokerResponse>(socket.as_raw_fd())?;
     if let Some(response) = response {
         println!(
@@ -10389,36 +10565,18 @@ fn run_probe(
 }
 
 #[cfg(feature = "layer1-bootstrap")]
-fn parse_probe_flags(rest: Vec<String>) -> Result<(PathBuf, Option<u32>), RunError> {
-    let mut socket_path = PathBuf::from(DEFAULT_SOCKET_PATH);
-    let mut test_uid = None;
-    let mut index = 0;
-    while index < rest.len() {
-        match rest[index].as_str() {
-            "--socket-path" => {
-                index += 1;
-                socket_path = PathBuf::from(expect_arg(&rest, index, "--socket-path")?);
-            }
-            "--test-uid" => {
-                index += 1;
-                test_uid = Some(
-                    expect_arg(&rest, index, "--test-uid")?
-                        .parse()
-                        .map_err(|_| RunError::Usage("invalid --test-uid".to_owned()))?,
-                );
-            }
-            other => return Err(RunError::Usage(format!("unknown probe flag: {other}"))),
-        }
-        index += 1;
-    }
-    Ok((socket_path, test_uid))
-}
+/// One flag arm of the shared bootstrap parser: it sees the flag name, the
+/// remaining arguments, and the cursor, and advances the cursor past the
+/// arguments it consumed.
+type FlagArm<'a> = dyn FnMut(&str, &[String], &mut usize) -> Result<(), RunError> + 'a;
 
 #[cfg(feature = "layer1-bootstrap")]
-fn parse_stub_flags(rest: &[String]) -> Result<(PathBuf, Option<u32>, String), RunError> {
+fn parse_common_flags(
+    rest: &[String],
+    extra: &mut FlagArm<'_>,
+) -> Result<(PathBuf, Option<u32>), RunError> {
     let mut socket_path = PathBuf::from(DEFAULT_SOCKET_PATH);
     let mut test_uid = None;
-    let mut operation = None;
     let mut index = 0;
     while index < rest.len() {
         match rest[index].as_str() {
@@ -10434,14 +10592,31 @@ fn parse_stub_flags(rest: &[String]) -> Result<(PathBuf, Option<u32>, String), R
                         .map_err(|_| RunError::Usage("invalid --test-uid".to_owned()))?,
                 );
             }
-            "--operation" => {
-                index += 1;
-                operation = Some(expect_arg(rest, index, "--operation")?.to_owned());
-            }
-            other => return Err(RunError::Usage(format!("unknown probe-stub flag: {other}"))),
+            other => extra(other, rest, &mut index)?,
         }
         index += 1;
     }
+    Ok((socket_path, test_uid))
+}
+
+#[cfg(feature = "layer1-bootstrap")]
+fn parse_probe_flags(rest: Vec<String>) -> Result<(PathBuf, Option<u32>), RunError> {
+    parse_common_flags(&rest, &mut |flag, _, _| {
+        Err(RunError::Usage(format!("unknown probe flag: {flag}")))
+    })
+}
+
+#[cfg(feature = "layer1-bootstrap")]
+fn parse_stub_flags(rest: &[String]) -> Result<(PathBuf, Option<u32>, String), RunError> {
+    let mut operation = None;
+    let (socket_path, test_uid) = parse_common_flags(rest, &mut |flag, rest, index| {
+        if flag != "--operation" {
+            return Err(RunError::Usage(format!("unknown probe-stub flag: {flag}")));
+        }
+        *index += 1;
+        operation = Some(expect_arg(rest, *index, "--operation")?.to_owned());
+        Ok(())
+    })?;
     Ok((
         socket_path,
         test_uid,
@@ -10451,40 +10626,21 @@ fn parse_stub_flags(rest: &[String]) -> Result<(PathBuf, Option<u32>, String), R
 
 #[cfg(feature = "layer1-bootstrap")]
 fn parse_export_flags(rest: &[String]) -> Result<(PathBuf, Option<u32>, CallerRole), RunError> {
-    let mut socket_path = PathBuf::from(DEFAULT_SOCKET_PATH);
-    let mut test_uid = None;
     let mut caller_role = None;
-    let mut index = 0;
-    while index < rest.len() {
-        match rest[index].as_str() {
-            "--socket-path" => {
-                index += 1;
-                socket_path = PathBuf::from(expect_arg(rest, index, "--socket-path")?);
-            }
-            "--test-uid" => {
-                index += 1;
-                test_uid = Some(
-                    expect_arg(rest, index, "--test-uid")?
-                        .parse()
-                        .map_err(|_| RunError::Usage("invalid --test-uid".to_owned()))?,
-                );
-            }
-            "--caller-role" => {
-                index += 1;
-                caller_role = crate::bootstrap::wire::caller_role_from_cli(expect_arg(
-                    rest,
-                    index,
-                    "--caller-role",
-                )?);
-            }
-            other => {
-                return Err(RunError::Usage(format!(
-                    "unknown probe-export-audit flag: {other}"
-                )));
-            }
+    let (socket_path, test_uid) = parse_common_flags(rest, &mut |flag, rest, index| {
+        if flag != "--caller-role" {
+            return Err(RunError::Usage(format!(
+                "unknown probe-export-audit flag: {flag}"
+            )));
         }
-        index += 1;
-    }
+        *index += 1;
+        caller_role = crate::bootstrap::wire::caller_role_from_cli(expect_arg(
+            rest,
+            *index,
+            "--caller-role",
+        )?);
+        Ok(())
+    })?;
     Ok((
         socket_path,
         test_uid,
@@ -11347,7 +11503,7 @@ fn profile_capabilities(profile: BrokerProfile) -> Vec<String> {
         BrokerProfile::Guest => profile
             .operations()
             .iter()
-            .map(|item| (*item).to_owned())
+            .map(|item| item.as_str().to_owned())
             .collect(),
     }
 }
@@ -11792,12 +11948,29 @@ async fn remove_and_notify_async(
     removed
 }
 
-/// Kill and synchronously reap a child when a post-spawn commit step fails.
+/// Bound on the spawn-rollback reap: `SIGKILL` is asynchronous (a child can
+/// sit in uninterruptible sleep), so [`cleanup_spawned_runner_after_failure`]
+/// polls `waitid` with `WNOHANG` under this deadline instead of parking the
+/// executor worker on a blocking wait for as long as the child takes to die.
+#[cfg(not(feature = "layer1-bootstrap"))]
+const SPAWN_ROLLBACK_REAP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+/// Poll interval for the spawn-rollback reap.
+#[cfg(not(feature = "layer1-bootstrap"))]
+const SPAWN_ROLLBACK_REAP_POLL: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// Kill and asynchronously reap a child when a post-spawn commit step fails.
 /// The broker must not return an error while leaving a live process or stale
 /// runner identity behind: the caller will retry the lifecycle operation and
 /// the next attempt must be able to reserve the same runner id.
+///
+/// The reap is a bounded `WNOHANG` poll (the same non-blocking probe every
+/// sibling reap path in this file uses) rather than a blocking `waitid`. On
+/// deadline exhaustion the pidfd entry is left in place: the SIGCHLD reaper
+/// owns the zombie (it is signal-driven and reaps on death), the next spawn
+/// reservation evicts the stale entry once the process is gone, and while
+/// the child is still alive the entry keeps refusing a duplicate spawn.
 #[cfg(not(feature = "layer1-bootstrap"))]
-pub(crate) fn cleanup_spawned_runner_after_failure(
+pub(crate) async fn cleanup_spawned_runner_after_failure(
     runner_id: &str,
     pidfd: std::os::fd::BorrowedFd<'_>,
 ) {
@@ -11811,28 +11984,34 @@ pub(crate) fn cleanup_spawned_runner_after_failure(
     }
 
     use nix::errno::Errno;
-    use nix::sys::wait::{Id, WaitPidFlag, waitid};
-    match waitid(Id::PIDFd(pidfd), WaitPidFlag::WEXITED) {
-        Ok(_) | Err(Errno::ECHILD) => {}
-        Err(err) => {
-            tracing::warn!(
-                runner_id = %runner_id,
-                error = %err,
-                "spawn rollback: blocking pidfd reap failed"
-            );
+    use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
+    let deadline = tokio::time::Instant::now() + SPAWN_ROLLBACK_REAP_DEADLINE;
+    loop {
+        match waitid(Id::PIDFd(pidfd), WaitPidFlag::WEXITED | WaitPidFlag::WNOHANG) {
+            Ok(WaitStatus::Exited(..)) | Ok(WaitStatus::Signaled(..)) | Err(Errno::ECHILD) => {
+                runner_pidfds().remove(runner_id);
+                return;
+            }
+            Ok(WaitStatus::StillAlive) | Ok(_) => {
+                if tokio::time::Instant::now() >= deadline {
+                    tracing::warn!(
+                        runner_id = %runner_id,
+                        "spawn rollback: reap deadline exceeded; the SIGCHLD reaper owns the child"
+                    );
+                    return;
+                }
+                tokio::time::sleep(SPAWN_ROLLBACK_REAP_POLL).await;
+            }
+            Err(err) => {
+                tracing::warn!(
+                    runner_id = %runner_id,
+                    error = %err,
+                    "spawn rollback: pidfd reap failed"
+                );
+                runner_pidfds().remove(runner_id);
+                return;
+            }
         }
-    }
-    runner_pidfds().remove(runner_id);
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn cleanup_registered_runner_after_failure(runner_id: &str) {
-    let pidfd = runner_pidfds().duplicate(runner_id);
-    if let Some(pidfd) = pidfd {
-        cleanup_spawned_runner_after_failure(runner_id, pidfd.as_fd());
-    } else {
-        remove_runner_metadata(runner_id);
-        remove_runner_registration(runner_id);
     }
 }
 
@@ -12558,8 +12737,9 @@ mod tests {
                 let Some(_marker) = crate::catalog::stub_target(name) else {
                     continue;
                 };
-                if crate::catalog::BrokerOperationRow::find(name)
-                    .is_some_and(|row| row.disposition == "promoted-live")
+                if crate::catalog::BrokerOperationRow::find(name).is_some_and(|row| {
+                    row.disposition == crate::catalog::Disposition::PromotedLive
+                })
                 {
                     both_stubbed_and_dispatchable.push(name);
                 }
@@ -12645,9 +12825,9 @@ mod tests {
         use d2b_core::host::{
             BridgePortFlags, ChNetHandoffMode, CloudHypervisorCapability, FdOwnershipEntry,
             HostChConfig, HostJson, HostsFileOwnership, IfNameMapping, Ipv6SysctlEntry,
-            KernelModulesEntry, LanPolicy, NetEnv, NetworkManagerUnmanaged, NftChain,
-            NftablesModel, OwnershipRule, SitePolicy, TapRole, UsbipBusidLock, UsbipLockOwner,
-            UsbipLockScope, VendorProductPair,
+            KernelModulesEntry, LanPolicy, NetEnv, NmReloadBehavior, NetworkManagerUnmanaged,
+            NftChain, NftablesModel, OwnershipRule, SitePolicy, TapRole, UsbipBusidLock,
+            UsbipLockOwner, UsbipLockScope, VendorProductPair,
         };
         use d2b_core::manifest_v04::{
             ManifestMeta, ManifestV04, ObservabilityMeta, VmEntry, VmLanPolicy, VmObservability,
@@ -12738,7 +12918,7 @@ mod tests {
             network_manager: NetworkManagerUnmanaged {
                 file_path: "/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf".to_owned(),
                 match_criteria: vec!["interface-name:d2b-*".to_owned()],
-                reload_behavior: "atomic-reload".to_owned(),
+                reload_behavior: NmReloadBehavior::AtomicReload,
                 ownership: OwnershipRule {
                     owner: "root".to_owned(),
                     group: "root".to_owned(),
@@ -14482,7 +14662,7 @@ mod tests {
             config.audit_retention_days,
         )
         .expect("open capturing audit log");
-        let kernels = kernel_table(&KernelConfig {
+        let kernels = kernel_table(KernelConfig {
             state_dir: config.state_dir.clone(),
             runtime_root: root.join("runtime"),
             daemon_uid: config.d2bd_uid,
@@ -14795,7 +14975,7 @@ mod tests {
             config.audit_retention_days,
         )
         .expect("open capturing audit log");
-        let kernels = kernel_table(&KernelConfig {
+        let kernels = kernel_table(KernelConfig {
             state_dir: config.state_dir.clone(),
             runtime_root: root.join("runtime"),
             daemon_uid: config.d2bd_uid,
@@ -15224,7 +15404,7 @@ mod tests {
                 config.audit_retention_days,
             )
             .expect("open capturing audit log");
-            let kernels = kernel_table(&KernelConfig {
+            let kernels = kernel_table(KernelConfig {
                 state_dir: config.state_dir.clone(),
                 runtime_root: root.join("runtime"),
                 daemon_uid: config.d2bd_uid,
@@ -15542,7 +15722,7 @@ mod tests {
                 config.audit_retention_days,
             )
             .expect("open capturing audit log");
-            let kernels = kernel_table(&KernelConfig {
+            let kernels = kernel_table(KernelConfig {
                 state_dir: config.state_dir.clone(),
                 runtime_root: runtime_root.to_path_buf(),
                 daemon_uid: config.d2bd_uid,
@@ -15811,7 +15991,6 @@ mod tests {
         crate::ops::usbip_lock::acquire_lock(
             &lock_root.join("1-2.3"),
             "corp-vm",
-            nix::unistd::Uid::current().as_raw(),
             Gid::current().as_raw(),
         )
         .expect("seed the busid lock");
@@ -17251,6 +17430,50 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// A malformed authoritative audit join must yield the typed protocol
+    /// refusal, never a panic. The parse-failure leg cannot be driven at
+    /// HEAD: `authoritative_audit_join` computes canonical digests, so
+    /// `CanonicalAuditDigest::parse` always succeeds on its output (the
+    /// refusal was observed under a mutation that made the join return raw
+    /// strings - see the wave-0 report). This test pins the typed-refusal
+    /// surface of the converted call: a valid join builds the context
+    /// without panicking, and a supplied join that mismatches the request's
+    /// canonical join is refused with the typed Protocol error.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn from_request_refuses_a_malformed_audit_join_with_a_typed_protocol_error() {
+        let request = store_sync_request(7);
+        let caller_role = CallerRole::AdminUid { uid: 1000 };
+
+        let context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
+            .expect("valid audit join builds the dispatch context");
+        let (zone_id, operation_identity) = request
+            .authoritative_audit_join()
+            .expect("store sync carries an authoritative join");
+        let join = context.audit_join.as_ref().expect("join recorded");
+        assert_eq!(join.zone_id.as_str(), zone_id.as_str());
+        assert_eq!(join.operation_identity.as_str(), operation_identity.as_str());
+
+        let foreign_join = AuditJoinContext {
+            zone_id: CanonicalAuditDigest::parse(
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            )
+            .expect("fixed canonical digest"),
+            operation_identity: CanonicalAuditDigest::parse(
+                "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            )
+            .expect("fixed canonical digest"),
+        };
+        let error = DispatchAuditContext::from_request_with_join(
+            &request,
+            4242,
+            &caller_role,
+            Some(&foreign_join),
+        )
+        .expect_err("a mismatched supplied join must be refused");
+        assert!(matches!(error, BrokerError::Protocol(_)));
+    }
+
     /// A second sync of the same closure must take the fast path and still
     /// emit EXACTLY ONE allowed record carrying `skipped_fast_path` +
     /// `fast_path`.
@@ -17593,7 +17816,7 @@ mod tests {
             config.audit_retention_days,
         )
         .expect("open capturing audit log");
-        let kernels = kernel_table(&KernelConfig {
+        let kernels = kernel_table(KernelConfig {
             state_dir: config.state_dir.clone(),
             runtime_root: root.join("runtime"),
             daemon_uid: config.d2bd_uid,
@@ -17874,8 +18097,7 @@ mod tests {
                     uid: configured_daemon_uid,
                 },
                 // Ignored because config.test_mode=false: the broker must use the
-                // kernel SO_PEERCRED uid, not a caller-supplied envelope field.
-                test_peer_uid: Some(configured_daemon_uid),
+                // kernel SO_PEERCRED uid, not the envelope's claimed caller role.
                 audit_join: None,
             };
             let (client, server) = socketpair(
@@ -18076,7 +18298,6 @@ mod tests {
                     supported_features: Vec::new(),
                 }),
                 caller_role: BrokerCallerRole::RootUid { uid: 0 },
-                test_peer_uid: None,
                 audit_join: None,
             },
         )
@@ -18709,7 +18930,6 @@ mod tests {
         crate::ops::usbip_lock::acquire_lock(
             &intent.lock_path,
             &intent.vm_name,
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .expect("seed post-bind lock");
@@ -18752,7 +18972,6 @@ mod tests {
         crate::ops::usbip_lock::acquire_lock(
             &intent.lock_path,
             &intent.vm_name,
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .expect("seed same-VM replay lock");
@@ -18795,7 +19014,6 @@ mod tests {
         crate::ops::usbip_lock::acquire_lock(
             &intent.lock_path,
             &intent.vm_name,
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .expect("seed same-VM replay lock");
@@ -18846,7 +19064,6 @@ mod tests {
         crate::ops::usbip_lock::acquire_lock(
             &intent.lock_path,
             &intent.vm_name,
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .expect("seed lock for absent device");
@@ -18881,7 +19098,6 @@ mod tests {
         crate::ops::usbip_lock::acquire_lock(
             &intent.lock_path,
             &intent.vm_name,
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .expect("seed lock");
@@ -18926,7 +19142,6 @@ mod tests {
         crate::ops::usbip_lock::acquire_lock(
             &intent.lock_path,
             &intent.vm_name,
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .expect("seed lock");
@@ -20320,6 +20535,50 @@ mod tests {
 
         #[test]
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn spawn_rollback_reaps_and_deregisters_the_child() {
+            // The post-spawn rollback reap must kill, reap, and
+            // deregister the child so a retry can reserve the runner id
+            // and no zombie is left behind.
+            let _guard = ReapTestGuard::new();
+
+            let child = Command::new("true").spawn().expect("spawn true child");
+            let pid = child.id() as i32;
+            let runner_id = format!("test-vm:rollback-{pid}");
+            let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
+            let registry_dup = pidfd.try_clone().expect("dup pidfd for registry");
+            runner_pidfds()
+                .insert(&runner_id, registry_dup)
+                .expect("register runner pidfd");
+            with_runner_metadata_mut(|registry| {
+                registry.insert(runner_id.clone(), test_runner_registration(pid, 1));
+            });
+            std::mem::forget(child);
+
+            envelope_call_runtime().block_on(cleanup_spawned_runner_after_failure(
+                &runner_id,
+                pidfd.as_fd(),
+            ));
+
+            assert!(
+                !runner_pidfds().contains_key(&runner_id),
+                "rollback reap must remove the pidfd registration"
+            );
+            assert!(
+                !with_runner_metadata_mut(|registry| registry.contains_key(&runner_id)),
+                "rollback reap must remove the runner metadata"
+            );
+            // The child must be reaped, not left a zombie: a fresh
+            // WNOHANG probe on the pidfd reports ECHILD (already reaped).
+            use nix::errno::Errno;
+            use nix::sys::wait::{Id, WaitPidFlag, waitid};
+            match waitid(Id::PIDFd(pidfd.as_fd()), WaitPidFlag::WEXITED | WaitPidFlag::WNOHANG) {
+                Err(Errno::ECHILD) => {}
+                other => panic!("rollback reap left the child unreaped: {other:?}"),
+            }
+        }
+
+        #[test]
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn targeted_reap_leaves_running_child_for_sigchld_loop() {
             // A still-running child must NOT be reaped by the targeted
             // pass: it stays registered for the SIGCHLD loop.
@@ -20574,7 +20833,6 @@ mod tests {
                     supported_features: Vec::new(),
                 }),
                 caller_role: BrokerCallerRole::AdminUid { uid: caller_uid },
-                test_peer_uid: Some(caller_uid),
                 audit_join: None,
             };
             caller.send_json_frame(&envelope).await.expect("send Hello");

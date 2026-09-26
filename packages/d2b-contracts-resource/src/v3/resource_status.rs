@@ -7,10 +7,11 @@ use super::{
     ObservedGeneration, ResourceGeneration, ResourceRef, Timestamp,
     resource_schema::{
         CanonicalJsonObject, ExtensionSchemaId, ExtensionSchemaLayer, SchemaVersion,
-        canonical_json_bytes, validate_canonical_string,
+        validate_canonical_string,
     },
 };
 use crate::ids::OperationId;
+use d2b_contracts::wire_deserialize;
 
 /// Maximum canonical bytes for a complete status object.
 pub const MAX_STATUS_BYTES: usize = 64 * 1024;
@@ -207,33 +208,28 @@ impl ResourceCondition {
     }
 }
 
-impl<'de> Deserialize<'de> for ResourceCondition {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(rename = "type")]
-            condition_type: StatusCode,
-            status: ConditionState,
-            reason: StatusCode,
-            message: StatusMessage,
-            observed_generation: ObservedGeneration,
-            last_transition_at: Timestamp,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Ok(Self::new(
-            wire.condition_type,
-            wire.status,
-            wire.reason,
-            wire.message,
-            wire.observed_generation,
-            wire.last_transition_at,
-        ))
-    }
-}
+wire_deserialize!(
+    ResourceCondition,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(rename = "type")]
+        condition_type: StatusCode,
+        status: ConditionState,
+        reason: StatusCode,
+        message: StatusMessage,
+        observed_generation: ObservedGeneration,
+        last_transition_at: Timestamp,
+    },
+    wire,
+    Ok(Self::new(
+        wire.condition_type,
+        wire.status,
+        wire.reason,
+        wire.message,
+        wire.observed_generation,
+        wire.last_transition_at,
+    ))
+);
 
 /// Latest bounded reconcile outcome.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -279,33 +275,28 @@ impl ResourceOutcome {
     }
 }
 
-impl<'de> Deserialize<'de> for ResourceOutcome {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            code: StatusCode,
-            exit_code: Option<i32>,
-            message: StatusMessage,
-            retryable: bool,
-            retry_after_ms: Option<u32>,
-            occurred_at: Timestamp,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.code,
-            wire.exit_code,
-            wire.message,
-            wire.retryable,
-            wire.retry_after_ms,
-            wire.occurred_at,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ResourceOutcome,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        code: StatusCode,
+        exit_code: Option<i32>,
+        message: StatusMessage,
+        retryable: bool,
+        retry_after_ms: Option<u32>,
+        occurred_at: Timestamp,
+    },
+    wire,
+    Self::new(
+        wire.code,
+        wire.exit_code,
+        wire.message,
+        wire.retryable,
+        wire.retry_after_ms,
+        wire.occurred_at,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// Currency state for the current desired generation.
 #[derive(
@@ -386,21 +377,16 @@ impl ResourceCurrencySet {
     }
 }
 
-impl<'de> Deserialize<'de> for ResourceCurrencySet {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            count: u64,
-            refs: Vec<ResourceRef>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.count, wire.refs).map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ResourceCurrencySet,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        count: u64,
+        refs: Vec<ResourceRef>,
+    },
+    wire,
+    Self::new(wire.count, wire.refs).map_err(serde::de::Error::custom)
+);
 
 /// Universal update currency object.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -460,41 +446,36 @@ impl ResourceUpdateStatus {
     }
 }
 
-impl<'de> Deserialize<'de> for ResourceUpdateStatus {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            state: UpdateState,
-            reasons: Vec<UpdateReason>,
-            observed_generation: ObservedGeneration,
-            target_generation: ResourceGeneration,
-            disruption: UpdateDisruption,
-            preserve_state: bool,
-            operation_id: RequiredNullable<OperationId>,
-            last_assessed_at: RequiredNullable<Timestamp>,
-            owned: ResourceCurrencySet,
-            dependencies: ResourceCurrencySet,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.state,
-            wire.reasons,
-            wire.observed_generation,
-            wire.target_generation,
-            wire.disruption,
-            wire.preserve_state,
-            wire.operation_id.0,
-            wire.last_assessed_at.0,
-            wire.owned,
-            wire.dependencies,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ResourceUpdateStatus,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        state: UpdateState,
+        reasons: Vec<UpdateReason>,
+        observed_generation: ObservedGeneration,
+        target_generation: ResourceGeneration,
+        disruption: UpdateDisruption,
+        preserve_state: bool,
+        operation_id: RequiredNullable<OperationId>,
+        last_assessed_at: RequiredNullable<Timestamp>,
+        owned: ResourceCurrencySet,
+        dependencies: ResourceCurrencySet,
+    },
+    wire,
+    Self::new(
+        wire.state,
+        wire.reasons,
+        wire.observed_generation,
+        wire.target_generation,
+        wire.disruption,
+        wire.preserve_state,
+        wire.operation_id.0,
+        wire.last_assessed_at.0,
+        wire.owned,
+        wire.dependencies,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// Optional Provider-specific status layer.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -559,31 +540,26 @@ impl core::fmt::Debug for ProviderStatusExtension {
     }
 }
 
-impl<'de> Deserialize<'de> for ProviderStatusExtension {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            provider_ref: ResourceRef,
-            schema_id: ExtensionSchemaId,
-            schema_version: SchemaVersion,
-            observed_provider_generation: ResourceGeneration,
-            details: CanonicalJsonObject,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.provider_ref,
-            wire.schema_id,
-            wire.schema_version,
-            wire.observed_provider_generation,
-            wire.details,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ProviderStatusExtension,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        provider_ref: ResourceRef,
+        schema_id: ExtensionSchemaId,
+        schema_version: SchemaVersion,
+        observed_provider_generation: ResourceGeneration,
+        details: CanonicalJsonObject,
+    },
+    wire,
+    Self::new(
+        wire.provider_ref,
+        wire.schema_id,
+        wire.schema_version,
+        wire.observed_provider_generation,
+        wire.details,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// Complete universal status plus ResourceType and optional Provider layers.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -647,7 +623,7 @@ impl ResourceStatus {
             resource,
             provider,
         };
-        if canonical_json_bytes(&value)
+        if serde_json::to_vec(&value)
             .map_err(|_| ResourceStatusError::InvalidStatusString)?
             .len()
             > MAX_STATUS_BYTES
@@ -702,43 +678,38 @@ impl core::fmt::Debug for ResourceStatus {
     }
 }
 
-impl<'de> Deserialize<'de> for ResourceStatus {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            observed_generation: ObservedGeneration,
-            status_generation: RequiredNullable<ObservedGeneration>,
-            phase: ResourcePhase,
-            conditions: Vec<ResourceCondition>,
-            last_reconciled_at: RequiredNullable<Timestamp>,
-            started_at: RequiredNullable<Timestamp>,
-            completed_at: RequiredNullable<Timestamp>,
-            outcome: RequiredNullable<ResourceOutcome>,
-            update: ResourceUpdateStatus,
-            resource: CanonicalJsonObject,
-            provider: Option<ProviderStatusExtension>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.observed_generation,
-            wire.status_generation.0,
-            wire.phase,
-            wire.conditions,
-            wire.last_reconciled_at.0,
-            wire.started_at.0,
-            wire.completed_at.0,
-            wire.outcome.0,
-            wire.update,
-            wire.resource,
-            wire.provider,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ResourceStatus,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        observed_generation: ObservedGeneration,
+        status_generation: RequiredNullable<ObservedGeneration>,
+        phase: ResourcePhase,
+        conditions: Vec<ResourceCondition>,
+        last_reconciled_at: RequiredNullable<Timestamp>,
+        started_at: RequiredNullable<Timestamp>,
+        completed_at: RequiredNullable<Timestamp>,
+        outcome: RequiredNullable<ResourceOutcome>,
+        update: ResourceUpdateStatus,
+        resource: CanonicalJsonObject,
+        provider: Option<ProviderStatusExtension>,
+    },
+    wire,
+    Self::new(
+        wire.observed_generation,
+        wire.status_generation.0,
+        wire.phase,
+        wire.conditions,
+        wire.last_reconciled_at.0,
+        wire.started_at.0,
+        wire.completed_at.0,
+        wire.outcome.0,
+        wire.update,
+        wire.resource,
+        wire.provider,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 fn ensure_layer_size(value: &CanonicalJsonObject) -> Result<(), ResourceStatusError> {
     if value.to_canonical_bytes().len() > MAX_STATUS_LAYER_BYTES {
@@ -845,6 +816,7 @@ impl std::error::Error for ResourceStatusError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::v3::resource_schema::canonical_json_bytes;
 
     fn timestamp() -> Timestamp {
         Timestamp::parse("2026-07-22T00:00:01.000Z").unwrap()

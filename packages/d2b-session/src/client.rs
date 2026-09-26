@@ -223,16 +223,27 @@ enum SessionClientBridgeError {
 
 impl std::fmt::Display for SessionClientBridgeError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Cancelled => "component-session-client-cancelled",
-            Self::Frame => "component-session-client-frame-invalid",
-            Self::Session(_) => "component-session-client-session-failed",
-            Self::Transport => "component-session-client-transport-failed",
-        })
+        match self {
+            Self::Cancelled => formatter.write_str("component-session-client-cancelled"),
+            Self::Frame => formatter.write_str("component-session-client-frame-invalid"),
+            Self::Session(error) => write!(
+                formatter,
+                "component-session-client-session-failed code={}",
+                error.code().as_str()
+            ),
+            Self::Transport => formatter.write_str("component-session-client-transport-failed"),
+        }
     }
 }
 
-impl std::error::Error for SessionClientBridgeError {}
+impl std::error::Error for SessionClientBridgeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Session(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

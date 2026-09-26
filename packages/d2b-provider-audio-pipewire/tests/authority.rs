@@ -1,8 +1,10 @@
+use std::num::NonZeroUsize;
+
 use d2b_provider_audio_pipewire::{AudioLeaseId, MicDecision, MicrophoneArbiter, SpeakerMixer};
 
 #[test]
 fn microphone_is_exclusive_and_fair_with_bounded_queue() {
-    let mut arbiter = MicrophoneArbiter::new(2);
+    let mut arbiter = MicrophoneArbiter::new(NonZeroUsize::new(2).unwrap());
     assert_eq!(arbiter.request(AudioLeaseId::new(1)), MicDecision::Granted);
     assert_eq!(arbiter.request(AudioLeaseId::new(2)), MicDecision::Queued);
     assert_eq!(arbiter.request(AudioLeaseId::new(3)), MicDecision::Queued);
@@ -16,7 +18,7 @@ fn microphone_is_exclusive_and_fair_with_bounded_queue() {
 
 #[test]
 fn queued_microphone_requests_remain_queued_until_handoff() {
-    let mut arbiter = MicrophoneArbiter::new(1);
+    let mut arbiter = MicrophoneArbiter::new(NonZeroUsize::new(1).unwrap());
     assert_eq!(arbiter.request(AudioLeaseId::new(1)), MicDecision::Granted);
     assert_eq!(arbiter.request(AudioLeaseId::new(2)), MicDecision::Queued);
     assert_eq!(arbiter.request(AudioLeaseId::new(2)), MicDecision::Queued);
@@ -25,8 +27,18 @@ fn queued_microphone_requests_remain_queued_until_handoff() {
 
 #[test]
 fn speaker_mixer_keeps_grants_independent() {
-    let mut mixer = SpeakerMixer::new(2);
+    let mut mixer = SpeakerMixer::new(NonZeroUsize::new(2).unwrap());
     mixer.set_level(AudioLeaseId::new(1), 80).unwrap();
     mixer.set_level(AudioLeaseId::new(2), 20).unwrap();
+    assert_eq!(mixer.mix_level(), 100);
+}
+
+#[test]
+fn speaker_mixer_mix_level_is_capped_at_100() {
+    let mut mixer = SpeakerMixer::new(NonZeroUsize::new(3).unwrap());
+    mixer.set_level(AudioLeaseId::new(1), 80).unwrap();
+    mixer.set_level(AudioLeaseId::new(2), 80).unwrap();
+    assert_eq!(mixer.mix_level(), 100);
+    mixer.set_level(AudioLeaseId::new(3), 60).unwrap();
     assert_eq!(mixer.mix_level(), 100);
 }

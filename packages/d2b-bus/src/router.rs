@@ -26,8 +26,8 @@ use d2b_core_controller::controller_assignment::{
     ScopedResourceScope,
 };
 use d2b_resource_api::authz::{
-    ApiMethod, AuthorizationRequest, AuthorizationState, AuthorizationTarget, NativeAuthorizer,
-    PolicySet, ResourceVerb, SessionVerb,
+    ApiMethod, AuthorizationRequest, AuthorizationState, AuthorizationTarget, PolicySet,
+    ResourceVerb, SessionVerb,
 };
 use d2b_resource_api::watch::{WatchFrame, WatchSink, WatchSinkError};
 use d2b_session::{
@@ -64,7 +64,9 @@ use crate::{
 
 /// Default maximum bytes in one method payload.
 pub const DEFAULT_MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
+/// Default maximum routes one source session may hold concurrently.
 pub const DEFAULT_MAX_ROUTES_PER_SESSION: usize = 128;
+/// Default maximum routes one bus may hold across all sessions.
 pub const DEFAULT_MAX_TOTAL_ROUTES: usize = 4096;
 const FIRST_CORRELATION_ID: u32 = RESERVED_CORRELATION_MAX + 1;
 const DEFAULT_MAX_CORRELATIONS_PER_GENERATION: u64 =
@@ -215,8 +217,7 @@ pub struct ResourceQuery {
     resource_types: Vec<ResourceTypeName>,
     resource_names: Vec<ResourceName>,
     filters: Vec<ResourceFilter>,
-    assignment: Option<AssignmentIdentity>,
-    scope: Option<ScopedResourceScope>,
+    scoped: Option<(AssignmentIdentity, ScopedResourceScope)>,
 }
 
 impl ResourceQuery {
@@ -237,8 +238,7 @@ impl ResourceQuery {
             resource_types,
             resource_names,
             filters,
-            assignment: None,
-            scope: None,
+            scoped: None,
         })
     }
 
@@ -263,8 +263,7 @@ impl ResourceQuery {
             resource_types,
             resource_names,
             filters,
-            assignment: Some(assignment),
-            scope: Some(scope),
+            scoped: Some((assignment, scope)),
         };
         query.validate_scoped()?;
         Ok(query)
@@ -287,21 +286,23 @@ impl ResourceQuery {
 
     /// Borrow the assignment evidence, when this query is controller-scoped.
     pub const fn assignment(&self) -> Option<&AssignmentIdentity> {
-        self.assignment.as_ref()
+        match &self.scoped {
+            Some((assignment, _)) => Some(assignment),
+            None => None,
+        }
     }
 
     /// Borrow the controller-minted query scope, when present.
     pub const fn scope(&self) -> Option<&ScopedResourceScope> {
-        self.scope.as_ref()
+        match &self.scoped {
+            Some((_, scope)) => Some(scope),
+            None => None,
+        }
     }
 
     fn validate_scoped(&self) -> Result<(), BusError> {
-        let (Some(assignment), Some(scope)) = (&self.assignment, &self.scope) else {
-            return if self.assignment.is_none() && self.scope.is_none() {
-                Ok(())
-            } else {
-                Err(BusError::InvalidResourceCall)
-            };
+        let Some((assignment, scope)) = &self.scoped else {
+            return Ok(());
         };
         let (bound_field, bound_value) = match scope {
             ScopedResourceScope::Primary => {
@@ -477,7 +478,7 @@ impl ResourceCall {
                 assignment,
                 mutations,
             } => {
-                if ScopedCommitTransport::new(assignment.clone(), mutations.clone()).is_err() {
+                if ScopedCommitTransport::validate(assignment, mutations).is_err() {
                     return Err(BusError::InvalidResourceCall);
                 }
                 (
@@ -916,7 +917,7 @@ impl BusCore {
 
     // Active-session gauges are updated in a brief non-suspending critical
     // section fed from async registration/reconnect flows and sync teardown
-    // accounting;the std lock stays short and never crosses an await.
+    // accounting; the std lock stays short and never crosses an await.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn record_session_registered(&self, session: SessionId) {
         let (direction, transport) = self.session_metrics(session);
@@ -1122,36 +1123,59 @@ pub struct ZoneBus {
     core: Arc<BusCore>,
 }
 
+/// One terminal bus-observable outcome class for an operation attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BusEvent {
+    /// A method-invocation attempt ended in error or cancellation.
     Invoke,
+    /// A named-stream operation attempt ended in error or cancellation.
     OpenStream,
+    /// A cancellation attempt ended in error or was abandoned.
     Cancel,
+    /// A deferred cleanup attempt failed or was abandoned.
     Cleanup,
+    /// An expired operation tombstone was evicted.
     TombstoneEviction,
 }
 
+/// Why one terminal bus outcome was recorded through [`BusObserver::record`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BusFailureReason {
+    /// The bus authorization layer refused the operation.
     Authorization,
+    /// The operation's route shape, registry, or reference was invalid.
     Route,
+    /// The operation's source session was mismatched or closed.
     Session,
+    /// An operation or stream capacity limit was exceeded.
     Capacity,
+    /// The operation or stream was shed under backpressure.
     Backpressure,
+    /// The operation's route was revoked.
     RouteRevoked,
+    /// The operation outlived its deadline.
     Deadline,
+    /// The operation attempt was cancelled.
     Cancelled,
+    /// The endpoint could not authenticate the source.
     Authentication,
+    /// The endpoint or bus generation moved beneath the operation.
     Generation,
+    /// A transport or endpoint delivery failure occurred.
     Transport,
+    /// A protocol or wire-shape failure occurred.
     Protocol,
+    /// An endpoint failed without a more specific class.
     Endpoint,
+    /// The operation's owner abandoned it.
     Abandoned,
+    /// The stream was shed for exceeding the per-source retention bound.
     StreamShed,
+    /// The operation hit the per-source retention bound.
     PerSourceRetention,
+    /// The operation hit the global retention bound.
     GlobalRetention,
 }
-
 impl BusFailureReason {
     const fn from_error(error: &BusError) -> Self {
         match error {
@@ -1184,10 +1208,17 @@ impl BusFailureReason {
     }
 }
 
+/// Observes terminal outcomes for the bus's operation attempts.
+///
+/// The observer is invoked once per terminal attempt outcome; see
+/// [`BusEvent`] for when each event fires and [`BusFailureReason`] for the
+/// reason classes.
 pub trait BusObserver: Send + Sync {
+    /// Record one terminal outcome observed by the bus.
     fn record(&self, event: BusEvent, reason: BusFailureReason);
 }
 
+/// A [`BusObserver`] that discards every recorded outcome.
 #[derive(Debug, Default)]
 pub struct NoopBusObserver;
 
@@ -1203,39 +1234,6 @@ impl ZoneBus {
         config: BusConfig,
     ) -> Result<(Self, ZoneRegistrar), BusError> {
         Self::with_clock(zone, authorizer, config, Arc::new(SystemClock::new()))
-    }
-
-    pub fn with_observer(
-        zone: ZoneId,
-        authorizer: BusAuthorizer,
-        config: BusConfig,
-        observer: Arc<dyn BusObserver>,
-    ) -> Result<(Self, ZoneRegistrar), BusError> {
-        Self::with_clock_and_observer(
-            zone,
-            authorizer,
-            config,
-            Arc::new(SystemClock::new()),
-            observer,
-        )
-    }
-
-    /// Construct a bus with the system clock, observer, and telemetry handoff.
-    pub fn with_observer_and_metrics(
-        zone: ZoneId,
-        authorizer: BusAuthorizer,
-        config: BusConfig,
-        observer: Arc<dyn BusObserver>,
-        metrics: Arc<dyn BusTelemetry>,
-    ) -> Result<(Self, ZoneRegistrar), BusError> {
-        Self::with_clock_observer_and_metrics(
-            zone,
-            authorizer,
-            config,
-            Arc::new(SystemClock::new()),
-            observer,
-            metrics,
-        )
     }
 
     /// Construct a bus and the Zone-runtime-only committed subject issuer.
@@ -1255,28 +1253,18 @@ impl ZoneBus {
     }
 
     /// Construct a bus with an injected monotonic clock.
-    pub fn with_clock(
+    pub(crate) fn with_clock(
         zone: ZoneId,
         authorizer: BusAuthorizer,
         config: BusConfig,
         clock: Arc<dyn BusClock>,
-    ) -> Result<(Self, ZoneRegistrar), BusError> {
-        Self::with_clock_and_observer(zone, authorizer, config, clock, Arc::new(NoopBusObserver))
-    }
-
-    pub fn with_clock_and_observer(
-        zone: ZoneId,
-        authorizer: BusAuthorizer,
-        config: BusConfig,
-        clock: Arc<dyn BusClock>,
-        observer: Arc<dyn BusObserver>,
     ) -> Result<(Self, ZoneRegistrar), BusError> {
         let (bus, registrar, _) = Self::with_clock_observer_and_metrics_internal(
             zone,
             authorizer,
             config,
             clock,
-            observer,
+            Arc::new(NoopBusObserver),
             Arc::new(NoopBusTelemetry),
             false,
         )?;
@@ -1284,6 +1272,7 @@ impl ZoneBus {
     }
 
     /// Construct a bus with an observer and the bounded telemetry handoff.
+    #[cfg(test)]
     pub fn with_clock_observer_and_metrics(
         zone: ZoneId,
         authorizer: BusAuthorizer,
@@ -1411,11 +1400,6 @@ impl ZoneBus {
         Ok(())
     }
 
-    /// Borrow the native authorizer shared by this Zone bus.
-    pub fn native_authorizer(&self) -> Arc<NativeAuthorizer> {
-        self.core.authorizer.native_authorizer()
-    }
-
     /// Fail closed for all new work while durable policy is unavailable.
     pub fn mark_policy_unavailable(&self) {
         self.core.authorizer.mark_policy_unavailable();
@@ -1436,14 +1420,22 @@ enum UnixSubjectKind {
     Provider,
 }
 
+/// The exactly-one expected peer identity for a Unix subject.
+#[derive(Clone)]
+enum ExpectedPeer {
+    /// The full peer credentials must match exactly.
+    Exact(PeerCredentials),
+    /// Only the peer UID must match.
+    Uid(u32),
+}
+
 #[derive(Clone)]
 pub(crate) struct UnixSubjectRecord {
     kind: UnixSubjectKind,
     subject_ref: ResourceRef,
     subject_uid: ResourceUid,
     zone_ref: ResourceRef,
-    expected_peer: Option<PeerCredentials>,
-    expected_peer_uid: Option<u32>,
+    expected_peer: ExpectedPeer,
     service: Option<ServicePackage>,
     provider_ref: Option<ResourceRef>,
     provider_generation: Option<ResourceGeneration>,
@@ -1530,8 +1522,7 @@ impl UnixSubjectRecord {
             subject_ref,
             subject_uid,
             zone_ref,
-            expected_peer: Some(expected_peer),
-            expected_peer_uid: None,
+            expected_peer: ExpectedPeer::Exact(expected_peer),
             service: None,
             provider_ref: None,
             provider_generation: None,
@@ -1559,8 +1550,7 @@ impl UnixSubjectRecord {
             subject_ref,
             subject_uid,
             zone_ref,
-            expected_peer: None,
-            expected_peer_uid: Some(expected_peer_uid),
+            expected_peer: ExpectedPeer::Uid(expected_peer_uid),
             service: None,
             provider_ref: None,
             provider_generation: None,
@@ -1588,8 +1578,7 @@ impl UnixSubjectRecord {
             subject_ref,
             subject_uid,
             zone_ref,
-            expected_peer: None,
-            expected_peer_uid: Some(expected_peer_uid),
+            expected_peer: ExpectedPeer::Uid(expected_peer_uid),
             service: None,
             provider_ref: None,
             provider_generation: None,
@@ -1664,15 +1653,12 @@ impl UnixSubjectRecord {
             UnixSubjectKind::Provider => "Provider",
         };
         peer.validate_transport(binding.transport_class())?;
-        let peer_matches = if binding.service().as_str() == "d2b.resource.v3" {
-            self.expected_peer
-                .is_some_and(|expected| peer.credentials() == expected)
-        } else {
-            self.expected_peer
-                .is_some_and(|expected| peer.credentials() == expected)
-                || self
-                    .expected_peer_uid
-                    .is_some_and(|expected| peer.credentials().uid().as_raw() == expected)
+        let peer_matches = match &self.expected_peer {
+            ExpectedPeer::Exact(expected) => peer.credentials() == *expected,
+            ExpectedPeer::Uid(expected) => {
+                binding.service().as_str() != "d2b.resource.v3"
+                    && peer.credentials().uid().as_raw() == *expected
+            }
         };
         if !peer_matches
             || evidence.class() != EvidenceClass::UnixPeer
@@ -1770,37 +1756,31 @@ impl AuthoritativeUnixSubjectResolver {
             .subjects
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let matches = subjects
+        let mut matches = subjects
             .iter()
             .enumerate()
-            .filter(|(_, subject)| {
-                let peer_matches = if *service == ServicePackage::ResourceV3 {
-                    subject
-                        .expected_peer
-                        .is_some_and(|expected| expected == peer)
-                } else {
-                    subject
-                        .expected_peer
-                        .is_some_and(|expected| expected == peer)
-                        || subject
-                            .expected_peer_uid
-                            .is_some_and(|expected| peer.uid().as_raw() == expected)
+            .filter_map(|(index, subject)| {
+                let peer_matches = match &subject.expected_peer {
+                    ExpectedPeer::Exact(expected) => *expected == peer,
+                    ExpectedPeer::Uid(expected) => {
+                        *service != ServicePackage::ResourceV3
+                            && peer.uid().as_raw() == *expected
+                    }
                 };
-                peer_matches
+                (peer_matches
                     && subject
                         .service
                         .as_ref()
-                        .is_none_or(|expected| expected == service)
-            })
-            .map(|(index, _)| index)
-            .collect::<Vec<_>>();
-        if matches.len() != 1 {
-            return Err(d2b_session::SessionError::new(
+                        .is_none_or(|expected| expected == service))
+                .then_some(index)
+            });
+        let index = match (matches.next(), matches.next()) {
+            (Some(index), None) => index,
+            _ => return Err(d2b_session::SessionError::new(
                 d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
-            ));
-        }
-        let index = matches[0];
-        if subjects[index].expected_peer.is_some() {
+            )),
+        };
+        if matches!(subjects[index].expected_peer, ExpectedPeer::Exact(_)) {
             Ok(subjects.swap_remove(index))
         } else {
             Ok(subjects[index].clone())
@@ -1865,7 +1845,8 @@ impl AuthoritativeUnixSubjectResolver {
 
 impl UnixSubjectRecord {
     fn is_exact_resource_v3(&self) -> bool {
-        self.expected_peer.is_some() && self.service == Some(ServicePackage::ResourceV3)
+        matches!(self.expected_peer, ExpectedPeer::Exact(_))
+            && self.service == Some(ServicePackage::ResourceV3)
     }
 
     fn has_same_exact_resource_v3_key(&self, other: &Self) -> bool {
@@ -1892,6 +1873,7 @@ struct InteractionSubjectRegistrar {
     authority: Arc<InteractionSubjectAuthority>,
 }
 
+/// Committed identity material the bus installs for one interaction subject.
 pub struct CommittedInteractionSubjectInstallBody {
     pub zone: ZoneId,
     pub display_subject_ref: ResourceRef,
@@ -2469,7 +2451,7 @@ impl ComponentResponses {
                         }
                     };
                     let accepted = {
-                        // Brief non-suspending endpoint-state critical section;the
+                        // Brief non-suspending endpoint-state critical section; the
                         // same state is locked by the sync BusEndpoint trait paths
                         // (invalidate_session/terminalize_cancel), so it has no
                         // async form.
@@ -2512,7 +2494,7 @@ impl ComponentResponses {
         }
     }
 
-    // Brief non-suspending response-waiter mutation;state has no async form
+    // Brief non-suspending response-waiter mutation; state has no async form
     // because sync BusEndpoint trait paths lock it too.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn deliver(&self, request_id: d2b_session::contract::RequestId, response: ComponentResponse) {
@@ -2559,7 +2541,7 @@ impl ComponentResponses {
         }
         let stream_id = ttrpc_stream_id(&frame).map_err(|_| EndpointError::Rejected)?;
         {
-            // Brief non-suspending critical section;locked by sync trait paths
+            // Brief non-suspending critical section; locked by sync trait paths
             // too (invalidate_session/terminalize_cancel), so no async form.
             #[allow(clippy::disallowed_methods, reason = "synchronous path")]
             let mut state = self
@@ -2744,7 +2726,7 @@ fn publish_component_request(
 }
 
 // Component request publication takes both endpoint locks in one brief
-    // non-suspending critical section;the same state is locked by the sync
+    // non-suspending critical section; the same state is locked by the sync
     // BusEndpoint trait paths (invalidate_session/terminalize_cancel), so
     // the locks have no async form.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
@@ -2807,7 +2789,7 @@ fn publish_component_request(
 
 #[async_trait::async_trait]
 impl crate::registry::BusEndpoint for ComponentEndpoint {
-    // Sync BusEndpoint trait contract;brief non-suspending activity revocation.
+    // Sync BusEndpoint trait contract; brief non-suspending activity revocation.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn invalidate_session(&self) -> crate::registry::SessionInvalidation {
         let writer_fence = self.cancellation.revoke_generation_writes();
@@ -2875,7 +2857,7 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         let caller_stream_id =
             ttrpc_stream_id(request.payload()).map_err(|_| EndpointError::Rejected)?;
         let correlation = {
-            // Brief non-suspending correlation allocation;the same lock is
+            // Brief non-suspending correlation allocation; the same lock is
             // used from sync paths, and no await happens while it is held.
             #[allow(clippy::disallowed_methods, reason = "synchronous path")]
             let mut correlations = self
@@ -2898,9 +2880,13 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         let mut outbound_frame = request.payload().to_vec();
         rewrite_ttrpc_stream_id(&mut outbound_frame, internal_stream_id)
             .map_err(|_| EndpointError::Rejected)?;
-        if let Some((query, watch)) = match request.resource_call() {
-            Some(ResourceCall::List(query)) if query.scope().is_some() => Some((query, false)),
-            Some(ResourceCall::Watch(query)) if query.scope().is_some() => Some((query, true)),
+        if let Some((query, method)) = match request.resource_call() {
+            Some(ResourceCall::List(query)) if query.scope().is_some() => {
+                Some((query, d2b_resource_api::ScopedQueryMethod::List))
+            }
+            Some(ResourceCall::Watch(query)) if query.scope().is_some() => {
+                Some((query, d2b_resource_api::ScopedQueryMethod::Watch))
+            }
             _ => None,
         } {
             let filters = query
@@ -2916,7 +2902,7 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
                 query.resource_types(),
                 query.resource_names(),
                 &filters,
-                watch,
+                method,
             )
             .map_err(|_| EndpointError::Rejected)?;
         }
@@ -3258,6 +3244,13 @@ impl ZoneRegistrar {
 
     /// Consume an authenticated candidate and install it only after native
     /// connect authorization succeeds.
+    ///
+    /// # Errors
+    /// Returns the seat's registration rejection when the candidate does not
+    /// pass the component-session admission gate; `BusError::SessionMismatch`
+    /// when the candidate is bound to a different Zone; the connect
+    /// authorization failure; or the registry admission failure (route shape,
+    /// capacity, or duplicate routing).
     pub async fn register_component_session(
         &mut self,
         session: AuthenticatedComponentSession<ComponentSessionAdmission>,
@@ -3705,7 +3698,16 @@ impl BusIngress {
         }
     }
 
-    /// Invoke a non-resource exact service method.
+/// Invoke a non-resource exact service method..
+///
+/// # Errors
+/// Returns `BusError::SessionClosed` when the bus or session is closed;
+/// `BusError::RouteShape` for a non-method route, an oversized payload, or
+/// an oversized response; the session's authorization or registry admission
+/// failures otherwise; an endpoint rejection wrapped as `BusError::Endpoint`;
+/// `BusError::Cancelled` or
+/// `BusError::Operation(OperationError::DeadlineExceeded)` when the attempt is
+/// cancelled or outlives its deadline.
     pub async fn invoke(
         &self,
         route: RouteKey,
@@ -4166,7 +4168,7 @@ impl BusStream {
         } else {
             self.outgoing.as_ref().map_or_else(
                 || Err(BusError::SessionClosed),
-                |outgoing| outgoing.send(payload).map_err(BusError::Stream),
+                |outgoing| outgoing.send(&payload).map_err(BusError::Stream),
             )
         };
         if let Err(error) = &result
@@ -4177,7 +4179,7 @@ impl BusStream {
         result
     }
 
-    async fn send_watch_payload(&self, payload: Vec<u8>) -> Result<(), BusError> {
+    async fn send_watch_payload(&self, payload: &[u8]) -> Result<(), BusError> {
         if self.cancellation.is_cancelled() {
             return Err(BusError::Cancelled);
         }
@@ -4232,7 +4234,7 @@ impl WatchSink for BusStream {
         frame: WatchFrame,
     ) -> impl std::future::Future<Output = Result<(), WatchSinkError>> + Send {
         async move {
-            match self.send_watch_payload(frame.payload().to_vec()).await {
+            match self.send_watch_payload(frame.payload()).await {
                 Ok(()) => Ok(()),
                 Err(BusError::Stream(StreamError::FrameBounds)) => {
                     Err(WatchSinkError::FrameTooLarge)
@@ -5991,8 +5993,7 @@ mod tests {
             resource_types: vec![ResourceTypeName::parse("Host").unwrap()],
             resource_names: Vec::new(),
             filters: vec![owner_filter.clone()],
-            assignment: Some(first.assignment().clone()),
-            scope: Some(owner_scope.clone()),
+            scoped: Some((first.assignment().clone(), owner_scope.clone())),
         };
         assert_eq!(
             ResourceCall::List(non_process).authorization_request(zone.clone()),
@@ -6003,8 +6004,7 @@ mod tests {
             resource_types: vec![ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()],
             resource_names: Vec::new(),
             filters: vec![owner_filter],
-            assignment: Some(second.assignment().clone()),
-            scope: Some(owner_scope),
+            scoped: Some((second.assignment().clone(), owner_scope)),
         };
         assert_eq!(
             ResourceCall::Watch(mismatched_scope).authorization_request(zone),

@@ -31,6 +31,9 @@ pub enum CredentialResourceRuntimeError {
     InvalidResource,
     /// A typed Credential session refused or could not confirm revocation.
     Revocation,
+    /// The dependency-facts read failed (a manager RPC failure), so the
+    /// caller can distinguish a failed read from an absent row.
+    DependencyFacts,
 }
 
 impl core::fmt::Display for CredentialResourceRuntimeError {
@@ -38,6 +41,7 @@ impl core::fmt::Display for CredentialResourceRuntimeError {
         formatter.write_str(match self {
             Self::InvalidResource => "credential-resource-invalid",
             Self::Revocation => "credential-revocation-unconfirmed",
+            Self::DependencyFacts => "credential-dependency-facts-unavailable",
         })
     }
 }
@@ -129,6 +133,13 @@ impl CredentialRevocationRequest {
     /// constructible for a credential Provider with a live (non-zero)
     /// session generation; everything else fails closed as
     /// [`CredentialResourceRuntimeError::InvalidResource`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialResourceRuntimeError::InvalidResource`] when
+    /// the session generation is zero or unknown, the rotation generation
+    /// is zero, or the Provider reference does not name a credential
+    /// Provider.
     pub fn new(inputs: CredentialRevocationInputs) -> Result<Self, CredentialResourceRuntimeError> {
         if inputs.session_generation.get() == 0
             || inputs.rotation_generation == 0
@@ -272,6 +283,11 @@ pub trait CredentialSession: Send + Sync {
 
     /// Revoke one credential lease through the authenticated Provider
     /// session.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialResourceRuntimeError::Revocation`] when the
+    /// session refuses or cannot confirm the revocation.
     async fn revoke_credential(
         &self,
         request: &CredentialRevocationRequest,
@@ -436,6 +452,7 @@ mod tests {
             Some(ReconnectGeneration::new(7).expect("recording session generation"))
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         async fn revoke_credential(
             &self,
             request: &CredentialRevocationRequest,

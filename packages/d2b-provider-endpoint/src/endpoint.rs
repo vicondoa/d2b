@@ -109,7 +109,7 @@ pub enum EndpointOperation {
 }
 
 /// Endpoint attachment capacity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EndpointAttachmentPolicy {
     /// Whether this endpoint accepts attachments at all.
@@ -136,8 +136,23 @@ impl EndpointAttachmentPolicy {
     }
 }
 
+impl<'de> Deserialize<'de> for EndpointAttachmentPolicy {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Wire {
+            #[serde(default)]
+            supported: bool,
+            #[serde(default)]
+            max_attachments: u16,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        Self::new(wire.supported, wire.max_attachments).map_err(serde::de::Error::custom)
+    }
+}
+
 /// The only fine-grained endpoint consumer policy.
-#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Default, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EndpointConsumerPolicy {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -392,12 +407,6 @@ impl<'de> Deserialize<'de> for EndpointSpec {
     }
 }
 
-impl Default for EndpointConsumerPolicy {
-    fn default() -> Self {
-        Self::unrestricted()
-    }
-}
-
 /// Stable endpoint contract errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EndpointSpecError {
@@ -504,6 +513,30 @@ mod tests {
         let mut object = serde_json::to_value(minimal()).unwrap();
         object["consumerPolicy"] = serde_json::json!(["attach"]);
         assert!(serde_json::from_value::<EndpointSpec>(object).is_err());
+    }
+
+    #[test]
+    fn attachment_policy_round_trips_and_rejects_inconsistent_shapes() {
+        let policy = EndpointAttachmentPolicy::new(true, 2).unwrap();
+        let value = serde_json::to_value(policy).unwrap();
+        assert_eq!(
+            serde_json::from_value::<EndpointAttachmentPolicy>(value).unwrap(),
+            policy
+        );
+        for (supported, max_attachments) in [
+            (false, 1),
+            (true, 0),
+            (true, MAX_ENDPOINT_ATTACHMENTS + 1),
+        ] {
+            let value = serde_json::json!({
+                "supported": supported,
+                "maxAttachments": max_attachments,
+            });
+            assert!(
+                serde_json::from_value::<EndpointAttachmentPolicy>(value).is_err(),
+                "illegal attachment policy ({supported}, {max_attachments}) admitted"
+            );
+        }
     }
 
     #[test]

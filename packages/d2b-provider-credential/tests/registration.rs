@@ -4,11 +4,11 @@
 
 use std::sync::Arc;
 
-use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use d2b_provider_credential::{
     CREDENTIAL_EFFECTS_SERVICE, CREDENTIAL_TYPE_NAME, CredentialDependencyFacts,
-    CredentialDriverArgs, CredentialEffectFacets, CredentialLeaseFacts, CredentialRuntime,
-    CredentialSession, credential_descriptor,
+    CredentialDriverArgs, CredentialEffectFacets, CredentialLeaseFacts,
+    CredentialResourceRuntimeError, CredentialRuntime, CredentialSession, credential_descriptor,
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::provider::{ProviderDirectory, ProviderDirectoryError};
@@ -24,8 +24,8 @@ impl CredentialRuntime for UnusedRuntime {
         &self,
         _provider_ref: &ResourceRef,
         _execution_ref: &ResourceRef,
-    ) -> Option<CredentialDependencyFacts> {
-        None
+    ) -> Result<Option<CredentialDependencyFacts>, CredentialResourceRuntimeError> {
+        Ok(None)
     }
 
     async fn lease_facts(&self, _credential_ref: &ResourceRef) -> Option<CredentialLeaseFacts> {
@@ -43,7 +43,7 @@ impl CredentialRuntime for UnusedRuntime {
 
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
     credential_descriptor(CredentialDriverArgs {
-        zone: "work".to_owned(),
+        zone: ZoneId::parse("work").unwrap(),
         controller_generation: d2b_contracts_resource::v3::ControllerGeneration::new(1)
             .expect("controller generation"),
         facets: CredentialEffectFacets {

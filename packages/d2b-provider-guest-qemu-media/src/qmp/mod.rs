@@ -2,6 +2,8 @@
 
 use std::collections::VecDeque;
 
+use d2b_contracts_resource::v3::BoundedToken;
+
 /// A typed QMP command accepted by the Provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QmpCommand {
@@ -125,6 +127,7 @@ pub trait QmpTransport {
 }
 
 /// Scripted transport used by hermetic tests and fake integration fixtures.
+#[doc(hidden)]
 #[derive(Debug, Clone)]
 pub struct ScriptedQmpTransport {
     greeting: Option<QmpGreeting>,
@@ -196,6 +199,12 @@ impl<T: QmpTransport> QmpSession<T> {
     }
 
     /// Negotiate QMP capabilities.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QmpError::GreetingInvalid`] when the greeting version is
+    /// empty or overlong, and the transport and command errors when the
+    /// greeting or capabilities exchange fails.
     pub fn negotiate(&mut self) -> Result<(), QmpError> {
         self.negotiated = false;
         let greeting = self.transport.receive_greeting()?;
@@ -263,21 +272,21 @@ impl<T: QmpTransport> QmpSession<T> {
         if !matches!(command, QmpCommand::Capabilities) && !self.negotiated {
             return Err(QmpError::NotReady);
         }
-        self.commands.push_back(command.clone());
-        if self.commands.len() > 128 {
-            self.commands.pop_front();
+        let Self {
+            transport,
+            commands,
+            ..
+        } = self;
+        commands.push_back(command);
+        if commands.len() > 128 {
+            commands.pop_front();
         }
-        self.transport.execute(&command)
+        transport.execute(commands.back().expect("command just pushed"))
     }
 }
 
 fn validate_object_id(value: &str) -> Result<(), QmpError> {
-    if value.is_empty()
-        || value.len() > 63
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-    {
+    if BoundedToken::parse(value).is_err() {
         Err(QmpError::InvalidObjectId)
     } else {
         Ok(())

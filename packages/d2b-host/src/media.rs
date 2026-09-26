@@ -6,6 +6,7 @@
 //! (`d2b-provider-guest-qemu-media`); this module keeps only the generic
 //! USB helpers.
 
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -38,6 +39,14 @@ impl fmt::Display for MediaRefError {
 
 impl std::error::Error for MediaRefError {}
 
+/// Validate the media reference grammar.
+///
+/// # Errors
+///
+/// Returns `Empty` for an empty reference, `TooLong` beyond the
+/// 63-byte bound, `BadStart` when the reference does not start with a
+/// lowercase ASCII letter, and `BadCharacter` when it contains any
+/// other character.
 pub fn validate_media_ref(value: &str) -> Result<(), MediaRefError> {
     if value.is_empty() {
         return Err(MediaRefError::Empty);
@@ -76,6 +85,12 @@ impl fmt::Display for BusIdError {
 impl std::error::Error for BusIdError {}
 
 /// Validate the Linux USB busid shape used under `/sys/bus/usb/devices/`.
+///
+/// # Errors
+///
+/// Returns `Empty` for an empty busid, `TooLong` beyond the 64-byte
+/// bound, and `BadCharacter` when the busid contains an invalid
+/// character.
 pub fn validate_usb_busid(value: &str) -> Result<(), BusIdError> {
     if value.is_empty() {
         return Err(BusIdError::Empty);
@@ -97,6 +112,46 @@ pub fn validate_usb_busid(value: &str) -> Result<(), BusIdError> {
         return Err(BusIdError::BadCharacter);
     }
     Ok(())
+}
+
+/// USB busid newtype. The lexical busid grammar
+/// ([`validate_usb_busid`]) is enforced once here, at the type boundary;
+/// consumers never re-validate. The transparent serde shape keeps the
+/// wire spelling unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct BusId(String);
+
+impl BusId {
+    /// Validate `s` against the USB busid grammar and wrap it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BusIdError`] when `s` is not a valid USB busid.
+    pub fn new(s: impl Into<String>) -> Result<Self, BusIdError> {
+        let s = s.into();
+        validate_usb_busid(&s)?;
+        Ok(Self(s))
+    }
+
+    /// Borrow the wrapped busid string.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<&str> for BusId {
+    type Error = BusIdError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl fmt::Display for BusId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

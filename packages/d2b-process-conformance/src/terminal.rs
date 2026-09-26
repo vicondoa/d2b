@@ -37,7 +37,7 @@ pub enum ExitClass {
 
 /// A bounded terminal outcome detached from any process locator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", try_from = "RawProcessOutcome")]
 pub struct ProcessOutcome {
     /// The stable terminal classification.
     pub exit_class: ExitClass,
@@ -48,6 +48,11 @@ pub struct ProcessOutcome {
 
 impl ProcessOutcome {
     /// Construct a normal exit result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessConformanceError::InvalidTerminalResult`] when the
+    /// exit code is outside `0..=255`.
     pub fn exited(exit_code: i32) -> Result<Self, ProcessConformanceError> {
         if !(0..=255).contains(&exit_code) {
             return Err(ProcessConformanceError::InvalidTerminalResult);
@@ -91,11 +96,43 @@ impl ProcessOutcome {
     }
 
     /// Validate the relationship between terminal class and exit code.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessConformanceError::InvalidTerminalResult`] when a
+    /// clean exit carries no valid code or any other class carries one.
     pub const fn validate(self) -> Result<(), ProcessConformanceError> {
         match (self.exit_class, self.exit_code) {
             (ExitClass::CleanExit, Some(code)) if code >= 0 && code <= 255 => Ok(()),
             (ExitClass::CleanExit, _) => Err(ProcessConformanceError::InvalidTerminalResult),
             (_, None) => Ok(()),
+            (_, Some(_)) => Err(ProcessConformanceError::InvalidTerminalResult),
+        }
+    }
+}
+
+/// Raw wire shape for [`ProcessOutcome`], validated on read.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawProcessOutcome {
+    exit_class: ExitClass,
+    exit_code: Option<i32>,
+}
+
+impl TryFrom<RawProcessOutcome> for ProcessOutcome {
+    type Error = ProcessConformanceError;
+
+    fn try_from(raw: RawProcessOutcome) -> Result<Self, Self::Error> {
+        match (raw.exit_class, raw.exit_code) {
+            (ExitClass::CleanExit, Some(code)) if (0..=255).contains(&code) => Ok(Self {
+                exit_class: ExitClass::CleanExit,
+                exit_code: Some(code),
+            }),
+            (ExitClass::CleanExit, _) => Err(ProcessConformanceError::InvalidTerminalResult),
+            (_, None) => Ok(Self {
+                exit_class: raw.exit_class,
+                exit_code: None,
+            }),
             (_, Some(_)) => Err(ProcessConformanceError::InvalidTerminalResult),
         }
     }
@@ -212,6 +249,12 @@ impl BrokerTerminalResult {
     }
 
     /// Consume the result and relay it only to its matching launch ticket.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessConformanceError::TerminalEvidenceMismatch`] when
+    /// the evidence is not reaped or the ticket does not match the
+    /// process, operation, provider, or expected identity.
     pub fn relay(self, ticket: &LaunchTicket) -> Result<ProcessOutcome, ProcessConformanceError> {
         if !self.evidence.is_reaped()
             || ticket.process_uid() != &self.process_uid
@@ -223,7 +266,6 @@ impl BrokerTerminalResult {
         {
             return Err(ProcessConformanceError::TerminalEvidenceMismatch);
         }
-        self.outcome.validate()?;
         Ok(self.outcome)
     }
 }
@@ -302,6 +344,25 @@ mod tests {
             .validate(),
             Err(ProcessConformanceError::InvalidTerminalResult)
         );
+    }
+
+    #[test]
+    fn process_outcome_wire_reads_validate_at_the_boundary() {
+        let exited = serde_json::to_string(&ProcessOutcome::exited(7).unwrap()).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ProcessOutcome>(&exited).unwrap(),
+            ProcessOutcome::exited(7).unwrap()
+        );
+        let signaled = serde_json::to_string(&ProcessOutcome::signaled()).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ProcessOutcome>(&signaled).unwrap(),
+            ProcessOutcome::signaled()
+        );
+
+        let crash_with_code = serde_json::json!({"exitClass": "crash", "exitCode": 300});
+        assert!(serde_json::from_str::<ProcessOutcome>(&crash_with_code.to_string()).is_err());
+        let clean_without_code = serde_json::json!({"exitClass": "clean-exit"});
+        assert!(serde_json::from_str::<ProcessOutcome>(&clean_without_code.to_string()).is_err());
     }
 
     #[test]

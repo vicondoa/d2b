@@ -1,6 +1,7 @@
 //! Host-local storage lifecycle report DTOs.
 
 use std::collections::BTreeSet;
+use std::fmt;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -41,40 +42,47 @@ impl StorageLifecycleReport {
     }
 }
 
+// The published schema must name these fields the way `serde` writes them.
+// schemars 0.8 reads `rename_all` on a variant, where it renames that
+// variant's fields, but not the container-level `rename_all_fields`, so every
+// struct variant repeats the field casing as a `schemars` attribute. Dropping
+// one of them leaves the published schema requiring a key the daemon never
+// writes; the schema-vs-bytes test in `tests/storage_lifecycle_schema.rs` is
+// what makes that loss fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case", tag = "kind")]
+#[serde(rename_all = "kebab-case", rename_all_fields = "camelCase", tag = "kind")]
 pub enum StorageLifecycleIssue {
     MissingStorageContract,
     MissingSyncContract,
+    #[schemars(rename_all = "camelCase")]
     LegacyBundleContractsUnavailable {
-        #[serde(rename = "bundleVersion")]
         bundle_version: u32,
     },
     BundleResolverUnavailable,
+    #[schemars(rename_all = "camelCase")]
     StorageContractInvalid {
-        #[serde(rename = "contractId")]
         contract_id: String,
         reason: StorageContractValidationReason,
-        #[serde(rename = "offendingId", skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         #[serde(default)]
         offending_id: Option<String>,
     },
+    #[schemars(rename_all = "camelCase")]
     SyncContractInvalid {
-        #[serde(rename = "contractId")]
         contract_id: String,
         reason: SyncContractValidationReason,
-        #[serde(rename = "offendingId", skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         #[serde(default)]
         offending_id: Option<String>,
     },
+    #[schemars(rename_all = "camelCase")]
     MissingRestartPolicy {
         vm: String,
-        #[serde(rename = "roleId")]
         role_id: String,
     },
+    #[schemars(rename_all = "camelCase")]
     AdoptableMissingCgroupLeaf {
         vm: String,
-        #[serde(rename = "roleId")]
         role_id: String,
     },
 }
@@ -113,77 +121,122 @@ pub enum SyncContractValidationReason {
     Unclassified,
 }
 
-pub fn classify_storage_validation_reason(detail: &str) -> StorageContractValidationReason {
-    if detail.starts_with("duplicate storage path id ") {
-        StorageContractValidationReason::DuplicateStoragePathId
-    } else if detail.starts_with("duplicate restart policy for ") {
-        StorageContractValidationReason::DuplicateRestartPolicy
-    } else if detail.starts_with("duplicate degraded reason ") {
-        StorageContractValidationReason::DuplicateDegradedReason
-    } else {
-        StorageContractValidationReason::Unclassified
+/// Typed failure from [`StorageJson::validate_unique_ids`](crate::storage::StorageJson::validate_unique_ids).
+///
+/// Carries the offending id payload so a `StorageContractInvalid` issue can
+/// be built without string-matching.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StorageValidationError {
+    DuplicateStoragePathId {
+        offending_id: String,
+    },
+    DuplicateRestartPolicy {
+        offending_id: String,
+    },
+    DuplicateDegradedReason {
+        offending_id: String,
+    },
+}
+
+impl StorageValidationError {
+    /// The wire reason for the persisted lifecycle report.
+    pub fn reason(&self) -> StorageContractValidationReason {
+        match self {
+            Self::DuplicateStoragePathId { .. } => {
+                StorageContractValidationReason::DuplicateStoragePathId
+            }
+            Self::DuplicateRestartPolicy { .. } => {
+                StorageContractValidationReason::DuplicateRestartPolicy
+            }
+            Self::DuplicateDegradedReason { .. } => {
+                StorageContractValidationReason::DuplicateDegradedReason
+            }
+        }
     }
 }
 
-pub fn storage_validation_offending_id(detail: &str) -> Option<String> {
-    if let Some(id) = detail.strip_prefix("duplicate storage path id ") {
-        bounded_contract_detail(id)
-    } else if let Some(id) = detail.strip_prefix("duplicate restart policy for ") {
-        bounded_contract_detail(id)
-    } else if let Some(id) = detail.strip_prefix("duplicate degraded reason ") {
-        bounded_contract_detail(id)
-    } else {
-        None
+impl fmt::Display for StorageValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DuplicateStoragePathId { offending_id } => {
+                write!(f, "duplicate storage path id {offending_id}")
+            }
+            Self::DuplicateRestartPolicy { offending_id } => {
+                write!(f, "duplicate restart policy for {offending_id}")
+            }
+            Self::DuplicateDegradedReason { offending_id } => {
+                write!(f, "duplicate degraded reason {offending_id}")
+            }
+        }
     }
 }
 
-pub fn classify_sync_validation_reason(detail: &str) -> SyncContractValidationReason {
-    if detail.starts_with("duplicate lock id ") {
-        SyncContractValidationReason::DuplicateLockId
-    } else if detail.starts_with("OFD lock ") && detail.ends_with(" must require O_CLOEXEC") {
-        SyncContractValidationReason::OfdLockMissingCloexec
-    } else if detail.starts_with("fd-passing lock ")
-        && detail.ends_with(" must require a lease transfer record")
-    {
-        SyncContractValidationReason::FdPassingMissingLeaseTransferRecord
-    } else if detail.starts_with("lock ") && detail.contains(" shares acquire order key with ") {
-        SyncContractValidationReason::DuplicateAcquireOrder
-    } else {
-        SyncContractValidationReason::Unclassified
+impl std::error::Error for StorageValidationError {}
+
+/// Typed failure from [`SyncJson::validate_lock_order`](crate::sync::SyncJson::validate_lock_order).
+///
+/// Carries the offending id payload so a `SyncContractInvalid` issue can be
+/// built without string-matching.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncValidationError {
+    DuplicateLockId {
+        offending_id: String,
+    },
+    OfdLockMissingCloexec {
+        offending_id: String,
+    },
+    FdPassingMissingLeaseTransferRecord {
+        offending_id: String,
+    },
+    DuplicateAcquireOrder {
+        offending_id: String,
+        existing_id: String,
+    },
+}
+
+impl SyncValidationError {
+    /// The wire reason for the persisted lifecycle report.
+    pub fn reason(&self) -> SyncContractValidationReason {
+        match self {
+            Self::DuplicateLockId { .. } => SyncContractValidationReason::DuplicateLockId,
+            Self::OfdLockMissingCloexec { .. } => {
+                SyncContractValidationReason::OfdLockMissingCloexec
+            }
+            Self::FdPassingMissingLeaseTransferRecord { .. } => {
+                SyncContractValidationReason::FdPassingMissingLeaseTransferRecord
+            }
+            Self::DuplicateAcquireOrder { .. } => {
+                SyncContractValidationReason::DuplicateAcquireOrder
+            }
+        }
     }
 }
 
-pub fn sync_validation_offending_id(detail: &str) -> Option<String> {
-    if let Some(id) = detail.strip_prefix("duplicate lock id ") {
-        bounded_contract_detail(id)
-    } else if let Some(rest) = detail.strip_prefix("OFD lock ") {
-        rest.strip_suffix(" must require O_CLOEXEC")
-            .and_then(bounded_contract_detail)
-    } else if let Some(rest) = detail.strip_prefix("fd-passing lock ") {
-        rest.strip_suffix(" must require a lease transfer record")
-            .and_then(bounded_contract_detail)
-    } else if let Some(rest) = detail.strip_prefix("lock ") {
-        rest.split_once(" shares acquire order key with ")
-            .and_then(|(id, _)| bounded_contract_detail(id))
-    } else {
-        None
+impl fmt::Display for SyncValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DuplicateLockId { offending_id } => {
+                write!(f, "duplicate lock id {offending_id}")
+            }
+            Self::OfdLockMissingCloexec { offending_id } => {
+                write!(f, "OFD lock {offending_id} must require O_CLOEXEC")
+            }
+            Self::FdPassingMissingLeaseTransferRecord { offending_id } => write!(
+                f,
+                "fd-passing lock {offending_id} must require a lease transfer record"
+            ),
+            Self::DuplicateAcquireOrder {
+                offending_id,
+                existing_id,
+            } => write!(
+                f,
+                "lock {offending_id} shares acquire order key with {existing_id}"
+            ),
+        }
     }
 }
 
-fn bounded_contract_detail(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty()
-        || trimmed.contains('/')
-        || trimmed.contains('\\')
-        || trimmed.len() > 128
-        || !trimmed
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'-' | b'_' | b'.'))
-    {
-        return None;
-    }
-    Some(trimmed.to_owned())
-}
+impl std::error::Error for SyncValidationError {}
 
 #[cfg(test)]
 mod tests {
@@ -298,6 +351,73 @@ mod tests {
         assert_eq!(
             report.issue_kinds_csv(),
             "adoptable-missing-cgroup-leaf,legacy-bundle-contracts-unavailable,missing-restart-policy"
+        );
+    }
+
+    #[test]
+    fn validation_errors_map_to_wire_reasons() {
+        let storage_errors = [
+            (
+                StorageValidationError::DuplicateStoragePathId {
+                    offending_id: "path:run-root".to_owned(),
+                },
+                StorageContractValidationReason::DuplicateStoragePathId,
+            ),
+            (
+                StorageValidationError::DuplicateRestartPolicy {
+                    offending_id: "corp-vm:cloud-hypervisor".to_owned(),
+                },
+                StorageContractValidationReason::DuplicateRestartPolicy,
+            ),
+            (
+                StorageValidationError::DuplicateDegradedReason {
+                    offending_id: "StorageDrift".to_owned(),
+                },
+                StorageContractValidationReason::DuplicateDegradedReason,
+            ),
+        ];
+        for (error, reason) in storage_errors {
+            assert_eq!(error.reason(), reason);
+        }
+
+        let sync_errors = [
+            (
+                SyncValidationError::DuplicateLockId {
+                    offending_id: "lock:daemon".to_owned(),
+                },
+                SyncContractValidationReason::DuplicateLockId,
+            ),
+            (
+                SyncValidationError::OfdLockMissingCloexec {
+                    offending_id: "lock:daemon".to_owned(),
+                },
+                SyncContractValidationReason::OfdLockMissingCloexec,
+            ),
+            (
+                SyncValidationError::FdPassingMissingLeaseTransferRecord {
+                    offending_id: "lock:daemon".to_owned(),
+                },
+                SyncContractValidationReason::FdPassingMissingLeaseTransferRecord,
+            ),
+            (
+                SyncValidationError::DuplicateAcquireOrder {
+                    offending_id: "lock:second".to_owned(),
+                    existing_id: "lock:first".to_owned(),
+                },
+                SyncContractValidationReason::DuplicateAcquireOrder,
+            ),
+        ];
+        for (error, reason) in sync_errors {
+            assert_eq!(error.reason(), reason);
+        }
+
+        assert_eq!(
+            SyncValidationError::DuplicateAcquireOrder {
+                offending_id: "lock:second".to_owned(),
+                existing_id: "lock:first".to_owned(),
+            }
+            .to_string(),
+            "lock lock:second shares acquire order key with lock:first"
         );
     }
 }

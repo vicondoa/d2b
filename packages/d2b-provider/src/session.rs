@@ -33,6 +33,13 @@ impl SessionIdentity {
     /// `zone` is supplied by the local Zone runtime that owns the registry,
     /// not by the peer. The subject must already carry the Provider binding
     /// and Provider/session generations its evidence established.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderRuntimeError::MissingProviderBinding`] when the
+    /// subject carries no Provider binding or its reference is not a
+    /// Provider, and the generation refusal when the evidence is
+    /// incomplete.
     pub fn from_authenticated(
         zone: ZonePath,
         subject: &AuthenticatedSubjectContext,
@@ -91,6 +98,12 @@ impl SessionIdentity {
     ///
     /// Zone, Provider reference, Provider generation, and service must all
     /// match exactly; a near miss is a refusal, never a coercion.
+    ///
+    /// # Errors
+    ///
+    /// Returns the identity-mismatch refusal when any of the Zone,
+    /// Provider reference, Provider generation, session generation, or
+    /// service differs from the descriptor.
     pub fn matches_descriptor(
         &self,
         descriptor: &ProviderDescriptor,

@@ -21,6 +21,17 @@ pub struct PeerIdentity {
     pub uid: u32,
 }
 
+/// How the peer classifier resolves the configured lifecycle group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerLookupMode {
+    /// Resolve the configured group through NSS; an unknown group is a
+    /// failed classifier lookup rather than an authority grant.
+    Production,
+    /// Skip the NSS group-name existence lookup; the supplied group list is
+    /// hermetic (test injection).
+    Hermetic,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PeerRole {
     Launcher,
@@ -65,7 +76,13 @@ pub fn authorize_peer(
     #[cfg(any(test, feature = "test-support"))]
     if let Some(peer) = peer_override_injected() {
         let _peer_gid = peer.gid;
-        return classify_peer(peer.uid, peer.username, peer.groups, config, false);
+        return classify_peer(
+            peer.uid,
+            peer.username,
+            peer.groups,
+            config,
+            PeerLookupMode::Hermetic,
+        );
     }
 
     let peer = getsockopt(stream, PeerCredentials).map_err(io_wrap("read SO_PEERCRED"))?;
@@ -73,7 +90,13 @@ pub fn authorize_peer(
     let _peer_gid = peer.gid();
     let uid = peer.uid() as u32;
     if uid == 0 {
-        return classify_peer(uid, None, Some(Vec::new()), config, false);
+        return classify_peer(
+            uid,
+            None,
+            Some(Vec::new()),
+            config,
+            PeerLookupMode::Hermetic,
+        );
     }
     let user = get_user_by_uid(uid);
     let username = user
@@ -88,7 +111,7 @@ pub fn authorize_peer(
                 .map(|group| group.name().to_string_lossy().into_owned())
                 .collect()
         });
-    classify_peer(uid, username, groups, config, true)
+    classify_peer(uid, username, groups, config, PeerLookupMode::Production)
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -105,7 +128,7 @@ pub fn classify_peer(
     username: Option<String>,
     groups: Option<Vec<String>>,
     config: &AdmissionConfig,
-    production_lookup: bool,
+    lookup_mode: PeerLookupMode,
 ) -> Result<PeerIdentity, TypedError> {
     if uid == config.daemon_uid {
         return Err(TypedError::AuthzNotALauncher { peer_uid: uid });
@@ -142,7 +165,9 @@ pub fn classify_peer(
     // In production, an unknown configured lifecycle group is a failed
     // classifier lookup rather than an authority grant. Test injection keeps
     // the group list hermetic and therefore skips NSS group-name lookup.
-    if production_lookup && get_group_by_name(lifecycle_group).is_none() {
+    if lookup_mode == PeerLookupMode::Production
+        && get_group_by_name(lifecycle_group).is_none()
+    {
         return Err(TypedError::AuthzNotALauncher { peer_uid: uid });
     }
 

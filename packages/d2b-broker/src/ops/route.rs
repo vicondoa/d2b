@@ -16,15 +16,19 @@ use std::path::Path;
 use std::process::Stdio;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RouteConflictKey {
-    pub destination: String,
-    pub via: Option<String>,
-    pub device: Option<String>,
-    pub metric: Option<String>,
-    pub protocol: Option<String>,
-    pub table: String,
+struct RouteConflictKey {
+    destination: String,
+    via: Option<String>,
+    device: Option<String>,
+    metric: Option<String>,
+    protocol: Option<String>,
+    table: String,
 }
 
+/// A preflight-refused route apply: the route-query step failed
+/// ([`ApplyWithPreflightError::RouteQuery`]), the owned-route ledger refused
+/// a foreign or unmarked route ([`ApplyWithPreflightError::ForeignRoute`]),
+/// or the executor apply itself failed ([`ApplyWithPreflightError::ReconcileExec`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplyWithPreflightError {
     RouteQuery(ReconcileExecError),

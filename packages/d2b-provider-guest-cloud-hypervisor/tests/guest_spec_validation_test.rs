@@ -103,15 +103,6 @@ fn descriptor_semantic_tokens_are_exact() {
         .is_err()
     );
     assert!(BootstrapHandoff::new("allocator", 30_000).is_err());
-    assert!(
-        d2b_provider_guest_cloud_hypervisor::identity::derive_private_runtime_scope(
-            &ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap(),
-            &ResourceUid::parse("323e4567-e89b-42d3-a456-426614174000").unwrap(),
-            "socket",
-            ResourceGeneration::new(1).unwrap(),
-        )
-        .is_err()
-    );
 }
 
 #[test]
@@ -178,7 +169,6 @@ fn fixed_guest_child_batch_is_name_addressed_and_uid_free() {
     assert!(batch.mutations().iter().all(|mutation| {
         mutation.precondition()
             == d2b_provider_guest_cloud_hypervisor::CreatePrecondition::CreateAbsent
-            && mutation.expected_uid().is_none()
             && mutation.owner_ref() == &guest
             && mutation.zone() == &zone
     }));

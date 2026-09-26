@@ -1247,8 +1247,8 @@ mod tests {
     use d2b_core::bundle::{Bundle, BundleGeneration};
     use d2b_core::host::{
         BridgePortFlags as HostBridgePortFlags, HostJson as BundleHostJson, IfNameMapping,
-        LanPolicy, NetEnv, NftablesModel, SitePolicy, TapRole, UsbipBusidLock, UsbipLockOwner,
-        UsbipLockScope,
+        LanPolicy, NetEnv, NmReloadBehavior, NftablesModel, SitePolicy, TapRole, UsbipBusidLock,
+        UsbipLockOwner, UsbipLockScope,
     };
     use d2b_core::manifest_v04::ManifestV04;
     use d2b_core::processes::ProcessesJson;
@@ -1379,7 +1379,7 @@ mod tests {
                     mode: "0644".to_owned(),
                     drift_policy: "replace".to_owned(),
                 },
-                reload_behavior: "reload".to_owned(),
+                reload_behavior: NmReloadBehavior::AtomicReload,
             },
             hosts_file: d2b_core::host::HostsFileOwnership {
                 start_marker: "# d2b-managed begin".to_owned(),

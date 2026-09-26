@@ -38,7 +38,7 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use d2b_provider_toolkit::{AllocatorEnrollment, run_guest};
-use d2b_sk_frontend::{Config, SecurityKeyFrontend, VsockAllocatorLink, uhid::UhidDevice};
+use d2b_sk_frontend::{Config, SecurityKeyFrontend, UhidDevice, VsockAllocatorLink};
 
 fn exit_on_error<T, E: Display>(result: Result<T, E>) -> T {
     match result {
@@ -51,19 +51,24 @@ fn exit_on_error<T, E: Display>(result: Result<T, E>) -> T {
 }
 
 fn main() {
-    let config = exit_on_error(Config::from_env());
-    let placement = exit_on_error(config.placement.clone().into_placement());
+    let Config {
+        vm_id,
+        link,
+        uhid_path,
+        placement,
+    } = exit_on_error(Config::from_env());
+    let placement = exit_on_error(placement.into_placement());
 
     eprintln!(
         "[d2b-sk-frontend/{}] starting; uhid={}, allocator=vsock:{}:{}",
-        config.vm_id,
-        config.uhid_path.display(),
-        config.link.cid(),
-        config.link.port(),
+        vm_id,
+        uhid_path.display(),
+        link.cid(),
+        link.port(),
     );
 
-    let agent = SecurityKeyFrontend::<UhidDevice>::open(&config.uhid_path, &config.vm_id);
-    let link = Box::new(VsockAllocatorLink::new(config.link.cid(), config.link.port()));
+    let agent = SecurityKeyFrontend::<UhidDevice>::open(&uhid_path, &vm_id);
+    let link = Box::new(VsockAllocatorLink::new(link.cid(), link.port()));
     let status = run_guest(agent, link, Arc::new(AllocatorEnrollment::new(placement)));
     std::process::exit(status);
 }

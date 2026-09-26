@@ -10,8 +10,11 @@ pub mod ingress_policy;
 pub mod metric_policy;
 pub mod metrics;
 
+/// The stable Provider name this crate implements.
 pub const PROVIDER_NAME: &str = "observability-otel";
+/// The canonical Provider reference this crate's rows select.
 pub const PROVIDER_REF: &str = "Provider/observability-otel";
+/// The Provider API major version this crate implements.
 pub const PROVIDER_API_MAJOR: u16 = 1;
 /// The role id the otel host bridge process carries in launcher rows.
 pub const OTEL_HOST_BRIDGE_ROLE: &str = "otel-host-bridge";

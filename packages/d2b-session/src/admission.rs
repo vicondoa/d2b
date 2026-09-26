@@ -590,7 +590,7 @@ impl<C> SessionAcceptor<C> {
             + Send
             + 'static,
     {
-        HandshakeOffer::from(policy.clone())
+        HandshakeOffer::from(&policy)
             .validate()
             .map_err(SessionError::from)?;
         Ok(Self {
@@ -622,30 +622,14 @@ impl<C> SessionAcceptor<C> {
         T: OwnedTransport + 'static,
     {
         engine.set_metrics(Arc::clone(&self.metrics));
-        macro_rules! admit_try {
-            ($expression:expr) => {
-                match $expression {
-                    Ok(value) => value,
-                    Err(error) => {
-                        engine.record_failure(
-                            MetricEvent::ConnectAttempt,
-                            ChannelClass::SessionControl,
-                            OperationClass::Connect,
-                            error,
-                        );
-                        return Err(error);
-                    }
-                }
-            };
-        }
-        let authentication = admit_try!(engine.take_authentication(&self.policy));
-        let binding = admit_try!(authentication_binding(&self.policy, authentication));
-        admit_try!(validate_transport_evidence(
-            &self.policy,
-            &binding,
-            &evidence
-        ));
-        admit_try!(validate_bootstrap_zone(&binding, &self.expected_zone));
+        let result = engine.take_authentication(&self.policy);
+        let authentication = admit_or_record(&mut engine, result)?;
+        let result = authentication_binding(&self.policy, authentication);
+        let binding = admit_or_record(&mut engine, result)?;
+        let result = validate_transport_evidence(&self.policy, &binding, &evidence);
+        admit_or_record(&mut engine, result)?;
+        let result = validate_bootstrap_zone(&binding, &self.expected_zone);
+        admit_or_record(&mut engine, result)?;
         let (subject, lease) = self
             .authority
             .authenticate_connect(evidence, &binding, &self.expected_zone, now_tick)
@@ -658,7 +642,8 @@ impl<C> SessionAcceptor<C> {
                     *error,
                 );
             })?;
-        admit_try!(validate_subject(&subject, &self.expected_zone, &binding));
+        let result = validate_subject(&subject, &self.expected_zone, &binding);
+        admit_or_record(&mut engine, result)?;
         if !lease.is_valid_at(now_tick) {
             let error = SessionError::new(SessionErrorCode::PolicyDenied);
             engine.record_failure(
@@ -694,6 +679,21 @@ impl<C> SessionAcceptor<C> {
             cleanup_observer,
         })
     }
+}
+
+/// Record a rejected connect attempt before returning the error unchanged.
+fn admit_or_record<T, U>(engine: &mut SessionEngine<T>, result: Result<U>) -> Result<U>
+where
+    T: OwnedTransport,
+{
+    result.inspect_err(|&error| {
+        engine.record_failure(
+            MetricEvent::ConnectAttempt,
+            ChannelClass::SessionControl,
+            OperationClass::Connect,
+            error,
+        );
+    })
 }
 
 impl<C> fmt::Debug for SessionAcceptor<C> {
@@ -753,6 +753,10 @@ pub struct AuthenticatedComponentSession<C> {
 /// owning session remains in this value so its liveness and single-owner
 /// authority cannot be detached by extracting a cloneable handle.
 pub struct AuthenticatedSessionDriver {
+    /// Sync carrier for the owning session: `AuthenticatedComponentSession` is
+    /// `Send` but not `Sync`, while this driver must satisfy
+    /// `ComponentSessionDriver: Send + Sync`. The mutex is never locked; it
+    /// only makes the owner shareable across the transport lane.
     _owner: std::sync::Mutex<AuthenticatedComponentSession<()>>,
     driver: SessionDriverHandle,
 }
@@ -1179,22 +1183,27 @@ impl AuthenticatedSessionRouteBinding {
         &self.context
     }
 
+    /// Borrow the authenticated Zone.
     pub fn zone(&self) -> &ZoneId {
         &self.zone
     }
 
+    /// Borrow the authenticated subject reference.
     pub fn subject_ref(&self) -> &ResourceRef {
         &self.subject_ref
     }
 
+    /// Borrow the authenticated subject UID.
     pub fn subject_uid(&self) -> &ResourceUid {
         &self.subject_uid
     }
 
+    /// Return the evidence class that authenticated the subject.
     pub const fn evidence_class(&self) -> EvidenceClass {
         self.evidence_class
     }
 
+    /// Return the authenticated locality.
     pub const fn locality(&self) -> Locality {
         self.locality
     }
@@ -1596,14 +1605,7 @@ impl<C> AuthenticatedComponentSession<C> {
         frame: Vec<u8>,
         now_tick: u64,
     ) -> Result<()> {
-        if !permit.lease.is_valid_at(now_tick)
-            || !matches!(
-                permit.request.verb,
-                SessionVerb::Invoke | SessionVerb::AuditExport | SessionVerb::SupportBundle
-            )
-        {
-            return Err(SessionError::new(SessionErrorCode::PolicyDenied));
-        }
+        validate_ttrpc_permit(&permit, now_tick)?;
         self.driver.send_ttrpc(frame).await
     }
 

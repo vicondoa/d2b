@@ -82,7 +82,7 @@ fn intent(target: &str, spec: Value) -> OwnedChildIntent {
 
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
     wayland_session_descriptor(InteractionDriverArgs {
-        zone: "work".to_owned(),
+        zone: ZoneId::parse("work").expect("zone"),
         controller_generation: ControllerGeneration::new(3).expect("generation"),
         effects: Arc::new(UnusedEffects),
         behavior: WaylandSession::new(Arc::new(TwoWorkers)),
@@ -196,10 +196,10 @@ fn the_session_reads_its_domain_dependencies() {
 fn a_foreign_row_is_refused() {
     let envelope = envelope(&json!({"providerRef": "Provider/display-wayland"}));
     let behavior = WaylandSession::new(Arc::new(TwoWorkers));
-    assert_eq!(
+    assert!(matches!(
         behavior.validate(&envelope),
-        Err(InteractionEffectError::InvalidResource)
-    );
+        Err(InteractionEffectError::InvalidSpec(_))
+    ));
 }
 
 /// The session's provider realization becomes manager child rows: the manager

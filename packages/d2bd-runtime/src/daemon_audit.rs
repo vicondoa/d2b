@@ -156,6 +156,20 @@ pub enum ResourcePlaneResult {
     Error,
 }
 
+/// Split-readiness mode for the api-ready wait phase of a VM start.
+///
+/// Closed, two-value state mirroring the run executor's split-readiness
+/// mode; serializes to the exact kebab-case strings used by the
+/// daemon-events JSONL shape (`"strict"` / `"no-wait-api"`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ApiReadyMode {
+    /// Wait for both process-alive and api-ready; fail-closed on timeout.
+    Strict,
+    /// Skip the api-ready probe; pending is expected during cold boot.
+    NoWaitApi,
+}
+
 /// Whether a daemon audit event is part of an operation's authority boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DaemonAuditAuthority {
@@ -190,8 +204,8 @@ pub enum DaemonEvent {
         runner: String,
         /// Configured timeout that elapsed, in whole seconds.
         elapsed_secs: u64,
-        /// Split-readiness mode: `"strict"` or `"no-wait-api"`.
-        mode: String,
+        /// Split-readiness mode (serializes as `"strict"` / `"no-wait-api"`).
+        mode: ApiReadyMode,
     },
     /// Emitted when an authenticated `vm exec` owner session is established
     /// (after admin authz + capability negotiation, before any op proxy).
@@ -496,7 +510,9 @@ pub enum WorkloadLaunchResult {
 ///   daemon-state directory.
 /// - **Tests that don't care about audit output**: use
 ///   [`DaemonAuditLog::no_op`]; best-effort writes are discarded, while
-///   authoritative writes fail closed.
+///   authoritative writes fail closed. Tests that want to assert the
+///   no-op sink never touches the filesystem can point it at a directory
+///   with [`DaemonAuditLog::no_op_with_state_dir`] (test-support).
 ///
 /// One appender thread owns the hash chain and every file operation, and
 /// callers hand it records over the bounded queue in [`AUDIT_QUEUE_DEPTH`],
@@ -510,8 +526,10 @@ pub struct DaemonAuditLog {
     /// Queue into the appender thread. `None` only when the appender could
     /// not start, which fails every write closed.
     sink: Option<AuditSink>,
+    /// Capture-only seat of the audit lines this log accepted, shared with
+    /// the appender thread.
     #[cfg(any(test, feature = "test-support"))]
-    pub captured: Arc<Mutex<Vec<String>>>,
+    captured: Arc<Mutex<Vec<String>>>,
 }
 
 /// The appender's queue and its thread handle.
@@ -552,6 +570,9 @@ fn complete_reply(reply: oneshot::Sender<io::Result<()>>, result: io::Result<()>
 /// sink.
 struct AuditAppender {
     state_dir: Option<PathBuf>,
+    /// Capture-only seat: never reads or writes the filesystem even when a
+    /// `state_dir` is present. `no_op()` logs are the test-support shape.
+    noop: bool,
     #[cfg(any(test, feature = "test-support"))]
     captured: Arc<Mutex<Vec<String>>>,
     writer: AuditWriterState,
@@ -608,7 +629,8 @@ impl AuditAppender {
             serde_json::to_value(event)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
         );
-        if let Some(state_dir) = self.state_dir.as_deref()
+        if !self.noop
+            && let Some(state_dir) = self.state_dir.as_deref()
             && let Err(error) = initialize_chain_from_disk(state_dir, &mut self.writer)
         {
             self.writer.poisoned = true;
@@ -625,7 +647,9 @@ impl AuditAppender {
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         line.push('\n');
 
-        if let Some(state_dir) = self.state_dir.as_deref() {
+        if !self.noop
+            && let Some(state_dir) = self.state_dir.as_deref()
+        {
             let today = utc_date_string();
             // First write of the process or a day-boundary crossing:
             // re-run retention pruning (best-effort) before appending.
@@ -854,12 +878,31 @@ impl DaemonAuditLog {
     pub fn new(state_dir: impl Into<PathBuf>) -> Self {
         let state_dir = state_dir.into();
         let poisoned = prune_old_audit_logs(&state_dir, AUDIT_RETENTION_DAYS).is_err();
-        Self::with_appender(Some(state_dir), poisoned)
+        Self::with_appender(Some(state_dir), poisoned, false)
     }
 
     /// No-op constructor for tests that do not exercise audit output.
     pub fn no_op() -> Self {
-        Self::with_appender(None, false)
+        Self::with_appender(None, false, true)
+    }
+
+    /// No-op constructor that records a `state_dir` for the test to inspect.
+    ///
+    /// The sink stays capture-only: it never reads or writes the given
+    /// directory, so a test can point it at a temp dir and assert that no
+    /// audit file appears there.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn no_op_with_state_dir(state_dir: impl Into<PathBuf>) -> Self {
+        Self::with_appender(Some(state_dir.into()), false, true)
+    }
+
+    /// The capture-only seat of the audit lines this log accepted.
+    ///
+    /// The lines are appended by the single appender thread, so the guard is
+    /// the only way to read a consistent set of them.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn captured(&self) -> &Mutex<Vec<String>> {
+        &self.captured
     }
 
     /// Start the single appender and return the handle over its queue.
@@ -867,11 +910,12 @@ impl DaemonAuditLog {
     /// A failed spawn is fail-closed: the sink stays `None`, so every later
     /// write reports the sink as unavailable instead of silently dropping the
     /// record.
-    fn with_appender(state_dir: Option<PathBuf>, poisoned: bool) -> Self {
+    fn with_appender(state_dir: Option<PathBuf>, poisoned: bool, noop: bool) -> Self {
         #[cfg(any(test, feature = "test-support"))]
         let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let appender = AuditAppender {
             state_dir: state_dir.clone(),
+            noop,
             #[cfg(any(test, feature = "test-support"))]
             captured: Arc::clone(&captured),
             writer: AuditWriterState {
@@ -910,14 +954,14 @@ impl DaemonAuditLog {
     /// within a JSONL line: this call queues the record and waits for that
     /// append's outcome. A day-boundary crossing triggers best-effort
     /// retention pruning of stale `daemon-events-*.jsonl` files.
-    pub fn write_event(&self, event: &DaemonEvent) -> io::Result<()> {
+    pub fn write_event(&self, event: DaemonEvent) -> io::Result<()> {
         self.write_event_with_authority(event, DaemonAuditAuthority::BestEffort)
     }
 
     /// Write an event with an explicit authority class.
     pub fn write_event_with_authority(
         &self,
-        event: &DaemonEvent,
+        event: DaemonEvent,
         authority: DaemonAuditAuthority,
     ) -> io::Result<()> {
         let (reply, outcome) = oneshot::channel();
@@ -932,7 +976,7 @@ impl DaemonAuditLog {
     }
 
     /// Append one event without parking the caller's thread on the sink.
-    pub async fn write_event_async(&self, event: &DaemonEvent) -> io::Result<()> {
+    pub async fn write_event_async(&self, event: DaemonEvent) -> io::Result<()> {
         self.write_event_with_authority_async(event, DaemonAuditAuthority::BestEffort)
             .await
     }
@@ -944,7 +988,7 @@ impl DaemonAuditLog {
     /// it.
     pub async fn write_event_with_authority_async(
         &self,
-        event: &DaemonEvent,
+        event: DaemonEvent,
         authority: DaemonAuditAuthority,
     ) -> io::Result<()> {
         let (reply, outcome) = oneshot::channel();
@@ -961,7 +1005,7 @@ impl DaemonAuditLog {
     /// caller, is what a backlog grows).
     fn enqueue(
         &self,
-        event: &DaemonEvent,
+        event: DaemonEvent,
         authority: DaemonAuditAuthority,
         reply: oneshot::Sender<io::Result<()>>,
     ) -> io::Result<()> {
@@ -973,7 +1017,7 @@ impl DaemonAuditLog {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis(),
-            event: event.clone(),
+            event,
             authority,
             reply,
         };
@@ -1914,16 +1958,16 @@ mod tests {
         let log = DaemonAuditLog::new(dir.path());
 
         // Trigger a fake api-ready timeout event.
-        log.write_event(&DaemonEvent::ApiReadyTimeout {
+        log.write_event(DaemonEvent::ApiReadyTimeout {
             vm: "vm-a".to_owned(),
             runner: "ch-runner".to_owned(),
             elapsed_secs: 60,
-            mode: "strict".to_owned(),
+            mode: ApiReadyMode::Strict,
         })
         .expect("write api-ready-timeout event");
 
         // Assert the in-memory captured record has the expected fields.
-        let records = log.captured.lock().expect("lock captured");
+        let records = log.captured().lock().expect("lock captured");
         assert_eq!(
             records.len(),
             1,
@@ -2013,6 +2057,32 @@ mod tests {
     }
 
     #[test]
+    fn api_ready_mode_roundtrips_and_rejects_invalid_strings() {
+        // The two closed modes serialize to the legacy JSONL kebab-case
+        // strings, so the daemon-events shape is unchanged.
+        assert_eq!(
+            serde_json::to_string(&ApiReadyMode::Strict).expect("serialize strict"),
+            "\"strict\"",
+        );
+        assert_eq!(
+            serde_json::to_string(&ApiReadyMode::NoWaitApi).expect("serialize no-wait-api"),
+            "\"no-wait-api\"",
+        );
+        assert_eq!(
+            serde_json::from_str::<ApiReadyMode>("\"strict\"").expect("parse strict"),
+            ApiReadyMode::Strict,
+        );
+        assert_eq!(
+            serde_json::from_str::<ApiReadyMode>("\"no-wait-api\"").expect("parse no-wait-api"),
+            ApiReadyMode::NoWaitApi,
+        );
+        assert!(
+            serde_json::from_str::<ApiReadyMode>("\"not-a-mode\"").is_err(),
+            "an unknown mode string must be rejected on deserialize",
+        );
+    }
+
+    #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn exec_lifecycle_events_are_leak_safe() {
         // The exec establish + terminate audit events carry ONLY
@@ -2022,19 +2092,19 @@ mod tests {
         const SENTINEL: &str = "SECRET-handle-argv-env-cwd-/nix/store/path-like-token-9b2f";
         let log = DaemonAuditLog::no_op();
 
-        log.write_event(&DaemonEvent::ComponentSessionExecEstablished {
+        log.write_event(DaemonEvent::ComponentSessionExecEstablished {
             vm: "corp-vm".to_owned(),
             peer_uid: 1000,
             tty: true,
         })
         .expect("write established event");
-        log.write_event(&DaemonEvent::ComponentSessionExecTerminated {
+        log.write_event(DaemonEvent::ComponentSessionExecTerminated {
             vm: "corp-vm".to_owned(),
             peer_uid: 1000,
         })
         .expect("write terminated event");
 
-        let records = log.captured.lock().expect("lock captured");
+        let records = log.captured().lock().expect("lock captured");
         assert_eq!(records.len(), 2, "expected two captured lifecycle records");
 
         for line in records.iter() {
@@ -2093,7 +2163,7 @@ mod tests {
         const SENTINEL: &str = "SECRET-shell-name-session-terminal-/nix/store/path-like-token";
         let log = DaemonAuditLog::no_op();
 
-        log.write_event(&DaemonEvent::ShellLifecycle {
+        log.write_event(DaemonEvent::ShellLifecycle {
             target: "corp-vm".to_owned(),
             peer_uid: 1000,
             provider: ShellAuditProvider::ComponentSession,
@@ -2105,7 +2175,7 @@ mod tests {
         })
         .expect("write provider-neutral shell event");
 
-        let records = log.captured.lock().expect("lock captured");
+        let records = log.captured().lock().expect("lock captured");
         assert_eq!(records.len(), 1, "expected one unified shell record");
         for line in records.iter() {
             assert!(
@@ -2153,7 +2223,7 @@ mod tests {
         const SENTINEL: &str = "SECRET-argv-env-cwd-/nix/store/log-bytes-2d7b";
         let log = DaemonAuditLog::no_op();
 
-        log.write_event(&DaemonEvent::ComponentSessionExecDetachedCreate {
+        log.write_event(DaemonEvent::ComponentSessionExecDetachedCreate {
             vm: "corp-vm".to_owned(),
             peer_uid: 1000,
             action: DetachedExecAuditAction::Create,
@@ -2161,7 +2231,7 @@ mod tests {
             exec_id: "exec-opaque-1".to_owned(),
         })
         .expect("write detached create event");
-        log.write_event(&DaemonEvent::ComponentSessionExecDetachedKill {
+        log.write_event(DaemonEvent::ComponentSessionExecDetachedKill {
             vm: "corp-vm".to_owned(),
             peer_uid: 1000,
             action: DetachedExecAuditAction::Cancel,
@@ -2170,7 +2240,7 @@ mod tests {
         })
         .expect("write detached kill event");
 
-        let records = log.captured.lock().expect("lock captured");
+        let records = log.captured().lock().expect("lock captured");
         assert_eq!(records.len(), 2, "expected two detached audit records");
 
         for line in records.iter() {
@@ -2350,16 +2420,16 @@ mod tests {
         std::fs::write(&blocker, "blocks directory creation").expect("write blocker");
         let log = DaemonAuditLog::new(blocker.join("child"));
         let error = log
-            .write_event(&DaemonEvent::ApiReadyTimeout {
+            .write_event(DaemonEvent::ApiReadyTimeout {
                 vm: "vm-a".to_owned(),
                 runner: "ch-runner".to_owned(),
                 elapsed_secs: 30,
-                mode: "strict".to_owned(),
+                mode: ApiReadyMode::Strict,
             })
             .expect_err("blocked destination must return an io error");
         assert_eq!(error.kind(), io::ErrorKind::Other);
         assert_eq!(error.to_string(), "daemon audit unavailable");
-        assert!(log.captured.lock().expect("captured").is_empty());
+        assert!(log.captured().lock().expect("captured").is_empty());
     }
 
     #[test]
@@ -2386,21 +2456,19 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn no_op_does_not_write_file() {
         let dir = tempfile::tempdir().expect("create temp dir");
-        // Create a no-op log - but give it the temp dir to make sure the
-        // file is NOT created.
-        let log = DaemonAuditLog::no_op();
-        // Manually set state_dir to the temp dir via a helper.
-        // We can't do that here because state_dir is private; instead,
-        // create a no_op and verify its captured vec is empty.
-        log.write_event(&DaemonEvent::ApiReadyTimeout {
+        // Point the no-op log at the temp dir: the no-op sink is
+        // capture-only and must never touch the filesystem, so the
+        // no-file-created claim is actually asserted against the dir.
+        let log = DaemonAuditLog::no_op_with_state_dir(dir.path());
+        log.write_event(DaemonEvent::ApiReadyTimeout {
             vm: "vm-a".to_owned(),
             runner: "ch-runner".to_owned(),
             elapsed_secs: 30,
-            mode: "strict".to_owned(),
+            mode: ApiReadyMode::Strict,
         })
         .expect("no-op write should not error");
 
-        // No file should appear in temp dir (no state_dir set).
+        // No file should appear in the temp dir the log was pointed at.
         let count = std::fs::read_dir(dir.path())
             .expect("read temp dir")
             .count();
@@ -2412,7 +2480,7 @@ mod tests {
     fn test_capture_authoritative_events_are_not_silently_dropped() {
         let log = DaemonAuditLog::no_op();
         let result = log.write_event_with_authority(
-            &DaemonEvent::ResourcePlaneLifecycle {
+            DaemonEvent::ResourcePlaneLifecycle {
                 zone: "work".to_owned(),
                 action: ResourcePlaneAction::Start,
                 result: ResourcePlaneResult::Ready,
@@ -2420,7 +2488,7 @@ mod tests {
             DaemonAuditAuthority::Authoritative,
         );
         assert!(result.is_ok());
-        assert_eq!(log.captured.lock().unwrap().len(), 1);
+        assert_eq!(log.captured().lock().unwrap().len(), 1);
     }
 
     #[test]
@@ -2455,7 +2523,7 @@ mod tests {
             let log = std::sync::Arc::clone(&log);
             handles.push(std::thread::spawn(move || {
                 for _ in 0..25 {
-                    log.write_event(&DaemonEvent::VmStartRunnerExited {
+                    log.write_event(DaemonEvent::VmStartRunnerExited {
                         vm: format!("vm-{thread_idx}"),
                         role_id: "swtpm".to_owned(),
                         reason_kind: VmStartRunnerExitReason::RunnerExited,
@@ -2498,16 +2566,16 @@ mod tests {
     async fn async_seat_appends_before_it_returns() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let log = DaemonAuditLog::new(dir.path());
-        log.write_event_async(&DaemonEvent::ApiReadyTimeout {
+        log.write_event_async(DaemonEvent::ApiReadyTimeout {
             vm: "vm-a".to_owned(),
             runner: "ch-runner".to_owned(),
             elapsed_secs: 60,
-            mode: "strict".to_owned(),
+            mode: ApiReadyMode::Strict,
         })
         .await
         .expect("async best-effort append");
         log.write_event_with_authority_async(
-            &DaemonEvent::ResourcePlaneLifecycle {
+            DaemonEvent::ResourcePlaneLifecycle {
                 zone: "work".to_owned(),
                 action: ResourcePlaneAction::Start,
                 result: ResourcePlaneResult::Ready,
@@ -2634,8 +2702,8 @@ mod tests {
             result: WorkloadLaunchResult::Committed,
         };
         assert!(!format!("{event:?}").contains("target-secret-canary"));
-        log.write_event(&event).unwrap();
-        let line = log.captured.lock().unwrap().last().cloned().unwrap();
+        log.write_event(event).unwrap();
+        let line = log.captured().lock().unwrap().last().cloned().unwrap();
         for canary in [
             "target-secret-canary",
             "item-secret-canary",

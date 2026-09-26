@@ -116,7 +116,12 @@ unsafe fn getsockopt_int(fd: RawFd, optname: libc::c_int) -> io::Result<libc::c_
     }
 }
 
-/// Audited SO_PEERCRED helper for accepted Unix seqpacket connections.
+/// Audited SO_PEERCRED helper for accepted Unix seqpacket connections:
+/// returns the peer's `(uid, gid, pid)` triple.
+///
+/// # Errors
+///
+/// Returns the socket error when `SO_PEERCRED` cannot be read for `fd`.
 #[allow(unsafe_code)]
 pub fn peer_credentials(fd: RawFd) -> io::Result<(u32, u32, i32)> {
     // SAFETY: the borrowed fd is valid for the duration of this call; ownership stays with the caller.
@@ -181,6 +186,12 @@ pub fn tun_create_tap_fd(fd: &OwnedFd, ifname: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// Set the TUN `TUNSETPERSIST` ioctl: whether the tap persists after
+/// its fd closes.
+///
+/// # Errors
+///
+/// Returns the ioctl error when the setting cannot be applied to `fd`.
 #[allow(unsafe_code)]
 pub fn tun_set_persist(fd: &OwnedFd, persist: bool) -> io::Result<()> {
     let value: libc::c_int = if persist { 1 } else { 0 };
@@ -191,6 +202,12 @@ pub fn tun_set_persist(fd: &OwnedFd, persist: bool) -> io::Result<()> {
     Ok(())
 }
 
+/// Set the TUN `TUNSETOWNER` ioctl:the uid that may open the tap.
+///
+/// # Errors
+///
+/// Returns [`io::ErrorKind::InvalidInput`] when `uid` exceeds the
+/// `c_int` range, and the ioctl error when the setting cannot be applied.
 #[allow(unsafe_code)]
 pub fn tun_set_owner(fd: &OwnedFd, uid: u32) -> io::Result<()> {
     let value = libc::c_int::try_from(uid).map_err(|_| {
@@ -206,6 +223,12 @@ pub fn tun_set_owner(fd: &OwnedFd, uid: u32) -> io::Result<()> {
     Ok(())
 }
 
+/// Set the TUN `TUNSETGROUP` ioctl:the gid that may open the tap.
+///
+/// # Errors
+///
+/// Returns [`io::ErrorKind::InvalidInput`] when `gid` exceeds the
+/// `c_int` range, and the ioctl error when the setting cannot be applied.
 #[allow(unsafe_code)]
 pub fn tun_set_group(fd: &OwnedFd, gid: u32) -> io::Result<()> {
     let value = libc::c_int::try_from(gid).map_err(|_| {
@@ -255,6 +278,8 @@ pub mod path_safe {
     use std::path::{Path, PathBuf};
     use std::process::{Command, Output};
 
+    /// Reject a symlink at `path` via `lstat`, returning
+    /// [`io::ErrorKind::PermissionDenied`] when one sits there.
     pub fn refuse_symlink(path: &Path) -> io::Result<()> {
         match fs::symlink_metadata(path) {
             Ok(md) if md.file_type().is_symlink() => Err(io::Error::new(
@@ -265,6 +290,8 @@ pub mod path_safe {
         }
     }
 
+    /// Reject a world-writable (or symlink) parent directory, the most
+    /// common path-safety regression.for broker file targets.
     pub fn refuse_world_writable_parent(path: &Path) -> io::Result<()> {
         let parent = path.parent().ok_or_else(|| {
             io::Error::new(
@@ -295,6 +322,8 @@ pub mod path_safe {
         Ok(())
     }
 
+    /// Refuse a parent directory not owned by uid 0, using the strict
+    /// no-exception rule for production paths under `/etc` and `/run`.
     pub fn refuse_non_root_parent(path: &Path) -> io::Result<()> {
         refuse_non_root_parent_except(path, None)
     }
@@ -326,6 +355,7 @@ pub mod path_safe {
         Ok(())
     }
 
+    /// Symlink-refusing read of `path` to a string, via `O_NOFOLLOW`.
     pub fn read_to_string_nofollow(path: &Path) -> io::Result<String> {
         refuse_symlink(path)?;
         let mut f = OpenOptions::new()
@@ -337,6 +367,8 @@ pub mod path_safe {
         Ok(s)
     }
 
+/// Write `body` to `path`, refusing symlinks and world-writable parents
+    /// and opening with `O_NOFOLLOW`.
     pub fn write_nofollow(path: &Path, body: &[u8]) -> io::Result<()> {
         refuse_world_writable_parent(path)?;
         refuse_symlink(path)?;
@@ -395,6 +427,8 @@ pub mod path_safe {
             })?;
         Ok((parent.to_path_buf(), name.to_owned()))
     }
+    /// Remove `path` via an fd-relative unlink of its basename, refusing
+    /// symlink traversal in the parent directory.
     pub fn remove_nofollow(path: &Path) -> io::Result<()> {
         let (parent, name) = parent_and_name(path)?;
         let parent_fd = open_dir_path_safe(&parent)?;
@@ -590,6 +624,7 @@ pub mod path_safe {
             mode: u64::from(mode),
             resolve,
         };
+        // SAFETY: `dirfd` and `path` are valid; the syscall result is checked before use.
         let ret = unsafe {
             libc::syscall(
                 libc::SYS_openat2,
@@ -612,6 +647,7 @@ pub mod path_safe {
         flags: libc::c_int,
         mode: u32,
     ) -> io::Result<OwnedFd> {
+        // SAFETY: `dirfd` and `path` are valid; the returned fd is checked before use.
         let ret = unsafe { libc::openat(dirfd, path.as_ptr(), flags, mode) };
         if ret < 0 {
             return Err(io::Error::last_os_error());
@@ -627,6 +663,7 @@ pub mod path_safe {
         newpath: &CString,
         flags: u32,
     ) -> io::Result<()> {
+        // SAFETY: both dirfds and paths are valid; the syscall result is checked before use.
         let ret = unsafe {
             libc::syscall(
                 libc::SYS_renameat2,
@@ -650,6 +687,7 @@ pub mod path_safe {
         newdirfd: RawFd,
         newpath: &CString,
     ) -> io::Result<()> {
+        // SAFETY: both dirfds and paths are valid; the result is checked before use.
         let ret = unsafe { libc::renameat(olddirfd, oldpath.as_ptr(), newdirfd, newpath.as_ptr()) };
         if ret < 0 {
             return Err(io::Error::last_os_error());
@@ -659,6 +697,7 @@ pub mod path_safe {
 
     #[allow(unsafe_code)]
     fn mkdirat_raw(dirfd: RawFd, path: &CString, mode: u32) -> io::Result<()> {
+        // SAFETY: `dirfd` and `path` are valid; the result is checked before use.
         let ret = unsafe { libc::mkdirat(dirfd, path.as_ptr(), mode) };
         if ret < 0 {
             return Err(io::Error::last_os_error());
@@ -673,6 +712,7 @@ pub mod path_safe {
 
     #[allow(unsafe_code)]
     fn unlinkat_raw_with_flags(dirfd: RawFd, path: &CString, flags: libc::c_int) -> io::Result<()> {
+        // SAFETY: `dirfd` and `path` are valid; the result is checked before use.
         let ret = unsafe { libc::unlinkat(dirfd, path.as_ptr(), flags) };
         if ret < 0 {
             return Err(io::Error::last_os_error());
@@ -682,7 +722,9 @@ pub mod path_safe {
 
     #[allow(unsafe_code)]
     fn fstatat_raw(dirfd: RawFd, path: &CString, flags: libc::c_int) -> io::Result<libc::stat> {
+        // SAFETY: `stat` is plain data; zeroing is safe and fstatat overwrites it on success.
         let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: `dirfd`/`path` are valid and `stat` is writable; the result is checked before use.
         let ret = unsafe { libc::fstatat(dirfd, path.as_ptr(), &mut stat, flags) };
         if ret < 0 {
             return Err(io::Error::last_os_error());
@@ -693,6 +735,7 @@ pub mod path_safe {
     #[allow(unsafe_code)]
     fn linkat_empty_path_raw(oldfd: RawFd, newdirfd: RawFd, newpath: &CString) -> io::Result<()> {
         let empty = CString::new(Vec::<u8>::new()).expect("empty C string is valid");
+        // SAFETY: `oldfd`/`newdirfd` are valid and both paths are NUL-terminated; result checked.
         let ret = unsafe {
             libc::linkat(
                 oldfd,
@@ -1912,6 +1955,84 @@ pub mod pidfd_sys {
         }
     }
 
+    /// One job on the setfacl seat: run one `setfacl` fork/exec/wait on
+    /// the worker's own thread.
+    struct SetfaclJob {
+        fd: OwnedFd,
+        op: String,
+        acl_spec: String,
+        reply: tokio::sync::oneshot::Sender<io::Result<()>>,
+    }
+
+    /// The bounded worker that owns the blocking `setfacl` fork/exec/wait:
+    /// a blocking `sync_channel` recv on the worker's own
+    /// dedicated thread, with `tokio::sync::oneshot` replies. The shellout
+    /// has no async form and can take arbitrarily long (a wedged host can
+    /// stall the child), so it must not run on an executor worker; the
+    /// dedicated thread blocks instead, and the caller awaits the outcome.
+    /// Admission is a non-blocking `try_send`, so a saturated queue refuses
+    /// rather than parking the caller or growing the pool.
+    struct SetfaclWorker {
+        sender: std::sync::mpsc::SyncSender<SetfaclJob>,
+    }
+
+    /// The setfacl seat, started on first use; `None` records a worker that
+    /// could not start, so every later call refuses instead of retrying a
+    /// failing spawn.
+    static SETFACL_WORKER: std::sync::LazyLock<Option<SetfaclWorker>> =
+        std::sync::LazyLock::new(|| {
+            const QUEUE_DEPTH: usize = 8;
+            let (sender, receiver) = std::sync::mpsc::sync_channel::<SetfaclJob>(QUEUE_DEPTH);
+            std::thread::Builder::new()
+                .name("d2b-broker-setfacl".to_owned())
+                .spawn(move || setfacl_worker_loop(receiver))
+                .ok()
+                .map(|_| SetfaclWorker { sender })
+        });
+
+    /// The sanctioned R4 channel boundary: a blocking `sync_channel` recv
+    /// on the worker's own dedicated thread, with `tokio::sync::oneshot`
+    /// replies.
+    #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
+    fn setfacl_worker_loop(receiver: std::sync::mpsc::Receiver<SetfaclJob>) {
+        while let Ok(job) = receiver.recv() {
+            let result = run_setfacl_op_on_fd(job.fd.as_fd(), &job.op, &job.acl_spec);
+            let _ = job.reply.send(result);
+        }
+    }
+
+    /// Async form of [`run_setfacl_op_on_fd`] for callers on an executor
+    /// worker: the fork/exec/wait runs on the dedicated bounded setfacl
+    /// seat ([`SETFACL_WORKER`]) instead of parking the worker thread.
+    /// The target fd is duplicated across, so the caller's fd lifetime is
+    /// unaffected.
+    pub async fn run_setfacl_op_on_fd_async(
+        fd: BorrowedFd<'_>,
+        op: &str,
+        acl_spec: &str,
+    ) -> io::Result<()> {
+        let Some(worker) = SETFACL_WORKER.as_ref() else {
+            return Err(io::Error::other("setfacl worker unavailable"));
+        };
+        let fd = nix::unistd::dup(fd.as_raw_fd())
+            .map(crate::sys::owned_fd_from_raw)
+            .map_err(|error| io::Error::from_raw_os_error(error as i32))?;
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        let job = SetfaclJob {
+            fd,
+            op: op.to_owned(),
+            acl_spec: acl_spec.to_owned(),
+            reply,
+        };
+        worker
+            .sender
+            .try_send(job)
+            .map_err(|_| io::Error::other("setfacl worker busy"))?;
+        answer
+            .await
+            .map_err(|_| io::Error::other("setfacl worker unavailable"))?
+    }
+
     /// Clear BOTH the access ACL and the default ACL on the directory
     /// referenced by `fd` (the effect of `setfacl -b -k`) by removing the
     /// POSIX-ACL xattrs directly with `fremovexattr(2)`. Using the syscall
@@ -2110,11 +2231,14 @@ pub mod pidfd_sys {
         for (index, &source_fd) in pre_opened_raw_fds.iter().enumerate() {
             let destination_fd = RENDER_NODE_INHERITED_FD + index as libc::c_int;
             if source_fd != destination_fd {
+                // SAFETY: pre-exec child context; `source_fd` is valid and `destination_fd` is in range.
                 if unsafe { libc::dup2(source_fd, destination_fd) } < 0 {
                     return Err(());
                 }
+                // SAFETY: pre-exec child context; closes the just-duplicated source fd.
                 unsafe { libc::close(source_fd) };
             }
+            // SAFETY: `destination_fd` is valid after dup2; the result is checked before use.
             if unsafe { libc::fcntl(destination_fd, libc::F_SETFD, 0) } < 0 {
                 return Err(());
             }
@@ -2552,6 +2676,7 @@ pub mod pidfd_sys {
     fn apply_mount_actions(actions: &[PreparedMountAction]) -> io::Result<()> {
         for action in actions {
             let path = action.path.as_ptr();
+            // SAFETY: `path` is a valid NUL-terminated path; the mount result is checked.
             let bind_ret = unsafe {
                 libc::mount(
                     path,
@@ -2565,6 +2690,7 @@ pub mod pidfd_sys {
                 return Err(io::Error::last_os_error());
             }
             if action.readonly {
+                // SAFETY: `path` is a valid NUL-terminated path; the mount result is checked.
                 let remount_ret = unsafe {
                     libc::mount(
                         std::ptr::null(),
@@ -2592,6 +2718,7 @@ pub mod pidfd_sys {
     ) -> Result<(), (libc::c_int, Vec<u8>)> {
         for action in actions {
             let path = action.path.as_ptr();
+            // SAFETY: `path` is a valid NUL-terminated path; the mount result is checked.
             let bind_ret = unsafe {
                 libc::mount(
                     path,
@@ -2602,10 +2729,12 @@ pub mod pidfd_sys {
                 )
             };
             if bind_ret < 0 {
+                // SAFETY: errno is read only immediately after a failed libc call.
                 let errno = unsafe { *libc::__errno_location() };
                 return Err((errno, action.path.as_bytes().to_vec()));
             }
             if action.readonly {
+                // SAFETY: `path` is a valid NUL-terminated path; the mount result is checked.
                 let remount_ret = unsafe {
                     libc::mount(
                         std::ptr::null(),
@@ -2617,6 +2746,7 @@ pub mod pidfd_sys {
                     )
                 };
                 if remount_ret < 0 {
+                    // SAFETY: errno is read only immediately after a failed libc call.
                     let errno = unsafe { *libc::__errno_location() };
                     return Err((errno, action.path.as_bytes().to_vec()));
                 }
@@ -2627,13 +2757,17 @@ pub mod pidfd_sys {
 
     #[allow(unsafe_code)]
     fn mkdir_one(path: *const libc::c_char) -> Result<(), libc::c_int> {
+        // SAFETY: `path` is a valid NUL-terminated path; the result is checked before use.
         if unsafe { libc::mkdir(path, 0o755) } < 0 {
+            // SAFETY: errno is read only immediately after a failed libc call.
             let errno = unsafe { *libc::__errno_location() };
             if errno != libc::EEXIST {
                 return Err(errno);
             }
         }
+        // SAFETY: `path` is a valid NUL-terminated path; the result is checked before use.
         if unsafe { libc::chmod(path, 0o755) } < 0 {
+            // SAFETY: errno is read only immediately after a failed libc call.
             Err(unsafe { *libc::__errno_location() })
         } else {
             Ok(())
@@ -2667,19 +2801,27 @@ pub mod pidfd_sys {
         uid: libc::uid_t,
         gid: libc::gid_t,
     ) -> Result<(), libc::c_int> {
+        // SAFETY: `destination` is a valid NUL-terminated path; the result is checked before use.
         if unsafe { libc::unlink(destination.as_ptr()) } < 0 {
+            // SAFETY: errno is read only immediately after a failed libc call.
             let errno = unsafe { *libc::__errno_location() };
             if errno != libc::ENOENT {
                 return Err(errno);
             }
         }
+        // SAFETY: `destination` is a valid NUL-terminated path; the result is checked before use.
         if unsafe { libc::mknod(destination.as_ptr(), mode, dev) } < 0 {
+            // SAFETY: errno is read only immediately after a failed libc call.
             return Err(unsafe { *libc::__errno_location() });
         }
+        // SAFETY: `destination` is a valid NUL-terminated path; the result is checked before use.
         if unsafe { libc::chmod(destination.as_ptr(), mode & 0o777) } < 0 {
+            // SAFETY: errno is read only immediately after a failed libc call.
             return Err(unsafe { *libc::__errno_location() });
         }
+        // SAFETY: `destination` is a valid NUL-terminated path; the result is checked before use.
         if unsafe { libc::chown(destination.as_ptr(), uid, gid) } < 0 {
+            // SAFETY: errno is read only immediately after a failed libc call.
             return Err(unsafe { *libc::__errno_location() });
         }
         Ok(())
@@ -2694,6 +2836,7 @@ pub mod pidfd_sys {
         let dev = c"/dev".as_ptr();
         let tmpfs = c"tmpfs".as_ptr();
         let options = c"mode=0755".as_ptr() as *const libc::c_void;
+        // SAFETY: `tmpfs`/`dev`/`options` are valid NUL-terminated strings; result checked.
         if unsafe {
             libc::mount(
                 tmpfs,
@@ -2704,6 +2847,7 @@ pub mod pidfd_sys {
             )
         } < 0
         {
+            // SAFETY: errno is read only immediately after a failed libc call.
             let errno = unsafe { *libc::__errno_location() };
             return Err((errno, b"/dev".to_vec()));
         }
@@ -2717,6 +2861,7 @@ pub mod pidfd_sys {
                     if let Err(errno) = mkdir_one(bind.destination.as_ptr()) {
                         return Err((errno, bind.destination.as_bytes().to_vec()));
                     }
+                    // SAFETY: both bind paths are valid NUL-terminated; the result is checked before use.
                     if unsafe {
                         libc::mount(
                             bind.source.as_ptr(),
@@ -2727,6 +2872,7 @@ pub mod pidfd_sys {
                         )
                     } < 0
                     {
+                        // SAFETY: errno is read only immediately after a failed libc call.
                         let errno = unsafe { *libc::__errno_location() };
                         return Err((errno, bind.destination.as_bytes().to_vec()));
                     }
@@ -2814,8 +2960,8 @@ pub mod pidfd_sys {
             n /= 10;
             len += 1;
         }
-        for i in 0..len {
-            buf[i] = tmp[len - 1 - i];
+        for (dst, src) in buf[..len].iter_mut().zip(tmp[..len].iter().rev()) {
+            *dst = *src;
         }
         len
     }

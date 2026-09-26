@@ -80,7 +80,9 @@ impl Config {
                 .map_err(|error| format!("D2B_SK_VSOCK_CID: {error}"))?,
             None => crate::link::VSOCK_HOST_CID,
         };
-        let uhid_path = optional("D2B_SK_UHID_PATH").unwrap_or_else(|| "/dev/uhid".to_owned());
+        let uhid_path = optional("D2B_SK_UHID_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/dev/uhid"));
 
         let parent_zone = zone_path(&required("D2B_SK_PARENT_ZONE")?, "D2B_SK_PARENT_ZONE")?;
         let guest_zone = zone_path(&required("D2B_SK_GUEST_ZONE")?, "D2B_SK_GUEST_ZONE")?;
@@ -112,7 +114,7 @@ impl Config {
         Ok(Self {
             vm_id,
             link: VsockAllocatorLink::new(vsock_cid, vsock_port),
-            uhid_path: PathBuf::from(uhid_path),
+            uhid_path,
             placement: PlacementConfig {
                 identity,
                 psk_issuance: number("D2B_SK_PSK_ISSUANCE")?,
@@ -175,13 +177,13 @@ fn hex(byte: u8) -> Option<u8> {
 
 /// Parse one `/`-separated Zone path, most specific first.
 fn zone_path(value: &str, name: &str) -> Result<ZonePath, String> {
-    let mut labels = Vec::new();
-    for label in value.split('/') {
-        labels.push(
+    let labels = value
+        .split('/')
+        .map(|label| {
             ZoneLabelId::parse(label)
-                .map_err(|_| format!("{name} is not a valid Zone label path"))?,
-        );
-    }
+                .map_err(|_| format!("{name} is not a valid Zone label path"))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     ZonePath::new(labels).map_err(|_| format!("{name} is not a valid Zone label path"))
 }
 

@@ -25,13 +25,19 @@ use async_trait::async_trait;
 use d2b_contracts_resource::v3::ResourceRef;
 
 use crate::driver::{CredentialDependencyFacts, CredentialLeaseFacts};
-use crate::session::CredentialSession;
+use crate::session::{CredentialResourceRuntimeError, CredentialSession};
 
 /// Boxed future returned by one production dependency probe: resolving the
 /// Provider and target rows is store-backed, so the facet cannot be a sync
-/// closure.
-pub type DependencyFactsFuture<'a> =
-    Pin<Box<dyn Future<Output = Option<CredentialDependencyFacts>> + Send + 'a>>;
+/// closure. The read fails as [`CredentialResourceRuntimeError`] rather
+/// than reporting absence when the manager RPC itself failed.
+pub type DependencyFactsFuture<'a> = Pin<
+    Box<
+        dyn Future<Output = Result<Option<CredentialDependencyFacts>, CredentialResourceRuntimeError>>
+            + Send
+            + 'a,
+    >,
+>;
 
 /// Boxed future of one production lease-fact read.
 pub type LeaseFactsFuture<'a> =
@@ -63,14 +69,16 @@ pub struct CredentialEffectFacets {
 /// daemon-supplied authenticated session surface.
 #[async_trait]
 pub trait CredentialRuntime: Send + Sync + 'static {
-    /// Provider + execution-target facts. `None` when the Provider row is
-    /// not observable to this daemon (deletion still fails closed rather
-    /// than guessing).
+    /// Provider + execution-target facts. `Ok(None)` when the Provider row
+    /// is not observable to this daemon (deletion still fails closed rather
+    /// than guessing); `Err` when the dependency read itself failed (a
+    /// manager RPC failure), so absence is never answered for a failed
+    /// read.
     async fn dependency_facts(
         &self,
         provider_ref: &ResourceRef,
         execution_ref: &ResourceRef,
-    ) -> Option<CredentialDependencyFacts>;
+    ) -> Result<Option<CredentialDependencyFacts>, CredentialResourceRuntimeError>;
 
     /// Provider-side lease facts for one Credential row.
     async fn lease_facts(&self, credential_ref: &ResourceRef) -> Option<CredentialLeaseFacts>;

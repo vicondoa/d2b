@@ -1,0 +1,4 @@
+### Fixed
+
+- Folded the in-crate deadline trio (`operation_deadline`, `time_bound_instant`, `time_bounds_not_after`, `time_bound_instant_at`, `is_expired_unix_ms`) in d2b-provider-credential-entra onto the shared `d2b_provider_toolkit::credential` helpers (`operation_deadline`, `now_unix_ms`, `is_absolute_unix_ms`); all eight call sites in lib.rs and service.rs re-pointed, and the expired-grant and expired-inspection checks now compose the toolkit primitives directly.
+- Deadline bounds checks in `authorize_request` now compare two `operation_deadline` instants via a small private composition helper instead of the crate-local single-snapshot conversion; zero-duration deadlines are rejected with `DeadlineExceeded` like the rest of the credential family.

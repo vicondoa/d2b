@@ -77,6 +77,8 @@ impl DataControlOffer {
         }
     }
 
+    /// Destroy the compositor offer object; the caller must not use the
+    /// offer after this call.
     pub fn destroy(self) {
         match self {
             Self::Ext(offer) => offer.destroy(),
@@ -95,6 +97,7 @@ pub enum DataControlSource {
 }
 
 impl DataControlSource {
+    /// Advertise one MIME type on the source to the compositor.
     pub fn offer_mime(&self, mime: String) {
         match self {
             Self::Ext(s) => s.offer(mime),
@@ -254,8 +257,7 @@ impl WlState {
         // compositor, or in rare race conditions (offer destroyed before selection).
         let live = self.live.remove(&id);
 
-        let all_mimes: Vec<String> = pending.mimes.clone();
-        let has_secret = has_secret_hint(all_mimes.iter().map(String::as_str));
+        let has_secret = has_secret_hint(pending.mimes.iter().map(String::as_str));
         let allowed_mimes: Vec<String> = pending
             .mimes
             .into_iter()
@@ -549,9 +551,9 @@ impl DataControlClient {
             .roundtrip(&mut state)
             .map_err(|e| DataControlError::Protocol(e.to_string()))?;
 
-        log::info!(
-            "d2b-clipd: data-control connected via {}",
-            state.manager_state.protocol_name()
+        tracing::info!(
+            protocol = %state.manager_state.protocol_name(),
+            "d2b-clipd: data-control connected"
         );
 
         Ok(Self {

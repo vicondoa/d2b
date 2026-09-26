@@ -1,4 +1,4 @@
-pub use d2b_contracts::audit_wire::{AuditExportCursor, AuditExportEntry};
+pub use d2b_contracts::audit_wire::{AuditExportCursor, AuditExportEntry, AuditPageError};
 use d2b_contracts::types::MediaRef;
 use d2b_contracts::{
     FeatureFlag, Version,
@@ -19,7 +19,7 @@ use schemars::{
     r#gen::SchemaGenerator,
     schema::{InstanceType, Metadata, Schema, SchemaObject, SingleOrVec, StringValidation},
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use std::fmt;
 
 /// Lifecycle state projected for a target-local Process or
@@ -180,6 +180,7 @@ pub enum WorkloadOpResponse {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Workload-list query; the realm filters the result.
 pub struct WorkloadListArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub realm: Option<String>,
@@ -275,6 +276,7 @@ pub struct LauncherExecResult {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// `list` query filters: an optional environment and VM name.
 pub struct ListRequest {
     pub env: Option<String>,
     pub vm: Option<String>,
@@ -282,6 +284,7 @@ pub struct ListRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// `status` query: optionally check bridges and select one VM.
 pub struct StatusRequest {
     #[serde(default)]
     pub check_bridges: bool,
@@ -290,6 +293,7 @@ pub struct StatusRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// `audit` query: filter, format, cursor, and page limit.
 pub struct AuditRequest {
     pub filter: Option<AuditSelector>,
     #[serde(default)]
@@ -309,17 +313,120 @@ fn default_audit_request_limit() -> u32 {
 // Mutating-verb request payloads.
 // ---------------------------------------------------------------
 
+/// The mutating mode one request selects: plan the mutation, or execute it.
+///
+/// The wire has always spelled this as the flat `dryRun`/`apply` boolean
+/// pair. That pair also admits a request which selects neither, so the mode
+/// is closed here and the pair is derived from it instead of being
+/// re-checked at every mutation site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum MutationMode {
+    /// Plan the mutation and return the daemon-side plan.
+    DryRun,
+    /// Execute the mutation.
+    Apply,
+}
+
+/// Why a raw `dryRun`/`apply` pair names no mutating mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MutationModeError;
+
+impl MutationMode {
+    /// Parse the wire `dryRun`/`apply` pair.
+    ///
+    /// A request that sets neither flag has no mode and is refused. When a
+    /// hand-written request sets both, `dryRun` wins - the precedence the
+    /// daemon has always applied to the pair, and a combination the CLI
+    /// cannot emit (`--dry-run` and `--apply` conflict).
+    pub fn from_flags(dry_run: bool, apply: bool) -> Result<Self, MutationModeError> {
+        match (dry_run, apply) {
+            (false, false) => Err(MutationModeError),
+            (true, _) => Ok(Self::DryRun),
+            (false, true) => Ok(Self::Apply),
+        }
+    }
+
+    /// The wire `dryRun`/`apply` pair this mode spells.
+    pub fn to_flags(self) -> (bool, bool) {
+        (matches!(self, Self::DryRun), matches!(self, Self::Apply))
+    }
+}
+
+impl fmt::Display for MutationModeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("mutating verb request sets neither dryRun nor apply")
+    }
+}
+
+impl std::error::Error for MutationModeError {}
+
+/// Common flags every mutating-verb request carries.
+///
+/// The mode moves with the flags, so a request that selects neither
+/// `dryRun` nor `apply` decodes with no mode rather than failing to decode:
+/// the daemon refuses it through the same structured
+/// `MutatingVerbOutcome::InvalidRequest` envelope and remediation string every
+/// other invalid mutating request gets, which is a contract a client can
+/// match on. The serialized shape is unchanged: the flat `dryRun`, `apply`,
+/// and `json` keys the protocol has always carried.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(try_from = "MutationFlagsWire", into = "MutationFlagsWire")]
+pub struct MutationFlags {
+    /// `None` when the request selected neither `dryRun` nor `apply`.
+    pub mode: Option<MutationMode>,
+    /// Ask for the machine-readable (`json`) response body.
+    pub json: bool,
+}
+
+// The published wire schema renders this doc comment as the description of
+// every request that flattens the flags, so it stays word-for-word.
 /// Common flags every mutating-verb request carries. The daemon
 /// rejects requests that set neither `dry_run` nor `apply`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MutationFlags {
+struct MutationFlagsWire {
     #[serde(default)]
-    pub dry_run: bool,
+    dry_run: bool,
     #[serde(default)]
-    pub apply: bool,
+    apply: bool,
     #[serde(default)]
-    pub json: bool,
+    json: bool,
+}
+
+impl TryFrom<MutationFlagsWire> for MutationFlags {
+    type Error = MutationModeError;
+
+    fn try_from(wire: MutationFlagsWire) -> Result<Self, Self::Error> {
+        Ok(Self {
+            mode: MutationMode::from_flags(wire.dry_run, wire.apply).ok(),
+            json: wire.json,
+        })
+    }
+}
+
+impl From<MutationFlags> for MutationFlagsWire {
+    fn from(flags: MutationFlags) -> Self {
+        let (dry_run, apply) = flags
+            .mode
+            .map(MutationMode::to_flags)
+            .unwrap_or((false, false));
+        Self {
+            dry_run,
+            apply,
+            json: flags.json,
+        }
+    }
+}
+
+impl JsonSchema for MutationFlags {
+    fn schema_name() -> String {
+        "MutationFlags".to_owned()
+    }
+
+    fn json_schema(r#gen: &mut SchemaGenerator) -> Schema {
+        MutationFlagsWire::json_schema(r#gen)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1276,9 +1383,16 @@ impl NamedProcessStreamResponseFrame {
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
+/// A validated shell name matching `^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$`.
 pub struct ShellName(String);
 
 impl ShellName {
+    /// Validate and construct a shell name.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShellNameError`] when the value does not match the shell
+    /// name pattern.
     pub fn new(value: impl Into<String>) -> Result<Self, ShellNameError> {
         let value = value.into();
         if shell_name_valid(&value) {
@@ -1294,7 +1408,16 @@ impl ShellName {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The value is not a valid shell name.
 pub struct ShellNameError;
+
+impl fmt::Display for ShellNameError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("invalid shell name")
+    }
+}
+
+impl std::error::Error for ShellNameError {}
 
 impl fmt::Debug for ShellName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -2036,14 +2159,14 @@ pub enum AudioOpResponse {
 
 // ---- Remaining request structs -----------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostPrepareRequest {
     #[serde(default, flatten)]
     pub flags: MutationFlags,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostDestroyRequest {
     #[serde(default, flatten)]
@@ -2055,7 +2178,7 @@ pub struct HostDestroyRequest {
 /// `--ownership`) carved out of `host prepare`. The daemon rejects
 /// requests with no scope selected with a typed `invalid-request`
 /// envelope.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostReconcileRequest {
     #[serde(default, flatten)]
@@ -2133,6 +2256,16 @@ pub struct AuthStatusResponse {
     pub sockets: Vec<SocketReachability>,
 }
 
+/// The read-only `d2b` command paths a peer may run, spelled the way the CLI
+/// parser names them (`<top level>` or `<top level> <subcommand>`).
+///
+/// Both halves of the `auth status` response draw their read-only surface from
+/// this one list - the CLI's `none` role and the daemon's launcher report are
+/// the same set - so the two halves cannot name different surfaces. The CLI
+/// is the only side that owns the parser, so its own test parses every entry
+/// here: a retired verb cannot be added without that test failing.
+pub const READ_ONLY_CLI_COMMANDS: &[&str] = &["list", "status", "auth status", "op inspect"];
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListResponse {
@@ -2153,7 +2286,7 @@ pub struct StatusResponse {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PublicReadModelMetadata {
     pub schema_version: u32,
-    pub kind: String,
+    pub kind: PublicReadModelKind,
     pub generation: u64,
     pub source_fingerprint: String,
     pub updated_at_unix_ms: u128,
@@ -2161,53 +2294,137 @@ pub struct PublicReadModelMetadata {
     pub deep_refresh: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Which public response frame the daemon's cached read model describes.
+///
+/// `kind` used to be a free-form `String`; the daemon publishes exactly two
+/// frames, the unfiltered `list` and `status` responses, so both the wire
+/// protocol and the generated CLI schema carry enum constraints rather than a
+/// free-form string. Serde names match the canonical wire strings exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum PublicReadModelKind {
+    /// The unfiltered public `list` frame.
+    List,
+    /// The unfiltered public `status` frame.
+    Status,
+}
+
+/// The end of one audit page: the final-page marker, or the cursor that
+/// continues the export.
+///
+/// The wire carries the pair `complete: bool` plus `nextCursor`. That pair
+/// allowed two combinations the protocol never meant - a final page with a
+/// cursor, and an incomplete page without one - so the page end is closed
+/// here and the pair is derived from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuditPageEnd {
+    /// Final page: the response omits `nextCursor`.
+    Complete,
+    /// At least one more page follows; the response carries `nextCursor`.
+    More(AuditExportCursor),
+}
+
+impl AuditPageEnd {
+    /// Build a page end from the raw `(complete, nextCursor)` pair of a page
+    /// this crate did not construct itself (the broker export page the daemon
+    /// forwards), refusing the two combinations that pair admits.
+    pub fn from_parts(
+        complete: bool,
+        next_cursor: Option<AuditExportCursor>,
+    ) -> Result<Self, AuditPageError> {
+        match (complete, next_cursor) {
+            (true, None) => Ok(Self::Complete),
+            (false, Some(cursor)) => Ok(Self::More(cursor)),
+            (true, Some(_)) => Err(AuditPageError::CompleteWithCursor),
+            (false, None) => Err(AuditPageError::IncompleteWithoutCursor),
+        }
+    }
+
+    /// Whether this is the final page.
+    pub fn is_complete(&self) -> bool {
+        matches!(self, Self::Complete)
+    }
+
+    /// The cursor that continues the export; absent on the final page.
+    pub fn next_cursor(&self) -> Option<&AuditExportCursor> {
+        match self {
+            Self::Complete => None,
+            Self::More(cursor) => Some(cursor),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "AuditResponseWire")]
 pub struct AuditResponse {
     /// Typed broker audit entries. The public daemon page deliberately shares
     /// the broker entry shape so pagination does not lose sequence or export
     /// error information.
     pub entries: Vec<AuditExportEntry>,
-    /// Omitted only when this is the final page.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub next_cursor: Option<AuditExportCursor>,
-    /// Protocol v5 requires an explicit completion marker.
-    pub complete: bool,
+    /// Where this page ends: the final marker, or the cursor that continues
+    /// the export.
+    pub page_end: AuditPageEnd,
 }
 
-#[derive(Debug, Deserialize)]
+// The serialized shape of `AuditResponse`: the flat `entries`, `nextCursor`,
+// and `complete` keys the protocol has always carried. The comment is not a
+// doc comment on purpose - the published schema description of this
+// definition comes from the wire struct and must stay absent, exactly as it
+// was before the page end became an enum.
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AuditResponseWire {
+    /// Typed broker audit entries. The public daemon page deliberately shares
+    /// the broker entry shape so pagination does not lose sequence or export
+    /// error information.
     entries: Vec<AuditExportEntry>,
-    #[serde(default)]
+    /// Omitted only when this is the final page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     next_cursor: Option<AuditExportCursor>,
+    /// Protocol v5 requires an explicit completion marker.
     complete: bool,
 }
 
-impl<'de> Deserialize<'de> for AuditResponse {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let wire = AuditResponseWire::deserialize(deserializer)?;
-        validate_audit_page(wire.complete, wire.next_cursor.as_ref())
-            .map_err(serde::de::Error::custom)?;
+/// The serialized shape of [`AuditResponse`], borrowing the page end so a
+/// page never clones its entries just to be written.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuditResponseOut<'a> {
+    entries: &'a [AuditExportEntry],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_cursor: Option<&'a AuditExportCursor>,
+    complete: bool,
+}
+
+impl Serialize for AuditResponse {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        AuditResponseOut {
+            entries: &self.entries,
+            next_cursor: self.page_end.next_cursor(),
+            complete: self.page_end.is_complete(),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl TryFrom<AuditResponseWire> for AuditResponse {
+    type Error = AuditPageError;
+
+    fn try_from(wire: AuditResponseWire) -> Result<Self, Self::Error> {
         Ok(Self {
             entries: wire.entries,
-            next_cursor: wire.next_cursor,
-            complete: wire.complete,
+            page_end: AuditPageEnd::from_parts(wire.complete, wire.next_cursor)?,
         })
     }
 }
 
-pub(crate) fn validate_audit_page(
-    complete: bool,
-    next_cursor: Option<&AuditExportCursor>,
-) -> Result<(), &'static str> {
-    match (complete, next_cursor.is_some()) {
-        (true, true) => Err("complete audit page must omit nextCursor"),
-        (false, false) => Err("incomplete audit page requires nextCursor"),
-        _ => Ok(()),
+impl JsonSchema for AuditResponse {
+    fn schema_name() -> String {
+        "AuditResponse".to_owned()
+    }
+
+    fn json_schema(r#gen: &mut SchemaGenerator) -> Schema {
+        AuditResponseWire::json_schema(r#gen)
     }
 }
 
@@ -2404,24 +2621,36 @@ fn is_default_usb_probe_entry_kind(kind: &UsbProbeEntryKind) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One USBIP probe entry describing a bus, its owner, and the next action.
 pub struct UsbipProbeEntry {
     #[serde(default, skip_serializing_if = "is_default_usb_probe_entry_kind")]
     pub kind: UsbProbeEntryKind,
+    /// VM this entry describes.
     pub vm: String,
+    /// Environment the VM belongs to.
     pub env: String,
+    /// Physical bus id probed.
     pub bus_id: String,
+    /// Broker claim lock path.
     pub lock_path: String,
+    /// Claim status.
     pub status: UsbipProbeStatus,
+    /// VM currently holding the claim, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_vm: Option<String>,
+    /// Attached USB slot, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot: Option<String>,
+    /// Media resource bound to the slot, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media_ref: Option<MediaRef>,
+    /// How the device was discovered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_kind: Option<String>,
+    /// Alternate bus ids that match the declaration.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub candidate_bus_ids: Vec<String>,
+    /// Command the operator should run next.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follow_up_command: Option<String>,
     #[serde(default)]
@@ -2448,6 +2677,7 @@ pub struct UsbipProbeResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Audit entry filters: scope, severity, and outcome facets.
 pub struct AuditSelector {
     pub env: Option<String>,
     pub severity: Option<String>,
@@ -2492,6 +2722,7 @@ pub struct SocketReachability {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One `list` result row.
 pub struct ListEntry {
     pub env: Option<String>,
     pub graphics: bool,
@@ -2527,6 +2758,7 @@ pub struct ListEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One `status` VM row.
 pub struct VmStatus {
     pub bridge_checks: Vec<BridgeCheck>,
     pub env: Option<String>,
@@ -2563,6 +2795,7 @@ pub struct VmStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// The observed service-state map of one VM.
 pub struct PublicVmServices {
     pub gpu: Option<String>,
     pub microvm: String,
@@ -2577,6 +2810,7 @@ pub struct PublicVmServices {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One bridge-presence check result.
 pub struct BridgeCheck {
     pub bridge: IfName,
     pub present: bool,
@@ -2585,6 +2819,7 @@ pub struct BridgeCheck {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// The lifecycle envelope of one VM.
 pub struct VmLifecycle {
     #[serde(default)]
     pub degraded: bool,
@@ -2615,6 +2850,7 @@ pub enum VmLifecycleState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// The active runner plus its capability and service summaries.
 pub struct RuntimeSummary {
     pub detail: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2630,13 +2866,28 @@ pub struct RuntimeSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Whether a VM is set to autostart, with the reason.
 pub struct VmAutostartPosture {
-    pub mode: String,
+    pub mode: VmAutostartMode,
     pub reason: String,
+}
+
+/// How the daemon's autostart pass treats a VM that carries an autostart row.
+///
+/// `mode` used to be a free-form `String`. The daemon emits a row only for
+/// VMs the pass refuses to start on its own, so the vocabulary has a single
+/// member today; a future posture is an additive variant here rather than a
+/// new string. Serde names match the canonical wire strings exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum VmAutostartMode {
+    /// Autostart skips this VM; the operator starts it explicitly.
+    ManualOnly,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Optional guest-media status attached to a VM row.
 pub struct QemuMediaStatus {
     pub firmware_mode: String,
     pub media: Vec<QemuMediaSourceStatus>,
@@ -2645,16 +2896,34 @@ pub struct QemuMediaStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Runner-side QMP media state for one VM.
 pub struct QemuMediaRunnerStatus {
     pub pre_cont_progress: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qmp_readiness: Option<String>,
     pub role: String,
-    pub state: String,
+    pub state: QemuMediaRunnerState,
+}
+
+/// Liveness of the qemu-media runner process the daemon projects.
+///
+/// `state` used to be a free-form `String`; the daemon derives it from the
+/// pidfd table, which reports a role as running while its recorded process is
+/// alive at the same start time and stopped otherwise, so the wire protocol
+/// and the generated CLI schema carry enum constraints rather than a free-form
+/// string. Serde names match the canonical wire strings exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum QemuMediaRunnerState {
+    /// The registered runner process is alive.
+    Running,
+    /// No live runner process is registered for the VM.
+    Stopped,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One attached media source's status.
 pub struct QemuMediaSourceStatus {
     pub format: String,
     pub media_ref: String,
@@ -2669,26 +2938,36 @@ pub struct QemuMediaSourceStatus {
 pub struct QemuMediaRegistryStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remediation: Option<String>,
-    pub state: String,
+    pub state: QemuMediaRegistryState,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AuditEntry {
-    pub action: String,
-    pub result: String,
-    pub scope: String,
-    pub timestamp: String,
+/// The media probe registry's convergence state for one attached source.
+///
+/// `state` used to be a free-form `String`; the daemon classifies every source
+/// into exactly these four states, so both the wire protocol and the generated
+/// CLI schema carry enum constraints rather than a free-form string. Serde
+/// names match the canonical wire strings exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum QemuMediaRegistryState {
+    /// The source is declared as `direct-config` and needs no probe record.
+    DirectConfig,
+    /// A probe record matches the current declaration.
+    Present,
+    /// A probe record exists but does not match the declaration.
+    Stale,
+    /// No probe record exists for the declared source.
+    Missing,
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        AuditResponse, ExecReadOutputResult, ExecStream, ExecTerminalStatus, LevelPercent,
-        MutationFlags, NamedProcessStreamError, NamedProcessStreamErrorKind,
-        NamedProcessStreamRequest, NamedProcessStreamRequestFrame, NamedProcessStreamResponse,
-        NamedProcessStreamResponseFrame, PublicRequest, PublicResponse, RuntimeSummary,
-        VmLifecycleRequest, VmLifecycleState,
+        AuditPageEnd, AuditResponse, ExecReadOutputResult, ExecStream, ExecTerminalStatus,
+        LevelPercent, MutationFlags, MutationMode, MutationModeError, NamedProcessStreamError,
+        NamedProcessStreamErrorKind, NamedProcessStreamRequest, NamedProcessStreamRequestFrame,
+        NamedProcessStreamResponse, NamedProcessStreamResponseFrame, PublicRequest, PublicResponse,
+        RuntimeSummary, VmLifecycleRequest, VmLifecycleState,
     };
     use d2b_contracts::{
         Error, FeatureFlag, Version,
@@ -2701,6 +2980,46 @@ mod tests {
     fn vm_lifecycle_keeps_booted_variant() {
         let encoded = serde_json::to_string(&VmLifecycleState::Booted).expect("serializes");
         assert_eq!(encoded, "\"Booted\"");
+    }
+
+    #[test]
+    fn status_dto_state_vocabularies_keep_their_wire_spellings() {
+        use super::{
+            PublicReadModelKind, QemuMediaRegistryState, QemuMediaRunnerState, VmAutostartMode,
+        };
+        use crate::cli_output::{RealmGatewayState, RealmMode};
+
+        fn assert_wire<T>(value: T, wire: &str)
+        where
+            T: serde::Serialize + serde::de::DeserializeOwned + PartialEq + core::fmt::Debug,
+        {
+            let encoded = serde_json::to_value(&value).expect("vocabulary value serializes");
+            assert_eq!(encoded, serde_json::json!(wire));
+            let decoded: T = serde_json::from_value(encoded).expect("vocabulary value decodes");
+            assert_eq!(decoded, value);
+        }
+
+        assert_wire(PublicReadModelKind::List, "list");
+        assert_wire(PublicReadModelKind::Status, "status");
+        assert_wire(VmAutostartMode::ManualOnly, "manual-only");
+        assert_wire(QemuMediaRunnerState::Running, "running");
+        assert_wire(QemuMediaRunnerState::Stopped, "stopped");
+        assert_wire(QemuMediaRegistryState::DirectConfig, "direct-config");
+        assert_wire(QemuMediaRegistryState::Present, "present");
+        assert_wire(QemuMediaRegistryState::Stale, "stale");
+        assert_wire(QemuMediaRegistryState::Missing, "missing");
+        assert_wire(RealmMode::HostResident, "host-resident");
+        assert_wire(RealmMode::GatewayBacked, "gateway-backed");
+        assert_wire(RealmGatewayState::LocalOnly, "local-only");
+        assert_wire(RealmGatewayState::Stopped, "stopped");
+        assert_wire(RealmGatewayState::Starting, "starting");
+        assert_wire(RealmGatewayState::Booted, "booted");
+        assert_wire(RealmGatewayState::Running, "running");
+        assert_wire(RealmGatewayState::Stopping, "stopping");
+        assert_wire(RealmGatewayState::Restarting, "restarting");
+        assert_wire(RealmGatewayState::Failed, "failed");
+        assert_wire(RealmGatewayState::Unknown, "unknown");
+        assert_wire(RealmGatewayState::NotReported, "not reported by d2bd");
     }
 
     #[test]
@@ -2864,8 +3183,11 @@ mod tests {
             serde_json::from_value(value).expect("paginated audit response decodes");
         assert_eq!(response.entries.len(), 1);
         assert_eq!(response.entries[0].sequence, 42);
-        assert_eq!(response.next_cursor, Some(cursor));
-        assert!(!response.complete);
+        assert_eq!(response.page_end, AuditPageEnd::More(cursor));
+        assert_eq!(
+            serde_json::to_string(&response).expect("page serializes"),
+            "{\"entries\":[{\"sequence\":42,\"record\":{\"operation\":\"ApplyNftables\"}}],\"nextCursor\":{\"day\":\"2026-08-13\",\"line\":41,\"sequence\":41},\"complete\":false}"
+        );
     }
 
     #[test]
@@ -2875,8 +3197,11 @@ mod tests {
             "complete": true
         }))
         .expect("complete audit page decodes");
-        assert!(response.next_cursor.is_none());
-        assert!(response.complete);
+        assert_eq!(response.page_end, AuditPageEnd::Complete);
+        assert_eq!(
+            serde_json::to_string(&response).expect("page serializes"),
+            "{\"entries\":[],\"complete\":true}"
+        );
     }
 
     #[test]
@@ -2976,7 +3301,7 @@ mod tests {
             decoded,
             PublicRequest::VmStop(VmLifecycleRequest {
                 vm,
-                flags: MutationFlags { apply: true, .. },
+                flags: MutationFlags { mode: Some(MutationMode::Apply), .. },
                 force: false,
                 no_wait_api: false,
             }) if vm == "corp-vm"
@@ -2984,19 +3309,130 @@ mod tests {
     }
 
     #[test]
+    fn mutation_mode_closes_the_flag_pair() {
+        assert_eq!(
+            MutationMode::from_flags(false, false),
+            Err(MutationModeError)
+        );
+        assert_eq!(MutationMode::from_flags(true, false), Ok(MutationMode::DryRun));
+        assert_eq!(MutationMode::from_flags(false, true), Ok(MutationMode::Apply));
+        assert_eq!(MutationMode::from_flags(true, true), Ok(MutationMode::DryRun));
+        assert_eq!(MutationMode::DryRun.to_flags(), (true, false));
+        assert_eq!(MutationMode::Apply.to_flags(), (false, true));
+    }
+
+    #[test]
+    fn mutating_flags_keep_the_flat_pair_and_admit_a_no_mode_payload() {
+        let apply = MutationFlags {
+            mode: Some(MutationMode::Apply),
+            json: false,
+        };
+        assert_eq!(
+            serde_json::to_string(&apply).expect("flags serialize"),
+            "{\"dryRun\":false,\"apply\":true,\"json\":false}"
+        );
+
+        let decoded: PublicRequest = serde_json::from_value(serde_json::json!({
+            "kind": "vm stop",
+            "payload": {
+                "vm": "corp-vm",
+                "dryRun": true
+            }
+        }))
+        .expect("dry run payload decodes");
+        assert!(matches!(
+            decoded,
+            PublicRequest::VmStop(VmLifecycleRequest {
+                flags: MutationFlags {
+                    mode: Some(MutationMode::DryRun),
+                    json: false,
+                },
+                ..
+            })
+        ));
+
+        // A payload that selects neither flag decodes with no mode rather
+        // than failing admission: the daemon refuses it through the same
+        // structured `MutatingVerbOutcome::InvalidRequest` envelope, with its
+        // remediation string, that every other invalid mutating request gets.
+        // A decode failure here would replace that matchable outcome with an
+        // opaque frame error.
+        let decoded: PublicRequest = serde_json::from_value(serde_json::json!({
+            "kind": "vm stop",
+            "payload": {
+                "vm": "corp-vm"
+            }
+        }))
+        .expect("a payload that selects no mode still decodes");
+        assert!(matches!(
+            decoded,
+            PublicRequest::VmStop(VmLifecycleRequest {
+                flags: MutationFlags { mode: None, json: false },
+                ..
+            })
+        ));
+
+        // Both flags set still resolves to the documented precedence.
+        let decoded: PublicRequest = serde_json::from_value(serde_json::json!({
+            "kind": "vm stop",
+            "payload": {
+                "vm": "corp-vm",
+                "dryRun": true,
+                "apply": true
+            }
+        }))
+        .expect("a payload that sets both flags decodes");
+        assert!(matches!(
+            decoded,
+            PublicRequest::VmStop(VmLifecycleRequest {
+                flags: MutationFlags {
+                    mode: Some(MutationMode::DryRun),
+                    ..
+                },
+                ..
+            })
+        ));
+
+        // Round trip: a no-mode value re-serializes to the flat pair unset.
+        assert_eq!(
+            serde_json::to_string(&MutationFlags::default()).expect("flags serialize"),
+            "{\"dryRun\":false,\"apply\":false,\"json\":false}"
+        );
+    }
+
+    #[test]
     fn vm_lifecycle_omits_false_force_but_serializes_true() {
         let without_force = serde_json::to_value(PublicRequest::VmStop(VmLifecycleRequest {
             vm: "corp-vm".to_owned(),
-            flags: MutationFlags::default(),
+            flags: MutationFlags {
+                mode: Some(MutationMode::DryRun),
+                json: false,
+            },
             force: false,
             no_wait_api: false,
         }))
         .expect("vm stop serializes");
         assert!(without_force["payload"].get("force").is_none());
+        assert_eq!(
+            serde_json::to_string(&PublicRequest::VmStop(VmLifecycleRequest {
+                vm: "corp-vm".to_owned(),
+                flags: MutationFlags {
+                    mode: Some(MutationMode::DryRun),
+                    json: false,
+                },
+                force: false,
+                no_wait_api: false,
+            }))
+            .expect("vm stop serializes"),
+            "{\"kind\":\"vm stop\",\"payload\":{\"vm\":\"corp-vm\",\"dryRun\":true,\"apply\":false,\"json\":false,\"noWaitApi\":false}}"
+        );
 
         let with_force = serde_json::to_value(PublicRequest::VmRestart(VmLifecycleRequest {
             vm: "corp-vm".to_owned(),
-            flags: MutationFlags::default(),
+            flags: MutationFlags {
+                mode: Some(MutationMode::Apply),
+                json: false,
+            },
             force: true,
             no_wait_api: false,
         }))
@@ -3682,6 +4118,165 @@ mod tests {
         assert_eq!(value["payload"]["result"]["channel"], "microphone");
         assert_eq!(value["payload"]["result"]["applied"], "host-and-guest");
         assert_eq!(value["payload"]["result"]["state"]["level"], 50);
+    }
+
+    #[test]
+    fn workload_public_wire_json_shape_is_stable() {
+        use super::{
+            GraphicalLaunchPosture, LauncherExecArgs, LauncherExecDisposition, LauncherExecResult,
+            PublicRequest, PublicResponse, WorkloadAvailability, WorkloadListArgs,
+            WorkloadListResult, WorkloadOp, WorkloadOpResponse, WorkloadPublicSummary,
+            WorkloadStatusArgs, WorkloadStatusResult,
+        };
+        use d2b_contracts::{
+            capability::CapabilitySet,
+            ids::{OperationId, RealmId, WorkloadId},
+            realm::RealmPath,
+            token::ProtocolToken,
+            workload::{
+                DisplayEnvironmentPosture, EnvironmentPosture, ExecutionIdentityPosture,
+                IsolationPosture, LauncherIcon, LauncherItemKind, LauncherItemSummary,
+                SessionPersistencePosture, WorkloadExecutionPosture, WorkloadProviderKind,
+                WorkloadState,
+            },
+            workload_identity::{WorkloadIdentity, WorkloadTarget},
+        };
+
+        let target = WorkloadTarget::parse("builder.dev.d2b").expect("valid target");
+        let item_id = ProtocolToken::parse("launch-item-1").expect("valid token");
+        let operation_id = OperationId::parse("op-1").expect("valid operation id");
+        let identity = WorkloadIdentity::new(
+            WorkloadId::parse("builder").expect("valid workload id"),
+            RealmId::parse("dev").expect("valid realm id"),
+            RealmPath::new(vec![RealmId::parse("dev").expect("valid realm id")])
+                .expect("valid realm path"),
+            target.clone(),
+        );
+        let summary = WorkloadPublicSummary {
+            identity,
+            provider_kind: WorkloadProviderKind::LocalVm,
+            state: WorkloadState::Running,
+            execution_posture: WorkloadExecutionPosture {
+                isolation: IsolationPosture::VirtualMachine,
+                environment: EnvironmentPosture::RuntimeManaged,
+                display_environment: DisplayEnvironmentPosture::NotApplicable,
+                execution_identity: ExecutionIdentityPosture::WorkloadUser,
+                session_persistence: SessionPersistencePosture::RuntimeManaged,
+            },
+            availability: WorkloadAvailability::Ready,
+            graphical_posture: GraphicalLaunchPosture::NotApplicable,
+            capabilities: CapabilitySet::empty(),
+            launcher_items: vec![LauncherItemSummary {
+                id: item_id.clone(),
+                name: "Developer Shell".to_owned(),
+                icon: LauncherIcon::default(),
+                kind: LauncherItemKind::Exec,
+                graphical: false,
+                capabilities: CapabilitySet::empty(),
+            }],
+            default_item_id: Some(item_id.clone()),
+        };
+
+        // List request with an optional realm filter.
+        let list = PublicRequest::Workload(WorkloadOp::List(WorkloadListArgs {
+            realm: Some("dev".to_owned()),
+        }));
+        let value = serde_json::to_value(&list).expect("workload list serializes");
+        assert_eq!(value["kind"], "workload");
+        assert_eq!(value["payload"]["op"], "list");
+        assert_eq!(value["payload"]["args"]["realm"], "dev");
+        let decoded: PublicRequest = serde_json::from_value(value).expect("workload list decodes");
+        assert_eq!(decoded, list);
+
+        // Realm-less list request omits the optional field.
+        let all = PublicRequest::Workload(WorkloadOp::List(WorkloadListArgs { realm: None }));
+        let value = serde_json::to_value(&all).expect("realm-less list serializes");
+        assert!(value["payload"]["args"].get("realm").is_none());
+        let decoded: PublicRequest = serde_json::from_value(value).expect("realm-less list decodes");
+        assert_eq!(decoded, all);
+
+        // Status request: the target travels as the canonical wire address.
+        let status = PublicRequest::Workload(WorkloadOp::Status(WorkloadStatusArgs {
+            target: target.clone(),
+        }));
+        let value = serde_json::to_value(&status).expect("workload status serializes");
+        assert_eq!(value["payload"]["op"], "status");
+        assert_eq!(value["payload"]["args"]["target"], "builder.dev.d2b");
+        let decoded: PublicRequest = serde_json::from_value(value).expect("workload status decodes");
+        assert_eq!(decoded, status);
+
+        // LauncherExec request.
+        let exec = PublicRequest::Workload(WorkloadOp::LauncherExec(LauncherExecArgs {
+            target: target.clone(),
+            item_id: item_id.clone(),
+            operation_id: operation_id.clone(),
+        }));
+        let value = serde_json::to_value(&exec).expect("launcher exec serializes");
+        assert_eq!(value["payload"]["op"], "launcherExec");
+        assert_eq!(value["payload"]["args"]["target"], "builder.dev.d2b");
+        assert_eq!(value["payload"]["args"]["itemId"], "launch-item-1");
+        assert_eq!(value["payload"]["args"]["operationId"], "op-1");
+        let decoded: PublicRequest = serde_json::from_value(value).expect("launcher exec decodes");
+        assert_eq!(decoded, exec);
+
+        // List response with one inventory row.
+        let list_response =
+            PublicResponse::Workload(WorkloadOpResponse::List(WorkloadListResult {
+                workloads: vec![summary.clone()],
+            }));
+        let value =
+            serde_json::to_value(&list_response).expect("workload list response serializes");
+        assert_eq!(value["kind"], "workload");
+        assert_eq!(value["payload"]["op"], "list");
+        let row = &value["payload"]["result"]["workloads"][0];
+        assert_eq!(row["identity"]["workloadId"], "builder");
+        assert_eq!(row["identity"]["realmId"], "dev");
+        assert_eq!(row["identity"]["canonicalTarget"], "builder.dev.d2b");
+        assert_eq!(row["providerKind"], "local-vm");
+        assert_eq!(row["state"], "running");
+        assert_eq!(row["executionPosture"]["isolation"], "virtual-machine");
+        assert_eq!(row["availability"], "ready");
+        assert_eq!(row["graphicalPosture"], "not-applicable");
+        assert_eq!(row["launcherItems"][0]["id"], "launch-item-1");
+        assert_eq!(row["launcherItems"][0]["type"], "exec");
+        assert_eq!(row["defaultItemId"], "launch-item-1");
+        let decoded: PublicResponse =
+            serde_json::from_value(value).expect("workload list response decodes");
+        assert_eq!(decoded, list_response);
+
+        // Status response.
+        let status_response = PublicResponse::Workload(WorkloadOpResponse::Status(Box::new(
+            WorkloadStatusResult {
+                workload: summary.clone(),
+            },
+        )));
+        let value =
+            serde_json::to_value(&status_response).expect("workload status response serializes");
+        assert_eq!(value["payload"]["op"], "status");
+        assert_eq!(value["payload"]["result"]["workload"]["state"], "running");
+        let decoded: PublicResponse =
+            serde_json::from_value(value).expect("workload status response decodes");
+        assert_eq!(decoded, status_response);
+
+        // LauncherExec response.
+        let exec_response = PublicResponse::Workload(WorkloadOpResponse::LauncherExec(
+            LauncherExecResult {
+                target,
+                item_id,
+                operation_id,
+                disposition: LauncherExecDisposition::Committed,
+            },
+        ));
+        let value =
+            serde_json::to_value(&exec_response).expect("launcher exec response serializes");
+        assert_eq!(value["payload"]["op"], "launcherExec");
+        assert_eq!(value["payload"]["result"]["target"], "builder.dev.d2b");
+        assert_eq!(value["payload"]["result"]["itemId"], "launch-item-1");
+        assert_eq!(value["payload"]["result"]["operationId"], "op-1");
+        assert_eq!(value["payload"]["result"]["disposition"], "committed");
+        let decoded: PublicResponse =
+            serde_json::from_value(value).expect("launcher exec response decodes");
+        assert_eq!(decoded, exec_response);
     }
 
     #[test]

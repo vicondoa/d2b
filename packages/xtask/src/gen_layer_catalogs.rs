@@ -155,16 +155,7 @@ fn string_slice(name: &str, doc: &[&str], values: &[String]) -> String {
 }
 
 /// Render one closed `&[&str]` constant.
-fn string_array(name: &str, doc: &[&str], values: &[String]) -> String {
-    let mut out = doc_lines(doc);
-    let _ = writeln!(out, "pub const {name}: &[&str] = &[");
-    for value in values {
-        let _ = writeln!(out, "    \"{value}\",");
-    }
-    out.push_str("];\n");
-    out
-}
-
+///
 /// Render one `&[(&str, &str)]` constant.
 fn string_pair_slice(name: &str, doc: &[&str], values: &[(&str, &str)]) -> String {
     let mut out = doc_lines(doc);
@@ -284,11 +275,19 @@ fn broker_operation_values(repo_root: &Path) -> Result<Vec<String>, String> {
     Ok(values)
 }
 
-/// The process-provider ids one consumer admits.
-fn process_provider_ids(metric_label: Option<bool>) -> Vec<String> {
+/// The process-provider ids the surface and audit catalogs admit.
+fn all_process_provider_ids() -> Vec<String> {
     PROCESS_PROVIDERS
         .iter()
-        .filter(|provider| metric_label.is_none_or(|metric| provider.metric_label == metric))
+        .map(|provider| provider.id.to_owned())
+        .collect()
+}
+
+/// The process-provider ids the metric label domain admits.
+fn metric_process_provider_ids() -> Vec<String> {
+    PROCESS_PROVIDERS
+        .iter()
+        .filter(|provider| provider.metric_label)
         .map(|provider| provider.id.to_owned())
         .collect()
 }
@@ -296,7 +295,7 @@ fn process_provider_ids(metric_label: Option<bool>) -> Vec<String> {
 /// Render the CLI's surface catalog module.
 fn surface_catalog_source() -> String {
     let mut source = String::from(HEADER);
-    source.push_str(&string_array(
+    source.push_str(&string_slice(
         "RESOURCE_TYPES",
         &[
             "The resource types the CLI addresses, in registry order.",
@@ -359,78 +358,98 @@ fn surface_catalog_source() -> String {
             .map(|value| (*value).to_owned())
             .collect::<Vec<_>>(),
     ));
-    source.push_str(&string_array(
+    source.push_str(&string_slice(
         "MUTATION_VERBS",
         &["The resource verbs that write an audit row, in contract order."],
         &resource_mutation_verbs(),
     ));
-    source.push_str(&string_array(
+    source.push_str(&string_slice(
         "PROCESS_PROVIDERS",
         &["The process providers an audit record may name."],
-        &process_provider_ids(None),
+        &all_process_provider_ids(),
     ));
     source.push_str(&doc_lines(&[
         "The resource type a typed noun addresses.",
     ]));
     source.push_str(
-        "pub fn typed_noun_type(noun: &str) -> Option<&'static str> {\n    \
-         TYPED_NOUNS\n        .iter()\n        \
-         .find_map(|(name, resource_type)| (*name == noun).then_some(*resource_type))\n}\n",
+        r##"pub fn typed_noun_type(noun: &str) -> Option<&'static str> {
+    TYPED_NOUNS
+        .iter()
+        .find_map(|(name, resource_type)| (*name == noun).then_some(*resource_type))
+}
+"##,
     );
     source.push_str(&doc_lines(&[
         "The resource type a typed verb is available on.",
     ]));
     source.push_str(
-        "pub fn typed_verb_type(verb: &str) -> Option<&'static str> {\n    \
-         TYPED_VERB_TYPES\n        .iter()\n        \
-         .find_map(|(name, resource_type)| (*name == verb).then_some(*resource_type))\n}\n",
+        r##"pub fn typed_verb_type(verb: &str) -> Option<&'static str> {
+    TYPED_VERB_TYPES
+        .iter()
+        .find_map(|(name, resource_type)| (*name == verb).then_some(*resource_type))
+}
+"##,
     );
     source.push_str(&doc_lines(&[
         "Whether the resource type is in the registry.",
     ]));
     source.push_str(
-        "pub fn admits_resource_type(resource_type: &str) -> bool {\n    \
-         RESOURCE_TYPES.contains(&resource_type)\n}\n",
+        r##"pub fn admits_resource_type(resource_type: &str) -> bool {
+    RESOURCE_TYPES.contains(&resource_type)
+}
+"##,
     );
     source.push_str(&doc_lines(&["Whether the verb writes a resource row."]));
     source.push_str(
-        "pub fn admits_mutation_verb(verb: &str) -> bool {\n    \
-         MUTATION_VERBS.contains(&verb)\n}\n",
+        r##"pub fn admits_mutation_verb(verb: &str) -> bool {
+    MUTATION_VERBS.contains(&verb)
+}
+"##,
     );
     source.push_str(&doc_lines(&[
         "Whether the resource type is one the controller owns.",
     ]));
     source.push_str(
-        "pub fn is_controller_owned(resource_type: &str) -> bool {\n    \
-         CONTROLLER_OWNED_TYPES.contains(&resource_type)\n}\n",
+        r##"pub fn is_controller_owned(resource_type: &str) -> bool {
+    CONTROLLER_OWNED_TYPES.contains(&resource_type)
+}
+"##,
     );
     source.push_str(&doc_lines(&[
         "Whether the resource type serves as an execution target.",
     ]));
     source.push_str(
-        "pub fn is_execution_target(resource_type: &str) -> bool {\n    \
-         EXECUTION_TARGET_TYPES.contains(&resource_type)\n}\n",
+        r##"pub fn is_execution_target(resource_type: &str) -> bool {
+    EXECUTION_TARGET_TYPES.contains(&resource_type)
+}
+"##,
     );
     source.push_str(&doc_lines(&[
         "Whether the posture marks a row with no isolation boundary.",
     ]));
     source.push_str(
-        "pub fn is_no_isolation_posture(posture: &str) -> bool {\n    \
-         NO_ISOLATION_POSTURES.contains(&posture)\n}\n",
+        r##"pub fn is_no_isolation_posture(posture: &str) -> bool {
+    NO_ISOLATION_POSTURES.contains(&posture)
+}
+"##,
     );
     source.push_str(&doc_lines(&[
         "Whether the provider reference marks a no-isolation row.",
     ]));
     source.push_str(
-        "pub fn is_unsafe_local_provider(reference: &str) -> bool {\n    \
-         reference == UNSAFE_LOCAL_PROVIDER_REF\n}\n",
+        r##"pub fn is_unsafe_local_provider(reference: &str) -> bool {
+    reference == UNSAFE_LOCAL_PROVIDER_REF
+}
+"##,
     );
     source.push_str(&doc_lines(&[
         "Whether the provider kind marks a no-isolation row.",
     ]));
     source.push_str(
-        "pub fn is_unsafe_local_provider_kind(kind: &str) -> bool {\n    \
-         kind == UNSAFE_LOCAL_PROVIDER_KIND\n}\n",
+        r##"pub fn is_unsafe_local_provider_kind(kind: &str) -> bool {
+    kind == UNSAFE_LOCAL_PROVIDER_KIND
+}
+"##,
     );
     source.push_str(&string_slice(
         "NO_ISOLATION_TARGET_TYPES",
@@ -444,8 +463,10 @@ fn surface_catalog_source() -> String {
         "Whether the execution target runs without an isolation boundary.",
     ]));
     source.push_str(
-        "pub fn is_no_isolation_target(resource_type: &str) -> bool {\n    \
-         NO_ISOLATION_TARGET_TYPES.contains(&resource_type)\n}\n",
+        r##"pub fn is_no_isolation_target(resource_type: &str) -> bool {
+    NO_ISOLATION_TARGET_TYPES.contains(&resource_type)
+}
+"##,
     );
     source
 }
@@ -453,7 +474,7 @@ fn surface_catalog_source() -> String {
 /// Render the audit crate's catalog module.
 fn audit_catalog_source() -> String {
     let mut source = String::from(HEADER);
-    source.push_str(&string_array(
+    source.push_str(&string_slice(
         "RESOURCE_TYPES",
         &[
             "The resource types an audit record may name.",
@@ -463,15 +484,15 @@ fn audit_catalog_source() -> String {
         ],
         &audit_resource_types(),
     ));
-    source.push_str(&string_array(
+    source.push_str(&string_slice(
         "MUTATION_VERBS",
         &["The resource verbs that write an audit row, in contract order."],
         &resource_mutation_verbs(),
     ));
-    source.push_str(&string_array(
+    source.push_str(&string_slice(
         "PROCESS_PROVIDERS",
         &["The process providers a process effect record may name."],
-        &process_provider_ids(None),
+        &all_process_provider_ids(),
     ));
     source.push_str(&doc_lines(&[
         "Whether the resource type is in the registry.",
@@ -493,7 +514,7 @@ fn audit_catalog_source() -> String {
 /// Render the provider contracts crate's telemetry catalog module.
 fn telemetry_catalog_source(repo_root: &Path) -> Result<String, String> {
     let mut source = String::from(HEADER);
-    source.push_str(&string_array(
+    source.push_str(&string_slice(
         "RESOURCE_TYPE_VALUES",
         &[
             "The resource type label domain, projected from the standard",
@@ -504,17 +525,17 @@ fn telemetry_catalog_source(repo_root: &Path) -> Result<String, String> {
         ],
         &metric_resource_types(),
     ));
-    source.push_str(&string_array(
+    source.push_str(&string_slice(
         "API_VERBS",
         &["The API verb label domain, projected from the Role resource verbs."],
         &resource_verbs(),
     ));
-    source.push_str(&string_array(
+    source.push_str(&string_slice(
         "PROCESS_PROVIDERS",
         &["The process provider label domain."],
-        &process_provider_ids(Some(true)),
+        &metric_process_provider_ids(),
     ));
-    source.push_str(&string_array(
+    source.push_str(&string_slice(
         "BROKER_OPERATION_VALUES",
         &[
             "The broker operation label domain: the committed operation rows'",
@@ -682,9 +703,9 @@ mod tests {
     /// The process provider vocabulary projects both consumer domains.
     #[test]
     fn process_provider_domains_project_from_one_vocabulary() {
-        assert_eq!(process_provider_ids(None).len(), PROCESS_PROVIDERS.len());
+        assert_eq!(all_process_provider_ids().len(), PROCESS_PROVIDERS.len());
         assert_eq!(
-            process_provider_ids(Some(true)),
+            metric_process_provider_ids(),
             vec!["minijail".to_owned(), "systemd".to_owned()]
         );
     }
@@ -697,14 +718,9 @@ mod tests {
     fn broker_operation_domain_projects_the_committed_rows() {
         let root = crate::repo_root().expect("repository root");
         let values = broker_operation_values(root).expect("committed broker rows");
-        let text = fs::read_to_string(root.join(BROKER_OPERATIONS_PATH)).expect("row catalog");
-        let catalog: BrokerOperations = serde_json::from_str(&text).expect("row catalog parses");
-        let expected = catalog
-            .rows
-            .iter()
-            .filter_map(|row| row.wire_variant.clone())
-            .collect::<Vec<_>>();
-        assert_eq!(values, expected);
+        // The pins below are the behaviour; a recomputed expectation derived
+        // with the same wire-variant projection as `broker_operation_values`
+        // could never disagree with it, so the equality is not asserted.
         assert!(
             values.iter().any(|value| value == "UsbipBind"),
             "a committed wire operation is in the domain"

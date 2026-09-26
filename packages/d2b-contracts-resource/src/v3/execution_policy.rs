@@ -17,9 +17,11 @@ use super::{
     ResourceRef,
     resource_schema::{CanonicalJsonError, CanonicalJsonObject, canonical_json_bytes},
 };
+use d2b_contracts::wire_deserialize;
 
 #[macro_export]
 macro_rules! redacted_debug {
+    // Whole-value redaction: `Type(<redacted>)`.
     ($type:ty) => {
         impl core::fmt::Debug for $type {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -27,6 +29,84 @@ macro_rules! redacted_debug {
             }
         }
     };
+    // Field-level redaction: `Type { field: value, ... }`. Each value is
+    // rendered by one of the `redacted_debug_field_*` helpers: a closure
+    // borrowing a field renders the value itself, a closure evaluating an
+    // expression (collection length, option presence) renders its result,
+    // and a closure returning the `"<redacted>"` literal redacts the field.
+    ($type:ty, $($field:ident: $kind:ident($closure:expr)),+ $(,)?) => {
+        impl core::fmt::Debug for $type {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                let mut debug = f.debug_struct(stringify!($type));
+                $(
+                    debug.field(stringify!($field), &$kind($closure, self));
+                )+
+                debug.finish()
+            }
+        }
+    };
+    // Field-level redaction with a non-exhaustive tail: `Type { ..., .. }`.
+    ($type:ty, non_exhaustive, $($field:ident: $kind:ident($closure:expr)),+ $(,)?) => {
+        impl core::fmt::Debug for $type {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                let mut debug = f.debug_struct(stringify!($type));
+                $(
+                    debug.field(stringify!($field), &$kind($closure, self));
+                )+
+                debug.finish_non_exhaustive()
+            }
+        }
+    };
+    // Enum variant redaction: payload-bearing variants render as
+    // `Type::Variant(<redacted>)`; unit variants listed after `; plain:`
+    // render as `Type::Variant`.
+    ($type:ty, variants: $($redacted:ident),+ $(,)? ; plain: $($plain:ident),+ $(,)?) => {
+        impl core::fmt::Debug for $type {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                match self {
+                    $(
+                        Self::$redacted { .. } => f.write_str(concat!(
+                            stringify!($type),
+                            "::",
+                            stringify!($redacted),
+                            "(<redacted>)"
+                        )),
+                    )+
+                    $(
+                        Self::$plain => f.write_str(concat!(
+                            stringify!($type),
+                            "::",
+                            stringify!($plain)
+                        )),
+                    )+
+                }
+            }
+        }
+    };
+}
+
+/// Renders one `redacted_debug!` field closure's borrowed value.
+///
+/// The closure receives `&T` and returns a borrowed `&R`; the returned
+/// reference is passed to the debug formatter unchanged. The HRTB bound
+/// lets the closure borrow from its argument for any lifetime, which keeps
+/// `&self` borrows valid through the formatter call.
+pub fn redacted_debug_field_ref<T: ?Sized, R: ?Sized + core::fmt::Debug>(
+    value: impl for<'a> FnOnce(&'a T) -> &'a R,
+    this: &T,
+) -> &R {
+    value(this)
+}
+
+/// Renders one `redacted_debug!` field closure's owned value.
+/// The closure receives `&T` and returns an owned `R` (a collection length,
+/// an option presence, or the `"<redacted>"` literal); the returned value is
+/// passed to the debug formatter unchanged.
+pub fn redacted_debug_field_value<T: ?Sized, R: core::fmt::Debug>(
+    value: impl FnOnce(&T) -> R,
+    this: &T,
+) -> R {
+    value(this)
 }
 
 #[macro_export]
@@ -168,6 +248,18 @@ pub fn require_execution_ref(reference: &ResourceRef) -> Result<(), PrimitiveSpe
         Ok(())
     } else {
         Err(PrimitiveSpecError::WrongResourceType)
+    }
+}
+
+/// Ensure a collection that must be unique carries no duplicate entry.
+pub(crate) fn ensure_unique<T: Ord + Clone>(values: &[T]) -> Result<(), PrimitiveSpecError> {
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    if sorted.len() == values.len() {
+        Ok(())
+    } else {
+        Err(PrimitiveSpecError::DuplicateEntry)
     }
 }
 
@@ -630,39 +722,37 @@ impl core::fmt::Debug for BudgetSpec {
     }
 }
 
-impl<'de> Deserialize<'de> for BudgetSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            cpu: Option<CpuBudget>,
-            #[serde(default)]
-            memory: Option<MemoryBudget>,
-            #[serde(default)]
-            pids: Option<CountBudget>,
-            #[serde(default)]
-            fds: Option<CountBudget>,
-            #[serde(default)]
-            io_weight: Option<u32>,
-            #[serde(default)]
-            network_egress_bps: Option<u64>,
-            #[serde(default)]
-            thread_limit: Option<u32>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.cpu,
-            wire.memory,
-            wire.pids,
-            wire.fds,
-            wire.io_weight,
-            wire.network_egress_bps,
-            wire.thread_limit,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    BudgetSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default)]
+        cpu: Option<CpuBudget>,
+        #[serde(default)]
+        memory: Option<MemoryBudget>,
+        #[serde(default)]
+        pids: Option<CountBudget>,
+        #[serde(default)]
+        fds: Option<CountBudget>,
+        #[serde(default)]
+        io_weight: Option<u32>,
+        #[serde(default)]
+        network_egress_bps: Option<u64>,
+        #[serde(default)]
+        thread_limit: Option<u32>,
+    },
+    wire,
+    Self::new(
+        wire.cpu,
+        wire.memory,
+        wire.pids,
+        wire.fds,
+        wire.io_weight,
+        wire.network_egress_bps,
+        wire.thread_limit,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// One Network made available to Processes under an execution target.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -695,19 +785,17 @@ impl NetworkAttachment {
 
 redacted_debug!(NetworkAttachment);
 
-impl<'de> Deserialize<'de> for NetworkAttachment {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            network_ref: ResourceRef,
-            #[serde(default)]
-            default: bool,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.network_ref, wire.default).map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    NetworkAttachment,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        network_ref: ResourceRef,
+        #[serde(default)]
+        default: bool,
+    },
+    wire,
+    Self::new(wire.network_ref, wire.default).map_err(serde::de::Error::custom)
+);
 
 /// One Device made available to Processes under an execution target.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -740,19 +828,17 @@ impl DeviceAttachment {
 
 redacted_debug!(DeviceAttachment);
 
-impl<'de> Deserialize<'de> for DeviceAttachment {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            device_ref: ResourceRef,
-            #[serde(default)]
-            exclusive: bool,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.device_ref, wire.exclusive).map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    DeviceAttachment,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        device_ref: ResourceRef,
+        #[serde(default)]
+        exclusive: bool,
+    },
+    wire,
+    Self::new(wire.device_ref, wire.exclusive).map_err(serde::de::Error::custom)
+);
 
 /// The shared Host and Guest execution, policy, and budget parent schema.
 ///
@@ -790,12 +876,7 @@ impl ExecutionPolicy {
         if allowed_domains.is_empty() || allowed_domains.len() > 2 {
             return Err(PrimitiveSpecError::TooManyEntries);
         }
-        let mut unique = allowed_domains.clone();
-        unique.sort_unstable();
-        unique.dedup();
-        if unique.len() != allowed_domains.len() {
-            return Err(PrimitiveSpecError::DuplicateEntry);
-        }
+        ensure_unique(&allowed_domains)?;
         if !allowed_domains.contains(&default_domain) {
             return Err(PrimitiveSpecError::ConflictingFields);
         }
@@ -920,6 +1001,7 @@ pub struct ExecutionPolicyWire {
 }
 
 impl ExecutionPolicyWire {
+    /// Convert the wire mirror into a validated `ExecutionPolicy`.
     pub fn into_policy(self) -> Result<ExecutionPolicy, PrimitiveSpecError> {
         ExecutionPolicy::new(
             self.default_domain,
@@ -941,6 +1023,8 @@ fn default_allowed_domains() -> Vec<ExecutionDomain> {
     vec![ExecutionDomain::System]
 }
 
+/// Build a bounded-string JSON schema; macro-support surface for the
+/// exported `string_schema!` expansion.
 pub fn string_schema_object(min: u32, max: u32) -> schemars::schema::Schema {
     let mut schema = schemars::schema::SchemaObject {
         instance_type: Some(schemars::schema::SingleOrVec::Single(Box::new(

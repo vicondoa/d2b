@@ -14,6 +14,7 @@ await_holding_lock = "deny"
 await_holding_refcell_ref = "deny"
 
 [dependencies]
+anyhow = "1"
 command-fds = "0.3"
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
@@ -29,6 +30,7 @@ nix = { version = "0.29", default-features = false, features = ["fs", "resource"
 rustix = { workspace = true, features = ["event", "fs", "pipe", "process", "net"] }
 thiserror = "2"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 wayland-protocols-misc = { version = "0.3", features = ["client"] }

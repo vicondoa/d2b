@@ -37,7 +37,7 @@ rustix = { workspace = true }
 semver = "1"
 serde.workspace = true
 serde_json.workspace = true
-sha2 = "0.10"
+sha2 = { workspace = true }
 socket2 = "0.5"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time", "net", "process", "fs", "io-util"] }
 tracing = "0.1"

@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use d2b_provider_notification_desktop::{
     ActionSpec, Category, NotificationError, NotificationOutcome, NotificationProjection,
     NotificationRequest, NotificationResult, NotificationTelemetryField,
-    NotificationTelemetryFrame,
+    NotificationTelemetryFrame, ProviderError,
 };
 
 #[test]
@@ -47,6 +47,6 @@ fn notification_canary_stays_out_of_debug_errors_and_telemetry() {
             key: "summary",
             value: CANARY.to_owned(),
         },]),
-        Err("notification-telemetry-field-rejected")
+        Err(ProviderError::TelemetryFieldRejected)
     );
 }

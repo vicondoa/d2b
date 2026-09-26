@@ -39,7 +39,7 @@ use d2b_provider_audio_pipewire::{
 use serde_json::Value;
 
 use crate::ServerState;
-use crate::TypedError;
+use crate::{TypedError, error_source};
 use crate::audio_host_controller::{
     HostAudioController, PipeWireHostController, QemuAudioController,
 };
@@ -157,7 +157,7 @@ pub fn enforce_host_grant(
     channel: AudioChannel,
 ) -> HostEnforcementResult {
     match build_host_controller(state, vm_name, cap, caller_role) {
-        Some(ctrl) => ctrl.enforce_grant(vm_name, grant, channel),
+        Some(ctrl) => ctrl.enforce_grant(grant, channel),
         None => HostEnforcementResult::Unsupported,
     }
 }
@@ -174,7 +174,7 @@ pub fn enforce_host_level(
     channel: AudioChannel,
 ) -> HostEnforcementResult {
     match build_host_controller(state, vm_name, cap, caller_role) {
-        Some(ctrl) => ctrl.enforce_level(vm_name, level, channel),
+        Some(ctrl) => ctrl.enforce_level(level, channel),
         None => HostEnforcementResult::Unsupported,
     }
 }
@@ -369,7 +369,20 @@ pub(crate) fn combined_audio_applied(
 
 // ── dispatch_audio ────────────────────────────────────────────────────────────
 
-pub fn dispatch_audio(
+/// Dispatch one audio op (Status, SetVolume, Mute) through the
+    /// capability-resolved audio provider for the target VMs.
+    ///
+    /// Status collects a per-VM result (entries and per-VM errors) from
+    /// the provider's state; SetVolume and Mute apply a state transition under
+    /// the audio serialization lock.
+    ///
+    /// A mutation refuses a target that is not declared in the public manifest
+    /// through [`TypedError::AudioVmNotFound`], and a target whose manifest
+    /// entry does not declare audio through [`TypedError::AudioNotEnabled`] -
+    /// the same classes the status path reports per VM through `AudioVmError`.
+    /// Lock, read, write, and enforcement failures keep returning
+    /// [`TypedError::InternalIo`].
+    pub fn dispatch_audio(
     state: &ServerState,
     caller_role: BrokerCallerRole,
     op: AudioOp,
@@ -389,10 +402,10 @@ fn dispatch_audio_status(
     args: AudioStatusArgs,
 ) -> Result<Value, TypedError> {
     let manifest: ManifestV04 = crate::load_json(&state.config.artifacts.public_manifest_path)?;
-    let mut entries: Vec<AudioVmState> = Vec::new();
-    let mut errors: Vec<AudioVmError> = Vec::new();
 
-    // Collect the set of VMs to query.
+    // Collect the set of VMs to query before sizing the result buffers: the
+    // only lower bound on admission of that set, so both grow-by-push lists
+    // below are pre-sized to it instead of starting empty.
     let vm_names: Vec<String> = if args.vms.is_empty() {
         manifest
             .vms
@@ -403,6 +416,9 @@ fn dispatch_audio_status(
     } else {
         args.vms.clone()
     };
+
+    let mut entries: Vec<AudioVmState> = Vec::with_capacity(vm_names.len());
+    let mut errors: Vec<AudioVmError> = Vec::with_capacity(vm_names.len());
 
     for vm_name in &vm_names {
         match resolve_vm_audio_status(state, vm_name, &manifest, caller_role.clone()) {
@@ -484,14 +500,12 @@ fn dispatch_audio_set_volume(
     let vm = manifest
         .vms
         .get(vm_name)
-        .ok_or_else(|| TypedError::InternalIo {
-            context: format!("audio set-volume {vm_name}"),
-            detail: "VM not present in public manifest".to_owned(),
+        .ok_or_else(|| TypedError::AudioVmNotFound {
+            vm: vm_name.clone(),
         })?;
 
-    let cap = audio_capability_for_vm(vm).ok_or_else(|| TypedError::InternalIo {
-        context: format!("audio set-volume {vm_name}"),
-        detail: "audio not enabled for this VM".to_owned(),
+    let cap = audio_capability_for_vm(vm).ok_or_else(|| TypedError::AudioNotEnabled {
+        vm: vm_name.clone(),
     })?;
 
     let state_dir = std::path::PathBuf::from(&vm.state_dir);
@@ -502,10 +516,12 @@ fn dispatch_audio_set_volume(
         acquire_audio_state_lock(&lock_path, true).map_err(|e| TypedError::InternalIo {
             context: "acquire audio state lock".to_owned(),
             detail: e.to_string(),
+            source: error_source(e),
         })?;
     let current = read_audio_state_unlocked(&state_path).map_err(|e| TypedError::InternalIo {
         context: "read audio state".to_owned(),
         detail: e.to_string(),
+        source: error_source(e),
     })?;
 
     let old_level = match channel {
@@ -526,6 +542,7 @@ fn dispatch_audio_set_volume(
             TypedError::InternalIo {
                 context: "write audio state".to_owned(),
                 detail: e.to_string(),
+                source: error_source(e),
             }
         })?;
     }
@@ -536,6 +553,7 @@ fn dispatch_audio_set_volume(
             return Err(TypedError::InternalIo {
                 context: "audio host enforcement".to_owned(),
                 detail: "host level enforcement failed; state not updated".to_owned(),
+                source: None,
             });
         }
         result
@@ -548,6 +566,7 @@ fn dispatch_audio_set_volume(
             TypedError::InternalIo {
                 context: "write audio state".to_owned(),
                 detail: e.to_string(),
+                source: error_source(e),
             }
         })?;
     }
@@ -591,14 +610,12 @@ fn dispatch_audio_mute(
     let vm = manifest
         .vms
         .get(vm_name)
-        .ok_or_else(|| TypedError::InternalIo {
-            context: format!("audio mute {vm_name}"),
-            detail: "VM not present in public manifest".to_owned(),
+        .ok_or_else(|| TypedError::AudioVmNotFound {
+            vm: vm_name.clone(),
         })?;
 
-    let cap = audio_capability_for_vm(vm).ok_or_else(|| TypedError::InternalIo {
-        context: format!("audio mute {vm_name}"),
-        detail: "audio not enabled for this VM".to_owned(),
+    let cap = audio_capability_for_vm(vm).ok_or_else(|| TypedError::AudioNotEnabled {
+        vm: vm_name.clone(),
     })?;
 
     let state_dir = std::path::PathBuf::from(&vm.state_dir);
@@ -609,10 +626,12 @@ fn dispatch_audio_mute(
         acquire_audio_state_lock(&lock_path, true).map_err(|e| TypedError::InternalIo {
             context: "acquire audio state lock".to_owned(),
             detail: e.to_string(),
+            source: error_source(e),
         })?;
     let current = read_audio_state_unlocked(&state_path).map_err(|e| TypedError::InternalIo {
         context: "read audio state".to_owned(),
         detail: e.to_string(),
+        source: error_source(e),
     })?;
 
     let grant = if mute {
@@ -633,6 +652,7 @@ fn dispatch_audio_mute(
             TypedError::InternalIo {
                 context: "write audio state".to_owned(),
                 detail: e.to_string(),
+                source: error_source(e),
             }
         })?;
     }
@@ -643,6 +663,7 @@ fn dispatch_audio_mute(
             return Err(TypedError::InternalIo {
                 context: "audio host enforcement".to_owned(),
                 detail: "host grant enforcement failed; state not updated".to_owned(),
+                source: None,
             });
         }
         result
@@ -655,6 +676,7 @@ fn dispatch_audio_mute(
             TypedError::InternalIo {
                 context: "write audio state".to_owned(),
                 detail: e.to_string(),
+                source: error_source(e),
             }
         })?;
     }
@@ -758,7 +780,7 @@ mod tests {
         use crate::audio_host_controller::FakeHostController;
         let cap = d2b_provider_guest_cloud_hypervisor::audio_capability();
         let ctrl = FakeHostController::success();
-        let host_result = ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Speaker);
+        let host_result = ctrl.enforce_grant(AudioGrant::Off, AudioChannel::Speaker);
         assert_eq!(host_result, HostEnforcementResult::Applied);
         let applied = combined_audio_applied(host_result, &cap);
         assert_eq!(
@@ -775,7 +797,7 @@ mod tests {
         // report Unsupported, never HostOnly.
         let cap = d2b_provider_guest_cloud_hypervisor::audio_capability();
         let ctrl = FakeHostController::failed();
-        let host_result = ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Speaker);
+        let host_result = ctrl.enforce_grant(AudioGrant::Off, AudioChannel::Speaker);
         assert_eq!(host_result, HostEnforcementResult::Failed);
         let applied = combined_audio_applied(host_result, &cap);
         assert_eq!(
@@ -1133,7 +1155,7 @@ mod tests {
         )
         .expect_err("failed host enforcement must refuse the increase");
         match error {
-            TypedError::InternalIo { context, detail } => {
+            TypedError::InternalIo { context, detail, .. } => {
                 assert_eq!(context, "audio host enforcement");
                 assert!(
                     detail.contains("host level enforcement failed"),
@@ -1169,7 +1191,7 @@ mod tests {
         )
         .expect_err("failed host enforcement must refuse the unmute");
         match error {
-            TypedError::InternalIo { context, detail } => {
+            TypedError::InternalIo { context, detail, .. } => {
                 assert_eq!(context, "audio host enforcement");
                 assert!(
                     detail.contains("host grant enforcement failed"),

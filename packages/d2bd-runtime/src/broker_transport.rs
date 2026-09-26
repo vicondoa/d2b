@@ -9,7 +9,7 @@ use d2b_contracts_broker::broker_wire::{
 };
 
 use crate::target_runtime::DaemonMode;
-use crate::typed_error::TypedError;
+use crate::typed_error::{TypedError, error_source};
 use crate::unix_transport::{
     connect_seqpacket, connect_seqpacket_with_timeout, read_frame, write_json_frame,
 };
@@ -28,11 +28,10 @@ pub fn dispatch_broker_request_to_socket(
     caller_role: BrokerCallerRole,
     timeout: Option<Duration>,
 ) -> Result<BrokerResponse, TypedError> {
-    let audit_join = default_audit_join_context(&request);
+    let audit_join = default_audit_join_context(&request)?;
     let envelope = BrokerRequestEnvelope {
         request,
         caller_role,
-        test_peer_uid: None,
         audit_join,
     };
     let Some(timeout) = timeout else {
@@ -43,6 +42,7 @@ pub fn dispatch_broker_request_to_socket(
             TypedError::InternalBrokerUnavailable {
                 path: socket_path.to_path_buf(),
                 detail: err.to_string(),
+                source: error_source(err),
             }
         });
     };
@@ -57,15 +57,44 @@ pub fn dispatch_broker_request_to_socket(
     }
 }
 
-pub fn default_audit_join_context(request: &BrokerRequest) -> Option<AuditJoinContext> {
-    let (zone_id, operation_identity) = request.authoritative_audit_join()?;
-    Some(AuditJoinContext {
-        zone_id: CanonicalAuditDigest::parse(zone_id).expect("canonical broker zone digest"),
-        operation_identity: CanonicalAuditDigest::parse(operation_identity)
-            .expect("canonical broker operation digest"),
-    })
+/// Extract the audit-join zone and operation identities a request
+/// authoritatively carries, if any.
+///
+/// # Errors
+///
+/// Returns `WireInvalidFrame` when the cited identities are not canonical
+/// audit digests. The identities are produced by hashing the request's
+/// authoritative fields, so the canonical spelling holds by construction and
+/// today's producers cannot reach the refusal; it converts the fallible
+/// digest constructor into a typed error so this dispatch path never panics
+/// on a value derived from the wire.
+pub fn default_audit_join_context(
+    request: &BrokerRequest,
+) -> Result<Option<AuditJoinContext>, TypedError> {
+    let Some((zone_id, operation_identity)) = request.authoritative_audit_join() else {
+        return Ok(None);
+    };
+    let zone_id =
+        CanonicalAuditDigest::parse(zone_id).map_err(|_| TypedError::WireInvalidFrame {
+            detail: "audit zone identity invalid".to_owned(),
+        })?;
+    let operation_identity = CanonicalAuditDigest::parse(operation_identity).map_err(|_| {
+        TypedError::WireInvalidFrame {
+            detail: "audit operation identity invalid".to_owned(),
+        }
+    })?;
+    Ok(Some(AuditJoinContext {
+        zone_id,
+        operation_identity,
+    }))
 }
 
+/// Seconds left before `deadline`, refusing ops that cannot plausibly fit.
+///
+/// # Errors
+///
+/// Returns `InternalBrokerTimeout` when the deadline has already passed, so
+/// each socket op is gated on a budget that cannot overrun into the next op.
 pub fn broker_remaining_before_op(
     deadline: Instant,
     socket_path: &Path,
@@ -96,6 +125,7 @@ fn broker_round_trip_within_deadline(
         .map_err(|error| TypedError::InternalIo {
             context: format!("set broker write timeout to {remaining:?}"),
             detail: error.to_string(),
+            source: error_source(error),
         })?;
     write_json_frame(&socket, envelope)?;
 
@@ -105,14 +135,18 @@ fn broker_round_trip_within_deadline(
         .map_err(|error| TypedError::InternalIo {
             context: format!("set broker read timeout to {remaining:?}"),
             detail: error.to_string(),
+            source: error_source(error),
         })?;
     let response = read_frame(&socket)?;
     serde_json::from_slice(&response).map_err(|error| TypedError::InternalBrokerUnavailable {
         path: socket_path.to_path_buf(),
         detail: error.to_string(),
+        source: error_source(error),
     })
 }
 
+/// The wire `kind` discriminator of a broker response, or `unknown` when
+/// the payload carries none or cannot be serialized.
 pub fn broker_response_kind(response: &BrokerResponse) -> String {
     serde_json::to_value(response)
         .ok()
@@ -125,6 +159,11 @@ pub fn broker_response_kind(response: &BrokerResponse) -> String {
         .unwrap_or_else(|| "unknown".to_owned())
 }
 
+/// Render an operator-facing (summary, remediation) pair for the launcher
+/// role when a broker operation fails.
+///
+/// The pair carries operator remediation prose only, keeping environment
+/// redaction safe for launcher-facing surfaces.
 pub fn redact_broker_error_for_launcher(
     op_name: &str,
     target_wave: Option<&str>,
@@ -184,6 +223,9 @@ pub fn redact_broker_error_for_launcher(
     (summary, remediation)
 }
 
+/// Render an operator-facing (summary, remediation) pair for the launcher
+/// role when the broker socket itself is unreachable (distinct from a broker
+/// error reply, which [`redact_broker_error_for_launcher`] shapes).
 pub fn redact_broker_dispatch_failure_for_launcher(op_name: &str) -> (String, String) {
     (
         format!("{op_name} failed"),
@@ -311,7 +353,19 @@ impl std::error::Error for ModeBoundBrokerError {}
 mod tests {
     use super::*;
     use d2b_contracts::types::{RoleId, VmId};
-    use d2b_contracts_broker::broker_wire::LaunchMinijailChildRequest;
+    use d2b_contracts_broker::broker_wire::{HelloRequest, LaunchMinijailChildRequest};
+
+    #[test]
+    fn request_without_audit_join_yields_none() {
+        let request = BrokerRequest::Hello(HelloRequest {
+            client_version: "test".to_owned(),
+            supported_features: Vec::new(),
+        });
+        assert_eq!(
+            default_audit_join_context(&request).expect("hello carries no audit join"),
+            None
+        );
+    }
 
     /// A host-only broker operation: refused by the Guest profile before
     /// any socket is opened.
@@ -372,6 +426,8 @@ mod tests {
             Err(TypedError::InternalBrokerTimeout { .. })
         ));
         let future = Instant::now() + Duration::from_secs(60);
-        assert!(broker_remaining_before_op(future, Path::new("/run/d2b/guest-broker.sock")).is_ok());
+        assert!(
+            broker_remaining_before_op(future, Path::new("/run/d2b/guest-broker.sock")).is_ok()
+        );
     }
 }

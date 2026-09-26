@@ -144,6 +144,11 @@ impl Default for ProviderConfig {
 
 impl ProviderConfig {
     /// Parse the strict root config shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::Invalid`] when the value is not an object,
+    /// carries a key outside the closed set, or a field fails validation.
     pub fn from_json(value: &serde_json::Value) -> Result<Self, ConfigError> {
         let object = value.as_object().ok_or(ConfigError::Invalid)?;
         let allowed = ["selfMetrics"];

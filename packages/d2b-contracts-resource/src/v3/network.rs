@@ -7,7 +7,7 @@
 //! Layer 3 `spec.provider` envelope on the universal `ResourceSpec`.
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 use super::{
     IfName, ResourceBundleGenerationId, ResourceGeneration, ResourceRef, ResourceUid,
@@ -17,6 +17,7 @@ use super::{
         require_execution_ref, string_schema,
     },
 };
+use d2b_contracts::wire_deserialize;
 
 /// Immutable Network identity carried through every host effect.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
@@ -290,21 +291,20 @@ impl Default for RoutingSpec {
     }
 }
 
-impl<'de> Deserialize<'de> for RoutingSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            host_blocklist: Option<Vec<Ipv4Cidr>>,
-        }
-        match Wire::deserialize(deserializer)?.host_blocklist {
-            Some(host_blocklist) => Self::new(host_blocklist),
-            None => Ok(Self::default()),
-        }
-        .map_err(serde::de::Error::custom)
+wire_deserialize!(
+    RoutingSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default)]
+        host_blocklist: Option<Vec<Ipv4Cidr>>,
+    },
+    wire,
+    match wire.host_blocklist {
+        Some(host_blocklist) => Self::new(host_blocklist),
+        None => Ok(Self::default()),
     }
-}
+    .map_err(serde::de::Error::custom)
+);
 
 /// DHCP settings for the LAN.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -342,20 +342,18 @@ impl Default for DhcpSpec {
 
 redacted_debug!(DhcpSpec);
 
-impl<'de> Deserialize<'de> for DhcpSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            domain: Option<BoundedToken>,
-            #[serde(default = "yes")]
-            ignore_client_names: bool,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Ok(Self::new(wire.domain, wire.ignore_client_names))
-    }
-}
+wire_deserialize!(
+    DhcpSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default)]
+        domain: Option<BoundedToken>,
+        #[serde(default = "yes")]
+        ignore_client_names: bool,
+    },
+    wire,
+    Ok(Self::new(wire.domain, wire.ignore_client_names))
+);
 
 /// DNS settings for the LAN.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -399,20 +397,18 @@ impl Default for DnsSpec {
 
 redacted_debug!(DnsSpec);
 
-impl<'de> Deserialize<'de> for DnsSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            forwarders: Vec<Ipv4Address>,
-            #[serde(default = "thousand")]
-            cache_size: u32,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.forwarders, wire.cache_size).map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    DnsSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default)]
+        forwarders: Vec<Ipv4Address>,
+        #[serde(default = "thousand")]
+        cache_size: u32,
+    },
+    wire,
+    Self::new(wire.forwarders, wire.cache_size).map_err(serde::de::Error::custom)
+);
 
 /// mDNS settings.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
@@ -466,33 +462,31 @@ impl Default for MdnsSpec {
 
 redacted_debug!(MdnsSpec);
 
-impl<'de> Deserialize<'de> for MdnsSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            enable: bool,
-            #[serde(default = "yes")]
-            reflector: bool,
-            #[serde(default)]
-            dnsmasq_local: bool,
-            #[serde(default = "mdns_port")]
-            dnsmasq_local_port: u16,
-            #[serde(default)]
-            publish_workstation: bool,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.enable,
-            wire.reflector,
-            wire.dnsmasq_local,
-            wire.dnsmasq_local_port,
-            wire.publish_workstation,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    MdnsSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default)]
+        enable: bool,
+        #[serde(default = "yes")]
+        reflector: bool,
+        #[serde(default)]
+        dnsmasq_local: bool,
+        #[serde(default = "mdns_port")]
+        dnsmasq_local_port: u16,
+        #[serde(default)]
+        publish_workstation: bool,
+    },
+    wire,
+    Self::new(
+        wire.enable,
+        wire.reflector,
+        wire.dnsmasq_local,
+        wire.dnsmasq_local_port,
+        wire.publish_workstation,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// External attachment mode.
 #[derive(
@@ -527,16 +521,17 @@ pub enum SharingPolicy {
 
 /// IPv4 address acquisition method.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize, JsonSchema,
 )]
 #[serde(rename_all = "lowercase")]
 pub enum Ipv4Method {
+    #[default]
     Dhcp,
     Static,
 }
 
 /// External IPv4 configuration.
-#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Default, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ExternalIpv4Spec {
     method: Ipv4Method,
@@ -594,38 +589,25 @@ impl ExternalIpv4Spec {
     }
 }
 
-impl Default for ExternalIpv4Spec {
-    fn default() -> Self {
-        Self {
-            method: Ipv4Method::Dhcp,
-            address: None,
-            gateway: None,
-            dns: Vec::new(),
-        }
-    }
-}
-
 redacted_debug!(ExternalIpv4Spec);
 
-impl<'de> Deserialize<'de> for ExternalIpv4Spec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default = "dhcp")]
-            method: Ipv4Method,
-            #[serde(default)]
-            address: Option<Ipv4Cidr>,
-            #[serde(default)]
-            gateway: Option<Ipv4Address>,
-            #[serde(default)]
-            dns: Vec<Ipv4Address>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.method, wire.address, wire.gateway, wire.dns)
-            .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ExternalIpv4Spec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default = "dhcp")]
+        method: Ipv4Method,
+        #[serde(default)]
+        address: Option<Ipv4Cidr>,
+        #[serde(default)]
+        gateway: Option<Ipv4Address>,
+        #[serde(default)]
+        dns: Vec<Ipv4Address>,
+    },
+    wire,
+    Self::new(wire.method, wire.address, wire.gateway, wire.dns)
+        .map_err(serde::de::Error::custom)
+);
 
 /// External egress policy.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -671,23 +653,21 @@ impl Default for EgressSpec {
 
 redacted_debug!(EgressSpec);
 
-impl<'de> Deserialize<'de> for EgressSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            enable: bool,
-            #[serde(default)]
-            allowed_cidrs: Vec<Ipv4Cidr>,
-            #[serde(default = "yes")]
-            masquerade: bool,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.enable, wire.allowed_cidrs, wire.masquerade)
-            .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    EgressSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default)]
+        enable: bool,
+        #[serde(default)]
+        allowed_cidrs: Vec<Ipv4Cidr>,
+        #[serde(default = "yes")]
+        masquerade: bool,
+    },
+    wire,
+    Self::new(wire.enable, wire.allowed_cidrs, wire.masquerade)
+        .map_err(serde::de::Error::custom)
+);
 
 /// Forwarded-port transport protocol.
 #[derive(
@@ -756,33 +736,31 @@ impl PortForwardSpec {
 
 redacted_debug!(PortForwardSpec);
 
-impl<'de> Deserialize<'de> for PortForwardSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            protocol: ForwardProtocol,
-            listen_port: u16,
-            #[serde(default)]
-            target_ref: Option<ResourceRef>,
-            #[serde(default)]
-            target_ip: Option<Ipv4Address>,
-            target_port: u16,
-            #[serde(default)]
-            source_cidrs: Vec<Ipv4Cidr>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.protocol,
-            wire.listen_port,
-            wire.target_ref,
-            wire.target_ip,
-            wire.target_port,
-            wire.source_cidrs,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    PortForwardSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        protocol: ForwardProtocol,
+        listen_port: u16,
+        #[serde(default)]
+        target_ref: Option<ResourceRef>,
+        #[serde(default)]
+        target_ip: Option<Ipv4Address>,
+        target_port: u16,
+        #[serde(default)]
+        source_cidrs: Vec<Ipv4Cidr>,
+    },
+    wire,
+    Self::new(
+        wire.protocol,
+        wire.listen_port,
+        wire.target_ref,
+        wire.target_ip,
+        wire.target_port,
+        wire.source_cidrs,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// The optional external physical-NIC attachment.
 ///
@@ -859,41 +837,39 @@ impl ExternalAttachmentSpec {
 
 redacted_debug!(ExternalAttachmentSpec);
 
-impl<'de> Deserialize<'de> for ExternalAttachmentSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default = "macvtap")]
-            mode: ExternalAttachmentMode,
-            parent_interface: IfName,
-            #[serde(default = "bridge")]
-            macvtap_mode: MacvtapMode,
-            #[serde(default = "exclusive")]
-            sharing_policy: SharingPolicy,
-            #[serde(default)]
-            mac: Option<MacAddress>,
-            #[serde(default)]
-            ipv4: ExternalIpv4Spec,
-            #[serde(default)]
-            egress: EgressSpec,
-            #[serde(default)]
-            port_forwards: Vec<PortForwardSpec>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.mode,
-            wire.parent_interface,
-            wire.macvtap_mode,
-            wire.sharing_policy,
-            wire.mac,
-            wire.ipv4,
-            wire.egress,
-            wire.port_forwards,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ExternalAttachmentSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default = "macvtap")]
+        mode: ExternalAttachmentMode,
+        parent_interface: IfName,
+        #[serde(default = "bridge")]
+        macvtap_mode: MacvtapMode,
+        #[serde(default = "exclusive")]
+        sharing_policy: SharingPolicy,
+        #[serde(default)]
+        mac: Option<MacAddress>,
+        #[serde(default)]
+        ipv4: ExternalIpv4Spec,
+        #[serde(default)]
+        egress: EgressSpec,
+        #[serde(default)]
+        port_forwards: Vec<PortForwardSpec>,
+    },
+    wire,
+    Self::new(
+        wire.mode,
+        wire.parent_interface,
+        wire.macvtap_mode,
+        wire.sharing_policy,
+        wire.mac,
+        wire.ipv4,
+        wire.egress,
+        wire.port_forwards,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// One reserved LAN address and MAC for a Host or Guest.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -937,23 +913,18 @@ impl NetworkAttachmentEntry {
 
 redacted_debug!(NetworkAttachmentEntry);
 
-impl<'de> Deserialize<'de> for NetworkAttachmentEntry {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            execution_ref: ResourceRef,
-            index: u8,
-            #[serde(default)]
-            mac: Option<MacAddress>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.execution_ref, wire.index, wire.mac).map_err(serde::de::Error::custom)
-    }
-}
-
-/// Canonical authored Network attachment spec.
-pub type AttachmentSpec = NetworkAttachmentEntry;
+wire_deserialize!(
+    NetworkAttachmentEntry,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        execution_ref: ResourceRef,
+        index: u8,
+        #[serde(default)]
+        mac: Option<MacAddress>,
+    },
+    wire,
+    Self::new(wire.execution_ref, wire.index, wire.mac).map_err(serde::de::Error::custom)
+);
 
 /// The Network ResourceType base spec.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -1125,54 +1096,52 @@ impl NetworkSpec {
 
 redacted_debug!(NetworkSpec);
 
-impl<'de> Deserialize<'de> for NetworkSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            lan_cidr: Ipv4Cidr,
-            uplink_cidr: Ipv4Cidr,
-            #[serde(default)]
-            mtu: Option<u32>,
-            #[serde(default)]
-            mss_clamp: bool,
-            #[serde(default)]
-            isolation: IsolationSpec,
-            #[serde(default)]
-            routing: RoutingSpec,
-            #[serde(default)]
-            dhcp: DhcpSpec,
-            #[serde(default)]
-            dns: DnsSpec,
-            #[serde(default)]
-            external_attachment: Option<ExternalAttachmentSpec>,
-            #[serde(default)]
-            mdns: MdnsSpec,
-            #[serde(default)]
-            net_vm_name_override: Option<BoundedToken>,
-            net_vm_system_artifact_id: BoundedToken,
-            #[serde(default)]
-            attachments: Vec<NetworkAttachmentEntry>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.lan_cidr,
-            wire.uplink_cidr,
-            wire.mtu,
-            wire.mss_clamp,
-            wire.isolation,
-            wire.routing,
-            wire.dhcp,
-            wire.dns,
-            wire.external_attachment,
-            wire.mdns,
-            wire.net_vm_name_override,
-            wire.net_vm_system_artifact_id,
-            wire.attachments,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    NetworkSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        lan_cidr: Ipv4Cidr,
+        uplink_cidr: Ipv4Cidr,
+        #[serde(default)]
+        mtu: Option<u32>,
+        #[serde(default)]
+        mss_clamp: bool,
+        #[serde(default)]
+        isolation: IsolationSpec,
+        #[serde(default)]
+        routing: RoutingSpec,
+        #[serde(default)]
+        dhcp: DhcpSpec,
+        #[serde(default)]
+        dns: DnsSpec,
+        #[serde(default)]
+        external_attachment: Option<ExternalAttachmentSpec>,
+        #[serde(default)]
+        mdns: MdnsSpec,
+        #[serde(default)]
+        net_vm_name_override: Option<BoundedToken>,
+        net_vm_system_artifact_id: BoundedToken,
+        #[serde(default)]
+        attachments: Vec<NetworkAttachmentEntry>,
+    },
+    wire,
+    Self::new(
+        wire.lan_cidr,
+        wire.uplink_cidr,
+        wire.mtu,
+        wire.mss_clamp,
+        wire.isolation,
+        wire.routing,
+        wire.dhcp,
+        wire.dns,
+        wire.external_attachment,
+        wire.mdns,
+        wire.net_vm_name_override,
+        wire.net_vm_system_artifact_id,
+        wire.attachments,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// Closed Network condition types written by the Network controller.
 #[derive(
@@ -1255,18 +1224,16 @@ impl AttachmentStatus {
 
 redacted_debug!(AttachmentStatus);
 
-impl<'de> Deserialize<'de> for AttachmentStatus {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            execution_ref: ResourceRef,
-            phase: NetworkComponentPhase,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.execution_ref, wire.phase).map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    AttachmentStatus,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        execution_ref: ResourceRef,
+        phase: NetworkComponentPhase,
+    },
+    wire,
+    Self::new(wire.execution_ref, wire.phase).map_err(serde::de::Error::custom)
+);
 
 /// Bounded public observation of one external physical-NIC authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1393,28 +1360,26 @@ impl NetworkStatus {
 
 redacted_debug!(NetworkStatus);
 
-impl<'de> Deserialize<'de> for NetworkStatus {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            net_vm_ref: ResourceRef,
-            lan_bridge: NetworkFabricStatus,
-            uplink_bridge: NetworkFabricStatus,
-            external_attachment: Option<ExternalAttachmentStatus>,
-            attachments: Vec<AttachmentStatus>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.net_vm_ref,
-            wire.lan_bridge,
-            wire.uplink_bridge,
-            wire.external_attachment,
-            wire.attachments,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    NetworkStatus,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        net_vm_ref: ResourceRef,
+        lan_bridge: NetworkFabricStatus,
+        uplink_bridge: NetworkFabricStatus,
+        external_attachment: Option<ExternalAttachmentStatus>,
+        attachments: Vec<AttachmentStatus>,
+    },
+    wire,
+    Self::new(
+        wire.net_vm_ref,
+        wire.lan_bridge,
+        wire.uplink_bridge,
+        wire.external_attachment,
+        wire.attachments,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// Expected generations bound to an opaque attachment realization.
 #[derive(Clone, PartialEq, Eq)]

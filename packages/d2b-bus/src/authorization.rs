@@ -66,16 +66,6 @@ impl BusAuthorizer {
         self
     }
 
-    /// Borrow the single native authorizer shared with the Resource API.
-    ///
-    /// The bus and generated resource handlers must evaluate the same policy
-    /// instance and store-bound mutation authority.  Returning the existing
-    /// `Arc` prevents the daemon from accidentally constructing a parallel
-    /// authority for one Zone.
-    pub fn native_authorizer(&self) -> std::sync::Arc<NativeAuthorizer> {
-        std::sync::Arc::clone(&self.lock().native)
-    }
-
     pub(crate) fn controller_generation(&self) -> Option<ControllerGeneration> {
         self.lock().state.snapshot.controller_generation
     }
@@ -195,7 +185,7 @@ impl BusAuthorizer {
         };
         if let Some(registry) = &self.assignments {
             // The assignment registry lock is an externally supplied std Mutex
-            // (d2bd-runtime's AssignmentRegistry);the validation is a brief
+            // (d2bd-runtime's AssignmentRegistry); the validation is a brief
             // non-suspending critical section on the sync authorization surface.
             #[allow(clippy::disallowed_methods, reason = "synchronous path")]
             registry
@@ -278,7 +268,7 @@ impl BusAuthorizer {
 
     // Policy state is evaluated in brief non-suspending critical sections behind
     // the synchronous SessionAcceptor surface (component_session_acceptor
-    // closures)and pub sync API consumed by the daemon;the lock has no async
+    // closures) and pub sync API consumed by the daemon; the lock has no async
     // form here.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn lock(&self) -> MutexGuard<'_, AuthorizationRuntime> {
@@ -397,6 +387,7 @@ pub enum AuthorizationError {
     Assignment(AssignmentError),
 }
 
+/// Closed classifier for bus authorization failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthorizationErrorClass {
     MissingGrant,
@@ -779,7 +770,6 @@ mod tests {
             8,
             assignment_digest(),
             [],
-            false,
         )
         .unwrap()
         .with_execution(ComponentExecution::Launchable {

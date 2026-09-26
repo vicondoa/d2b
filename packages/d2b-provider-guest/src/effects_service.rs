@@ -240,7 +240,7 @@ impl aca_runtime::AcaControl for FrameworkAcaControl {
         {
             sandbox.lifecycle = aca_runtime::AcaSandboxLifecycle::Running;
         }
-        aca_runtime::AcaSandboxCandidates::new(state.sandbox.clone().into_iter().collect())
+        aca_runtime::AcaSandboxCandidates::new(state.sandbox.iter().cloned().collect())
             .map_err(|_| {
                 aca_runtime::AcaControlError::new(aca_runtime::AcaControlErrorKind::InvalidResponse)
             })
@@ -253,7 +253,7 @@ impl aca_runtime::AcaControl for FrameworkAcaControl {
         _desired: &aca_runtime::AcaDesiredDiskImage,
     ) -> Result<aca_runtime::AcaDiskImageCandidates, aca_runtime::AcaControlError> {
         let state = self.state.lock().await;
-        aca_runtime::AcaDiskImageCandidates::new(state.disk_image.clone().into_iter().collect())
+        aca_runtime::AcaDiskImageCandidates::new(state.disk_image.iter().cloned().collect())
             .map_err(|_| {
                 aca_runtime::AcaControlError::new(aca_runtime::AcaControlErrorKind::InvalidResponse)
             })
@@ -980,12 +980,13 @@ impl GuestEffectsService {
     }
 
     fn framework_operation_id(prefix: &str, operation_id: &str) -> String {
+        use std::fmt::Write as _;
         let digest = Sha256::digest(format!("{prefix}:{operation_id}").as_bytes());
         let mut id = String::with_capacity(24);
         id.push_str("guest-");
         id.push_str(prefix);
         for byte in digest.iter().take(8) {
-            id.push_str(&format!("{byte:02x}"));
+            let _ = write!(id, "{byte:02x}");
         }
         id
     }
@@ -1186,9 +1187,9 @@ impl GuestEffectsService {
                 let controller = azure_vm_runtime::AzureVmController::new(
                     config,
                     settings,
-                    Arc::new(FrameworkAzureEffect {
+                    FrameworkAzureEffect {
                         state: Arc::clone(&state),
-                    }),
+                    },
                     Arc::new(FrameworkAzureCredential),
                     None,
                 )
@@ -1382,9 +1383,9 @@ impl GuestEffectsService {
                     .map_err(|_| GuestEffectError::Unavailable)?;
             }
             GuestRuntimeController::AzureVm { controller } => {
-                if let Some(operation) = controller.recovery_state().operation {
+                if let Some(in_flight) = controller.recovery_state().in_flight_operation {
                     controller
-                        .poll_operation(operation)
+                        .poll_operation(in_flight.operation)
                         .await
                         .map_err(|_| GuestEffectError::Unavailable)?;
                 }
@@ -1437,10 +1438,10 @@ impl GuestEffectsService {
                 );
                 GuestEffectError::Unavailable
             })?;
-        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         let published = request
             .status_sink
-            .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            .lock()
+            .await
             .clone()
             .or_else(|| request.status.clone());
         let phase = match published.as_ref().and_then(|status| status.get("phase")).and_then(Value::as_str) {
@@ -1806,9 +1807,9 @@ mod tests {
         .unwrap();
         let config = aca_runtime::AcaProviderConfig::new(
             ResourceRef::parse("Guest/gateway").unwrap(),
-            aca_runtime::OpaqueAzureRef::parse("tenant").unwrap(),
-            aca_runtime::OpaqueAzureRef::parse("client").unwrap(),
-            aca_runtime::OpaqueAzureRef::parse("subscription").unwrap(),
+            d2b_contracts_provider::v3::credential::OpaqueAzureRef::parse("tenant").unwrap(),
+            d2b_contracts_provider::v3::credential::OpaqueAzureRef::parse("client").unwrap(),
+            d2b_contracts_provider::v3::credential::OpaqueAzureRef::parse("subscription").unwrap(),
             ResourceRef::parse("Credential/control").unwrap(),
             None,
             aca_runtime::AcaConfiguredImageId::parse("environment").unwrap(),
@@ -1892,9 +1893,9 @@ mod tests {
             child_zone_hosting: false,
             azure_tags: Vec::new(),
         };
-        let effect = Arc::new(FrameworkAzureEffect {
+        let effect = FrameworkAzureEffect {
             state: Arc::new(tokio::sync::Mutex::new(FrameworkAzureState::new(&settings))),
-        });
+        };
         let mut controller = azure_vm_runtime::AzureVmController::new(
             config,
             settings,
@@ -1924,8 +1925,8 @@ mod tests {
         }
         assert_eq!(controller.phase(), azure_vm_runtime::AzureVmPhase::Ready);
         for _ in 0..8 {
-            if let Some(operation) = controller.recovery_state().operation {
-                controller.poll_operation(operation).await.unwrap();
+            if let Some(in_flight) = controller.recovery_state().in_flight_operation {
+                controller.poll_operation(in_flight.operation).await.unwrap();
             }
             let outcome = controller
                 .finalize("work", "123e4567-e89b-42d3-a456-426614174000", 1)
@@ -2110,13 +2111,15 @@ mod tests {
     #[tokio::test]
     async fn guest_phase_answers_the_live_phase_of_a_held_row() {
         let facets = ScriptedFacets::new();
-        facets.add_row(row_fixture(
-            "work",
-            "Guest",
-            "worker",
-            json!({ "providerRef": "Provider/runtime-qemu-media" }),
-            ResourceStatus::Ready,
-        ));
+        facets
+            .add_row(row_fixture(
+                "work",
+                "Guest",
+                "worker",
+                json!({ "providerRef": "Provider/runtime-qemu-media" }),
+                ResourceStatus::Ready,
+            ))
+            .await;
         let service = super::GuestEffectsService::new(facets.facet_set());
         let payload = guest_phase_payload();
         let mut resources = d2b_resource_runtime::context::ServiceResourceContext::fail_closed();
@@ -2169,13 +2172,15 @@ mod tests {
     #[tokio::test]
     async fn cloud_hypervisor_reconcile_drives_the_controller_session_facets() {
         let facets = ScriptedFacets::new();
-        facets.add_row(row_fixture(
-            "work",
-            "Provider",
-            "runtime-cloud-hypervisor",
-            json!({ "config": {} }),
-            ResourceStatus::Ready,
-        ));
+        facets
+            .add_row(row_fixture(
+                "work",
+                "Provider",
+                "runtime-cloud-hypervisor",
+                json!({ "config": {} }),
+                ResourceStatus::Ready,
+            ))
+            .await;
         facets.add_committed_provider(
             ResourceRef::parse("Provider/runtime-cloud-hypervisor").expect("provider"),
             ResourceUid::parse("123e4567-e89b-42d3-a456-426614174001").expect("uid"),
@@ -2184,14 +2189,14 @@ mod tests {
         facets.set_session_generation(Some(
             d2b_contracts_resource::v3::identity::ReconnectGeneration::new(2).expect("generation"),
         ));
-        facets.set_cloud_hypervisor_outcome(
-            crate::facets::GuestCloudHypervisorOutcome::Ready,
-        );
+        facets
+            .set_cloud_hypervisor_outcome(crate::facets::GuestCloudHypervisorOutcome::Ready)
+            .await;
         let service = super::GuestEffectsService::new(facets.facet_set());
         let request = cloud_hypervisor_request();
         // The controller session's status write is captured into the sink
         // before the pass, exactly as the driver's effect call observes it.
-        *request.status_sink.lock() = Some(json!({ "phase": "Ready" })); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        *request.status_sink.lock().await = Some(json!({ "phase": "Ready" }));
 
         let outcome = service
             .reconcile(crate::driver::GuestKind::CloudHypervisor, &request)
@@ -2223,13 +2228,15 @@ mod tests {
     #[tokio::test]
     async fn cloud_hypervisor_finalize_completes_through_the_controller_session() {
         let facets = ScriptedFacets::new();
-        facets.add_row(row_fixture(
-            "work",
-            "Provider",
-            "runtime-cloud-hypervisor",
-            json!({ "config": {} }),
-            ResourceStatus::Ready,
-        ));
+        facets
+            .add_row(row_fixture(
+                "work",
+                "Provider",
+                "runtime-cloud-hypervisor",
+                json!({ "config": {} }),
+                ResourceStatus::Ready,
+            ))
+            .await;
         facets.add_committed_provider(
             ResourceRef::parse("Provider/runtime-cloud-hypervisor").expect("provider"),
             ResourceUid::parse("123e4567-e89b-42d3-a456-426614174001").expect("uid"),

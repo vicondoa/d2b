@@ -79,7 +79,7 @@ use d2b_audit::evidence_chain::{
     ChainAuditSink, ChainLeg, ChainOutcome, ChainRecord, ChainRecordClass, EvidenceChain,
     MAX_NESTED_DEPTH, NESTED_DEPTH_EXCEEDED,
 };
-use d2b_contracts_broker::FORWARD_SOCKET_ENV;
+use d2b_contracts_broker::broker_wire::FORWARD_SOCKET_ENV;
 use d2b_contracts_broker::broker_wire::{
     DEFAULT_CONTEXT_DEADLINE_MS, FD_LEG, FdKind, ForwardContext, ForwardOperationOutcome,
     ForwardOperationRequest, ForwardOperationResponse, MAX_CONTEXT_DEADLINE_MS, MAX_FRAME_FDS,
@@ -90,7 +90,7 @@ use d2b_provider_toolkit::operations::{UNCOMMITTED_OPERATION, UNGRANTED_CALLER};
 use d2b_resource_types::{KernelCaller, MethodFdContract, OperationResult};
 use d2bd_runtime::concurrency::DEFAULT_MAX_INFLIGHT_CONNECTIONS;
 use d2bd_runtime::runtime_process::{RuntimeIdentity, bind_public_socket};
-use d2bd_runtime::typed_error::TypedError;
+use d2bd_runtime::typed_error::{ErrorSource, TypedError, error_source};
 use d2bd_runtime::unix_transport::{close_received_fds, read_frame_with_fds, write_frame_with_fds};
 use d2bd_runtime::wire::MAX_FRAME_SIZE;
 use nix::sys::socket::{MsgFlags, getsockopt, recv, send, sockopt};
@@ -329,7 +329,7 @@ impl ForwardRendezvous {
     /// pre-restart context stops validating regardless of generation
     /// equality.
     pub(crate) fn set_broker_epoch(&self, epoch: u64) {
-        self.broker_epoch.store(epoch, Ordering::SeqCst);
+        self.broker_epoch.store(epoch, Ordering::Relaxed);
     }
 
     /// Wire one Zone's U10 family seam (the kernel socket, the caller
@@ -411,7 +411,7 @@ impl ForwardRendezvous {
     /// ceiling. The broker is the sole minter, so any mismatch is a stale
     /// or mutated attestation.
     async fn context_admitted(&self, context: &ForwardContext, request_zone: &str) -> bool {
-        let observed_epoch = self.broker_epoch.load(Ordering::SeqCst);
+        let observed_epoch = self.broker_epoch.load(Ordering::Relaxed);
         if observed_epoch == 0 {
             // No epoch observed yet: the attestation cannot be verified, so
             // no context is admitted - the fail-closed half of the rule that
@@ -453,10 +453,9 @@ impl ForwardRendezvous {
         fds: &[RawFd],
         chain: &EvidenceChain,
     ) -> (ForwardOperationResponse, Vec<OwnedFd>) {
-        let zone = request.zone.clone();
         let (providers, kernel, resources) = {
             let zones = self.zones.lock().await;
-            match zones.get(&zone) {
+            match zones.get(&request.zone) {
                 Some(binding) => (
                     Some(Arc::clone(&binding.providers)),
                     binding.kernel.clone(),
@@ -645,7 +644,7 @@ impl ForwardRendezvous {
         // root leg.
         let chain = match &request.chain_identities {
             Some(identities) => {
-                let mut chain = match identities.split_first() {
+                let chain = match identities.split_first() {
                     Some((head, tail)) => {
                         let mut chain = EvidenceChain::root(
                             request.invocation_id.clone(),
@@ -665,11 +664,11 @@ impl ForwardRendezvous {
                             .unwrap_or_else(|| "daemon".to_owned()),
                     ),
                 };
-                // The handler-side legs append the invoking handler's own
+// The handler-side legs append the invoking handler's own
                 // identity; the daemon-side record of a forwarded nested leg
                 // keys on the root id and the chain's depth exactly as the
                 // broker-side record of the in-broker leg does.
-                let _ = &mut chain;
+
                 chain
             }
             None => EvidenceChain::root(
@@ -977,7 +976,16 @@ fn response_fds_match_method(fds: &[OwnedFd], contract: MethodFdContract) -> boo
 /// (the kebab-case `MethodFdContract` facet), when the spelling is a known
 /// kind.
 fn declared_fd_kind(kind: &str) -> Option<FdKind> {
-    serde_json::from_value(serde_json::Value::String(kind.to_owned())).ok()
+    match kind {
+        "fifo" => Some(FdKind::Fifo),
+        "socket" => Some(FdKind::Socket),
+        "char-device" => Some(FdKind::CharDevice),
+        "block-device" => Some(FdKind::BlockDevice),
+        "any" => Some(FdKind::Any),
+        "regular" => Some(FdKind::Regular),
+        "directory" => Some(FdKind::Directory),
+        _ => None,
+    }
 }
 
 /// The normal result reply of one effect-service invocation: the canonical
@@ -1043,7 +1051,7 @@ impl ScmFds {
         Self(fds)
     }
 
-    /// The received descriptors,borrowed across the invocation..
+    /// The received descriptors, borrowed across the invocation.
     fn as_slice(&self) -> &[RawFd] {
         &self.0
     }
@@ -1057,8 +1065,8 @@ impl Drop for ScmFds {
 }
 
 /// Whether one request's declared fd leg is admitted by the descriptors the
-/// frame actually attached:count equal (never truncated), indexes in frame
-/// order, kinds against the kernel stat of each received descriptor,and the
+/// frame actually attached: count equal (never truncated), indexes in frame
+/// order, kinds against the kernel stat of each received descriptor, andthe
 /// whole leg within the carrier's frame ceiling.
 fn request_fds_admitted(request: &ForwardOperationRequest, fds: &[RawFd]) -> bool {
     if request.fd_indexes.len() != request.fd_kinds.len() {
@@ -1087,8 +1095,8 @@ fn request_fds_admitted(request: &ForwardOperationRequest, fds: &[RawFd]) -> boo
         })
 }
 
-/// The kernel kind one descriptor presents,or None when its fstat reports
-/// a kind the carrier vocabulary does not carry..
+/// The kernel kind one descriptor presents, or None when its fstat reports
+/// a kind the carrier vocabulary does not carry.
 fn fd_kind_of(fd: RawFd) -> Option<FdKind> {
     let stat = nix::sys::stat::fstat(fd).ok()?;
     match stat.st_mode & nix::libc::S_IFMT {
@@ -1247,7 +1255,11 @@ async fn serve_accepted(
             // answer: the call is refused under the daemon's own capacity
             // code, so the broker reports that code rather than a handler it
             // never reached.
-            tracing::warn!("forward rendezvous is at its in-flight cap; refusing the call");
+            tracing::warn!(
+                peer_uid,
+                max = posture.max_inflight,
+                "forward rendezvous is at its in-flight cap; refusing the call"
+            );
             refuse(&connection, TypedError::DaemonBusy.kind()).await;
             continue;
         };
@@ -1319,10 +1331,12 @@ impl AsyncSeqpacket {
             .map_err(|error| TypedError::InternalIo {
                 context: "set forward rendezvous socket nonblocking".to_owned(),
                 detail: error.to_string(),
+                source: error_source(error),
             })?;
         let io = AsyncFd::new(socket).map_err(|error| TypedError::InternalIo {
             context: "register forward rendezvous socket".to_owned(),
             detail: error.to_string(),
+            source: error_source(error),
         })?;
         Ok(Self { io })
     }
@@ -1338,6 +1352,7 @@ impl AsyncSeqpacket {
             .map_err(|error| TypedError::InternalIo {
                 context: "read forward rendezvous peer credentials".to_owned(),
                 detail: error.to_string(),
+                source: error_source(error),
             })
     }
 
@@ -1352,12 +1367,52 @@ impl AsyncSeqpacket {
     }
 
     /// Read one frame, waiting at most `deadline` for it to arrive.
+    // R11 inventory note: genuinely synchronous path - the `nix::sys::socket`
+    // recv runs inside the `AsyncFd::async_io` readiness closure on a
+    // non-blocking descriptor (the clippy.toml replacement vocabulary names
+    // this exact AsyncFd-over-raw-socket shape as the sanctioned seam); the
+    // syscall never blocks because readiness was already observed.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub(crate) async fn read_frame(&self, deadline: Duration) -> Result<Vec<u8>, TypedError> {
-        let mut datagram = vec![0u8; MAX_FRAME_SIZE + 5];
+        // The frame is length-prefixed, so peek the four-byte prefix and
+        // size the datagram buffer from the declared length instead of the
+        // ceiling: drain_pending reads up to four frames per refused call,
+        // and the ceiling buffer is 1 MiB.
+        let mut prefix = [0u8; 4];
+        let peeked = match tokio::time::timeout(
+            deadline,
+            self.io.async_io(Interest::READABLE, |socket| {
+                recv(socket.as_raw_fd(), &mut prefix, MsgFlags::MSG_PEEK)
+                    .map_err(|errno| io::Error::from_raw_os_error(errno as i32))
+            }),
+        )
+        .await
+        {
+            Ok(Ok(read)) => read,
+            Ok(Err(error)) => return Err(recv_failure(error.to_string(), error_source(error))),
+            Err(_) => return Err(recv_failure(format!("no frame within {deadline:?}"), None)),
+        };
+        if peeked < 4 {
+            // A datagram shorter than the prefix is malformed; consume it
+            // so the next read starts clean, refusing it exactly as the
+            // ceiling-buffer read did.
+            let mut short = [0u8; 4];
+            let read = match tokio::time::timeout(deadline, self.recv_datagram(&mut short)).await {
+                Ok(Ok(read)) => read,
+                Ok(Err(error)) => return Err(recv_failure(error.to_string(), error_source(error))),
+                Err(_) => return Err(recv_failure(format!("no frame within {deadline:?}"), None)),
+            };
+            return decode_frame(&short[..read]);
+        }
+        let declared = u32::from_le_bytes(prefix) as usize;
+        if declared > MAX_FRAME_SIZE {
+            return Err(TypedError::WireFrameTooLarge { declared });
+        }
+        let mut datagram = vec![0u8; declared + 5];
         let read = match tokio::time::timeout(deadline, self.recv_datagram(&mut datagram)).await {
             Ok(Ok(read)) => read,
-            Ok(Err(error)) => return Err(recv_failure(error.to_string())),
-            Err(_) => return Err(recv_failure(format!("no frame within {deadline:?}"))),
+            Ok(Err(error)) => return Err(recv_failure(error.to_string(), error_source(error))),
+            Err(_) => return Err(recv_failure(format!("no frame within {deadline:?}"), None)),
         };
         decode_frame(&datagram[..read])
     }
@@ -1367,14 +1422,14 @@ impl AsyncSeqpacket {
         let frame = encode_frame(body)?;
         let written = match tokio::time::timeout(deadline, self.send_datagram(&frame)).await {
             Ok(Ok(written)) => written,
-            Ok(Err(error)) => return Err(send_failure(error.to_string())),
-            Err(_) => return Err(send_failure(format!("no write within {deadline:?}"))),
+            Ok(Err(error)) => return Err(send_failure(error.to_string(), error_source(error))),
+            Err(_) => return Err(send_failure(format!("no write within {deadline:?}"), None)),
         };
         if written != frame.len() {
-            return Err(send_failure(format!(
-                "short write: {written} of {}",
-                frame.len()
-            )));
+            return Err(send_failure(
+                format!("short write: {written} of {}", frame.len()),
+                None,
+            ));
         }
         Ok(())
     }
@@ -1382,10 +1437,10 @@ impl AsyncSeqpacket {
     /// Read one frame and the descriptors its SCM_RIGHTS attachments carried,
     /// waiting at most `deadline` for it to arrive.
     ///
-    /// A frame and its attachments arrive together or not at all,so the
+    /// A frame and its attachments arrive together or not at all, so the
     /// received descriptor count is exactly what the sender put on the
-    /// carrier;an oversized cmsg set is capped by the kernel at the receive
-    /// buffer's ceiling,which is why the caller-side declaration check
+    /// carrier; an oversized cmsg set is capped by the kernel at the receive
+    /// buffer's ceiling, which is why the caller-side declaration check
     /// refuses a count over that ceiling rather than let a truncation pass..
     async fn read_frame_with_fds(&self, deadline: Duration) -> Result<(Vec<u8>, Vec<RawFd>), TypedError> {
         // The blocking transport read the prefixed frame and stripped the
@@ -1393,12 +1448,12 @@ impl AsyncSeqpacket {
         // payload,length-checked and cmsg-truncation-checked.
         match tokio::time::timeout(deadline, self.recv_frame_with_fds()).await {
             Ok(Ok(pair)) => Ok(pair),
-            Ok(Err(error)) => Err(recv_failure(error.to_string())),
-            Err(_) => Err(recv_failure(format!("no frame within {deadline:?}"))),
+            Ok(Err(error)) => Err(recv_failure(error.to_string(), error_source(error))),
+            Err(_) => Err(recv_failure(format!("no frame within {deadline:?}"), None)),
         }
     }
 
-    /// Write one frame,attaching `fds` to it,waiting at most `deadline`
+    /// Write one frame, attaching `fds` to it, waiting at most `deadline`
     /// for the peer to take it.
     async fn write_frame_with_fds(
         &self,
@@ -1407,17 +1462,17 @@ impl AsyncSeqpacket {
         deadline: Duration,
     ) -> Result<(), TypedError> {
         // The transport writes the length prefix itself,so the body crosses
-        // as-is;the receiving transport strips the same prefix back off..
+        // as-is; the receiving transport strips the same prefix back off..
         match tokio::time::timeout(deadline, self.send_datagram_with_fds(body, fds)).await {
             Ok(Ok(())) => Ok(()),
-            Ok(Err(error)) => Err(send_failure(error.to_string())),
-            Err(_) => Err(send_failure(format!("no write within {deadline:?}"))),
+            Ok(Err(error)) => Err(send_failure(error.to_string(), error_source(error))),
+            Err(_) => Err(send_failure(format!("no write within {deadline:?}"), None)),
         }
     }
 
-    /// One datagram read with its attachments,awaited for readiness. The
+    /// One datagram read with its attachments, awaited for readiness. The
     /// blocking transport's `recvmsg` owns the control-message buffer for
-    /// this read,and MSG_CMSG_CLOEXEC is set there,so the received descriptors
+    /// this read, and MSG_CMSG_CLOEXEC is set there, so the received descriptors
     /// arrive close-on-exec exactly as they do on the broker leg.
     async fn recv_frame_with_fds(&self) -> io::Result<(Vec<u8>, Vec<RawFd>)> {
         self.io
@@ -1428,7 +1483,7 @@ impl AsyncSeqpacket {
             .await
     }
 
-    /// One datagram write with its attachments,awaited for readiness..
+    /// One datagram write with its attachments, awaited for readiness.
     async fn send_datagram_with_fds(&self, frame: &[u8], fds: &[RawFd]) -> io::Result<()> {
         self.io
             .async_io(Interest::WRITABLE, |socket| {
@@ -1483,20 +1538,24 @@ impl AsyncSeqpacket {
 }
 
 /// The failure of a frame read, in the vocabulary the blocking transport uses
-/// for the same syscall.
-fn recv_failure(detail: String) -> TypedError {
+/// for the same syscall. `source` is the origin error when the read failed on
+/// one; a deadline that elapsed without a frame has none.
+fn recv_failure(detail: String, source: Option<ErrorSource>) -> TypedError {
     TypedError::InternalIo {
         context: "recv seqpacket frame".to_owned(),
         detail,
+        source,
     }
 }
 
 /// The failure of a frame write, in the vocabulary the blocking transport
-/// uses for the same syscall.
-fn send_failure(detail: String) -> TypedError {
+/// uses for the same syscall. `source` is the origin error when the write
+/// failed on one; a deadline that elapsed without a write has none.
+fn send_failure(detail: String, source: Option<ErrorSource>) -> TypedError {
     TypedError::InternalIo {
         context: "send seqpacket frame".to_owned(),
         detail,
+        source,
     }
 }
 
@@ -1506,6 +1565,7 @@ fn encode_reply(response: &ForwardOperationResponse) -> Result<Vec<u8>, TypedErr
     serde_json::to_vec(response).map_err(|error| TypedError::InternalIo {
         context: "serialize JSON frame".to_owned(),
         detail: error.to_string(),
+        source: error_source(error),
     })
 }
 
@@ -1527,7 +1587,7 @@ fn encode_frame(body: &[u8]) -> Result<Vec<u8>, TypedError> {
 /// refuses.
 fn decode_frame(datagram: &[u8]) -> Result<Vec<u8>, TypedError> {
     if datagram.is_empty() {
-        return Err(recv_failure("peer closed the socket".to_owned()));
+        return Err(recv_failure("peer closed the socket".to_owned(), None));
     }
     if datagram.len() < 4 {
         return Err(TypedError::WireInvalidFrame {
@@ -1797,6 +1857,10 @@ mod tests {
     /// A handler that holds its call on the gate until the test releases it.
     struct GatedHandler {
         gate: &'static StallGate,
+        /// When present, records the thread that executed the call before
+        /// holding it: the concurrent-calls test counts the distinct
+        /// threads across the held calls.
+        seen: Option<&'static tokio::sync::Mutex<Vec<std::thread::ThreadId>>>,
     }
 
     #[async_trait::async_trait]
@@ -1806,6 +1870,9 @@ mod tests {
             _ctx: OperationCtx<'_>,
             _payload: ValidatedPayload,
         ) -> Result<OperationResult, OperationFailure> {
+            if let Some(seen) = self.seen {
+                seen.lock().await.push(std::thread::current().id());
+            }
             self.gate.hold().await;
             Ok(stall_result())
         }
@@ -1826,11 +1893,20 @@ mod tests {
         }
     }
 
+    /// The threads that executed the held stall-threads calls, one entry
+    /// per call, recorded at handler entry. This recorder is this test's
+    /// own: only the calls the concurrent-calls test forwards execute the
+    /// stall-threads handler, so nothing another test does can inflate it.
+    static THREADS_SEEN: tokio::sync::Mutex<Vec<std::thread::ThreadId>> =
+        tokio::sync::Mutex::const_new(Vec::new());
+
     static THREADS_HANDLER: GatedHandler = GatedHandler {
         gate: &THREADS_GATE,
+        seen: Some(&THREADS_SEEN),
     };
     static CAPACITY_HANDLER: GatedHandler = GatedHandler {
         gate: &CAPACITY_GATE,
+        seen: None,
     };
     static STALLED_HANDLER: StalledHandler = StalledHandler;
 
@@ -1891,8 +1967,8 @@ mod tests {
 
     /// A handler that reads the descriptor the carrier attached to its
     /// call. The forwarded request leg carries the caller's descriptor over
-    /// SCM_RIGHTS;the rendezvous validates it against the wire declarations
-    /// and hands it to the declared handler,so this handler reading it back
+    /// SCM_RIGHTS; the rendezvous validates it against the wire declarations
+    /// and hands it to the declared handler, so this handler reading it back
     /// proves the round trip through the real socket and the provider envelope.to
     struct FdEchoHandler;
 
@@ -2266,10 +2342,20 @@ mod tests {
         let connection =
             AsyncSeqpacket::register(Socket::from(socket)).expect("register the forwarded call");
         let deadline = Duration::from_secs(10);
-        connection
-            .write_frame(&encoded, deadline)
-            .await
-            .expect("write the request frame");
+        // A refused peer is answered before its frame is read: the server
+        // writes the refusal, drains briefly, and closes, so a write that
+        // races the close can fail with EPIPE even though the refusal is
+        // already queued for this socket. Read the queued refusal instead
+        // of failing the call; only a write error with no reply is a
+        // failure.
+        if let Err(write_error) = connection.write_frame(&encoded, deadline).await {
+            let frame = connection.read_frame(deadline).await;
+            if let Ok(frame) = frame {
+                return serde_json::from_slice(&frame)
+                    .expect("the reply is a ForwardOperationResponse");
+            }
+            panic!("write the request frame: {write_error:?}");
+        }
         let frame = connection
             .read_frame(deadline)
             .await
@@ -2345,27 +2431,6 @@ mod tests {
         sink
     }
 
-    /// The threads this process is running, one per task entry.
-    ///
-    /// `tokio::fs` (plan U10): the count probes the process's own thread
-    /// table, so the async form never parks an executor worker on the
-    /// directory read.
-    async fn thread_count() -> usize {
-        let mut entries = tokio::fs::read_dir("/proc/self/task")
-            .await
-            .expect("/proc/self/task is readable");
-        let mut count = 0usize;
-        while entries
-            .next_entry()
-            .await
-            .expect("/proc/self/task is readable")
-            .is_some()
-        {
-            count += 1;
-        }
-        count
-    }
-
     /// The production posture with a test's own in-flight cap and handler
     /// deadline.
     fn posture(max_inflight: usize, handler_deadline: Duration) -> ServingPosture {
@@ -2400,8 +2465,19 @@ mod tests {
         // endpoint is exercised against the exact bytes the broker sends.
         let encoded =
             canonical_json_bytes(&request).expect("the request encodes as canonical JSON");
-        d2bd_runtime::unix_transport::write_frame(&socket, &encoded)
-            .expect("write the request frame");
+        // A refused peer is answered before its frame is read: the server
+        // writes the refusal, drains briefly, and closes, so a write that
+        // races the close can fail with EPIPE even though the refusal is
+        // already queued for this socket. Read the queued refusal instead
+        // of failing the call; only a write error with no reply is a
+        // failure.
+        if let Err(write_error) = d2bd_runtime::unix_transport::write_frame(&socket, &encoded) {
+            if let Ok(frame) = read_frame(&socket) {
+                return serde_json::from_slice(&frame)
+                    .expect("the reply is a ForwardOperationResponse");
+            }
+            panic!("write the request frame: {write_error:?}");
+        }
         let frame = read_frame(&socket).expect("read the reply frame");
 serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     }
@@ -2432,7 +2508,19 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         let encoded =
             canonical_json_bytes(&request).expect("the request encodes as canonical JSON");
         let socket = connect_seqpacket(socket_path).expect("dial the rendezvous");
-        write_frame_with_fds(&socket, &encoded, fds).expect("write the request frame with fds");
+        // A refused peer is answered before its frame is read: the server
+        // writes the refusal, drains briefly, and closes, so a write that
+        // races the close can fail with EPIPE even though the refusal is
+        // already queued for this socket. Read the queued refusal instead
+        // of failing the call; only a write error with no reply is a
+        // failure.
+        if let Err(write_error) = write_frame_with_fds(&socket, &encoded, fds) {
+            if let Ok(frame) = read_frame(&socket) {
+                return serde_json::from_slice(&frame)
+                    .expect("the reply is a ForwardOperationResponse");
+            }
+            panic!("write the request frame with fds: {write_error:?}");
+        }
         let frame = read_frame(&socket).expect("read the reply frame");
         serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     }
@@ -2890,6 +2978,9 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn concurrent_calls_are_held_on_the_runtime_without_a_thread_each() {
         const CALLS: usize = 4;
+        // The runtime this test runs on: the serving path registers with
+        // `Handle::current()`, so the held calls execute on these workers.
+        const WORKER_THREADS: usize = 2;
         let serving = ServingRendezvous::start().await;
         // One warm call, so the runtime's workers exist before the baseline.
         let warm = forward_async(
@@ -2904,7 +2995,9 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
             ForwardOperationOutcome::Result { .. }
         ));
 
-        let before = thread_count().await;
+        // The recorder is this test's own: only the calls below execute the
+        // stall-threads handler, so no other test can inflate the count.
+        THREADS_SEEN.lock().await.clear();
         let calls: Vec<_> = (0..CALLS)
             .map(|_| {
                 tokio::spawn(forward_async(
@@ -2918,18 +3011,29 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         // Every call reached the handler while none of them was released: the
         // second call does not wait for the first.
         THREADS_GATE.wait_for(CALLS).await;
-        let held = thread_count().await;
-        // The counter is process-wide (/proc/self/task): other tests'
-        // runtimes and their blocking pools grow concurrently under
-        // parallel test load, and this runtime's own blocking pool expands
-        // amortized (reused, bounded by peak concurrency), so the bound is
-        // a few slots per call, never a thread owned per call. A
-        // per-call thread-ownership regression - one OS thread held for
-        // the lifetime of each in-flight call - blows far past this.
-        assert!(
-            held <= before + CALLS * 4,
-            "{CALLS} calls in flight must not each own a thread: {before} -> {held}"
+        // The held calls all run on this runtime's own workers: at most
+        // WORKER_THREADS distinct threads can have executed the handler. A
+        // per-call thread-ownership regression - one OS thread held for the
+        // lifetime of each in-flight call - puts each call on its own
+        // thread, far past the worker count. The measurement is per-test
+        // (threads that executed this test's handler), so parallel test
+        // load cannot inflate it.
+        let seen = THREADS_SEEN.lock().await;
+        assert_eq!(
+            seen.len(),
+            CALLS,
+            "every held call recorded the thread that executed it"
         );
+        let distinct = seen
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
+        assert!(
+            distinct.len() <= WORKER_THREADS,
+            "{CALLS} calls in flight must not each own a thread: held on {} distinct threads (the runtime has {WORKER_THREADS} workers)",
+            distinct.len()
+        );
+        drop(seen);
 
         THREADS_GATE.release(CALLS);
         for call in calls {

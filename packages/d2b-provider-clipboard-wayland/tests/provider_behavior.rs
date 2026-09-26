@@ -45,7 +45,7 @@ fn fd_validation_rejects_unsafe_files_and_truncated_control_messages() {
 #[test]
 fn history_is_bounded_ttl_aware_and_purges_guest_state() {
     let config = ClipboardConfig::default();
-    let mut history = ClipboardHistory::new(config.clone()).unwrap();
+    let mut history = ClipboardHistory::new(config.clone());
     let entry = ClipboardEntry::new("Guest/work", "text/plain", b"hello", 100).unwrap();
     history.insert(entry).unwrap();
     assert_eq!(history.len(), 1);
@@ -64,7 +64,7 @@ fn history_is_bounded_ttl_aware_and_purges_guest_state() {
 fn duplicate_history_tokens_do_not_double_count_quota() {
     let policy = Policy::new(true, true, true, true, false, 3, 4096, 4096, 32, 60).unwrap();
     let config = ClipboardConfig::from_policy(policy);
-    let mut history = ClipboardHistory::new(config).unwrap();
+    let mut history = ClipboardHistory::new(config);
     let first = ClipboardEntry::new("Guest/work", "text/plain", &[1; 2000], 100).unwrap();
     let duplicate = ClipboardEntry::new("Guest/work", "text/plain", &[1; 2000], 100).unwrap();
     let second = ClipboardEntry::new("Guest/work", "text/plain", &[2; 2000], 101).unwrap();

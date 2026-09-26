@@ -3,6 +3,39 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
+/// Captures the shared contract Wire-struct `Deserialize` shape: a private
+/// `#[derive(Deserialize)]` wire struct with `deny_unknown_fields`, then a
+/// validated constructor admission check.
+///
+/// The binding name is passed explicitly (`wire` at every site) so the
+/// construct expression can reference it across macro hygiene.
+#[macro_export]
+macro_rules! wire_deserialize {
+    (
+        $type:ty,
+        $(#[$container:meta])*
+        $wire:ident {
+            $( $(#[$field_attr:meta])* $field:ident : $field_ty:ty ),* $(,)?
+        },
+        $binding:ident,
+        $construct:expr
+    ) => {
+        impl<'de> serde::Deserialize<'de> for $type {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                #[derive(serde::Deserialize)]
+                $(#[$container])*
+                struct $wire {
+                    $( $(#[$field_attr])* $field: $field_ty, )*
+                }
+                let $binding = $wire::deserialize(deserializer)?;
+                $construct
+            }
+        }
+    };
+}
 
 pub mod audio;
 pub mod audit_wire;
@@ -51,8 +84,6 @@ pub use ids::{
     AllocatorLeaseId, CorrelationId, ExecutionId, HostResourceId, IdempotencyKey, OperationId,
     PrincipalId, StreamCursor, StreamId,
 };
-pub use opaque_payload::OpaquePayload;
-pub use privileges_w3::W3BrokerOperation;
 pub use token::{ProtocolToken, TokenError};
 pub use workload::{
     DisplayEnvironmentPosture, EnvironmentPosture, ExecutionIdentityPosture, IsolationPosture,

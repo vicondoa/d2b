@@ -193,6 +193,7 @@ impl GuestTargetHandle {
         self.session_generation
     }
 
+    /// Whether a live session has ever been registered for this guest.
     pub const fn is_bound(&self) -> bool {
         self.session_generation.is_some()
     }
@@ -478,18 +479,18 @@ pub trait TargetResolver: Send + Sync + 'static {
 /// trusting a channel the caller kept.
 #[derive(Debug, Clone)]
 pub struct TargetBinding {
-    directory: Arc<TargetDirectory>,
+    directory: TargetDirectory,
     assignment: TargetAssignment,
 }
 
 impl TargetBinding {
-    pub fn new(directory: Arc<TargetDirectory>, assignment: TargetAssignment) -> Self {
+    /// Bind one resource's recorded assignment to the directory it resolves
+    /// through.
+    ///
+    /// The directory is the per-Zone handle every binding of that Zone
+    /// shares, so the binding takes its own cheap clone of it.
+    pub fn new(directory: TargetDirectory, assignment: TargetAssignment) -> Self {
         Self { directory, assignment }
-    }
-
-    /// The per-Zone directory this binding resolves through.
-    pub fn directory(&self) -> &Arc<TargetDirectory> {
-        &self.directory
     }
 
     /// The recorded assignment.
@@ -543,7 +544,7 @@ impl TargetBinding {
         let rebound = outcome.handle().clone();
         let mut assignment = self.assignment.clone();
         assignment.target = ResolvedTarget::Guest(rebound);
-        Ok((TargetBinding { directory: Arc::clone(&self.directory), assignment }, outcome))
+        Ok((TargetBinding { directory: self.directory.clone(), assignment }, outcome))
     }
 }
 
@@ -573,15 +574,9 @@ struct DirectoryState {
 /// that decides *whose* authority they may use. It never changes a resource's
 /// Zone identity, never synthesizes a desired resource in a guest namespace,
 /// and never deletes desired state because a target went away.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TargetDirectory {
     inner: Arc<Mutex<DirectoryState>>,
-}
-
-impl Default for TargetDirectory {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl TargetDirectory {
@@ -652,18 +647,28 @@ impl TargetDirectory {
         }
         match &reference.kind {
             TargetKind::Host => {
-                state.host_assignments.insert(source.clone(), assignment.clone());
+                state.host_assignments.insert(source.clone(), assignment);
+                let handle = state
+                    .host_assignments
+                    .get(source)
+                    .expect("host assignment was just inserted")
+                    .clone();
+                Ok(handle)
             }
             TargetKind::Guest => {
-                state
+                let assignments = &mut state
                     .guests
                     .entry(reference)
                     .or_insert_with(Self::new_guest_record)
-                    .assignments
-                    .insert(source.clone(), assignment.clone());
+                    .assignments;
+                assignments.insert(source.clone(), assignment);
+                let handle = assignments
+                    .get(source)
+                    .expect("guest assignment map entry was just inserted")
+                    .clone();
+                Ok(handle)
             }
         }
-        Ok(assignment)
     }
 
     /// The recorded assignment of one resource.
@@ -729,7 +734,7 @@ impl TargetDirectory {
             .get(guest)
             .map(|record| record.assignments.keys().cloned().collect())
             .unwrap_or_default();
-        assigned.sort_by(|left, right| identity_order(left).cmp(&identity_order(right)));
+        assigned.sort_by_cached_key(identity_order);
         assigned
     }
 
@@ -1041,8 +1046,12 @@ impl TargetDirectory {
 }
 
 /// Stable ordering for resource identities inside the directory.
-fn identity_order(key: &ResourceKey) -> (&str, &str, &str) {
-    (&key.zone, &key.type_name, &key.name)
+///
+/// The key is owned rather than a tuple of borrows because the ordering is
+/// applied through `sort_by_cached_key`, which caches one key per element and
+/// so cannot take a key borrowed from the element it is called on.
+fn identity_order(key: &ResourceKey) -> (String, String, String) {
+    (key.zone.clone(), key.type_name.clone(), key.name.clone())
 }
 
 #[cfg(test)]
@@ -1616,7 +1625,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_target_binding_never_trusts_a_channel_it_kept() {
-        let directory = Arc::new(TargetDirectory::new());
+        let directory = TargetDirectory::new();
         let runtime = Arc::new(GuestTargetRuntime::new(guest()));
         runtime.bind_session(1).expect("bind session");
         directory
@@ -1625,7 +1634,7 @@ mod tests {
         let source = key("Process", "worker");
         let assignment =
             directory.assign(&source, &[7; 16], 2, "Guest/work-vm").expect("assign guest");
-        let binding = TargetBinding::new(Arc::clone(&directory), assignment);
+        let binding = TargetBinding::new(directory.clone(), assignment);
 
         binding.realize(spec(), digest(), "/run/d2b/worker.sock").await.expect("realize");
         assert_eq!(
@@ -1663,7 +1672,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_host_binding_has_no_guest_realization_path() {
-        let directory = Arc::new(TargetDirectory::new());
+        let directory = TargetDirectory::new();
         let source = key("Process", "hosted");
         let assignment =
             directory.assign(&source, &[1; 16], 1, "Host/main-host").expect("assign host");

@@ -28,6 +28,7 @@
 //! configuration.
 
 use std::{
+    fmt,
     sync::{
         LazyLock,
         mpsc::{SyncSender, TrySendError, sync_channel},
@@ -46,6 +47,17 @@ pub enum LoaderRefusal {
     /// The loader worker is not running.
     Unavailable,
 }
+
+impl fmt::Display for LoaderRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Busy => formatter.write_str("loader queue is full: retry later"),
+            Self::Unavailable => formatter.write_str("loader worker is not running"),
+        }
+    }
+}
+
+impl std::error::Error for LoaderRefusal {}
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
 

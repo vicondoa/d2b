@@ -31,6 +31,11 @@ struct JournalEntry {
     coordinator: HandoffCoordinator,
 }
 
+/// A handoff apply/replay failure: journal replays either carry the typed
+/// validation error (`Invalid` / `Io`) or refuse on a journal/helper
+/// mismatch or helper unavailability; artifact-validation failures keep
+/// their own variants so callers can distinguish helper faults from
+/// validation-output faults.
 #[derive(Debug)]
 pub enum HandoffOperationError {
     Invalid(HandoffError),
@@ -227,7 +232,10 @@ pub async fn validate_artifact_with_helper(
 /// `flock(2)` on a dedicated lock file: the held fd is the lock (plan
 /// KD1 - no surviving `std::sync::Mutex`), and the same file excludes
 /// concurrent writers across processes as well as threads. The fd stays
-/// owned by the caller for the whole apply/replay critical section.
+/// owned by the caller for the whole apply/replay critical section. The
+/// blocking wait runs on the dedicated bounded worker
+/// ([`HANDOFF_LOCK_WORKER`]) so the executor worker never parks on it;
+/// the lock is acquired exactly when it is free, as before.
 async fn acquire_handoff_lock(
     state_dir: &Path,
 ) -> Result<nix::fcntl::Flock<std::fs::File>, HandoffOperationError> {
@@ -243,8 +251,65 @@ async fn acquire_handoff_lock(
         .open(&path)
         .await
         .map_err(HandoffOperationError::Io)?;
-    nix::fcntl::Flock::lock(file.into_std().await, nix::fcntl::FlockArg::LockExclusive)
-        .map_err(|(_, err)| HandoffOperationError::Io(io::Error::from(err)))
+    let file = file.into_std().await;
+    let Some(worker) = HANDOFF_LOCK_WORKER.as_ref() else {
+        return Err(HandoffOperationError::Io(io::Error::other(
+            "handoff lock worker unavailable",
+        )));
+    };
+    let (reply, answer) = tokio::sync::oneshot::channel();
+    let job = HandoffLockJob { file, reply };
+    worker
+        .sender
+        .try_send(job)
+        .map_err(|_| HandoffOperationError::Io(io::Error::other("handoff lock worker busy")))?;
+    answer
+        .await
+        .map_err(|_| HandoffOperationError::Io(io::Error::other("handoff lock worker unavailable")))?
+        .map_err(HandoffOperationError::Io)
+}
+
+/// One job on the handoff-lock seat: block on `flock(2)` for the caller.
+struct HandoffLockJob {
+    file: std::fs::File,
+    reply: tokio::sync::oneshot::Sender<Result<nix::fcntl::Flock<std::fs::File>, io::Error>>,
+}
+
+/// The bounded worker that owns the blocking `flock(2)` wait for the
+/// per-state-dir handoff lock: a blocking `sync_channel` recv on
+/// the worker's own dedicated thread, with `tokio::sync::oneshot` replies.
+/// The wait can be long - the lock is held for the whole apply/replay
+/// critical section of the previous holder - so it must not park an
+/// executor worker; the dedicated thread blocks instead, and the caller
+/// awaits the outcome. Admission is a non-blocking `try_send`, so a
+/// saturated queue refuses rather than parking the caller or growing the
+/// pool.
+struct HandoffLockWorker {
+    sender: std::sync::mpsc::SyncSender<HandoffLockJob>,
+}
+
+/// The handoff-lock seat, started on first use; `None` records a worker
+/// that could not start, so every later call refuses instead of retrying.
+static HANDOFF_LOCK_WORKER: std::sync::LazyLock<Option<HandoffLockWorker>> =
+    std::sync::LazyLock::new(|| {
+        const QUEUE_DEPTH: usize = 4;
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<HandoffLockJob>(QUEUE_DEPTH);
+        std::thread::Builder::new()
+            .name("d2b-broker-handoff-lock".to_owned())
+            .spawn(move || handoff_lock_worker_loop(receiver))
+            .ok()
+            .map(|_| HandoffLockWorker { sender })
+    });
+
+/// The sanctioned R4 channel boundary: a blocking `sync_channel` recv on
+/// the worker's own dedicated thread, with `tokio::sync::oneshot` replies.
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
+fn handoff_lock_worker_loop(receiver: std::sync::mpsc::Receiver<HandoffLockJob>) {
+    while let Ok(job) = receiver.recv() {
+        let result = nix::fcntl::Flock::lock(job.file, nix::fcntl::FlockArg::LockExclusive)
+            .map_err(|(_, err)| io::Error::from(err));
+        let _ = job.reply.send(result);
+    }
 }
 
 /// Apply or replay one broker-owned generation handoff using a typed effect.
@@ -506,6 +571,32 @@ mod tests {
         // The flock needs the state dir itself, but the journal must not
         // have been touched: no `host-generation-handoffs` subtree exists.
         assert!(!directory.join(JOURNAL_DIR).exists());
+        let _ = tokio::fs::remove_dir_all(directory).await;
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn handoff_lock_serializes_concurrent_appliers() {
+        let directory = PathBuf::from("target")
+            .join(format!("d2b-handoff-lock-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&directory).await;
+
+        let first = acquire_handoff_lock(&directory).await.expect("first lock");
+        let second_dir = directory.clone();
+        let second = tokio::spawn(async move {
+            acquire_handoff_lock(&second_dir).await.expect("second lock")
+        });
+        // The second acquisition must not complete while the first lock is
+        // held. The sleep is a window, not the assertion: whether the
+        // second task is queued on the worker or still awaiting its
+        // reply, it cannot be finished while the flock is held.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            !second.is_finished(),
+            "second acquisition must wait for the first holder"
+        );
+        drop(first);
+        second.await.expect("second acquisition completes after release");
         let _ = tokio::fs::remove_dir_all(directory).await;
     }
 

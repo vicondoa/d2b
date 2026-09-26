@@ -4,10 +4,11 @@ mod daemon_state_persistence {
     use std::fs;
     use std::path::PathBuf;
     use std::process::{Command, Stdio};
+    use std::time::Duration;
 
     use serde_json::{Value, json};
 
-    use super::common::{DaemonFixture, TestPeer, spawn_d2bd_serve};
+    use super::common::{DaemonFixture, TestPeer, spawn_d2bd_serve, wait_for_file};
 
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -62,6 +63,11 @@ mod daemon_state_persistence {
             true,
             Some(report_json.as_path()),
         );
+        // The report is written during startup, after the public socket
+        // binds; wait for it before killing so the kill cannot race the
+        // write (the socket appears first, so waiting on the socket alone
+        // is not enough).
+        wait_for_file(&report_json, Duration::from_secs(15));
         restore.kill_and_wait();
 
         let report = read_json(&report_json);

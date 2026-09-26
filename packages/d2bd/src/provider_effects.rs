@@ -7,7 +7,7 @@
 //! with the existing typed broker dispatch functions.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     fs::{self, OpenOptions},
     io::Write,
     path::PathBuf,
@@ -16,6 +16,9 @@ use std::{
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(any(test, feature = "test-support"))]
+use std::collections::BTreeSet;
 
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 use d2b_contracts_broker::broker_wire::{BrokerRequest, BrokerResponse};
@@ -88,6 +91,11 @@ impl FixedEffectAdapter {
     }
 
     /// Validate the fixed socket instance before any ticket is delivered.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FixedEffectError::Broker`] when the broker socket instance
+    /// fails validation.
     pub fn validate_instance(&self) -> Result<(), FixedEffectError> {
         self.broker
             .validate_instance()
@@ -107,7 +115,14 @@ impl FixedEffectAdapter {
         }
     }
 
-    pub fn dispatch(
+    /// Dispatch one effect through the fixed adapter after admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FixedEffectError::EffectClassDenied`] when the daemon
+    /// mode does not admit the class, and [`FixedEffectError::Broker`] when
+    /// the broker dispatch fails.
+        pub fn dispatch(
         &self,
         class: ProviderEffectClass,
         request: BrokerRequest,
@@ -707,6 +722,7 @@ impl ProviderLifecycleDispatch {
     }
 
     /// Construct a dispatcher backed by a daemon-owned durable state file.
+    #[cfg(any(test, feature = "test-support"))]
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn new_persistent(
         zone: ZoneId,
@@ -801,6 +817,15 @@ impl ProviderLifecycleDispatch {
     }
 
     /// Admit one request after checking caller role, Zone, and deduplication.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderEffectError::CallerRoleDenied`],
+    /// [`ProviderEffectError::ZoneMismatch`],
+    /// [`ProviderEffectError::StopOnlyLease`], or
+    /// [`ProviderEffectError::StateUnavailable`].
+    ///
+    #[cfg(any(test, feature = "test-support"))]
     pub fn admit(
         &self,
         caller: &BrokerCallerRole,
@@ -1061,7 +1086,7 @@ impl ProviderLifecycleDispatch {
 
     fn allocate_desired_generation(&self) -> Result<u64, ProviderEffectError> {
         self.next_desired_generation
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |generation| {
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |generation| {
                 generation.checked_add(1)
             })
             .map(|previous| previous.saturating_add(1))
@@ -1305,6 +1330,7 @@ fn validate_authorization(request: &GuestLifecycleRequest) -> Result<(), Provide
     Ok(())
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn persisted_authorization(entry: &PersistedLifecycleMutation) -> Option<LifecycleAuthorization> {
     let zone_uid = ResourceUid::parse(entry.zone_uid.as_ref()?).ok()?;
     let guest_ref = ResourceRef::parse(&entry.guest).ok()?;
@@ -1345,6 +1371,7 @@ fn persisted_authorization(entry: &PersistedLifecycleMutation) -> Option<Lifecyc
     })
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn migrate_legacy_generations(
     persisted: &mut [PersistedLifecycleMutation],
 ) -> Result<u64, ProviderEffectError> {

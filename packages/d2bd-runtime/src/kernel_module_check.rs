@@ -185,7 +185,7 @@ impl ModuleCheckReport {
 fn classify_vms(resolver: &BundleResolver) -> BundleFeatureSet {
     let mut features = BundleFeatureSet::default();
 
-    for (vm_id, vm) in &resolver.manifest.vms {
+    for (vm_id, vm) in &resolver.manifest().vms {
         if vm.graphics {
             features.graphics_vms.insert(vm_id.clone());
         }
@@ -202,7 +202,7 @@ fn classify_vms(resolver: &BundleResolver) -> BundleFeatureSet {
     // module. We additionally pick up Gpu / Usbip / Swtpm nodes
     // for VMs whose manifest-level booleans might lag a
     // future-shape change.
-    for dag in &resolver.processes.vms {
+    for dag in &resolver.processes().vms {
         let vm_id = &dag.vm;
         for node in &dag.nodes {
             match node.role {

@@ -499,7 +499,10 @@ complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand
 complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from logs" -l human -d 'Force human-readable terminal output'
 complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from logs" -l no-deadline -d 'Suppress the command default deadline'
 complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from logs" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from kill" -l signal -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from kill" -l signal -r -f -a "term\t''
+kill\t''
+int\t''
+hup\t''"
 complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from kill" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
 complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from kill" -l deadline -d 'Bound all Zone requests and streams' -r
 complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from kill" -l json -d 'Emit the stable JSON envelope'
@@ -950,7 +953,11 @@ complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcom
 complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from get" -l human -d 'Force human-readable terminal output'
 complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from get" -l no-deadline -d 'Suppress the command default deadline'
 complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from get" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from list" -l endpoint-class -r
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from list" -l endpoint-class -r -f -a "service\t''
+device\t''
+transport\t''
+control\t''
+data\t''"
 complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from list" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
 complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from list" -l deadline -d 'Bound all Zone requests and streams' -r
 complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from list" -l updates
@@ -958,7 +965,11 @@ complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcom
 complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from list" -l human -d 'Force human-readable terminal output'
 complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from list" -l no-deadline -d 'Suppress the command default deadline'
 complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from list" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from watch" -l endpoint-class -r
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from watch" -l endpoint-class -r -f -a "service\t''
+device\t''
+transport\t''
+control\t''
+data\t''"
 complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from watch" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
 complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from watch" -l deadline -d 'Bound all Zone requests and streams' -r
 complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from watch" -l json -d 'Emit the stable JSON envelope'

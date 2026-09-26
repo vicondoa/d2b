@@ -79,9 +79,16 @@ disallowed-methods = [
     { path = "std::sync::Mutex::lock", reason = "Blocks the calling thread until the lock is free, and the guard it returns cannot be held across an await; use the async mutex, or the dedicated bounded-worker channel boundary (plan R4)", replacement = "tokio::sync::Mutex::lock" },
     { path = "std::sync::RwLock::read", reason = "Blocks the calling thread until the read lock is free, and the guard it returns cannot be held across an await", replacement = "tokio::sync::RwLock::read" },
     { path = "std::sync::RwLock::write", reason = "Blocks the calling thread until the write lock is free, and the guard it returns cannot be held across an await", replacement = "tokio::sync::RwLock::write" },
-    { path = "parking_lot::Mutex::lock", reason = "Blocking lock, and the guard it returns cannot be held across an await; the parking_lot carve-out is revoked (plan KD3)", replacement = "tokio::sync::Mutex::lock" },
-    { path = "parking_lot::RwLock::read", reason = "Blocking read lock, and the guard it returns cannot be held across an await; the parking_lot carve-out is revoked (plan KD3)", replacement = "tokio::sync::RwLock::read" },
-    { path = "parking_lot::RwLock::write", reason = "Blocking write lock, and the guard it returns cannot be held across an await; the parking_lot carve-out is revoked (plan KD3)", replacement = "tokio::sync::RwLock::write" },
+    # The parking_lot lock types are aliases into `lock_api` (`parking_lot`'s
+    # `Mutex<T>` is `lock_api::Mutex<RawMutex, T>`, its `RwLock<T>` is
+    # `lock_api::RwLock<RawRwLock, T>`), and a method entry configured on the
+    # alias text does not resolve: clippy matches the path against the
+    # definition the call ends up at, so the three entries below name the
+    # resolved `lock_api` paths. `parking_lot::Condvar` below is a real type,
+    # not an alias, and keeps its own name.
+    { path = "lock_api::Mutex::lock", reason = "Blocking lock reached through the parking_lot alias (`parking_lot::Mutex` is `lock_api::Mutex<RawMutex, T>`), and the guard it returns cannot be held across an await; the parking_lot carve-out is revoked", replacement = "tokio::sync::Mutex::lock" },
+    { path = "lock_api::RwLock::read", reason = "Blocking read lock reached through the parking_lot alias (`parking_lot::RwLock` is `lock_api::RwLock<RawRwLock, T>`), and the guard it returns cannot be held across an await; the parking_lot carve-out is revoked", replacement = "tokio::sync::RwLock::read" },
+    { path = "lock_api::RwLock::write", reason = "Blocking write lock reached through the parking_lot alias (`parking_lot::RwLock` is `lock_api::RwLock<RawRwLock, T>`), and the guard it returns cannot be held across an await; the parking_lot carve-out is revoked", replacement = "tokio::sync::RwLock::write" },
 
     # --- Condition variables ---------------------------------------------
     { path = "std::sync::Condvar::wait", reason = "Parks the caller until another thread notifies; on a single-threaded runtime the notifier is the parked worker itself, so the wait can never be satisfied", replacement = "arm tokio::sync::Notify before the check, then tokio::time::timeout" },

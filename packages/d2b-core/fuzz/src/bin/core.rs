@@ -3,6 +3,7 @@ mod harness;
 
 use d2b_contracts_resource::v3::{IfName, IfNameError};
 use std::collections::BTreeMap;
+use d2b_contracts::error::{BrokerOp, Error, SemverRange, Version};
 use d2b_core::{
     bundle::{Bundle, BundleGeneration},
     bundle_resolver::{
@@ -12,11 +13,10 @@ use d2b_core::{
         intent_id_sysctl, intent_id_usbip_bind,
         intent_id_usbip_firewall,
     },
-    error::{BrokerOp, Error, SemverRange, Version},
     host::{
         BridgePortFlags, HostJson, HostsFileOwnership, Ipv6SysctlEntry, LanPolicy, NetEnv,
-        NetworkManagerUnmanaged, NftChain, NftablesModel, OwnershipRule, SitePolicy, TapRole,
-        UsbipBusidLock, UsbipLockOwner, UsbipLockScope,
+        NmReloadBehavior, NetworkManagerUnmanaged, NftChain, NftablesModel, OwnershipRule,
+        SitePolicy, TapRole, UsbipBusidLock, UsbipLockOwner, UsbipLockScope,
     },
     manifest_v04::ManifestV04,
     sandbox_profile::CgroupPlacement,
@@ -45,6 +45,10 @@ fn main() {
         (
             "host_json_denies_unknown_fields",
             host_json_denies_unknown_fields,
+        ),
+        (
+            "nm_reload_behavior_wire_values_are_closed",
+            nm_reload_behavior_wire_values_are_closed,
         ),
         (
             "usbip_busid_lock_round_trips_bus_ids",
@@ -138,6 +142,31 @@ fn host_json_denies_unknown_fields() {
     assert!(err.to_string().contains("unknown field"));
 }
 
+fn nm_reload_behavior_wire_values_are_closed() {
+    for (wire, behavior) in [
+        ("atomic-reload", NmReloadBehavior::AtomicReload),
+        ("none", NmReloadBehavior::None),
+        ("", NmReloadBehavior::Unspecified),
+    ] {
+        let rendered = serde_json::to_string(&behavior).expect("serialize reload behavior");
+        assert_eq!(rendered, format!("{wire:?}"));
+        let parsed: NmReloadBehavior =
+            serde_json::from_str(&rendered).expect("parse reload behavior");
+        assert_eq!(parsed, behavior);
+    }
+
+    let declared = |reload_behavior: &str| {
+        format!(
+            r##"{{"filePath":"/etc/NetworkManager/conf.d/00-d2b.conf","matchCriteria":[],"reloadBehavior":{reload_behavior:?},"ownership":{{"owner":"root","group":"root","mode":"0644","driftPolicy":"replace"}}}}"##
+        )
+    };
+    serde_json::from_str::<NetworkManagerUnmanaged>(&declared("atomic-reload"))
+        .expect("a declared reload behavior resolves");
+    let err = serde_json::from_str::<NetworkManagerUnmanaged>(&declared("atomic-reloadd"))
+        .expect_err("a hand-declared reload behavior typo must fail at resolution");
+    assert!(err.to_string().contains("unknown variant"), "{err}");
+}
+
 fn usbip_busid_lock_round_trips_bus_ids() {
     let lock: UsbipBusidLock = serde_json::from_str(
         r#"{"vm":"work-vm","lockOwner":"daemon","scope":"per-busid","busIds":["1-1.4","2-3"]}"#,
@@ -157,7 +186,7 @@ fn privileges_json_denies_unknown_fields() {
 }
 
 fn w1_matrix_contains_public_and_broker_rows() {
-    let matrix = PrivilegesJson::w1("v1");
+    let matrix = PrivilegesJson::from_const_rows("v1");
     assert_eq!(matrix.public_operations.len(), PUBLIC_OPERATION_AUTHZ.len());
     assert_eq!(matrix.broker_operations.len(), BROKER_OPERATION_AUTHZ.len());
     assert!(
@@ -339,7 +368,7 @@ fn build_synthetic_resolver() -> BundleResolver {
         network_manager: NetworkManagerUnmanaged {
             file_path: "/etc/NetworkManager/conf.d/00-d2b.conf".to_owned(),
             match_criteria: vec!["interface-name:d2b-*".to_owned()],
-            reload_behavior: "atomic-reload".to_owned(),
+            reload_behavior: NmReloadBehavior::AtomicReload,
             ownership: OwnershipRule {
                 owner: "root".to_owned(),
                 group: "root".to_owned(),
@@ -625,23 +654,36 @@ fn bundle_resolver_host_runtime_synthesizes_from_ifname_mappings() {
 
 fn build_resolver_with_ifname_mappings() -> d2b_core::bundle_resolver::BundleResolver {
     use d2b_core::host::IfNameMapping;
-    let mut r = build_synthetic_resolver();
-    r.host.if_name_mappings = vec![IfNameMapping {
+    let r = build_synthetic_resolver();
+    let mut host = r.host().clone();
+    host.if_name_mappings = vec![IfNameMapping {
         env: "work".to_owned(),
         vm: None,
         role: TapRole::WorkloadLan,
         user_visible_name: "br-work-lan".to_owned(),
         derived_ifname: IfName::new("d2b-br-a1b2c3d4").expect("ifname"),
     }];
-    r
+    BundleResolver::from_artifacts_with_zone_resource_bundles(
+        r.bundle().clone(),
+        host,
+        r.processes().clone(),
+        r.manifest().clone(),
+        BTreeMap::new(),
+    )
 }
 
 fn build_resolver_with_usbip_bus_ids(
     bus_ids: &[&str],
 ) -> d2b_core::bundle_resolver::BundleResolver {
-    let mut r = build_synthetic_resolver();
-    r.host.environments[0].usbip_busid_locks[0].bus_ids =
+    let r = build_synthetic_resolver();
+    let mut host = r.host().clone();
+    host.environments[0].usbip_busid_locks[0].bus_ids =
         bus_ids.iter().map(|bus_id| (*bus_id).to_owned()).collect();
     BundleResolver::from_artifacts_with_zone_resource_bundles(
-        r.bundle, r.host, r.processes, r.manifest, BTreeMap::new())
+        r.bundle().clone(),
+        host,
+        r.processes().clone(),
+        r.manifest().clone(),
+        BTreeMap::new(),
+    )
 }

@@ -57,6 +57,11 @@ impl<'de> serde::Deserialize<'de> for OperationIdentity {
 
 impl OperationIdentity {
     /// Derive an identity from the request token.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperationIdentityError::Invalid`] when the token is empty,
+    /// exceeds the bounded length, or contains control characters.
     pub fn derive(value: &str) -> Result<Self, OperationIdentityError> {
         if value.is_empty()
             || value.len() > MAX_OPERATION_ID_BYTES
@@ -75,8 +80,13 @@ impl OperationIdentity {
     }
 
     /// Parse a previously derived canonical identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperationIdentityError::Invalid`] when the value is not a
+    /// canonical digest.
     pub fn parse(value: &str) -> Result<Self, OperationIdentityError> {
-        AuditHash::parse(value.to_owned())
+        AuditHash::parse(value)
             .map(|hash| Self(hash.as_str().to_owned()))
             .map_err(|_| OperationIdentityError::Invalid)
     }

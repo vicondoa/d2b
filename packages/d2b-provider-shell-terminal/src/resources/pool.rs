@@ -81,6 +81,13 @@ impl std::fmt::Debug for PoolSpec {
 
 impl PoolSpec {
     /// Construct a bounded pool policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns the execution-target validation refusal, the name or
+    /// workload-user validation refusal, or
+    /// [`ShellTerminalError::InvalidLoginShell`] when the login shell
+    /// reference is not a bounded `artifact://` URI.
     pub fn new(
         execution_target: ExecutionTarget,
         workload_user: impl Into<String>,

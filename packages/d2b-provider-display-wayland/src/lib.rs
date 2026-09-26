@@ -10,8 +10,6 @@ mod process;
 mod runtime;
 pub mod session_children;
 mod spec;
-#[allow(missing_docs)]
-pub mod wayland_proxy;
 
 pub use controller::{
     AuthenticatedDisplaySession, CapabilityReadiness, CleanupState, DependencyReadiness,
@@ -28,9 +26,9 @@ pub use policy::{
 pub use principal::{PrincipalLease, PrincipalPool, PrincipalPoolError};
 pub use process::DisplayLaunchBinding;
 pub use process::{
-    AttachmentGrantHandle, DisplayProcessRole, LaunchGrants, LaunchTicket, ProcessObservation,
-    VolumeState, WorkerAction, WorkerRestartEvidence, WorkerState, WorkerSupervisor,
-    WorkerSupervisorError,
+    AttachmentGrantHandle, DisplayProcessRole, LaunchError, LaunchGrants, LaunchTicket,
+    ProcessObservation, VolumeState, WorkerAction, WorkerRestartEvidence, WorkerState,
+    WorkerSupervisor, WorkerSupervisorError,
 };
 pub use runtime::{
     DisplayProcessEffectPort, DisplayRuntime, DisplayRuntimeError, FinalizationReport,

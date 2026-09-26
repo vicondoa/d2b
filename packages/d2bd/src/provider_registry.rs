@@ -45,7 +45,7 @@ pub const PROVIDER_BUNDLE_VERSION: u32 = 3;
 pub const PROVIDER_BUNDLE_SCHEMA_VERSION: &str = "v3";
 
 /// Registry limits and snapshots are owned by the shared Provider crate.
-pub use d2b_provider::{MAX_PROVIDER_REGISTRY_ENTRIES, ProviderRegistrySnapshot};
+pub use d2b_provider::MAX_PROVIDER_REGISTRY_ENTRIES;
 
 /// Mint a unique operation identity for one lifecycle attempt. The immutable
 /// Guest identity is carried by the sealed authorization lease; the nonce
@@ -411,7 +411,7 @@ enum ProviderRuntimeState {
     Active(ActiveProviderRuntime),
     /// The catalog is absent or failed validation; all lifecycle effects
     /// refuse until the daemon is rebuilt with a valid catalog.
-    Refused(ProviderCompositionError),
+    Refused,
 }
 
 /// Daemon-owned Provider composition and lifecycle routing state.
@@ -425,9 +425,7 @@ impl ProviderRuntime {
     /// Start unavailable until a trusted Provider catalog is supplied.
     pub fn new() -> Self {
         Self {
-            state: tokio::sync::RwLock::new(ProviderRuntimeState::Refused(
-                ProviderCompositionError::ProviderNotRegistered,
-            )),
+            state: tokio::sync::RwLock::new(ProviderRuntimeState::Refused),
             process_providers: tokio::sync::RwLock::new(None),
         }
     }
@@ -505,7 +503,7 @@ impl ProviderRuntime {
                 ProviderRuntimeState::Active(active) => {
                     Some(active.registry.current().snapshot().descriptors().len())
                 }
-                ProviderRuntimeState::Refused(_) => None,
+                ProviderRuntimeState::Refused => None,
             })
             .unwrap_or(0)
     }
@@ -527,10 +525,7 @@ impl ProviderRuntime {
             .map_err(|_| ProviderEffectError::StateUnavailable)?;
         let ProviderRuntimeState::Active(active) = &*state else {
             return match &*state {
-                ProviderRuntimeState::Refused(error) => {
-                    let _ = error.code();
-                    Err(ProviderEffectError::RegistryUnavailable)
-                }
+                ProviderRuntimeState::Refused => Err(ProviderEffectError::RegistryUnavailable),
                 ProviderRuntimeState::Active(_) => unreachable!("active state matched above"),
             };
         };
@@ -749,7 +744,6 @@ mod tests {
             8,
             digest.clone(),
             [],
-            false,
         )
         .unwrap()
         .with_execution(ComponentExecution::Launchable {

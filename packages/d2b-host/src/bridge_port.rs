@@ -124,6 +124,12 @@ pub struct FlagDifference {
 /// Compares an observed flag set against the per-role defaults.
 /// Returns `Ok(())` if every flag matches; otherwise a drift report
 /// listing every flag that diverges.
+///
+/// # Errors
+///
+/// Returns `Err(BridgePortFlagDrift)` when any observed flag differs
+/// from the role's default set; the report names every diverging flag
+/// with its expected and actual value.
 pub fn validate_readback(
     role: TapRoleW3,
     observed: BridgePortFlagSet,

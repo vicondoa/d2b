@@ -26,3 +26,4 @@ semver = "1"
 rustix = { workspace = true }
 sha2 = { workspace = true }
 tokio = { workspace = true }
+tracing = "0.1"

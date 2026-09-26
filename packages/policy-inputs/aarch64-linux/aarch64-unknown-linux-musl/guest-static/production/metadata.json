@@ -2,8 +2,8 @@
   "authority": "cargo-locked-metadata",
   "defaultFeatures": false,
   "features": [],
-  "lockSha256": "67a1bfe5ba093516dc7c33d02fffd50351c6d5485695a699fb7285e285a01eb0",
-  "policyPackageCount": 466,
+  "lockSha256": "9db1081561f765badba0a9f7432156f246cbd3f50b5ba8bd558917b4a354b835",
+  "policyPackageCount": 467,
   "policyPackageIds": [
     "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
     "aead@0.5.2#registry+https://github.com/rust-lang/crates.io-index",
@@ -143,6 +143,7 @@
     "d2b-provider-zone@0.0.0-bootstrap#path",
     "d2b-provider@0.0.0-bootstrap#path",
     "d2b-resource-api@0.0.0-bootstrap#path",
+    "d2b-resource-client@0.0.0-bootstrap#path",
     "d2b-resource-runtime@0.0.0-bootstrap#path",
     "d2b-resource-types@0.0.0-bootstrap#path",
     "d2b-session-unix@0.0.0-bootstrap#path",
@@ -472,7 +473,7 @@
     "zvariant_derive@5.15.0#registry+https://github.com/rust-lang/crates.io-index",
     "zvariant_utils@4.2.0#registry+https://github.com/rust-lang/crates.io-index"
   ],
-  "productionPackageCount": 466,
+  "productionPackageCount": 467,
   "resolveNodeCount": 0,
   "roots": [
     "d2bd",

@@ -45,6 +45,7 @@
       "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$"
     },
     "ObservabilityMeta": {
+      "description": "The reserved `_observability` block: host-wide telemetry wiring.",
       "type": "object",
       "required": [
         "enabled",
@@ -416,6 +417,7 @@
       "additionalProperties": false
     },
     "VmEntry": {
+      "description": "One VM's public roster entry, keyed by its name in the manifest.",
       "type": "object",
       "required": [
         "audio",
@@ -591,6 +593,7 @@
       "additionalProperties": false
     },
     "VmGracefulShutdown": {
+      "description": "Graceful-shutdown policy for one VM.",
       "type": "object",
       "required": [
         "enable"
@@ -611,6 +614,7 @@
       "additionalProperties": false
     },
     "VmLanPolicy": {
+      "description": "LAN policy for one VM: east-west traffic allowance and its effective value after host-wide policy is applied.",
       "type": "object",
       "required": [
         "allowEastWest",
@@ -627,6 +631,7 @@
       "additionalProperties": false
     },
     "VmLifecycle": {
+      "description": "Per-VM lifecycle policy: graceful shutdown and live activation.",
       "type": "object",
       "required": [
         "gracefulShutdown"
@@ -649,6 +654,7 @@
       "additionalProperties": false
     },
     "VmLiveActivation": {
+      "description": "Live-activation policy for one VM.",
       "type": "object",
       "properties": {
         "timeoutSeconds": {
@@ -663,6 +669,7 @@
       "additionalProperties": false
     },
     "VmObservability": {
+      "description": "Per-VM observability wiring: agent socket and vsock transport.",
       "type": "object",
       "required": [
         "enabled"
@@ -695,6 +702,7 @@
       "additionalProperties": false
     },
     "VmShellMetadata": {
+      "description": "Shell-session metadata for one VM.",
       "type": "object",
       "required": [
         "defaultName",

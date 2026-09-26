@@ -795,7 +795,6 @@ dependencies = [
  "d2b-core",
  "d2b-provider-config-nixos",
  "d2b-resource-client",
- "d2b-zone-routing",
  "nix 0.29.0",
  "rustix 0.38.44",
  "schemars",
@@ -847,6 +846,7 @@ dependencies = [
  "d2b-broker",
  "d2b-broker-fixture-handlers",
  "regex",
+ "serde",
  "serde_json",
  "tokio",
  "tracing-subscriber",
@@ -884,7 +884,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "snow",
- "tempfile",
  "tokio",
  "ttrpc",
 ]
@@ -988,6 +987,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1064,7 +1064,6 @@ dependencies = [
  "d2b-resource-types",
  "parking_lot",
  "ring",
- "serde",
  "serde_json",
  "sha2",
  "tokio",
@@ -1094,7 +1093,6 @@ dependencies = [
  "d2b-contracts-resource",
  "libc",
  "nix 0.29.0",
- "schemars",
  "serde",
  "serde_json",
  "tempfile",
@@ -1119,6 +1117,7 @@ dependencies = [
 name = "d2b-provider-clipboard-wayland"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "anyhow",
  "command-fds",
  "d2b-contracts",
  "d2b-contracts-resource",
@@ -1134,6 +1133,7 @@ dependencies = [
  "sha2",
  "thiserror 2.0.20",
  "tracing",
+ "tracing-subscriber",
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-misc",
@@ -1255,12 +1255,10 @@ dependencies = [
 name = "d2b-provider-device-gpu"
 version = "0.0.0-bootstrap"
 dependencies = [
- "async-trait",
  "d2b-contracts-resource",
  "d2b-core-controller",
  "d2b-provider-toolkit",
  "d2b-resource-runtime",
- "d2b-resource-types",
  "parking_lot",
  "serde",
  "serde_json",
@@ -1399,7 +1397,6 @@ dependencies = [
  "d2b-resource-runtime",
  "d2b-resource-types",
  "d2bd-runtime",
- "parking_lot",
  "schemars",
  "serde",
  "serde_json",
@@ -1419,7 +1416,6 @@ dependencies = [
  "d2b-contracts-resource",
  "serde",
  "serde_json",
- "sha2",
  "tokio",
  "tracing",
 ]
@@ -1450,6 +1446,7 @@ dependencies = [
  "d2b-contracts-zone-session",
  "d2b-core",
  "d2b-core-controller",
+ "d2b-resource-client",
  "d2b-session",
  "d2b-session-unix",
  "serde",
@@ -1502,7 +1499,6 @@ dependencies = [
  "d2b-provider-toolkit",
  "d2b-resource-runtime",
  "d2b-resource-types",
- "parking_lot",
  "rustix 0.38.44",
  "serde",
  "serde_json",
@@ -1634,7 +1630,6 @@ dependencies = [
  "d2b-resource-types",
  "schemars",
  "serde",
- "serde_json",
  "tokio",
 ]
 
@@ -1748,7 +1743,6 @@ dependencies = [
  "d2b-provider-toolkit",
  "serde",
  "serde_json",
- "tokio",
  "tracing",
 ]
 
@@ -1778,6 +1772,7 @@ dependencies = [
  "d2b-provider-toolkit",
  "d2b-resource-runtime",
  "d2b-resource-types",
+ "serde",
  "serde_json",
  "tokio",
 ]
@@ -1792,6 +1787,7 @@ dependencies = [
  "d2b-session-unix",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1807,7 +1803,6 @@ dependencies = [
  "d2b-resource-types",
  "d2b-session",
  "d2b-session-unix",
- "parking_lot",
  "schemars",
  "serde",
  "serde_json",
@@ -1843,7 +1838,7 @@ dependencies = [
  "tokio-tungstenite",
  "tracing",
  "urlencoding",
- "webpki-roots 0.26.11",
+ "webpki-roots 1.0.9",
  "zeroize",
 ]
 
@@ -1879,12 +1874,12 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "d2b-contracts-resource",
+ "d2b-core",
  "d2b-provider-system-core",
  "d2b-provider-toolkit",
  "d2b-resource-runtime",
  "d2b-resource-types",
  "nix 0.29.0",
- "parking_lot",
  "serde_json",
  "sha2",
  "tokio",
@@ -1902,7 +1897,6 @@ dependencies = [
  "d2b-provider-volume-virtiofs",
  "d2b-resource-runtime",
  "d2b-resource-types",
- "parking_lot",
  "serde_json",
  "tokio",
 ]
@@ -1919,7 +1913,6 @@ dependencies = [
  "d2b-provider-volume-virtiofs",
  "d2b-resource-runtime",
  "d2b-resource-types",
- "parking_lot",
  "serde_json",
  "tokio",
  "tracing",
@@ -1989,6 +1982,7 @@ dependencies = [
  "d2b-resource-runtime",
  "d2b-resource-types",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -2051,6 +2045,7 @@ name = "d2b-resource-compiler"
 version = "0.0.0-bootstrap"
 dependencies = [
  "base64",
+ "d2b-contracts",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
@@ -2099,14 +2094,11 @@ name = "d2b-session"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-audit",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-resource-api",
- "d2b-telemetry",
  "futures-util",
  "protobuf",
- "serde_json",
  "sha2",
  "snow",
  "tokio",
@@ -2157,7 +2149,6 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts-provider",
  "d2b-contracts-resource",
- "rustix 0.38.44",
  "serde",
  "serde_json",
  "sha2",
@@ -2177,6 +2168,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "socket2 0.5.10",
+ "tracing",
  "uzers",
  "zbus",
 ]

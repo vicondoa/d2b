@@ -183,6 +183,26 @@ struct Probe {
     gate: MinijailPlatformGate,
 }
 
+impl Probe {
+    fn new(
+        capabilities: BTreeSet<HostCapabilityClass>,
+        user_manager_available: bool,
+        gate: MinijailPlatformGate,
+        kernel_release: &str,
+    ) -> Self {
+        Self {
+            capabilities,
+            gate,
+            metadata: HostProbeMetadata {
+                kernel_release: kernel_release.to_owned(),
+                os_name: "test-os".to_owned(),
+                user_manager_available,
+                active_process_count: 0,
+            },
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl HostProbeEffectPort for Probe {
     async fn probe(&self, capability: HostCapabilityClass) -> Result<bool, SystemCoreError> {
@@ -200,16 +220,13 @@ impl HostProbeEffectPort for Probe {
 
 #[test]
 fn bounded_probe_reconciles_all_capabilities_and_gates_minijail() {
-    let probe = Probe {
-        capabilities: HostCapabilityClass::ALL.into_iter().collect(),
-        metadata: HostProbeMetadata {
-            kernel_release: "6.1".to_owned(),
-            os_name: "test-os".to_owned(),
-            user_manager_available: true,
-            active_process_count: 3,
-        },
-        gate: MinijailPlatformGate::new(6, 1, true),
-    };
+    let mut probe = Probe::new(
+        HostCapabilityClass::ALL.into_iter().collect(),
+        true,
+        MinijailPlatformGate::new(6, 1, true),
+        "6.1",
+    );
+    probe.metadata.active_process_count = 3;
     let result = block_on(HostReconciler::new().reconcile_with_probe(
         &fixtures::host_ref(),
         &fixtures::system_core_provider_ref(),
@@ -226,16 +243,12 @@ fn bounded_probe_reconciles_all_capabilities_and_gates_minijail() {
 
 #[test]
 fn user_capable_host_without_user_manager_is_degraded() {
-    let probe = Probe {
-        capabilities: HostCapabilityClass::ALL.into_iter().collect(),
-        metadata: HostProbeMetadata {
-            kernel_release: "6.1".to_owned(),
-            os_name: "test-os".to_owned(),
-            user_manager_available: false,
-            active_process_count: 0,
-        },
-        gate: MinijailPlatformGate::new(6, 1, true),
-    };
+    let probe = Probe::new(
+        HostCapabilityClass::ALL.into_iter().collect(),
+        false,
+        MinijailPlatformGate::new(6, 1, true),
+        "6.1",
+    );
     let result = block_on(HostReconciler::new().reconcile_with_probe(
         &fixtures::user_only_host_ref(),
         &fixtures::system_core_provider_ref(),
@@ -250,16 +263,12 @@ fn user_capable_host_without_user_manager_is_degraded() {
 
 #[test]
 fn missing_required_probe_capability_is_rejected() {
-    let probe = Probe {
-        capabilities: BTreeSet::new(),
-        metadata: HostProbeMetadata {
-            kernel_release: "6.1".to_owned(),
-            os_name: "test-os".to_owned(),
-            user_manager_available: true,
-            active_process_count: 0,
-        },
-        gate: MinijailPlatformGate::new(6, 1, true),
-    };
+    let probe = Probe::new(
+        BTreeSet::new(),
+        true,
+        MinijailPlatformGate::new(6, 1, true),
+        "6.1",
+    );
     assert_eq!(
         block_on(HostReconciler::new().reconcile_with_probe(
             &fixtures::host_ref(),
@@ -276,16 +285,12 @@ fn missing_required_probe_capability_is_rejected() {
 
 #[test]
 fn malformed_probe_metadata_is_rejected() {
-    let probe = Probe {
-        capabilities: HostCapabilityClass::ALL.into_iter().collect(),
-        metadata: HostProbeMetadata {
-            kernel_release: "6.1\nmalicious".to_owned(),
-            os_name: "test-os".to_owned(),
-            user_manager_available: true,
-            active_process_count: 0,
-        },
-        gate: MinijailPlatformGate::new(6, 1, true),
-    };
+    let probe = Probe::new(
+        HostCapabilityClass::ALL.into_iter().collect(),
+        true,
+        MinijailPlatformGate::new(6, 1, true),
+        "6.1\nmalicious",
+    );
     assert_eq!(
         block_on(HostReconciler::new().reconcile_with_probe(
             &fixtures::host_ref(),
@@ -302,16 +307,12 @@ fn malformed_probe_metadata_is_rejected() {
 
 #[test]
 fn unsupported_minijail_probe_posture_is_rejected() {
-    let probe = Probe {
-        capabilities: HostCapabilityClass::ALL.into_iter().collect(),
-        metadata: HostProbeMetadata {
-            kernel_release: "6.1".to_owned(),
-            os_name: "test-os".to_owned(),
-            user_manager_available: true,
-            active_process_count: 0,
-        },
-        gate: MinijailPlatformGate::new(6, 1, false),
-    };
+    let probe = Probe::new(
+        HostCapabilityClass::ALL.into_iter().collect(),
+        true,
+        MinijailPlatformGate::new(6, 1, false),
+        "6.1",
+    );
     assert_eq!(
         block_on(HostReconciler::new().reconcile_with_probe(
             &fixtures::host_ref(),

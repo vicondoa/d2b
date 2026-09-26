@@ -14,7 +14,6 @@ use crate::error::{FailureComparison, ResourceError};
 use crate::identity::{ResourceKey, ResourceTypeName, StoredDesiredResource};
 use crate::manager::ResourceView;
 use crate::spec_store::EnsureOutcome;
-use crate::target::TargetHandle;
 
 // ---------------------------------------------------------------------------
 // Long effects (R5; spec section 14)
@@ -363,7 +362,6 @@ impl ResourceContext {
     /// manager-wired hooks.
     pub fn new(
         row: StoredDesiredResource,
-        _target: TargetHandle,
         decoder: Arc<dyn SpecDecoder>,
         manager: Arc<dyn ManagerEndpoint>,
         requeue: Arc<dyn RequeueScheduler>,
@@ -529,7 +527,9 @@ impl ResourceContext {
     ///   observed state of the current row.
     ///   [`ResourceView::observed_status`] folds both of the last two cases
     ///   into `None`.
-    /// - `Err(ResourceError::ManagerRpc(_))`: the manager could not answer.
+    /// - `Err(ResourceError::ManagerUnavailable(_))`: the manager could not
+    ///   answer; `Err(ResourceError::ManagerRejected { .. })`: the manager
+    ///   refused the call.
     ///   Never reported as absence.
     ///
     /// Readiness of a child or dependency is therefore
@@ -681,23 +681,23 @@ impl ManagerEndpoint for FailClosedManager {
         _parent: &ResourceKey,
         _child: ChildEnsure,
     ) -> Result<EnsureOutcome, ResourceError> {
-        Err(ResourceError::ManagerRpc("no manager seam".into()))
+        Err(ResourceError::ManagerRejected { reason: "no manager seam".into() })
     }
 
     async fn get(&self, _key: &ResourceKey) -> Result<Option<StoredDesiredResource>, ResourceError> {
-        Err(ResourceError::ManagerRpc("no manager seam".into()))
+        Err(ResourceError::ManagerRejected { reason: "no manager seam".into() })
     }
 
     async fn view(&self, _key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
-        Err(ResourceError::ManagerRpc("no manager seam".into()))
+        Err(ResourceError::ManagerRejected { reason: "no manager seam".into() })
     }
 
     async fn delete(&self, _key: &ResourceKey) -> Result<(), ResourceError> {
-        Err(ResourceError::ManagerRpc("no manager seam".into()))
+        Err(ResourceError::ManagerRejected { reason: "no manager seam".into() })
     }
 
     async fn list_owned(&self, _owner_uid: [u8; 16]) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-        Err(ResourceError::ManagerRpc("no manager seam".into()))
+        Err(ResourceError::ManagerRejected { reason: "no manager seam".into() })
     }
 
     async fn register_watch(
@@ -705,11 +705,11 @@ impl ManagerEndpoint for FailClosedManager {
         _subscriber: &ResourceKey,
         _registration: WatchRegistration,
     ) -> Result<WatchId, ResourceError> {
-        Err(ResourceError::ManagerRpc("no manager seam".into()))
+        Err(ResourceError::ManagerRejected { reason: "no manager seam".into() })
     }
 
     async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
-        Err(ResourceError::ManagerRpc("no manager seam".into()))
+        Err(ResourceError::ManagerRejected { reason: "no manager seam".into() })
     }
 }
 
@@ -808,7 +808,6 @@ pub(crate) mod test_support {
     use crate::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
     use crate::manager::ResourceView;
     use crate::spec_store::EnsureOutcome;
-    use crate::target::TargetHandle;
 
     /// Decoder that always fails; tests wiring their own decode hooks pass
     /// [`super::typed_spec_decoder`] closures instead.
@@ -844,23 +843,23 @@ pub(crate) mod test_support {
     #[async_trait::async_trait]
     impl ManagerEndpoint for DeadManager {
         async fn ensure_child(&self, _parent: &ResourceKey, _child: ChildEnsure) -> Result<EnsureOutcome, ResourceError> {
-            Err(ResourceError::ManagerRpc("dead manager".into()))
+            Err(ResourceError::ManagerUnavailable("dead manager".into()))
         }
 
         async fn get(&self, _key: &ResourceKey) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            Err(ResourceError::ManagerRpc("dead manager".into()))
+            Err(ResourceError::ManagerUnavailable("dead manager".into()))
         }
 
         async fn view(&self, _key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
-            Err(ResourceError::ManagerRpc("dead manager".into()))
+            Err(ResourceError::ManagerUnavailable("dead manager".into()))
         }
 
         async fn delete(&self, _key: &ResourceKey) -> Result<(), ResourceError> {
-            Err(ResourceError::ManagerRpc("dead manager".into()))
+            Err(ResourceError::ManagerUnavailable("dead manager".into()))
         }
 
         async fn list_owned(&self, _owner_uid: [u8; 16]) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            Err(ResourceError::ManagerRpc("dead manager".into()))
+            Err(ResourceError::ManagerUnavailable("dead manager".into()))
         }
 
         async fn register_watch(
@@ -868,11 +867,11 @@ pub(crate) mod test_support {
             _subscriber: &ResourceKey,
             _registration: WatchRegistration,
         ) -> Result<WatchId, ResourceError> {
-            Err(ResourceError::ManagerRpc("dead manager".into()))
+            Err(ResourceError::ManagerUnavailable("dead manager".into()))
         }
 
         async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
-            Err(ResourceError::ManagerRpc("dead manager".into()))
+            Err(ResourceError::ManagerUnavailable("dead manager".into()))
         }
     }
 
@@ -892,6 +891,7 @@ pub(crate) mod test_support {
         }
 
         /// Child keys the manager was asked to delete, in order.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         pub(crate) fn deleted_keys(&self) -> Vec<ResourceKey> {
             self.deleted.lock().clone()
         }
@@ -900,17 +900,18 @@ pub(crate) mod test_support {
     #[async_trait::async_trait]
     impl ManagerEndpoint for OwnedChildrenManager {
         async fn ensure_child(&self, _parent: &ResourceKey, _child: ChildEnsure) -> Result<EnsureOutcome, ResourceError> {
-            Err(ResourceError::ManagerRpc("unexpected ensure_child".into()))
+            Err(ResourceError::ManagerRejected { reason: "unexpected ensure_child".into() })
         }
 
         async fn get(&self, _key: &ResourceKey) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            Err(ResourceError::ManagerRpc("unexpected get".into()))
+            Err(ResourceError::ManagerRejected { reason: "unexpected get".into() })
         }
 
         async fn view(&self, _key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
-            Err(ResourceError::ManagerRpc("unexpected view".into()))
+            Err(ResourceError::ManagerRejected { reason: "unexpected view".into() })
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
             self.deleted.lock().push(key.clone()); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Ok(())
@@ -925,11 +926,11 @@ pub(crate) mod test_support {
             _subscriber: &ResourceKey,
             _registration: WatchRegistration,
         ) -> Result<WatchId, ResourceError> {
-            Err(ResourceError::ManagerRpc("unexpected register_watch".into()))
+            Err(ResourceError::ManagerRejected { reason: "unexpected register_watch".into() })
         }
 
         async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
-            Err(ResourceError::ManagerRpc("unexpected cancel_watch".into()))
+            Err(ResourceError::ManagerRejected { reason: "unexpected cancel_watch".into() })
         }
     }
 
@@ -962,6 +963,7 @@ pub(crate) mod test_support {
             }
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         pub(crate) fn take_receiver(&self) -> mpsc::UnboundedReceiver<RequeueId> {
             self.inner
                 .delivered_rx
@@ -972,6 +974,7 @@ pub(crate) mod test_support {
     }
 
     impl RequeueScheduler for TokioRequeue {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn schedule(&self, _key: ResourceKey, after: std::time::Duration) -> RequeueId {
             let id = self.inner.next.fetch_add(1, Ordering::SeqCst);
             let tx = self.inner.delivered_tx.clone();
@@ -983,6 +986,7 @@ pub(crate) mod test_support {
             RequeueId(id)
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn cancel(&self, id: RequeueId) {
             if let Some(handle) = self.inner.pending.lock().remove(&id.0) {
                 handle.abort();
@@ -1021,7 +1025,6 @@ pub(crate) mod test_support {
         Fixture {
             ctx: ResourceContext::new(
                 row,
-                TargetHandle::Host,
                 decoder,
                 Arc::new(manager),
                 Arc::new(requeue),
@@ -1103,8 +1106,8 @@ mod tests {
             self.tx
                 .send(StubCall::EnsureChild { parent: parent.clone(), child, reply })
                 .await
-                .map_err(|_| ResourceError::ManagerRpc("manager channel closed".into()))?;
-            rx.await.map_err(|_| ResourceError::ManagerRpc("manager dropped the request".into()))?
+                .map_err(|_| ResourceError::ManagerUnavailable("manager channel closed".into()))?;
+            rx.await.map_err(|_| ResourceError::ManagerUnavailable("manager dropped the request".into()))?
         }
 
         async fn get(&self, key: &ResourceKey) -> Result<Option<StoredDesiredResource>, ResourceError> {
@@ -1112,8 +1115,8 @@ mod tests {
             self.tx
                 .send(StubCall::Get { key: key.clone(), reply })
                 .await
-                .map_err(|_| ResourceError::ManagerRpc("manager channel closed".into()))?;
-            rx.await.map_err(|_| ResourceError::ManagerRpc("manager dropped the request".into()))?
+                .map_err(|_| ResourceError::ManagerUnavailable("manager channel closed".into()))?;
+            rx.await.map_err(|_| ResourceError::ManagerUnavailable("manager dropped the request".into()))?
         }
 
         async fn view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
@@ -1121,16 +1124,16 @@ mod tests {
             self.tx
                 .send(StubCall::GetView { key: key.clone(), reply })
                 .await
-                .map_err(|_| ResourceError::ManagerRpc("manager channel closed".into()))?;
-            rx.await.map_err(|_| ResourceError::ManagerRpc("manager dropped the request".into()))?
+                .map_err(|_| ResourceError::ManagerUnavailable("manager channel closed".into()))?;
+            rx.await.map_err(|_| ResourceError::ManagerUnavailable("manager dropped the request".into()))?
         }
 
         async fn delete(&self, _key: &ResourceKey) -> Result<(), ResourceError> {
-            Err(ResourceError::ManagerRpc("delete not exercised in-module".into()))
+            Err(ResourceError::ManagerRejected { reason: "delete not exercised in-module".into() })
         }
 
         async fn list_owned(&self, _owner_uid: [u8; 16]) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            Err(ResourceError::ManagerRpc("list_owned not exercised in-module".into()))
+            Err(ResourceError::ManagerRejected { reason: "list_owned not exercised in-module".into() })
         }
 
         async fn register_watch(
@@ -1146,12 +1149,12 @@ mod tests {
                     reply,
                 })
                 .await
-                .map_err(|_| ResourceError::ManagerRpc("manager channel closed".into()))?;
-            rx.await.map_err(|_| ResourceError::ManagerRpc("manager dropped the request".into()))?
+                .map_err(|_| ResourceError::ManagerUnavailable("manager channel closed".into()))?;
+            rx.await.map_err(|_| ResourceError::ManagerUnavailable("manager dropped the request".into()))?
         }
 
         async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
-            Err(ResourceError::ManagerRpc("cancel_watch not exercised in-module".into()))
+            Err(ResourceError::ManagerRejected { reason: "cancel_watch not exercised in-module".into() })
         }
     }
 
@@ -1223,19 +1226,19 @@ mod tests {
     }
 
     /// A closed manager channel or a dropped request surfaces as
-    /// `ResourceError::ManagerRpc`, never as a silent no-op.
+    /// `ResourceError::ManagerUnavailable`, never as a silent no-op.
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    async fn manager_failures_surface_as_manager_rpc_errors() {
+    async fn manager_failures_surface_as_manager_unavailable() {
         // Channel closed before the call.
         let (tx, rx) = mpsc::channel::<StubCall>(1);
         drop(rx);
         let endpoint = ChannelEndpointStub::new(tx);
         let key = ResourceKey::new("z", "Volume", "data");
         let error = endpoint.get(&key).await.unwrap_err();
-        assert!(matches!(error, ResourceError::ManagerRpc(_)));
+        assert!(matches!(error, ResourceError::ManagerUnavailable(_)));
         let error = endpoint.view(&key).await.unwrap_err();
-        assert!(matches!(error, ResourceError::ManagerRpc(_)), "the live read fails loudly too");
+        assert!(matches!(error, ResourceError::ManagerUnavailable(_)), "the live read fails loudly too");
 
         // Manager receives the request and drops it without replying.
         let (tx, mut rx) = mpsc::channel::<StubCall>(1);
@@ -1244,15 +1247,15 @@ mod tests {
             let _ = rx.recv().await; // take the request, never reply
         });
         let error = endpoint.get(&key).await.unwrap_err();
-        assert!(matches!(error, ResourceError::ManagerRpc(_)));
+        assert!(matches!(error, ResourceError::ManagerUnavailable(_)));
     }
 
     /// The live read (`ResourceContext::get_view`, `ManagerEndpoint::view`)
     /// never fabricates absence: a request the manager drops without
-    /// replying surfaces as `ResourceError::ManagerRpc`.
+    /// replying surfaces as `ResourceError::ManagerUnavailable`.
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    async fn dropped_view_request_surfaces_as_manager_rpc_error() {
+    async fn dropped_view_request_surfaces_as_manager_unavailable() {
         let (tx, mut rx) = mpsc::channel::<StubCall>(1);
         let endpoint = ChannelEndpointStub::new(tx);
         tokio::spawn(async move {
@@ -1260,7 +1263,7 @@ mod tests {
         });
         let key = ResourceKey::new("z", "Volume", "data");
         let error = endpoint.view(&key).await.unwrap_err();
-        assert!(matches!(error, ResourceError::ManagerRpc(_)));
+        assert!(matches!(error, ResourceError::ManagerUnavailable(_)));
     }
 
     /// One classified read against a scripted manager: `respond` answers the
@@ -1328,7 +1331,7 @@ mod tests {
         // The manager cannot answer: unavailable, never absence.
         let (mut ctx, stub) = scripted_read(|call| match call {
             StubCall::Get { reply, .. } => {
-                let _ = reply.send(Err(ResourceError::ManagerRpc("no answer".into())));
+                let _ = reply.send(Err(ResourceError::ManagerUnavailable("no answer".into())));
             }
             other => panic!("classified lookup sent a non-Get call: {other:?}"),
         });

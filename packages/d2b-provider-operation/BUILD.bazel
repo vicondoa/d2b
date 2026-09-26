@@ -43,8 +43,8 @@ d2b_rust_test(
     srcs = ["tests/registration.rs"],
     compile_data = ["Cargo.toml"],
     deps = [
-        "//packages/d2b-resource-types:d2b_resource_types",
-        ":d2b_provider_operation",
+        "//packages/d2b-resource-types:d2b_resource_types_test_support",
+        ":d2b_provider_operation_test_support",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

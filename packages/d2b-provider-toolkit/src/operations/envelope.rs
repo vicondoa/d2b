@@ -484,7 +484,7 @@ impl OperationEnvelope {
     fn next_invocation_id(&self) -> String {
         format!(
             "invocation-{}",
-            self.invocations.fetch_add(1, Ordering::AcqRel)
+            self.invocations.fetch_add(1, Ordering::Relaxed)
         )
     }
 
@@ -493,8 +493,23 @@ impl OperationEnvelope {
     }
 
     fn audit_named(&self, operation: &str, outcome: ProviderAgentAuditOutcome) {
-        let Ok(method) = BoundedToken::parse(operation) else {
-            return;
+        // The forwarded spelling is the catalog's PascalCase wire name,
+        // which the bounded token grammar rejects; the record falls back to
+        // the canonical (lowercase, dash-stripped) spelling so a refused
+        // forwarded invocation still lands its Denied event (U10 seam).
+        let method = match BoundedToken::parse(operation) {
+            Ok(method) => method,
+            Err(_) => {
+                let canonical: String = operation
+                    .chars()
+                    .filter(|c| *c != '-')
+                    .flat_map(char::to_lowercase)
+                    .collect();
+                let Ok(method) = BoundedToken::parse(&canonical) else {
+                    return;
+                };
+                method
+            }
         };
         // The audit ring is shared with the adapter through a `std` mutex
         // (the constructor surface is a frozen contract), so the record is

@@ -25,6 +25,7 @@ use std::sync::{
     atomic::AtomicU64,
     atomic::{AtomicBool, Ordering},
 };
+#[cfg(test)]
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use std::{
@@ -35,14 +36,20 @@ use std::{
 use async_trait::async_trait;
 
 use d2b_contracts_control::public_wire::{
-    EXEC_MAX_CHUNK_BYTES, ExecCloseResult, ExecControlResult, ExecOp, ExecOpResponse,
-    ExecReadOutputResult, ExecStartResult, ExecStream, ExecTerminalStatus, ExecWaitResult,
-    ExecWriteStdinResult, NamedProcessStreamErrorKind, NamedProcessStreamRequest,
+    EXEC_MAX_CHUNK_BYTES, ExecOpResponse, ExecStartResult, ExecStream, ExecTerminalStatus,
+    NamedProcessStreamErrorKind, NamedProcessStreamRequest,
     NamedProcessStreamRequestFrame, NamedProcessStreamResponse, NamedProcessStreamResponseFrame,
+};
+#[cfg(test)]
+use d2b_contracts_control::public_wire::{
+    ExecCloseResult, ExecControlResult, ExecOp, ExecReadOutputResult, ExecWaitResult,
+    ExecWriteStdinResult,
 };
 use d2b_core::base64_codec;
 use d2b_session::{ComponentSessionDriver, StreamEvent, StreamId};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
+#[cfg(test)]
+use tokio::sync::mpsc;
 
 use crate::terminal_session::{OutputStreamSel, TerminalBackend, TerminalKind};
 use crate::terminal_session::{ReadOutputOutcome, WaitOutcome, WriteStdinOutcome};
@@ -152,6 +159,7 @@ impl ExecEstablishError {
 /// one-shot establishment budget is exhausted by the time the first op runs,
 /// so reusing it would immediately time out.
 #[derive(Debug, Clone, Copy)]
+#[cfg(test)]
 pub struct ExecOpDeadlines {
     /// Fast control ops (`WriteStdin`, `Signal`, `Resize`, `Close`).
     pub control: Duration,
@@ -164,6 +172,7 @@ pub struct ExecOpDeadlines {
     pub poll_slack: Duration,
 }
 
+#[cfg(test)]
 impl Default for ExecOpDeadlines {
     fn default() -> Self {
         Self {
@@ -178,16 +187,24 @@ impl Default for ExecOpDeadlines {
 /// redacted so a stray `{:?}` can never leak argv / env keys+values / cwd.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ExecStartSpec {
+    /// The guest VM these args target.
     pub vm: String,
     /// Optional opaque idempotency key forwarded as guest request metadata.
     /// It is never argv and must not appear in Debug output.
     pub request_id: Option<String>,
+    /// Program plus arguments, forwarded verbatim to the guest exec.
     pub argv: Vec<String>,
+    /// Whether to allocate a PTY drunk on the guest side.
     pub tty: bool,
+    /// Whether the guest process must leave its session alive after stdin
+/// closes (non-tty detached spawn).
     pub detached: bool,
-    pub env: Vec<(String, String)>,
+    /// Environment overrides applied at launch (never rendered in Debug).
+    pub env: Vec<(String,String)>,
+    /// Working directory the guest runs in, or the guest default when `None`.
     pub cwd: Option<String>,
-    pub term_size: Option<(u32, u32)>,
+    /// PTY size requested at spawn, when the guest terminal reports one.
+    pub term_size: Option<(u32,u32)>,
 }
 
 impl std::fmt::Debug for ExecStartSpec {
@@ -208,8 +225,13 @@ impl std::fmt::Debug for ExecStartSpec {
 /// Session info reported back to the owner on a successful establish.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecSessionInfo {
+    /// Whether the session was established with a PTY.
     pub tty: bool,
+    /// Bytes already readable from the guest stdout stream, from the owner's
+    /// offset perspective (0-based at first read).
     pub stdout_offset: u64,
+    /// Bytes already readable from the guest stderr stream, from the owner's
+    /// offset perspective (0-based at first read).
     pub stderr_offset: u64,
 }
 
@@ -246,9 +268,16 @@ impl NegotiatedCaps {
 /// A freshly established session: the authenticated client, the info echoed to
 /// the owner, and the initial control sequence from `ExecCreate`.
 pub struct Established {
+    /// The authenticated guest exec channel for the session.
     pub client: Arc<dyn ExecGuestClient>,
+    /// Session metadata echoed to the owner at establish time.
     pub info: ExecSessionInfo,
+    /// The initial control sequence number the session starts at, used to
+    /// derive per-op sequence ids so a resequenced stream cannot replay
+    /// an older op.
     pub control_seq: u64,
+    /// The negotiated capability snapshot the guest advertised at establish,
+    /// shared by every op gate until the session closes.
     pub caps: NegotiatedCaps,
 }
 
@@ -791,12 +820,14 @@ pub trait ExecGuestConnector: Send + Sync {
 }
 
 /// One command shuttled from the owner connection to the session worker.
+#[cfg(test)]
 pub struct WorkerCommand {
     pub op: ExecOp,
     pub reply: oneshot::Sender<Result<ExecOpResponse, ExecOpError>>,
 }
 
 /// Establish reply shuttled back to the owner before the op loop begins.
+#[cfg(test)]
 pub type EstablishReply = Result<ExecSessionInfo, ExecEstablishError>;
 
 /// Owner-socket teardown seam for the terminal-cleanup reaper.
@@ -804,13 +835,16 @@ pub type EstablishReply = Result<ExecSessionInfo, ExecEstablishError>;
 /// down the socket) so the session slot is released after the command has gone
 /// terminal and the cleanup TTL elapsed. It MUST be idempotent and MUST NOT be
 /// called while the command is still live.
+#[cfg(test)]
 pub trait OwnerReaper: Send + Sync {
     fn reap(&self);
 }
 
 /// A no-op owner reaper for unit tests / callers that drive teardown directly.
+#[cfg(test)]
 pub struct NoopReaper;
 
+#[cfg(test)]
 impl OwnerReaper for NoopReaper {
     fn reap(&self) {}
 }
@@ -820,12 +854,14 @@ impl OwnerReaper for NoopReaper {
 /// this long so it cannot pin a session slot indefinitely. Generous enough for
 /// a well-behaved CLI to read the terminal status and close first. The reaper
 /// never kills a LIVE command - cleanup only arms once `Wait` returns terminal.
+#[cfg(test)]
 pub const EXEC_TERMINAL_CLEANUP_TTL: Duration = Duration::from_secs(10);
 
 /// Records when the guest command first went terminal and decides - against an
 /// injected [`Clock`] - whether the terminal-cleanup TTL has since elapsed.
 /// Pure and fake-clock testable; the worker arms a real timer that consults
 /// [`TerminalReaper::due`].
+#[cfg(test)]
 pub struct TerminalReaper {
     clock: Arc<dyn Clock>,
     ttl: Duration,
@@ -835,6 +871,7 @@ pub struct TerminalReaper {
     terminal_at: tokio::sync::Mutex<Option<Instant>>,
 }
 
+#[cfg(test)]
 impl TerminalReaper {
     pub fn new(clock: Arc<dyn Clock>, ttl: Duration) -> Self {
         Self {
@@ -878,11 +915,19 @@ impl TerminalReaper {
 }
 
 /// Inputs to [`spawn_session_worker`].
+#[cfg(test)]
 pub struct WorkerSpawn {
+    /// The authenticated guest channel factory the worker uses to establish.
     pub connector: Arc<dyn ExecGuestConnector>,
+    /// The validated launch spec the guest session starts with.
     pub spec: ExecStartSpec,
+    /// Per-op control/poll deadlines applied by the worker.
     pub deadlines: ExecOpDeadlines,
+    /// Sender for the establish outcome, consumed exactly once by the
+    /// worker when the guest session reports ready or fails.
     pub establish_tx: oneshot::Sender<EstablishReply>,
+    /// Inbound worker commands (resize, signal, read offsets) serviced
+    /// until the channel closes (owner disconnect).
     pub control_rx: mpsc::Receiver<WorkerCommand>,
     /// Terminal-cleanup grace before the reaper releases a stalled owner's slot.
     pub terminal_ttl: Duration,
@@ -897,7 +942,11 @@ pub struct WorkerSpawn {
 /// `establish_tx`, then services `WorkerCommand`s until the channel closes.
 /// Dropping the sender (owner disconnect) returns the worker, drops the
 /// runtime, and drops every client clone - prompting the guest teardown.
-pub fn spawn_session_worker(spawn: WorkerSpawn) -> JoinHandle<()> {
+///
+/// Returns an error when the OS thread cannot be spawned (thread exhaustion
+/// or resource limits), before any worker state is created.
+#[cfg(test)]
+pub fn spawn_session_worker(spawn: WorkerSpawn) -> std::io::Result<JoinHandle<()>> {
     let WorkerSpawn {
         connector,
         spec,
@@ -936,9 +985,9 @@ pub fn spawn_session_worker(spawn: WorkerSpawn) -> JoinHandle<()> {
                 owner_reaper,
             ));
         })
-        .expect("spawn exec session worker thread")
 }
 
+#[cfg(test)]
 async fn worker_main(
     connector: Arc<dyn ExecGuestConnector>,
     spec: ExecStartSpec,
@@ -1034,6 +1083,7 @@ async fn worker_main(
 /// is still terminal (the owner never closed), reap the owner socket so the
 /// session slot is released. If the owner closes first the worker is torn down
 /// and this task is aborted with the runtime, so the reaper never fires.
+#[cfg(test)]
 fn arm_terminal_reap(reaper: Arc<TerminalReaper>, owner_reaper: Arc<dyn OwnerReaper>) {
     let ttl = reaper.ttl();
     tokio::spawn(async move {
@@ -1049,8 +1099,10 @@ fn arm_terminal_reap(reaper: Arc<TerminalReaper>, owner_reaper: Arc<dyn OwnerRea
 /// re-delivered to the guest, so a lost reply never causes a duplicate
 /// signal/resize. Interactive sessions issue very few control ops, so a small
 /// ring is sufficient.
+#[cfg(test)]
 const CONTROL_REPLAY_CAP: usize = 16;
 
+#[cfg(test)]
 struct WorkerState {
     client: Arc<dyn ExecGuestClient>,
     deadlines: ExecOpDeadlines,
@@ -1065,6 +1117,7 @@ struct WorkerState {
     caps: NegotiatedCaps,
 }
 
+#[cfg(test)]
 impl WorkerState {
     /// Return a cached control-op ack for a previously-served `opId`, if any.
     fn cached_control(&self, op_id: u64) -> Option<ExecOpResponse> {
@@ -1090,6 +1143,7 @@ impl WorkerState {
     }
 }
 
+#[cfg(test)]
 impl WorkerState {
     async fn handle_inline(&mut self, op: ExecOp) -> Result<ExecOpResponse, ExecOpError> {
         match op {
@@ -1205,6 +1259,7 @@ impl WorkerState {
     }
 }
 
+#[cfg(test)]
 async fn run_long_poll(
     client: &dyn ExecGuestClient,
     op: ExecOp,
@@ -1257,6 +1312,7 @@ async fn run_long_poll(
     }
 }
 
+#[cfg(test)]
 fn map_terminal(kind: TerminalKind) -> ExecTerminalStatus {
     match kind {
         TerminalKind::Exited(code) => ExecTerminalStatus::Exited { code },
@@ -2492,7 +2548,8 @@ mod tests {
             terminal_ttl: EXEC_TERMINAL_CLEANUP_TTL,
             clock: Arc::new(SystemClock),
             owner_reaper: Arc::new(NoopReaper),
-        });
+        })
+        .expect("spawn exec session worker thread");
         let reply = establish_rx.blocking_recv().expect("establish reply");
         (control_tx, worker, reply)
     }
@@ -3606,7 +3663,8 @@ mod tests {
             owner_reaper: Arc::new(RecordingReaper {
                 reaped: reaped_for_worker,
             }),
-        });
+        })
+        .expect("spawn exec session worker thread");
         establish_rx
             .blocking_recv()
             .expect("establish")

@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "UnsafeLocalHelperWireSchema",
+  "description": "The complete helper wire schema: version plus both frame directions.",
   "type": "object",
   "required": [
     "daemonToHelper",
@@ -23,8 +24,10 @@
   "additionalProperties": false,
   "definitions": {
     "DaemonToUnsafeLocalHelper": {
+      "description": "One frame the daemon may send to the helper.",
       "oneOf": [
         {
+          "description": "The greeting was accepted.",
           "type": "object",
           "required": [
             "payload",
@@ -43,6 +46,7 @@
           }
         },
         {
+          "description": "A liveness frame.",
           "type": "object",
           "required": [
             "payload",
@@ -61,6 +65,7 @@
           }
         },
         {
+          "description": "A launch request.",
           "type": "object",
           "required": [
             "payload",
@@ -81,25 +86,37 @@
       ]
     },
     "HelperFailureCode": {
-      "type": "string",
-      "enum": [
-        "invalid-request",
-        "operation-id-conflict",
-        "queue-full",
-        "timeout",
-        "user-manager-unavailable",
-        "environment-invalid",
-        "executable-unavailable",
-        "scope-create-failed",
-        "scope-identity-mismatch",
-        "graphical-session-inactive",
-        "wayland-unavailable",
-        "proxy-unavailable",
-        "first-client-timeout",
-        "internal"
+      "description": "Closed failure code one helper operation can report.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "operation-id-conflict",
+            "queue-full",
+            "timeout",
+            "user-manager-unavailable",
+            "environment-invalid",
+            "executable-unavailable",
+            "scope-create-failed",
+            "scope-identity-mismatch",
+            "graphical-session-inactive",
+            "wayland-unavailable",
+            "proxy-unavailable",
+            "first-client-timeout",
+            "internal"
+          ]
+        },
+        {
+          "description": "The request was malformed or out of bounds.",
+          "type": "string",
+          "enum": [
+            "invalid-request"
+          ]
+        }
       ]
     },
     "HelperHeartbeat": {
+      "description": "Liveness frame carrying the generation and a monotonic sequence.",
       "type": "object",
       "required": [
         "generation",
@@ -120,6 +137,7 @@
       "additionalProperties": false
     },
     "HelperHello": {
+      "description": "Helper-to-daemon greeting naming the protocol version and generation.",
       "type": "object",
       "required": [
         "generation",
@@ -147,6 +165,7 @@
       "additionalProperties": false
     },
     "HelperHelloAccepted": {
+      "description": "Daemon-to-helper acceptance of a greeting, pinning interval bounds.",
       "type": "object",
       "required": [
         "generation",
@@ -179,6 +198,7 @@
       "additionalProperties": false
     },
     "HelperLaunchRequest": {
+      "description": "One launch request the daemon commits to the helper.\n\nThe workload target, item id, and argv are redacted in `Debug`.",
       "type": "object",
       "required": [
         "argv",
@@ -224,14 +244,33 @@
       "additionalProperties": false
     },
     "HelperOperationDisposition": {
-      "type": "string",
-      "enum": [
-        "committed",
-        "already-committed",
-        "completed"
+      "description": "How a helper operation settled.",
+      "oneOf": [
+        {
+          "description": "The operation was newly committed.",
+          "type": "string",
+          "enum": [
+            "committed"
+          ]
+        },
+        {
+          "description": "The operation was already committed before.",
+          "type": "string",
+          "enum": [
+            "already-committed"
+          ]
+        },
+        {
+          "description": "The operation finished.",
+          "type": "string",
+          "enum": [
+            "completed"
+          ]
+        }
       ]
     },
     "HelperOperationRejected": {
+      "description": "Refusal of one helper operation with its closed failure code.",
       "type": "object",
       "required": [
         "code",
@@ -254,6 +293,7 @@
       "additionalProperties": false
     },
     "HelperOperationResult": {
+      "description": "Outcome of one committed helper operation.",
       "type": "object",
       "required": [
         "disposition",
@@ -286,13 +326,26 @@
       "additionalProperties": false
     },
     "HelperScopeKind": {
-      "type": "string",
-      "enum": [
-        "launcher-app",
-        "wayland-proxy"
+      "description": "The kind of workload scope the helper runs.",
+      "oneOf": [
+        {
+          "description": "A launcher application scope.",
+          "type": "string",
+          "enum": [
+            "launcher-app"
+          ]
+        },
+        {
+          "description": "A Wayland proxy scope.",
+          "type": "string",
+          "enum": [
+            "wayland-proxy"
+          ]
+        }
       ]
     },
     "HelperScopeSnapshot": {
+      "description": "One scope's observed state in a helper snapshot.",
       "type": "object",
       "required": [
         "operationId",
@@ -317,16 +370,47 @@
       "additionalProperties": false
     },
     "HelperScopeState": {
-      "type": "string",
-      "enum": [
-        "starting",
-        "active",
-        "stopping",
-        "exited",
-        "degraded"
+      "description": "Lifecycle state of one helper scope.",
+      "oneOf": [
+        {
+          "description": "The scope is being set up.",
+          "type": "string",
+          "enum": [
+            "starting"
+          ]
+        },
+        {
+          "description": "The scope is serving.",
+          "type": "string",
+          "enum": [
+            "active"
+          ]
+        },
+        {
+          "description": "The scope is tearing down.",
+          "type": "string",
+          "enum": [
+            "stopping"
+          ]
+        },
+        {
+          "description": "The scope has exited.",
+          "type": "string",
+          "enum": [
+            "exited"
+          ]
+        },
+        {
+          "description": "The scope is serving degraded.",
+          "type": "string",
+          "enum": [
+            "degraded"
+          ]
+        }
       ]
     },
     "HelperSnapshot": {
+      "description": "Bounded snapshot of every scope the helper currently runs.",
       "type": "object",
       "required": [
         "generation",
@@ -392,6 +476,7 @@
       "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
     "ScopeIdentity": {
+      "description": "Opaque identity of one helper scope; the invocation id is redacted.",
       "type": "object",
       "required": [
         "invocationId",
@@ -408,8 +493,10 @@
       "additionalProperties": false
     },
     "UnsafeLocalHelperToDaemon": {
+      "description": "One frame the helper may send to the daemon.",
       "oneOf": [
         {
+          "description": "The initial greeting.",
           "type": "object",
           "required": [
             "payload",
@@ -428,6 +515,7 @@
           }
         },
         {
+          "description": "A scope snapshot.",
           "type": "object",
           "required": [
             "payload",
@@ -446,6 +534,7 @@
           }
         },
         {
+          "description": "A liveness frame.",
           "type": "object",
           "required": [
             "payload",
@@ -464,6 +553,7 @@
           }
         },
         {
+          "description": "A committed operation outcome.",
           "type": "object",
           "required": [
             "payload",
@@ -482,6 +572,7 @@
           }
         },
         {
+          "description": "A refused operation.",
           "type": "object",
           "required": [
             "payload",

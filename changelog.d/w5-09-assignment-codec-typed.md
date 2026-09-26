@@ -1,0 +1,5 @@
+### Fixed
+
+- Assignment transport codecs (scoped commit envelope, assignment grant, revocation notice, owner-child scope, mutation) now encode and decode through typed serde structs with `rename_all = "camelCase"` and `deny_unknown_fields`, replacing the hand-rolled `serde_json::Value` walking. Wire shape is unchanged: exact keys, version 1, strictly ascending verb arrays, canonical bytes, and the existing size bounds all still hold.
+- The child create payload builder now materializes through typed serde envelopes instead of `json!` literals and `serde_json::Map` spec assembly; the canonical UID-free payload shape is unchanged.
+- Removed the dead Value-walking helpers (`require_exact_keys`, the hand-rolled decode functions); `encode_bounded_json` remains as the generic bounded-canonical egress and `decode_string_set` remains as the sorted-array admission check.

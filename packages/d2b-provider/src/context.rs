@@ -56,6 +56,14 @@ pub struct OwnedOperationContext {
 }
 
 impl OwnedOperationContext {
+    /// Link one operation context to its cancellation set.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderRuntimeError::DeadlineExpired`] when the deadline
+    /// is zero, over the ceiling, or overflows the clock, and
+    /// [`ProviderRuntimeError::Cancelled`] when no cancellation token is
+    /// linked.
     pub(crate) fn new_linked(
         identity: SessionIdentity,
         method: ProviderMethodName,

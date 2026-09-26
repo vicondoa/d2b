@@ -20,10 +20,11 @@ use serde::{Deserialize, Deserializer, Serialize};
 use super::{
     ActivationRunnerInput, ResourceRef,
     execution_policy::{
-        BoundedToken, BudgetSpec, DurationMs, ExecutionDomain, PrimitiveSpecError, redacted_debug,
-        require_execution_ref, require_resource_type,
+        BoundedToken, BudgetSpec, DurationMs, ExecutionDomain, PrimitiveSpecError, ensure_unique,
+        redacted_debug, require_execution_ref, require_resource_type,
     },
 };
+use d2b_contracts::wire_deserialize;
 
 /// The canonical ResourceType name for the long-lived process type.
 pub const PROCESS_RESOURCE_TYPE: &str = "Process";
@@ -248,33 +249,33 @@ impl Default for SandboxSpec {
 
 redacted_debug!(SandboxSpec);
 
-impl<'de> Deserialize<'de> for SandboxSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            namespace_classes: Vec<NamespaceClass>,
-            #[serde(default)]
-            capability_classes: Vec<CapabilityClass>,
-            #[serde(default)]
-            seccomp_class: Option<BoundedToken>,
-            #[serde(default = "yes")]
-            no_new_privileges: bool,
-            #[serde(default)]
-            start_root: bool,
-            #[serde(default = "minimal_environment")]
-            environment_class: EnvironmentClass,
-            #[serde(default = "yes")]
-            read_only_root: bool,
-            #[serde(default = "default_umask")]
-            umask: Option<String>,
-            #[serde(default)]
-            oom_score_adj: i32,
-            #[serde(default)]
-            user_namespace: Option<UserNamespaceSpec>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
+wire_deserialize!(
+    SandboxSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default)]
+        namespace_classes: Vec<NamespaceClass>,
+        #[serde(default)]
+        capability_classes: Vec<CapabilityClass>,
+        #[serde(default)]
+        seccomp_class: Option<BoundedToken>,
+        #[serde(default = "yes")]
+        no_new_privileges: bool,
+        #[serde(default)]
+        start_root: bool,
+        #[serde(default = "minimal_environment")]
+        environment_class: EnvironmentClass,
+        #[serde(default = "yes")]
+        read_only_root: bool,
+        #[serde(default = "default_umask")]
+        umask: Option<String>,
+        #[serde(default)]
+        oom_score_adj: i32,
+        #[serde(default)]
+        user_namespace: Option<UserNamespaceSpec>,
+    },
+    wire,
+    {
         let seccomp_class = match wire.seccomp_class {
             Some(class) => class,
             None => BoundedToken::parse("strict").map_err(serde::de::Error::custom)?,
@@ -293,7 +294,7 @@ impl<'de> Deserialize<'de> for SandboxSpec {
         )
         .map_err(serde::de::Error::custom)
     }
-}
+);
 
 /// Access level of one Volume mount.
 #[derive(
@@ -365,30 +366,28 @@ impl MountSpec {
 
 redacted_debug!(MountSpec);
 
-impl<'de> Deserialize<'de> for MountSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            volume_ref: ResourceRef,
-            view: BoundedToken,
-            mount_path: String,
-            #[serde(default = "read_only")]
-            access: MountAccess,
-            #[serde(default = "yes")]
-            required: bool,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.volume_ref,
-            wire.view,
-            wire.mount_path,
-            wire.access,
-            wire.required,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    MountSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        volume_ref: ResourceRef,
+        view: BoundedToken,
+        mount_path: String,
+        #[serde(default = "read_only")]
+        access: MountAccess,
+        #[serde(default = "yes")]
+        required: bool,
+    },
+    wire,
+    Self::new(
+        wire.volume_ref,
+        wire.view,
+        wire.mount_path,
+        wire.access,
+        wire.required,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// Transport protocol of one declared port.
 #[derive(
@@ -447,21 +446,19 @@ impl PortSpec {
 
 redacted_debug!(PortSpec);
 
-impl<'de> Deserialize<'de> for PortSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            port: u16,
-            #[serde(default = "tcp")]
-            protocol: PortProtocol,
-            #[serde(default)]
-            purpose: String,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.port, wire.protocol, wire.purpose).map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    PortSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        port: u16,
+        #[serde(default = "tcp")]
+        protocol: PortProtocol,
+        #[serde(default)]
+        purpose: String,
+    },
+    wire,
+    Self::new(wire.port, wire.protocol, wire.purpose).map_err(serde::de::Error::custom)
+);
 
 /// Network access declared by one process.
 ///
@@ -513,22 +510,20 @@ impl NetworkUsageSpec {
 
 redacted_debug!(NetworkUsageSpec);
 
-impl<'de> Deserialize<'de> for NetworkUsageSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            network_ref: Option<ResourceRef>,
-            #[serde(default)]
-            ports: Vec<PortSpec>,
-            #[serde(default)]
-            allow_egress: bool,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.network_ref, wire.ports, wire.allow_egress).map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    NetworkUsageSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default)]
+        network_ref: Option<ResourceRef>,
+        #[serde(default)]
+        ports: Vec<PortSpec>,
+        #[serde(default)]
+        allow_egress: bool,
+    },
+    wire,
+    Self::new(wire.network_ref, wire.ports, wire.allow_egress).map_err(serde::de::Error::custom)
+);
 
 /// Device access level requested by one process.
 #[derive(
@@ -587,21 +582,19 @@ impl DeviceUsageSpec {
 
 redacted_debug!(DeviceUsageSpec);
 
-impl<'de> Deserialize<'de> for DeviceUsageSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            device_ref: ResourceRef,
-            #[serde(default = "shared")]
-            access: DeviceAccess,
-            #[serde(default)]
-            purpose: String,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.device_ref, wire.access, wire.purpose).map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    DeviceUsageSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        device_ref: ResourceRef,
+        #[serde(default = "shared")]
+        access: DeviceAccess,
+        #[serde(default)]
+        purpose: String,
+    },
+    wire,
+    Self::new(wire.device_ref, wire.access, wire.purpose).map_err(serde::de::Error::custom)
+);
 
 /// Log level hint carried by the telemetry bindings.
 #[derive(
@@ -988,25 +981,25 @@ impl Default for RestartPolicySpec {
 
 redacted_debug!(RestartPolicySpec);
 
-impl<'de> Deserialize<'de> for RestartPolicySpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default = "on_failure")]
-            class: RestartClass,
-            #[serde(default)]
-            backoff_base: Option<DurationMs>,
-            #[serde(default)]
-            backoff_max: Option<DurationMs>,
-            #[serde(default = "two_thousand")]
-            backoff_multiplier_milli: u32,
-            #[serde(default)]
-            max_restarts: Option<u32>,
-            #[serde(default)]
-            reset_after: Option<DurationMs>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
+wire_deserialize!(
+    RestartPolicySpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default = "on_failure")]
+        class: RestartClass,
+        #[serde(default)]
+        backoff_base: Option<DurationMs>,
+        #[serde(default)]
+        backoff_max: Option<DurationMs>,
+        #[serde(default = "two_thousand")]
+        backoff_multiplier_milli: u32,
+        #[serde(default)]
+        max_restarts: Option<u32>,
+        #[serde(default)]
+        reset_after: Option<DurationMs>,
+    },
+    wire,
+    {
         let default = RestartPolicySpec::default();
         Self::new(
             wire.class,
@@ -1018,7 +1011,7 @@ impl<'de> Deserialize<'de> for RestartPolicySpec {
         )
         .map_err(serde::de::Error::custom)
     }
-}
+);
 
 /// Readiness probe mechanism.
 #[derive(
@@ -1083,23 +1076,23 @@ impl Default for ReadinessSpec {
 
 redacted_debug!(ReadinessSpec);
 
-impl<'de> Deserialize<'de> for ReadinessSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            initial_delay: Option<DurationMs>,
-            #[serde(default)]
-            timeout: Option<DurationMs>,
-            #[serde(default = "three")]
-            failure_threshold: u32,
-            #[serde(default = "one")]
-            success_threshold: u32,
-            #[serde(default = "ready_condition")]
-            class: ReadinessClass,
-        }
-        let wire = Wire::deserialize(deserializer)?;
+wire_deserialize!(
+    ReadinessSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default)]
+        initial_delay: Option<DurationMs>,
+        #[serde(default)]
+        timeout: Option<DurationMs>,
+        #[serde(default = "three")]
+        failure_threshold: u32,
+        #[serde(default = "one")]
+        success_threshold: u32,
+        #[serde(default = "ready_condition")]
+        class: ReadinessClass,
+    },
+    wire,
+    {
         let default = ReadinessSpec::default();
         Self::new(
             wire.initial_delay.unwrap_or(default.initial_delay),
@@ -1110,7 +1103,7 @@ impl<'de> Deserialize<'de> for ReadinessSpec {
         )
         .map_err(serde::de::Error::custom)
     }
-}
+);
 
 /// Health check mechanism.
 #[derive(
@@ -1173,23 +1166,23 @@ impl Default for HealthCheckSpec {
 
 redacted_debug!(HealthCheckSpec);
 
-impl<'de> Deserialize<'de> for HealthCheckSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            enabled: bool,
-            #[serde(default)]
-            interval: Option<DurationMs>,
-            #[serde(default)]
-            timeout: Option<DurationMs>,
-            #[serde(default = "three")]
-            failure_threshold: u32,
-            #[serde(default = "provider_defined_health")]
-            class: HealthCheckClass,
-        }
-        let wire = Wire::deserialize(deserializer)?;
+wire_deserialize!(
+    HealthCheckSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default)]
+        enabled: bool,
+        #[serde(default)]
+        interval: Option<DurationMs>,
+        #[serde(default)]
+        timeout: Option<DurationMs>,
+        #[serde(default = "three")]
+        failure_threshold: u32,
+        #[serde(default = "provider_defined_health")]
+        class: HealthCheckClass,
+    },
+    wire,
+    {
         let default = HealthCheckSpec::default();
         Self::new(
             wire.enabled,
@@ -1200,7 +1193,7 @@ impl<'de> Deserialize<'de> for HealthCheckSpec {
         )
         .map_err(serde::de::Error::custom)
     }
-}
+);
 
 /// Whether the controller adopts a running process after restart.
 #[derive(
@@ -1300,48 +1293,48 @@ impl ProcessSpec {
 
 redacted_debug!(ProcessSpec);
 
-impl<'de> Deserialize<'de> for ProcessSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            execution_ref: ResourceRef,
-            #[serde(default)]
-            domain: Option<ExecutionDomain>,
-            #[serde(default)]
-            user_ref: Option<ResourceRef>,
-            process_class: ProcessClass,
-            template: BoundedToken,
-            #[serde(default)]
-            config_ref: Option<ResourceRef>,
-            #[serde(default)]
-            credential_refs: Vec<ResourceRef>,
-            #[serde(default)]
-            mounts: Vec<MountSpec>,
-            #[serde(default)]
-            sandbox: SandboxSpec,
-            #[serde(default)]
-            budget: BudgetSpec,
-            #[serde(default)]
-            network_usage: Option<NetworkUsageSpec>,
-            #[serde(default)]
-            device_usage: Vec<DeviceUsageSpec>,
-            #[serde(default)]
-            telemetry: TelemetrySpec,
-            #[serde(default = "running")]
-            desired_lifecycle: DesiredLifecycle,
-            #[serde(default)]
-            restart_policy: RestartPolicySpec,
-            #[serde(default)]
-            readiness: ReadinessSpec,
-            #[serde(default)]
-            health_check: HealthCheckSpec,
-            #[serde(default = "adopt_on_restart")]
-            adoption_policy: AdoptionPolicy,
-            #[serde(default)]
-            drain_timeout: Option<DurationMs>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
+wire_deserialize!(
+    ProcessSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        execution_ref: ResourceRef,
+        #[serde(default)]
+        domain: Option<ExecutionDomain>,
+        #[serde(default)]
+        user_ref: Option<ResourceRef>,
+        process_class: ProcessClass,
+        template: BoundedToken,
+        #[serde(default)]
+        config_ref: Option<ResourceRef>,
+        #[serde(default)]
+        credential_refs: Vec<ResourceRef>,
+        #[serde(default)]
+        mounts: Vec<MountSpec>,
+        #[serde(default)]
+        sandbox: SandboxSpec,
+        #[serde(default)]
+        budget: BudgetSpec,
+        #[serde(default)]
+        network_usage: Option<NetworkUsageSpec>,
+        #[serde(default)]
+        device_usage: Vec<DeviceUsageSpec>,
+        #[serde(default)]
+        telemetry: TelemetrySpec,
+        #[serde(default = "running")]
+        desired_lifecycle: DesiredLifecycle,
+        #[serde(default)]
+        restart_policy: RestartPolicySpec,
+        #[serde(default)]
+        readiness: ReadinessSpec,
+        #[serde(default)]
+        health_check: HealthCheckSpec,
+        #[serde(default = "adopt_on_restart")]
+        adoption_policy: AdoptionPolicy,
+        #[serde(default)]
+        drain_timeout: Option<DurationMs>,
+    },
+    wire,
+    {
         let execution = ExecutionWire {
             execution_ref: wire.execution_ref,
             domain: wire.domain,
@@ -1371,7 +1364,7 @@ impl<'de> Deserialize<'de> for ProcessSpec {
         )
         .map_err(serde::de::Error::custom)
     }
-}
+);
 
 /// The EphemeralProcess ResourceType base spec.
 ///
@@ -1487,48 +1480,48 @@ impl EphemeralProcessSpec {
 
 redacted_debug!(EphemeralProcessSpec);
 
-impl<'de> Deserialize<'de> for EphemeralProcessSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            execution_ref: ResourceRef,
-            #[serde(default)]
-            domain: Option<ExecutionDomain>,
-            #[serde(default)]
-            user_ref: Option<ResourceRef>,
-            process_class: ProcessClass,
-            template: BoundedToken,
-            #[serde(default)]
-            config_ref: Option<ResourceRef>,
-            #[serde(default)]
-            credential_refs: Vec<ResourceRef>,
-            #[serde(default)]
-            mounts: Vec<MountSpec>,
-            #[serde(default)]
-            sandbox: SandboxSpec,
-            #[serde(default)]
-            budget: BudgetSpec,
-            #[serde(default)]
-            network_usage: Option<NetworkUsageSpec>,
-            #[serde(default)]
-            device_usage: Vec<DeviceUsageSpec>,
-            #[serde(default)]
-            telemetry: TelemetrySpec,
-            #[serde(default)]
-            activation_input: Option<ActivationRunnerInput>,
-            #[serde(default)]
-            start_deadline: Option<DurationMs>,
-            #[serde(default)]
-            runtime_deadline: Option<DurationMs>,
-            #[serde(default)]
-            successful_ttl: Option<DurationMs>,
-            #[serde(default)]
-            failed_ttl: Option<DurationMs>,
-            #[serde(default)]
-            incident_hold: bool,
-        }
-        let wire = Wire::deserialize(deserializer)?;
+wire_deserialize!(
+    EphemeralProcessSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        execution_ref: ResourceRef,
+        #[serde(default)]
+        domain: Option<ExecutionDomain>,
+        #[serde(default)]
+        user_ref: Option<ResourceRef>,
+        process_class: ProcessClass,
+        template: BoundedToken,
+        #[serde(default)]
+        config_ref: Option<ResourceRef>,
+        #[serde(default)]
+        credential_refs: Vec<ResourceRef>,
+        #[serde(default)]
+        mounts: Vec<MountSpec>,
+        #[serde(default)]
+        sandbox: SandboxSpec,
+        #[serde(default)]
+        budget: BudgetSpec,
+        #[serde(default)]
+        network_usage: Option<NetworkUsageSpec>,
+        #[serde(default)]
+        device_usage: Vec<DeviceUsageSpec>,
+        #[serde(default)]
+        telemetry: TelemetrySpec,
+        #[serde(default)]
+        activation_input: Option<ActivationRunnerInput>,
+        #[serde(default)]
+        start_deadline: Option<DurationMs>,
+        #[serde(default)]
+        runtime_deadline: Option<DurationMs>,
+        #[serde(default)]
+        successful_ttl: Option<DurationMs>,
+        #[serde(default)]
+        failed_ttl: Option<DurationMs>,
+        #[serde(default)]
+        incident_hold: bool,
+    },
+    wire,
+    {
         let execution = ExecutionWire {
             execution_ref: wire.execution_ref,
             domain: wire.domain,
@@ -1566,20 +1559,13 @@ impl<'de> Deserialize<'de> for EphemeralProcessSpec {
             None => Ok(spec),
         }
     }
-}
+);
 
 fn check_unique<T: Ord + Clone>(values: &[T], max: usize) -> Result<(), PrimitiveSpecError> {
     if values.len() > max {
         return Err(PrimitiveSpecError::TooManyEntries);
     }
-    let mut sorted = values.to_vec();
-    sorted.sort_unstable();
-    sorted.dedup();
-    if sorted.len() == values.len() {
-        Ok(())
-    } else {
-        Err(PrimitiveSpecError::DuplicateEntry)
-    }
+    ensure_unique(values)
 }
 
 fn check_duration(value: &DurationMs, min: u64, max: u64) -> Result<(), PrimitiveSpecError> {

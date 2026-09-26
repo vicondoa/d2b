@@ -726,7 +726,7 @@ fn rendered_rows_round_trip_through_the_strict_envelope_reader() {
         // the digest the row carries.
         assert_eq!(
             envelope.digest().unwrap(),
-            stored.payload_digest,
+            stored.payload_digest.as_str(),
             "{label}: the row digest must be the decoded envelope's digest"
         );
         assert_eq!(envelope.status().phase(), expected_phase, "{label}");
@@ -801,7 +801,7 @@ fn rendered_full_envelopes_keep_the_strict_reader_contract() {
         );
         assert_eq!(
             envelope.digest().unwrap(),
-            stored.payload_digest,
+            stored.payload_digest.as_str(),
             "{label}: the row digest must be the decoded envelope's digest"
         );
         if deleting {
@@ -912,7 +912,7 @@ fn every_converted_type_projects_a_strict_wire_view() {
             );
             assert_eq!(
                 envelope.digest().expect("envelope digest"),
-                stored.payload_digest,
+                stored.payload_digest.as_str(),
                 "{label}: the row digest must be the decoded envelope's digest"
             );
             assert_eq!(
@@ -1033,8 +1033,8 @@ async fn every_converted_type_is_served_by_the_manager_path() {
 /// layers, for which the universal strict envelope is the whole boundary.
 #[test]
 fn converted_type_status_layers_round_trip_through_their_typed_decoders() {
-    use d2b_contracts_resource::v3::{ DeviceStatusResource, VolumeBindingStatusResource };
-use d2b_provider_quota::quota::{ QuotaStatusResource };
+    use d2b_contracts_resource::v3::{DeviceStatusResource, VolumeBindingStatusResource};
+    use d2b_provider_quota::quota::QuotaStatusResource;
     use d2b_resource_runtime::manager::ResourceView;
     use d2b_resource_runtime::resource::ResourceStatus;
     use d2b_resource_runtime::spec_store::{ResourceKey, ResourceProvenance};
@@ -1447,13 +1447,17 @@ async fn list_returns_snapshot_revision_and_watch_refuses_until_wired() {
         error_reason(&empty)
     );
     let snapshot = empty.snapshot_revision;
-    assert_eq!(
-        snapshot >> 32,
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs(),
-        "the wire snapshot carries the epoch-seconds mapping"
+    // The snapshot's epoch-seconds half is stamped when the list is served,
+    // which precedes the clock read here; a second boundary may cross in
+    // between, so the mapping holds within a one-second tolerance.
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let snapshot_secs = snapshot >> 32;
+    assert!(
+        snapshot_secs <= now_secs && now_secs - snapshot_secs <= 1,
+        "the wire snapshot carries the epoch-seconds mapping: snapshot={snapshot_secs} now={now_secs}"
     );
 
     let created = service.create(trusted(create_request())).await;

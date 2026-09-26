@@ -749,7 +749,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (kill)
 _arguments "${_arguments_options[@]}" : \
-'--signal=[]:SIGNAL:_default' \
+'--signal=[]:SIGNAL:(term kill int hup)' \
 '--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
 '--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
 '(--human)--json[Emit the stable JSON envelope]' \
@@ -1811,7 +1811,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (list)
 _arguments "${_arguments_options[@]}" : \
-'--endpoint-class=[]:ENDPOINT_CLASS:_default' \
+'--endpoint-class=[]:ENDPOINT_CLASS:(service device transport control data)' \
 '--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
 '--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
 '--updates[]' \
@@ -1824,7 +1824,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (watch)
 _arguments "${_arguments_options[@]}" : \
-'--endpoint-class=[]:ENDPOINT_CLASS:_default' \
+'--endpoint-class=[]:ENDPOINT_CLASS:(service device transport control data)' \
 '--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
 '--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
 '(--human)--json[Emit the stable JSON envelope]' \

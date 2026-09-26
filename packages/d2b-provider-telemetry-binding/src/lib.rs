@@ -33,9 +33,9 @@
 mod driver;
 
 pub use driver::{
-    PHASE_DEGRADED, PHASE_PENDING, TELEMETRY_BINDING_COLLECTOR_CREATION,
-    TELEMETRY_BINDING_CREATIONS, TELEMETRY_BINDING_ENDPOINT_CREATION,
-    TELEMETRY_BINDING_RESYNC, TELEMETRY_BINDING_TYPE, TelemetryBindingDriver,
-    TelemetryBindingDriverError, TelemetryBindingDriverFactory, TelemetryBindingStatus,
-    telemetry_binding_descriptor, telemetry_binding_spec_decoder,
+    TELEMETRY_BINDING_COLLECTOR_CREATION, TELEMETRY_BINDING_CREATIONS,
+    TELEMETRY_BINDING_ENDPOINT_CREATION, TELEMETRY_BINDING_RESYNC, TELEMETRY_BINDING_TYPE,
+    TelemetryBindingDriver, TelemetryBindingDriverError, TelemetryBindingDriverFactory,
+    TelemetryBindingPhase, TelemetryBindingStatus, telemetry_binding_descriptor,
+    telemetry_binding_spec_decoder,
 };

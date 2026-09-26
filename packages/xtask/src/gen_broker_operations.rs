@@ -313,6 +313,13 @@ const PAYLOAD_PROVENANCE: [&str; 2] = ["wire", "request"];
 /// The deadline tiers a row may declare; a row that declares none sits on
 /// the standard tier.
 const DEADLINE_TIERS: [&str; 2] = ["standard", "extended"];
+/// The dispositions a row may admit.
+const DISPOSITIONS: [&str; 4] = [
+    "callable-read-only",
+    "promoted-live",
+    "stubbed-unimplemented",
+    "compile-time-only",
+];
 
 /// The method-name spelling every operation-serving method carries: a
 /// lower-kebab token. A method outside the grammar cannot be addressed by
@@ -545,6 +552,13 @@ fn validate_row(row: &Row, source: &str) -> Result<(), Box<dyn std::error::Error
             row.audit.mode
         )));
     }
+    if !DISPOSITIONS.contains(&row.disposition.as_str()) {
+        return Err(render_error(format!(
+            "{} has unknown disposition {}",
+            label(&row.operation),
+            row.disposition
+        )));
+    }
     if row.disposition == "promoted-live" && !row.audit.required {
         return Err(render_error(format!(
             "{} is live but its audit is not required",
@@ -769,13 +783,6 @@ fn write(
     Ok(path)
 }
 
-fn string_list(items: impl IntoIterator<Item = String>, indent: &str) -> String {
-    items
-        .into_iter()
-        .map(|item| format!("{indent}\"{item}\",\n"))
-        .collect()
-}
-
 /// The generated `StubTarget` variant a reserved stub's committed disposition
 /// target maps to.
 ///
@@ -796,6 +803,43 @@ fn stub_target_variant(row: &Row) -> Option<&'static str> {
         .iter()
         .find(|(target, _)| *target == row.disposition_target)
         .map(|(_, variant)| *variant)
+}
+
+/// The Rust variant name one committed operation maps to on the generated
+/// `BrokerOperationName` enum.
+///
+/// A PascalCase operation name is already a valid variant identifier and is
+/// kept verbatim (the wire-spelling convention the `W3BrokerOperation`
+/// sibling uses); a lower-kebab name (the declared-method vocabulary, which
+/// is not a valid Rust identifier) maps to its snake_case spelling. The map
+/// is injective over the committed set: no kebab name's snake_case spelling
+/// collides with a PascalCase name's variant, and two distinct kebab names
+/// cannot map to one spelling, so the enum is closed over exactly the one
+/// variant per committed row.
+fn operation_variant(operation: &str) -> String {
+    if operation
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return operation.to_owned();
+    }
+    operation.replace('-', "_")
+}
+
+/// The generated `Disposition` variant a committed disposition spelling
+/// maps to.
+///
+/// The row's disposition is a closed set: a spelling outside the committed
+/// vocabulary fails generation instead of widening what a disposition may
+/// mean.
+fn disposition_variant(disposition: &str) -> &'static str {
+    match disposition {
+        "callable-read-only" => "Disposition::CallableReadOnly",
+        "promoted-live" => "Disposition::PromotedLive",
+        "stubbed-unimplemented" => "Disposition::StubbedUnimplemented",
+        "compile-time-only" => "Disposition::CompileTimeOnly",
+        other => unreachable!("validated disposition {other}"),
+    }
 }
 
 /// The first declared join field a row's payload does not carry as a
@@ -838,28 +882,74 @@ fn optional_str_list(fields: &[String]) -> String {
     )
 }
 
-fn profile_catalog(rows: &[Row], profile: &str) -> Vec<String> {
+fn profile_catalog<'a>(rows: &'a [Row], profile: &str) -> Vec<&'a str> {
     rows.iter()
         .filter(|row| row.profiles.iter().any(|item| item == profile))
-        .filter_map(|row| row.wire_variant.clone())
+        .filter_map(|row| row.wire_variant.as_deref())
         .collect()
 }
 
 fn generate_profiles(catalog: &Catalog) -> String {
+    let variants = catalog
+        .rows
+        .iter()
+        .map(|row| format!("    {},\n", operation_variant(&row.operation)))
+        .collect::<String>();
+    let as_str_arms = catalog
+        .rows
+        .iter()
+        .map(|row| {
+            format!(
+                "            Self::{} => \"{}\",\n",
+                operation_variant(&row.operation),
+                row.operation
+            )
+        })
+        .collect::<String>();
     format!(
         "// {HEADER}\n\n\
+         /// Every committed broker operation name, in declared order.\n\
+         ///\n\
+         /// The profile catalogs and the committed row table are typed against this\n\
+         /// closed vocabulary; the wire boundary keeps the string spelling through\n\
+         /// [`BrokerOperationName::as_str`].\n\
+         ///\n\
+         /// A declared-method operation name is lower-kebab and not a valid variant\n\
+         /// identifier; its variant mirrors the wire spelling as snake_case, which\n\
+         /// the lint allowance below admits.\n\
+         #[allow(non_camel_case_types)]\n\
+         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]\n\
+         pub enum BrokerOperationName {{\n{0}\
+         }}\n\n\
+         impl BrokerOperationName {{\n\
+         \x20   /// The committed operation name.\n\
+         \x20   pub const fn as_str(self) -> &'static str {{\n\
+         \x20       match self {{\n{1}\
+         \x20       }}\n\
+         \x20   }}\n\
+         }}\n\n\
          /// Every request currently defined by the broker wire. Host mode is closed\n\
          /// over this list rather than using an open-ended default.\n\
-         pub const HOST_OPERATION_CATALOG: &[&str] = &[\n{}\
+         pub const HOST_OPERATION_CATALOG: &[BrokerOperationName] = &[\n{2}\
          ];\n\n\
          /// Guest-local process and broker lifecycle effects. Host networking,\n\
          /// devices, storage, realm, and allocator operations are intentionally\n\
          /// absent from this catalog.\n\
-         pub const GUEST_OPERATION_CATALOG: &[&str] = &[\n{}\
+         pub const GUEST_OPERATION_CATALOG: &[BrokerOperationName] = &[\n{3}\
          ];\n",
-        string_list(profile_catalog(&catalog.rows, "host"), "    "),
-        string_list(profile_catalog(&catalog.rows, "guest"), "    "),
+        variants,
+        as_str_arms,
+        operation_list(profile_catalog(&catalog.rows, "host"), "    "),
+        operation_list(profile_catalog(&catalog.rows, "guest"), "    "),
     )
+}
+
+/// The generated profile catalog as one `BrokerOperationName` list.
+fn operation_list<'a>(items: impl IntoIterator<Item = &'a str>, indent: &str) -> String {
+    items
+        .into_iter()
+        .map(|item| format!("{indent}BrokerOperationName::{},\n", operation_variant(item)))
+        .collect()
 }
 
 fn generate_w3(catalog: &Catalog) -> String {
@@ -875,12 +965,12 @@ fn generate_w3(catalog: &Catalog) -> String {
 fn generate_authz(catalog: &Catalog) -> String {
     let mut rows = String::new();
     for row in &catalog.rows {
-        rows.push_str("    row(\n");
-        rows.push_str(&format!("        \"{}\",\n", row.operation));
-        rows.push_str(&format!("        \"{}\",\n", row.authz.subject));
-        rows.push_str(&format!("        \"{}\",\n", row.authz.scope));
+        rows.push_str("    OperationAuthzRow {\n");
+        rows.push_str(&format!("        operation: \"{}\",\n", row.operation));
+        rows.push_str(&format!("        subject: \"{}\",\n", row.authz.subject));
+        rows.push_str(&format!("        scope: \"{}\",\n", row.authz.scope));
         rows.push_str(&format!(
-            "        &[{}],\n",
+            "        allowed_groups: &[{}],\n",
             row.authz
                 .allowed_groups
                 .iter()
@@ -888,14 +978,23 @@ fn generate_authz(catalog: &Catalog) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
-        rows.push_str(&format!("        {},\n", row.authz.destructive));
-        rows.push_str(&format!("        SecretAccess::{},\n", row.authz.secret_access));
         rows.push_str(&format!(
-            "        BrokerRequirement::{},\n",
+            "        destructive: Destructive::{},\n",
+            destructive_variant(row.authz.destructive)
+        ));
+        rows.push_str(&format!(
+            "        secret_access: SecretAccess::{},\n",
+            row.authz.secret_access
+        ));
+        rows.push_str(&format!(
+            "        broker_required: BrokerRequirement::{},\n",
             row.authz.broker_required
         ));
-        rows.push_str(&format!("        AuditMode::{},\n", row.authz.audit_mode));
-        rows.push_str("    ),\n");
+        rows.push_str(&format!(
+            "        audit_mode: AuditMode::{},\n",
+            row.authz.audit_mode
+        ));
+        rows.push_str("    },\n");
     }
     format!(
         "// {HEADER}\n\n\
@@ -903,6 +1002,16 @@ fn generate_authz(catalog: &Catalog) -> String {
          /// operation rows.\n\
          pub const BROKER_OPERATION_AUTHZ: &[OperationAuthzRow] = &[\n{rows}];\n"
     )
+}
+
+/// The generated `Destructive` variant a committed boolean destructive
+/// facet maps to.
+fn destructive_variant(destructive: bool) -> &'static str {
+    if destructive {
+        "Yes"
+    } else {
+        "No"
+    }
 }
 
 fn owner_variant(owner: &str) -> &'static str {
@@ -928,7 +1037,10 @@ fn generate_catalog(catalog: &Catalog) -> String {
             .collect::<Vec<_>>()
             .join(", ");
         rows.push_str("    BrokerOperationRow {\n");
-        rows.push_str(&format!("        operation: \"{}\",\n", row.operation));
+        rows.push_str(&format!(
+            "        operation: BrokerOperationName::{},\n",
+            operation_variant(&row.operation)
+        ));
         rows.push_str(&format!(
             "        wire_variant: {},\n",
             optional_str(row.wire_variant.as_deref())
@@ -946,7 +1058,10 @@ fn generate_catalog(catalog: &Catalog) -> String {
         rows.push_str(&format!("        profiles: &[{profiles}],\n"));
         rows.push_str(&format!("        w3: {},\n", row.w3));
         rows.push_str(&format!("        capabilities: {},\n", row.capabilities));
-        rows.push_str(&format!("        disposition: \"{}\",\n", row.disposition));
+        rows.push_str(&format!(
+            "        disposition: {},\n",
+            disposition_variant(&row.disposition)
+        ));
         rows.push_str(&format!(
             "        stub_target: {},\n",
             match stub_target_variant(row) {
@@ -977,14 +1092,17 @@ fn generate_catalog(catalog: &Catalog) -> String {
         ));
         rows.push_str(&format!("            destructive: {},\n", row.authz.destructive));
         rows.push_str(&format!(
-            "            secret_access: \"{}\",\n",
+            "            secret_access: SecretAccess::{},\n",
             row.authz.secret_access
         ));
         rows.push_str(&format!(
-            "            broker_required: \"{}\",\n",
+            "            broker_required: BrokerRequirement::{},\n",
             row.authz.broker_required
         ));
-        rows.push_str(&format!("            audit_mode: \"{}\",\n", row.authz.audit_mode));
+        rows.push_str(&format!(
+            "            audit_mode: AuditMode::{},\n",
+            row.authz.audit_mode
+        ));
         rows.push_str("        },\n");
         rows.push_str(&format!(
             "        payload_provenance: PayloadProvenance::{},\n",

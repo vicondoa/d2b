@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef};
+use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ZoneId};
 use d2b_provider_shell_pool::{
     SHELL_POOL_TYPE, ShellPool, shell_pool_descriptor, shell_pool_spec_decoder,
 };
@@ -42,7 +42,7 @@ impl InteractionDriverEffects for UnusedEffects {
 
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
     shell_pool_descriptor(InteractionDriverArgs {
-        zone: "work".to_owned(),
+        zone: ZoneId::parse("work").expect("zone"),
         controller_generation: ControllerGeneration::new(3).expect("generation"),
         effects: Arc::new(UnusedEffects),
         behavior: ShellPool,

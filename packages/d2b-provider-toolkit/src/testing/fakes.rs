@@ -28,6 +28,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -43,7 +44,6 @@ use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesi
 use d2b_resource_runtime::manager::{ResourceView, deterministic_uid};
 use d2b_resource_runtime::resource::ResourceStatus;
 use d2b_resource_runtime::spec_store::EnsureOutcome;
-use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
 use crate::base::error::ProviderToolkitError;
@@ -241,6 +241,52 @@ impl CallRecorder {
     }
 }
 
+/// A shared ordered call log for recording doubles.
+///
+/// The provider family crates' scripted effect doubles previously carried
+/// private copies of this shape (a fresh `Arc<Mutex<Vec<String>>>` plus a
+/// snapshot accessor) in each `test_support` module; this is that log, once.
+/// The log is deliberately unbounded and free-form: a recording double
+/// appends the labels its own tests assert on - including formatted values -
+/// which the bounded [`CallRecorder`] refuses by design. The log is shared
+/// by `Arc`, so a manager endpoint and an effect double can append to one
+/// sequence.
+#[derive(Debug, Clone, Default)]
+pub struct SharedLog(Arc<std::sync::Mutex<Vec<String>>>);
+
+impl SharedLog {
+    /// A fresh, empty shared log.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Append one entry.
+    ///
+    /// Every double holding a clone of this log observes the entry.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    pub fn record(&self, entry: String) {
+        self.0
+            .lock()
+            .expect("a test-support recorder lock is never poisoned")
+            .push(entry);
+    }
+
+    /// Snapshot the entries in arrival order.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    pub fn entries(&self) -> Vec<String> {
+        self.0
+            .lock()
+            .expect("a test-support recorder lock is never poisoned")
+            .clone()
+    }
+}
+
+impl From<Arc<std::sync::Mutex<Vec<String>>>> for SharedLog {
+    fn from(log: Arc<std::sync::Mutex<Vec<String>>>) -> Self {
+        Self(log)
+    }
+}
+
 /// A fake Zone core client: artifact catalog lookup and readiness.
 ///
 /// Core resolves an `artifactId` to a signed manifest and computes the
@@ -286,9 +332,9 @@ impl FakeCoreClient {
         artifact_id: &ArtifactId,
     ) -> Result<&ProviderManifest, FakePortError> {
         self.faults.take_next()?;
-        let _ = self
-            .recorder
-            .record("resolve-artifact", BoundedToken::parse("catalog").unwrap());
+        self.recorder
+            .record("resolve-artifact", BoundedToken::parse("catalog").unwrap())
+            .map_err(|_| FakePortError::RecorderFull)?;
         self.catalog
             .get(artifact_id.as_str())
             .ok_or(FakePortError::ArtifactNotFound)
@@ -300,9 +346,9 @@ impl FakeCoreClient {
         provider_ref: &ResourceRef,
     ) -> Result<(), FakePortError> {
         self.faults.take_next()?;
-        let _ = self
-            .recorder
-            .record("resolve-provider-ref", BoundedToken::parse("row").unwrap());
+        self.recorder
+            .record("resolve-provider-ref", BoundedToken::parse("row").unwrap())
+            .map_err(|_| FakePortError::RecorderFull)?;
         let _ = provider_ref;
         if self.ready {
             Ok(())
@@ -348,9 +394,9 @@ impl FakeResourceStore {
     /// Write status for one resource, refusing an unowned ResourceType.
     pub fn write_status(&mut self, resource_ref: &ResourceRef) -> Result<(), FakePortError> {
         self.faults.take_next()?;
-        let _ = self
-            .recorder
-            .record("write-status", BoundedToken::parse("status").unwrap());
+        self.recorder
+            .record("write-status", BoundedToken::parse("status").unwrap())
+            .map_err(|_| FakePortError::RecorderFull)?;
         if self
             .owned
             .iter()
@@ -402,10 +448,12 @@ impl FakeBus {
     /// Resolve one declared alias.
     pub fn resolve_alias(&mut self, alias: DependencyAlias) -> Result<ResourceRef, FakePortError> {
         self.faults.take_next()?;
-        let _ = self.recorder.record(
-            "resolve-alias",
-            BoundedToken::parse(alias.as_str()).expect("an alias token is a compiled constant"),
-        );
+        self.recorder
+            .record(
+                "resolve-alias",
+                BoundedToken::parse(alias.as_str()).expect("an alias token is a compiled constant"),
+            )
+            .map_err(|_| FakePortError::RecorderFull)?;
         self.bindings
             .get(&alias)
             .cloned()
@@ -497,7 +545,7 @@ impl FakeEffectPort {
 /// `delete` records `delete:<type>/<name>` and removes the row;
 /// `register_watch` records `watch:<type>/<name>` and returns a
 /// monotonically increasing [`WatchId`]. While [`Self::set_fail_reads`] is
-/// on, every read (`get`, `view`, `list_owned`) answers `ManagerRpc`, so a
+/// on, every read (`get`, `view`, `list_owned`) answers `ManagerUnavailable`, so a
 /// test can pin the retryable defer of an unanswerable manager.
 ///
 /// The double is cloneable and shares its state through `Arc`s, so a test
@@ -507,7 +555,7 @@ impl FakeEffectPort {
 pub struct RecordingManagerEndpoint {
     zone: String,
     owner_uid: [u8; 16],
-    log: Arc<Mutex<Vec<String>>>,
+    log: SharedLog,
     rows: Arc<Mutex<Vec<StoredDesiredResource>>>,
     views: Arc<Mutex<Vec<(ResourceKey, ResourceView)>>>,
     watch_targets: Arc<Mutex<Vec<ResourceKey>>>,
@@ -524,7 +572,7 @@ impl RecordingManagerEndpoint {
         Self {
             zone: "work".to_owned(),
             owner_uid: [0x42; 16],
-            log: Arc::new(Mutex::new(Vec::new())),
+            log: SharedLog::new(),
             rows: Arc::new(Mutex::new(Vec::new())),
             views: Arc::new(Mutex::new(Vec::new())),
             watch_targets: Arc::new(Mutex::new(Vec::new())),
@@ -549,7 +597,7 @@ impl RecordingManagerEndpoint {
 
     /// Share the caller's ordered log, so manager calls and a sibling
     /// effect double read as one sequence.
-    pub fn with_log(log: Arc<Mutex<Vec<String>>>) -> Self {
+    pub fn with_log(log: SharedLog) -> Self {
         Self {
             log,
             ..Self::new()
@@ -558,58 +606,85 @@ impl RecordingManagerEndpoint {
 
     /// Seed the parent row the binding declares: `Volume/data` in this
     /// double's zone, owned by nobody.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn with_parent(self, parent_uid: [u8; 16], spec: &[u8]) -> Self {
-        self.rows.lock().push(StoredDesiredResource {
-            key: ResourceKey::new(&self.zone, "Volume", "data"),
-            uid: parent_uid,
-            generation: 2,
-            owner_uid: None,
-            provenance: ResourceProvenance::Api,
-            deleting: false,
-            spec: spec.to_vec(),
-            metadata: Vec::new(),
-            created_at: 0,
-        });
+        self.rows
+            .lock()
+            .expect("a test-support recorder lock is never poisoned")
+            .push(StoredDesiredResource {
+                key: ResourceKey::new(&self.zone, "Volume", "data"),
+                uid: parent_uid,
+                generation: 2,
+                owner_uid: None,
+                provenance: ResourceProvenance::Api,
+                deleting: false,
+                spec: spec.to_vec(),
+                metadata: Vec::new(),
+                created_at: 0,
+            });
         self
     }
 
     /// Seed one pre-existing row.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn with_row(self, row: StoredDesiredResource) -> Self {
-        self.rows.lock().push(row);
+        self.rows
+            .lock()
+            .expect("a test-support recorder lock is never poisoned")
+            .push(row);
         self
     }
 
     /// Seed a pre-existing owned-row set.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn with_rows(self, rows: Vec<StoredDesiredResource>) -> Self {
-        self.rows.lock().extend(rows);
+        self.rows
+            .lock()
+            .expect("a test-support recorder lock is never poisoned")
+            .extend(rows);
         self
     }
 
     /// Seed one owned child row (drift the driver must retire).
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn seed_owned(&self, key: ResourceKey) {
-        self.rows.lock().push(StoredDesiredResource {
-            key,
-            uid: [0x77; 16],
-            generation: 1,
-            owner_uid: Some(self.owner_uid),
-            provenance: ResourceProvenance::Resource,
-            deleting: false,
-            spec: Vec::new(),
-            metadata: Vec::new(),
-            created_at: 0,
-        });
+        self.rows
+            .lock()
+            .expect("a test-support recorder lock is never poisoned")
+            .push(StoredDesiredResource {
+                key,
+                uid: [0x77; 16],
+                generation: 1,
+                owner_uid: Some(self.owner_uid),
+                provenance: ResourceProvenance::Resource,
+                deleting: false,
+                spec: Vec::new(),
+                metadata: Vec::new(),
+                created_at: 0,
+            });
     }
 
     /// Seed one row without a published view.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn seed(&self, row: StoredDesiredResource) {
-        self.rows.lock().push(row);
+        self.rows
+            .lock()
+            .expect("a test-support recorder lock is never poisoned")
+            .push(row);
     }
 
     /// Seed one row together with its live view at the given status.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn add(&self, row: StoredDesiredResource, status: ResourceStatus) {
         let view = Self::project(&row, status);
-        self.rows.lock().push(row);
-        self.views.lock().push((view.key.clone(), view));
+        self.rows
+            .lock()
+            .expect("a test-support recorder lock is never poisoned")
+            .push(row);
+        self.views
+            .lock()
+            .expect("a test-support recorder lock is never poisoned")
+            .push((view.key.clone(), view));
     }
 
     /// Project one committed row to the live view a driver's read sees.
@@ -632,42 +707,62 @@ impl RecordingManagerEndpoint {
     }
 
     /// Seed one owned row together with its published view.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn add_owned(&self, row: StoredDesiredResource, view: ResourceView) {
-        self.views.lock().push((view.key.clone(), view));
-        self.rows.lock().push(row);
+        self.views
+            .lock()
+            .expect("a test-support recorder lock is never poisoned")
+            .push((view.key.clone(), view));
+        self.rows
+            .lock()
+            .expect("a test-support recorder lock is never poisoned")
+            .push(row);
     }
 
     /// Seed one published view without a row.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn add_view(&self, view: ResourceView) {
-        self.views.lock().push((view.key.clone(), view));
+        self.views
+            .lock()
+            .expect("a test-support recorder lock is never poisoned")
+            .push((view.key.clone(), view));
     }
 
     /// Remove one row and its published view.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn drop_row(&self, key: &ResourceKey) {
-        self.rows.lock().retain(|row| row.key != *key);
-        self.views.lock().retain(|(view_key, _)| view_key != key);
+        self.rows
+            .lock()
+            .expect("a test-support recorder lock is never poisoned")
+            .retain(|row| row.key != *key);
+        self.views
+            .lock()
+            .expect("a test-support recorder lock is never poisoned")
+            .retain(|(view_key, _)| view_key != key);
     }
 
     /// The published view of one key, if any.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn view_of(&self, key: &ResourceKey) -> Option<ResourceView> {
         self.views
             .lock()
+            .expect("a test-support recorder lock is never poisoned")
             .iter()
             .find(|(view_key, _)| view_key == key)
             .map(|(_, view)| view.clone())
     }
 
-    /// Make every read answer `ManagerRpc` (the unanswerable plane).
+    /// Make every read answer `ManagerUnavailable` (the unanswerable plane).
     pub fn set_fail_reads(&self, fail: bool) {
         self.fail_reads.store(fail, Ordering::SeqCst);
     }
 
-    /// Make every child ensure answer `ManagerRpc` (the refusing plane).
+    /// Make every child ensure answer `ManagerUnavailable` (the refusing plane).
     pub fn set_fail_ensures(&self, fail: bool) {
         self.fail_ensures.store(fail, Ordering::SeqCst);
     }
 
-    /// Make every child delete answer `ManagerRpc` (the refusing plane).
+    /// Make every child delete answer `ManagerUnavailable` (the refusing plane).
     pub fn set_fail_deletes(&self, fail: bool) {
         self.fail_deletes.store(fail, Ordering::SeqCst);
     }
@@ -678,19 +773,19 @@ impl RecordingManagerEndpoint {
     }
 
     /// The shared ordered log, for a sibling double to append to.
-    pub fn log_handle(&self) -> Arc<Mutex<Vec<String>>> {
-        Arc::clone(&self.log)
+    pub fn log_handle(&self) -> SharedLog {
+        self.log.clone()
     }
 
     /// The recorded calls in order.
     pub fn call_order(&self) -> Vec<String> {
-        self.log.lock().clone()
+        self.log.entries()
     }
 
     /// The recorded `ensure:` calls in order.
     pub fn ensure_order(&self) -> Vec<String> {
         self.log
-            .lock()
+            .entries()
             .iter()
             .filter(|call| call.starts_with("ensure:"))
             .cloned()
@@ -698,18 +793,32 @@ impl RecordingManagerEndpoint {
     }
 
     /// The committed rows.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn rows(&self) -> Vec<StoredDesiredResource> {
-        self.rows.lock().clone()
+        self.rows
+            .lock()
+            .expect("a test-support recorder lock is never poisoned")
+            .clone()
     }
 
     /// One committed row by key.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn row(&self, key: &ResourceKey) -> Option<StoredDesiredResource> {
-        self.rows.lock().iter().find(|row| row.key == *key).cloned()
+        self.rows
+            .lock()
+            .expect("a test-support recorder lock is never poisoned")
+            .iter()
+            .find(|row| row.key == *key)
+            .cloned()
     }
 
     /// The registered watch targets in order.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn watch_targets(&self) -> Vec<ResourceKey> {
-        self.watch_targets.lock().clone()
+        self.watch_targets
+            .lock()
+            .expect("a test-support recorder lock is never poisoned")
+            .clone()
     }
 }
 
@@ -720,6 +829,7 @@ impl Default for RecordingManagerEndpoint {
 }
 
 #[async_trait]
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 impl ManagerEndpoint for RecordingManagerEndpoint {
     async fn ensure_child(
         &self,
@@ -727,17 +837,16 @@ impl ManagerEndpoint for RecordingManagerEndpoint {
         child: ChildEnsure,
     ) -> Result<EnsureOutcome, ResourceError> {
         let id = format!("{}/{}", child.type_name.as_str(), child.name);
-        self.log.lock().push(format!("ensure:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        self.log.record(format!("ensure:{id}"));
         if self.fail_ensures.load(Ordering::SeqCst) {
-            return Err(ResourceError::ManagerRpc("scripted ensure failure".into()));
+            return Err(ResourceError::ManagerUnavailable("scripted ensure failure".into()));
         }
-        // The committed identity mirrors the manager's contract: a child's
-        // uid is derived deterministically from its key (stable for the same
-        // key, distinct across keys), and an update keeps the committed uid
-        // while advancing the generation exactly once (spec_store's ensure
-        // contract).
+        // The committed identity mirrors the manager's contract: a child's uid is
+        // derived deterministically from its key (stable for the same key,
+        // distinct across keys), and an update keeps the committed uid while
+        // advancing the generation exactly once (spec_store's ensure contract).
         let key = ResourceKey::new(&self.zone, child.type_name.as_str(), &child.name);
-        let mut rows = self.rows.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        let mut rows = self.rows.lock().expect("a test-support recorder lock is never poisoned"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         let outcome = match rows.iter_mut().find(|existing| existing.key == key) {
             Some(existing) if existing.spec == child.spec => EnsureOutcome::Unchanged(existing.clone()),
             Some(existing) => {
@@ -781,14 +890,14 @@ impl ManagerEndpoint for RecordingManagerEndpoint {
                 ResourceStatus::Pending
             };
             let committed = outcome.row().clone();
-            self.views.lock().retain(|(view_key, _)| view_key != &committed.key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            self.views.lock().push(( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.views.lock().expect("a test-support recorder lock is never poisoned").retain(|(view_key, _)| view_key != &committed.key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.views.lock().expect("a test-support recorder lock is never poisoned").push(( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 committed.key.clone(),
                 Self::project(&committed, status),
             ));
         }
         // Spawn notification only after the commit (F1, AE1).
-        self.log.lock().push(format!("spawned:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        self.log.record(format!("spawned:{id}"));
         Ok(outcome)
     }
 
@@ -797,27 +906,26 @@ impl ManagerEndpoint for RecordingManagerEndpoint {
         key: &ResourceKey,
     ) -> Result<Option<StoredDesiredResource>, ResourceError> {
         if self.fail_reads.load(Ordering::SeqCst) {
-            return Err(ResourceError::ManagerRpc("scripted read failure".into()));
+            return Err(ResourceError::ManagerUnavailable("scripted read failure".into()));
         }
-        Ok(self.rows.lock().iter().find(|row| row.key == *key).cloned()) // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        Ok(self.rows.lock().expect("a test-support recorder lock is never poisoned").iter().find(|row| row.key == *key).cloned()) // async-gate-allow: synchronous lock acquisition, no await while the guard is held
     }
 
     async fn view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
-        self.log.lock().push(format!("view:{}/{}", key.type_name, key.name)); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        self.log.record(format!("view:{}/{}", key.type_name, key.name));
         if self.fail_reads.load(Ordering::SeqCst) {
-            return Err(ResourceError::ManagerRpc("scripted read failure".into()));
+            return Err(ResourceError::ManagerUnavailable("scripted read failure".into()));
         }
         Ok(self.view_of(key))
     }
 
     async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-        self.log.lock().push(format!("delete:{}/{}", key.type_name, key.name)); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        self.log.record(format!("delete:{}/{}", key.type_name, key.name));
         if self.fail_deletes.load(Ordering::SeqCst) {
-
-            return Err(ResourceError::ManagerRpc("scripted delete failure".into()));
+            return Err(ResourceError::ManagerUnavailable("scripted delete failure".into()));
         }
-        self.rows.lock().retain(|row| row.key != *key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-        self.views.lock().retain(|(view_key, _)| view_key != key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        self.rows.lock().expect("a test-support recorder lock is never poisoned").retain(|row| row.key != *key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        self.views.lock().expect("a test-support recorder lock is never poisoned").retain(|(view_key, _)| view_key != key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         Ok(())
     }
 
@@ -826,11 +934,11 @@ impl ManagerEndpoint for RecordingManagerEndpoint {
         owner_uid: [u8; 16],
     ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
         if self.fail_reads.load(Ordering::SeqCst) {
-            return Err(ResourceError::ManagerRpc("scripted read failure".into()));
+            return Err(ResourceError::ManagerUnavailable("scripted read failure".into()));
         }
-        Ok(self
-            .rows
+        Ok(self.rows
             .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            .expect("a test-support recorder lock is never poisoned")
             .iter()
             .filter(|row| row.owner_uid == Some(owner_uid))
             .cloned()
@@ -842,11 +950,11 @@ impl ManagerEndpoint for RecordingManagerEndpoint {
         _subscriber: &ResourceKey,
         registration: WatchRegistration,
     ) -> Result<WatchId, ResourceError> {
-        self.log.lock().push(format!( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        self.log.record(format!(
             "watch:{}/{}",
             registration.target.type_name, registration.target.name
         ));
-        let mut targets = self.watch_targets.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        let mut targets = self.watch_targets.lock().expect("a test-support recorder lock is never poisoned"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         targets.push(registration.target.clone());
         Ok(WatchId(targets.len() as u64))
     }
@@ -910,9 +1018,11 @@ impl RecordingRequeue {
     }
 
     /// The scheduled delays, in arrival order.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn scheduled(&self) -> Vec<Duration> {
         self.inner
             .lock()
+            .expect("a test-support recorder lock is never poisoned")
             .calls
             .iter()
             .map(|(_, after)| *after)
@@ -921,8 +1031,12 @@ impl RecordingRequeue {
 }
 
 impl RequeueScheduler for RecordingRequeue {
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn schedule(&self, key: ResourceKey, after: Duration) -> RequeueId {
-        let mut inner = self.inner.lock();
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("a test-support recorder lock is never poisoned");
         let id = inner.next;
         inner.next += 1;
         inner.calls.push((key, after));
@@ -1019,6 +1133,24 @@ mod tests {
         assert!(port.recorder().is_empty());
         assert!(port.apply(&effect).is_ok());
         assert_eq!(port.recorder().count_of("apply-effect"), 1);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_shared_log_records_in_order_and_shares_a_wrapped_manager_log() {
+        let log = SharedLog::new();
+        log.record("first".to_owned());
+        log.record("second".to_owned());
+        assert_eq!(log.entries(), ["first".to_owned(), "second".to_owned()]);
+
+        let raw: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let wrapped = SharedLog::from(Arc::clone(&raw));
+        wrapped.record("shared".to_owned());
+        assert_eq!(wrapped.entries(), ["shared".to_owned()]);
+        assert_eq!(
+            *raw.lock().expect("the test holds the only reference"),
+            ["shared".to_owned()]
+        );
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]

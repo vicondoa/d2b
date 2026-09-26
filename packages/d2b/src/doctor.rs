@@ -59,7 +59,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(750);
 /// Stable per-check severity for `d2b host doctor` output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum DoctorStatus {
+pub(crate) enum DoctorStatus {
     Pass,
     Warn,
     Fail,
@@ -77,7 +77,7 @@ impl DoctorStatus {
 
 /// One row in the doctor's `checks[]` array.
 #[derive(Debug, Clone)]
-pub struct DoctorCheck {
+pub(crate) struct DoctorCheck {
     /// Stable kebab-case identifier (e.g. `broker-ready`).
     pub name: &'static str,
     pub status: DoctorStatus,
@@ -88,7 +88,8 @@ pub struct DoctorCheck {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct DoctorReport {
+/// Ordered check list produced by one doctor run.
+pub(crate) struct DoctorReport {
     pub checks: Vec<DoctorCheck>,
 }
 
@@ -160,7 +161,8 @@ impl DoctorReport {
     }
 }
 
-pub fn run_doctor(context: &CliContext) -> DoctorReport {
+/// Run every doctor probe against one CLI context and aggregate the results.
+pub(crate) fn run_doctor(context: &CliContext) -> DoctorReport {
     let mut report = DoctorReport::default();
     check_broker_socket(context, &mut report);
     check_daemon_socket(context, &mut report);
@@ -481,6 +483,15 @@ enum PidfdState {
     ParseError(String),
 }
 
+impl PidfdEntries {
+    fn state_detail(&self) -> String {
+        match &self.state {
+            PidfdState::ParseError(d) => d.clone(),
+            _ => "daemon state dir unreadable".to_owned(),
+        }
+    }
+}
+
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn load_pidfd_entries(daemon_state_dir: &Path) -> PidfdEntries {
     let path = daemon_state_dir.join("pidfd-table.json");
@@ -525,10 +536,7 @@ fn check_otel_host_bridge_runner(entries: &PidfdEntries, report: &mut DoctorRepo
             "daemon pidfd-table.json missing; cannot confirm OtelHostBridge runner".to_owned(),
         ),
         PidfdState::UnreadableDir | PidfdState::ParseError(_) => {
-            let detail = match &entries.state {
-                PidfdState::ParseError(d) => d.clone(),
-                _ => "daemon state dir unreadable".to_owned(),
-            };
+            let detail = entries.state_detail();
             report.push(
                 "otel-host-bridge-runner",
                 DoctorStatus::Warn,
@@ -575,10 +583,7 @@ fn check_usbipd_runners(entries: &PidfdEntries, report: &mut DoctorReport) {
             "daemon pidfd-table.json missing; cannot enumerate per-env usbipd runners".to_owned(),
         ),
         PidfdState::UnreadableDir | PidfdState::ParseError(_) => {
-            let detail = match &entries.state {
-                PidfdState::ParseError(d) => d.clone(),
-                _ => "daemon state dir unreadable".to_owned(),
-            };
+            let detail = entries.state_detail();
             report.push(
                 "usbipd-runners",
                 DoctorStatus::Warn,
@@ -1059,15 +1064,15 @@ fn check_storage_lifecycle_report(daemon_state_dir: &Path, report: &mut DoctorRe
     let legacy_only = parsed.has_only_legacy_contract_issue();
     let invalid_contract_summary = storage_lifecycle_invalid_contract_summary(&parsed.issues);
     let mut data = json!({
-        "schemaVersion": parsed.schema_version.clone(),
+        "schemaVersion": parsed.schema_version,
         "storageContractPresent": parsed.storage_contract_present,
         "syncContractPresent": parsed.sync_contract_present,
         "pathCount": parsed.path_count,
         "restartPolicyCount": parsed.restart_policy_count,
         "lockCount": parsed.lock_count,
         "issueCount": issue_count,
-        "issueKinds": issue_kinds.clone(),
-        "issues": parsed.issues.clone(),
+        "issueKinds": issue_kinds,
+        "issues": parsed.issues,
     });
 
     if legacy_only {
@@ -1226,10 +1231,7 @@ fn check_seccomp_bpf_loaded(entries: &PidfdEntries, report: &mut DoctorReport) {
             return;
         }
         PidfdState::UnreadableDir | PidfdState::ParseError(_) => {
-            let detail = match &entries.state {
-                PidfdState::ParseError(d) => d.clone(),
-                _ => "daemon state dir unreadable".to_owned(),
-            };
+            let detail = entries.state_detail();
             report.push(
                 "seccomp-bpf-loaded",
                 DoctorStatus::Warn,
@@ -1339,10 +1341,7 @@ fn check_pre_ns_posture_with_reader<F>(
             return;
         }
         PidfdState::UnreadableDir | PidfdState::ParseError(_) => {
-            let detail = match &entries.state {
-                PidfdState::ParseError(d) => d.clone(),
-                _ => "daemon state dir unreadable".to_owned(),
-            };
+            let detail = entries.state_detail();
             report.push(
                 "pre-ns-posture",
                 DoctorStatus::Warn,
@@ -1445,10 +1444,7 @@ fn check_broker_reap_health(entries: &PidfdEntries, report: &mut DoctorReport) {
             return;
         }
         PidfdState::UnreadableDir | PidfdState::ParseError(_) => {
-            let detail = match &entries.state {
-                PidfdState::ParseError(d) => d.clone(),
-                _ => "daemon state dir unreadable".to_owned(),
-            };
+            let detail = entries.state_detail();
             report.push(
                 "broker-reap-health",
                 DoctorStatus::Warn,
@@ -1697,7 +1693,8 @@ fn run_sysctl_n(key: &str) -> Result<String, String> {
 // Renderers
 // ---------------------------------------------------------------
 
-pub fn render_summary(report: &DoctorReport) -> Value {
+/// Render the doctor report as the structured JSON doctor output.
+pub(crate) fn render_summary(report: &DoctorReport) -> Value {
     let checks: Vec<Value> = report
         .checks
         .iter()
@@ -1746,7 +1743,8 @@ pub fn render_summary(report: &DoctorReport) -> Value {
     })
 }
 
-pub fn render_human(report: &DoctorReport) -> String {
+/// Render the doctor report as human-readable terminal text.
+pub(crate) fn render_human(report: &DoctorReport) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
     let _ = writeln!(

@@ -2,12 +2,14 @@
 //!
 //! Plan U3 / KTD3 / KD4. One generic mechanism hosts the broker-owned state
 //! the per-family typed registries used to own. Cells are keyed
-//! `(cell, invocation_id, initiating_principal)`; compare-and-consume runs
-//! under the broker's single-process lock (the broker is the cell owner, so
-//! the lock is single-process by construction). A repeated invocation id
-//! replays the recorded outcome for the same initiating principal only -
-//! invocation ids appear in audit records and are not secrets, so they never
-//! gate one-time grants alone.
+//! `(cell, invocation_id)` with the initiating principal inside the record -
+//! the same nested layout the durable file uses, so partial-key lookups are
+//! O(log n) instead of a whole-map scan; compare-and-consume runs under the
+//! broker's single-process lock (the broker is the cell owner, so the lock
+//! is single-process by construction). A repeated invocation id replays the
+//! recorded outcome for the same initiating principal only - invocation ids
+//! appear in audit records and are not secrets, so they never gate one-time
+//! grants alone.
 //!
 //! Durability facets ride the committed Operation rows
 //! ([`crate::catalog::CellDurability`], regenerated from
@@ -78,30 +80,12 @@ const CELL_WORKER_QUEUE_DEPTH: usize = 256;
 /// arms the seam retires later will carry the attested caller instead.
 pub const BROKER_PRINCIPAL: &str = "broker";
 
-/// One keyed cell record identity.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct CellKey {
-    /// The declared cell name (the committed row's `stateCell.cell`).
-    pub cell: String,
-    /// The caller-supplied per-invocation identity (the operation's
-    /// invocation id; appears in audit records, never a secret).
-    pub invocation_id: String,
-    /// The initiating principal, as attested at the envelope boundary.
-    pub principal: String,
-}
-
-impl CellKey {
-    fn new(cell: &str, invocation_id: &str, principal: &str) -> Self {
-        Self {
-            cell: cell.to_owned(),
-            invocation_id: invocation_id.to_owned(),
-            principal: principal.to_owned(),
-        }
-    }
-}
-
 /// The recorded outcome of one cell record.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// The serde shape is the durable wire spelling: `unknown` / `completed`,
+/// byte-identical to the strings the durable file has always carried.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum CellOutcome {
     /// The record is durably pre-committed but no completion has been
     /// recorded: either the effect is in flight or the owner crashed between
@@ -200,6 +184,11 @@ impl Default for RetentionPolicy {
 
 /// One in-process cell record.
 struct CellRecord {
+    /// The initiating principal, as attested at the envelope boundary.
+    /// Rides inside the record (not the key) so the in-memory layout
+    /// mirrors the durable file's nested cell -> invocation shape and
+    /// partial-key lookups stay O(log n).
+    principal: String,
     outcome: CellOutcome,
     /// A live in-process claim. Never persisted: a restarted owner reloads
     /// durable records unclaimed, which is what turns a crash-stale record
@@ -314,7 +303,10 @@ enum CellCommand {
 struct CellWorkerState {
     /// The durable root directory, when the store is file-backed.
     root: Option<PathBuf>,
-    records: BTreeMap<CellKey, CellRecord>,
+    /// Cell name -> invocation id -> record, the same nested layout the
+    /// durable file uses (principal inside the record), so partial-key
+    /// lookups are O(log n) rather than a whole-map scan.
+    records: BTreeMap<String, BTreeMap<String, CellRecord>>,
     retention: RetentionPolicy,
     /// Latched by a panic inside a mutation critical section; `consume` and
     /// `complete` refuse with [`CellStoreError::Poisoned`] once set.
@@ -334,7 +326,7 @@ struct DurableFile {
 #[serde(rename_all = "camelCase")]
 struct DurableRecord {
     principal: String,
-    outcome: String,
+    outcome: CellOutcome,
     consumed_at_ms: u64,
     #[serde(default)]
     completed_at_ms: Option<u64>,
@@ -345,7 +337,7 @@ impl CellStore {
     /// An in-memory store with no durable file.
     pub fn in_memory() -> Self {
         Self::spawn_owner(None, RetentionPolicy::default())
-            .expect("spawn in-memory cell store owner")
+            .expect("in-memory store is a startup precondition; a fresh owner spawn cannot fail")
     }
 
     /// Open the store for one state root, recovering every durable record.
@@ -355,9 +347,12 @@ impl CellStore {
     }
 
     /// Test/embedding knob: the root plus an explicit retention policy.
-    pub(crate) fn with_retention(root: Option<PathBuf>, retention: RetentionPolicy) -> Self {
+    /// Failures propagate to the caller instead of panicking.
+    pub(crate) fn with_retention(
+        root: Option<PathBuf>,
+        retention: RetentionPolicy,
+    ) -> Result<Self, CellStoreError> {
         Self::spawn_owner(root, retention)
-            .expect("spawn cell store owner with retention")
     }
 
     /// Spawn the single owner thread and hand it the bootstrap command.
@@ -752,8 +747,8 @@ fn cell_handle(state: &mut CellWorkerState, command: CellCommand) -> LoopControl
         } => {
             let found = state
                 .records
-                .keys()
-                .any(|key| key.cell == cell && key.invocation_id == invocation_id);
+                .get(&cell)
+                .is_some_and(|invocations| invocations.contains_key(&invocation_id));
             let _ = reply.send(found);
             LoopControl::Continue
         }
@@ -764,9 +759,9 @@ fn cell_handle(state: &mut CellWorkerState, command: CellCommand) -> LoopControl
         } => {
             let payload = state
                 .records
-                .range(..)
-                .find(|(key, _)| key.cell == cell && key.invocation_id == invocation_id)
-                .and_then(|(_, record)| record.payload.clone());
+                .get(&cell)
+                .and_then(|invocations| invocations.get(&invocation_id))
+                .and_then(|record| record.payload.clone());
             let _ = reply.send(payload);
             LoopControl::Continue
         }
@@ -775,47 +770,41 @@ fn cell_handle(state: &mut CellWorkerState, command: CellCommand) -> LoopControl
             invocation_id,
             reply,
         } => {
-            let keys: Vec<CellKey> = state
-                .records
-                .keys()
-                .filter(|key| key.cell == cell && key.invocation_id == invocation_id)
-                .cloned()
-                .collect();
-            let removed = !keys.is_empty();
-            for key in keys {
-                state.records.remove(&key);
-            }
+            let removed = match state.records.get_mut(&cell) {
+                Some(invocations) => {
+                    let removed = invocations.remove(&invocation_id).is_some();
+                    if removed && invocations.is_empty() {
+                        state.records.remove(&cell);
+                    }
+                    removed
+                }
+                None => false,
+            };
             let _ = reply.send(removed);
             LoopControl::Continue
         }
         CellCommand::Keys { cell, reply } => {
-            let mut ids: Vec<String> = state
+            // Invocation ids are unique per cell, so the inner map's own
+            // sorted order is the answer; no sort/dedup pass needed.
+            let ids: Vec<String> = state
                 .records
-                .keys()
-                .filter(|key| key.cell == cell)
-                .map(|key| key.invocation_id.clone())
-                .collect();
-            ids.sort();
-            ids.dedup();
+                .get(&cell)
+                .map(|invocations| invocations.keys().cloned().collect())
+                .unwrap_or_default();
             let _ = reply.send(ids);
             LoopControl::Continue
         }
         CellCommand::Clear { cell, reply } => {
-            let keys: Vec<CellKey> = state
+            let count = state
                 .records
-                .keys()
-                .filter(|key| key.cell == cell)
-                .cloned()
-                .collect();
-            let count = keys.len();
-            for key in keys {
-                state.records.remove(&key);
-            }
+                .remove(&cell)
+                .map(|invocations| invocations.len())
+                .unwrap_or(0);
             let _ = reply.send(count);
             LoopControl::Continue
         }
         CellCommand::RecordCount { reply } => {
-            let _ = reply.send(state.records.len());
+            let _ = reply.send(state.records.values().map(|invocations| invocations.len()).sum());
             LoopControl::Continue
         }
         #[cfg(test)]
@@ -823,10 +812,10 @@ fn cell_handle(state: &mut CellWorkerState, command: CellCommand) -> LoopControl
             // A mutation critical section that panics mid-way: the record is
             // inserted (the corrupted partial mutation) before the panic, so
             // the owner's in-memory state is dirty when the latch trips.
-            let key = CellKey::new("injected-panic", "injected", BROKER_PRINCIPAL);
-            state.records.insert(
-                key,
+            state.records.entry("injected-panic".to_owned()).or_default().insert(
+                "injected".to_owned(),
                 CellRecord {
+                    principal: BROKER_PRINCIPAL.to_owned(),
                     outcome: CellOutcome::Unknown,
                     claimed: true,
                     durability: CellDurability::OneTime,
@@ -849,10 +838,10 @@ fn cell_handle(state: &mut CellWorkerState, command: CellCommand) -> LoopControl
             // "process" dies before the Granted reply can cross.
             let now = now_ms();
             enforce_retention_locked(&mut state.records, state.retention, now);
-            let key = CellKey::new(&cell, &invocation_id, &principal);
-            state.records.insert(
-                key,
+            state.records.entry(cell).or_default().insert(
+                invocation_id,
                 CellRecord {
+                    principal,
                     outcome: CellOutcome::Unknown,
                     claimed: true,
                     durability,
@@ -873,24 +862,23 @@ fn cell_handle(state: &mut CellWorkerState, command: CellCommand) -> LoopControl
 }
 
 /// Durable record snapshot (one-time cells only) as the file payload.
-fn durable_snapshot(records: &BTreeMap<CellKey, CellRecord>) -> DurableFile {
+fn durable_snapshot(records: &BTreeMap<String, BTreeMap<String, CellRecord>>) -> DurableFile {
     let mut by_cell: BTreeMap<String, BTreeMap<String, DurableRecord>> = BTreeMap::new();
-    for (key, record) in records {
-        if record.durability != CellDurability::OneTime || record.payload.is_some() {
-            continue;
-        }
-        by_cell.entry(key.cell.clone()).or_default().insert(
-            key.invocation_id.clone(),
-            DurableRecord {
-                principal: key.principal.clone(),
-                outcome: match record.outcome {
-                    CellOutcome::Unknown => "unknown".to_owned(),
-                    CellOutcome::Completed => "completed".to_owned(),
+    for (cell, invocations) in records {
+        for (invocation_id, record) in invocations {
+            if record.durability != CellDurability::OneTime || record.payload.is_some() {
+                continue;
+            }
+            by_cell.entry(cell.clone()).or_default().insert(
+                invocation_id.clone(),
+                DurableRecord {
+                    principal: record.principal.clone(),
+                    outcome: record.outcome,
+                    consumed_at_ms: record.consumed_ms,
+                    completed_at_ms: record.completed_ms,
                 },
-                consumed_at_ms: record.consumed_ms,
-                completed_at_ms: record.completed_ms,
-            },
-        );
+            );
+        }
     }
     DurableFile {
         version: DURABLE_VERSION,
@@ -899,7 +887,7 @@ fn durable_snapshot(records: &BTreeMap<CellKey, CellRecord>) -> DurableFile {
 }
 
 #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
-fn load(root: &Path) -> Result<BTreeMap<CellKey, CellRecord>, CellStoreError> {
+fn load(root: &Path) -> Result<BTreeMap<String, BTreeMap<String, CellRecord>>, CellStoreError> {
     let path = cell_durable_path(root);
     let bytes = match fs::read(&path) {
         Ok(bytes) => bytes,
@@ -918,23 +906,14 @@ fn load(root: &Path) -> Result<BTreeMap<CellKey, CellRecord>, CellStoreError> {
             file.version
         )));
     }
-    let mut records = BTreeMap::new();
+    let mut records: BTreeMap<String, BTreeMap<String, CellRecord>> = BTreeMap::new();
     for (cell, invocations) in file.records {
         for (invocation_id, record) in invocations {
-            let outcome = match record.outcome.as_str() {
-                "unknown" => CellOutcome::Unknown,
-                "completed" => CellOutcome::Completed,
-                other => {
-                    return Err(CellStoreError::CorruptDurable(format!(
-                        "{}: record {cell}/{invocation_id} has unknown outcome {other}",
-                        path.display()
-                    )));
-                }
-            };
-            records.insert(
-                CellKey::new(&cell, &invocation_id, &record.principal),
+            records.entry(cell.clone()).or_default().insert(
+                invocation_id,
                 CellRecord {
-                    outcome,
+                    principal: record.principal,
+                    outcome: record.outcome,
                     claimed: false,
                     durability: CellDurability::OneTime,
                     payload: None,
@@ -957,7 +936,7 @@ fn load(root: &Path) -> Result<BTreeMap<CellKey, CellRecord>, CellStoreError> {
 #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 fn persist_locked(
     root: Option<&Path>,
-    records: &BTreeMap<CellKey, CellRecord>,
+    records: &BTreeMap<String, BTreeMap<String, CellRecord>>,
 ) -> Result<(), CellStoreError> {
     let Some(root) = root else {
         return Ok(());
@@ -1029,50 +1008,48 @@ fn persist_locked(
 ///
 /// One-time consumed markers and payload-bearing live state are exempt.
 fn enforce_retention_locked(
-    records: &mut BTreeMap<CellKey, CellRecord>,
+    records: &mut BTreeMap<String, BTreeMap<String, CellRecord>>,
     retention: RetentionPolicy,
     now: u64,
 ) {
     let stale_before = now.saturating_sub(retention.outcome_ttl_ms);
-    records.retain(|_, record| {
-        if record.durability != CellDurability::Ephemeral
-            || record.payload.is_some()
-            || record.claimed
-        {
-            return true;
-        }
-        record.consumed_ms >= stale_before
-    });
-    let mut per_cell: BTreeMap<String, Vec<CellKey>> = BTreeMap::new();
-    for (key, record) in records.iter() {
-        if record.durability == CellDurability::Ephemeral
-            && record.payload.is_none()
-            && !record.claimed
-        {
-            per_cell
-                .entry(key.cell.clone())
-                .or_default()
-                .push(key.clone());
-        }
+    for invocations in records.values_mut() {
+        invocations.retain(|_, record| {
+            if record.durability != CellDurability::Ephemeral
+                || record.payload.is_some()
+                || record.claimed
+            {
+                return true;
+            }
+            record.consumed_ms >= stale_before
+        });
     }
-    for keys in per_cell.into_values() {
-        let evict = keys
+    for invocations in records.values_mut() {
+        // The per-cell cap counts replayable outcome records only: one-time
+        // consumed markers and payload-bearing live state are exempt in both
+        // dimensions, so they never push an eligible record off the cap.
+        let mut ordered: Vec<(String, u64)> = invocations
+            .iter()
+            .filter(|(_, record)| {
+                record.durability == CellDurability::Ephemeral
+                    && record.payload.is_none()
+                    && !record.claimed
+            })
+            .map(|(id, record)| (id.clone(), record.consumed_ms))
+            .collect();
+        let evict = ordered
             .len()
             .saturating_sub(retention.max_ephemeral_outcome_records);
         if evict == 0 {
             continue;
         }
-        let mut ordered = keys;
-        ordered.sort_by_key(|key| {
-            records
-                .get(key)
-                .map(|record| record.consumed_ms)
-                .unwrap_or(0)
-        });
-        for key in ordered.into_iter().take(evict) {
-            records.remove(&key);
+        ordered.sort_by_key(|(_, consumed_ms)| *consumed_ms);
+        for (id, _) in ordered.into_iter().take(evict) {
+            invocations.remove(&id);
         }
     }
+    // Keep the outer map free of empty cells left by eviction.
+    records.retain(|_, invocations| !invocations.is_empty());
 }
 
 fn now_ms() -> u64 {
@@ -1089,7 +1066,7 @@ fn now_ms() -> u64 {
 /// before `Granted` is returned, so a crash between the commit and the
 /// effect reconciles on retry instead of granting twice.
 fn consume_locked(
-    records: &mut BTreeMap<CellKey, CellRecord>,
+    records: &mut BTreeMap<String, BTreeMap<String, CellRecord>>,
     root: Option<&Path>,
     retention: RetentionPolicy,
     cell: &str,
@@ -1101,18 +1078,16 @@ fn consume_locked(
     // the consume below may create one, so stale records go first.
     let now = now_ms();
     enforce_retention_locked(records, retention, now);
-    let key = CellKey::new(cell, invocation_id, principal);
-    // The principal is part of the key: a record for the same cell +
+    // The principal rides inside the record: a record for the same cell +
     // invocation id under a different principal must refuse the replay,
     // never fall through to a fresh grant (invocation ids alone never
     // gate one-time grants, KTD3).
-    let Some(owner) = records
-        .keys()
-        .find(|candidate| candidate.cell == cell && candidate.invocation_id == invocation_id)
-    else {
-        records.insert(
-            key,
+    let invocations = records.entry(cell.to_owned()).or_default();
+    let Some(owner) = invocations.get(invocation_id) else {
+        invocations.insert(
+            invocation_id.to_owned(),
             CellRecord {
+                principal: principal.to_owned(),
                 outcome: CellOutcome::Unknown,
                 claimed: true,
                 durability,
@@ -1126,10 +1101,10 @@ fn consume_locked(
         }
         return Ok(ConsumeDecision::Granted);
     };
-    if owner.principal != key.principal {
+    if owner.principal != principal {
         return Ok(ConsumeDecision::ForeignPrincipal);
     }
-    let existing = records.get(&key).expect("owner is the requested key");
+    let existing = invocations.get(invocation_id).expect("owner is the requested key");
     if existing.claimed {
         return Ok(ConsumeDecision::InProgress);
     }
@@ -1138,7 +1113,7 @@ fn consume_locked(
         // A durable unknown left by a crashed owner: the retried
         // invocation reconciles (idempotently) under its invocation id.
         CellOutcome::Unknown => {
-            let record = records.get_mut(&key).expect("key present");
+            let record = invocations.get_mut(invocation_id).expect("key present");
             record.claimed = true;
             if durability == CellDurability::OneTime {
                 persist_locked(root, records)?;
@@ -1150,7 +1125,7 @@ fn consume_locked(
 
 /// Record completion for one claimed key, on the owner.
 fn complete_locked(
-    records: &mut BTreeMap<CellKey, CellRecord>,
+    records: &mut BTreeMap<String, BTreeMap<String, CellRecord>>,
     root: Option<&Path>,
     retention: RetentionPolicy,
     cell: &str,
@@ -1159,17 +1134,16 @@ fn complete_locked(
 ) -> Result<(), CellStoreError> {
     let now = now_ms();
     enforce_retention_locked(records, retention, now);
-    let key = CellKey::new(cell, invocation_id, principal);
-    let Some(owner) = records
-        .keys()
-        .find(|candidate| candidate.cell == cell && candidate.invocation_id == invocation_id)
-    else {
+    let Some(invocations) = records.get_mut(cell) else {
         return Err(CellStoreError::MissingRecord);
     };
-    if owner.principal != key.principal {
+    let Some(owner) = invocations.get(invocation_id) else {
+        return Err(CellStoreError::MissingRecord);
+    };
+    if owner.principal != principal {
         return Err(CellStoreError::ForeignPrincipal);
     }
-    let record = records.get_mut(&key).expect("owner is the requested key");
+    let record = invocations.get_mut(invocation_id).expect("owner is the requested key");
     if record.outcome == CellOutcome::Completed && record.completed_ms.is_some() {
         return Ok(());
     }
@@ -1184,26 +1158,29 @@ fn complete_locked(
 
 /// Insert one payload record into an ephemeral cell, on the owner.
 fn insert_payload_locked(
-    records: &mut BTreeMap<CellKey, CellRecord>,
+    records: &mut BTreeMap<String, BTreeMap<String, CellRecord>>,
     retention: RetentionPolicy,
     cell: &str,
     invocation_id: &str,
     principal: &str,
     payload: Arc<dyn Any + Send + Sync>,
 ) -> Result<(), CellStoreError> {
-    let key = CellKey::new(cell, invocation_id, principal);
     enforce_retention_locked(records, retention, now_ms());
-    records.insert(
-        key,
-        CellRecord {
-            outcome: CellOutcome::Unknown,
-            claimed: false,
-            durability: CellDurability::Ephemeral,
-            payload: Some(payload),
-            consumed_ms: now_ms(),
-            completed_ms: None,
-        },
-    );
+    records
+        .entry(cell.to_owned())
+        .or_default()
+        .insert(
+            invocation_id.to_owned(),
+            CellRecord {
+                principal: principal.to_owned(),
+                outcome: CellOutcome::Unknown,
+                claimed: false,
+                durability: CellDurability::Ephemeral,
+                payload: Some(payload),
+                consumed_ms: now_ms(),
+                completed_ms: None,
+            },
+        );
     Ok(())
 }
 
@@ -1607,7 +1584,8 @@ mod tests {
                 outcome_ttl_ms: 60_000,
                 max_ephemeral_outcome_records: 1,
             },
-        );
+        )
+        .expect("spawn store with retention");
         // The one-time marker: consumed and completed.
         assert_eq!(
             store.consume("grant-g", "grant-1", "alice", CellDurability::OneTime),
@@ -1683,6 +1661,18 @@ mod tests {
         store.complete(LEASES, "inv-1", "alice").expect("complete");
         let path = root.path().join(STATE_CELLS_FILE);
         std::fs::write(&path, b"not json").expect("corrupt the file");
+        assert!(matches!(
+            CellStore::open(root.path()),
+            Err(CellStoreError::CorruptDurable(_))
+        ));
+        // A syntactically valid file whose outcome string is not a known
+        // spelling must also fail closed: the enum derive rejects it the
+        // same way the old hand re-parse did.
+        std::fs::write(
+            &path,
+            br#"{"version":1,"records":{"lifecycle-leases":{"inv-1":{"principal":"alice","outcome":"bogus","consumedAtMs":1}}}}"#,
+        )
+        .expect("write unknown-outcome file");
         assert!(matches!(
             CellStore::open(root.path()),
             Err(CellStoreError::CorruptDurable(_))

@@ -182,7 +182,7 @@ impl NotificationSink {
                 provider = "notification-desktop",
                 "delivery refused: source session not authenticated"
             );
-            crate::types::NotificationError::InvalidOpaqueKey
+            crate::types::NotificationError::Denied
         })?;
         if !self.observer_enabled {
             return Err(crate::types::NotificationError::ObserverDisabled);
@@ -192,14 +192,14 @@ impl NotificationSink {
                 provider = "notification-desktop",
                 "delivery refused: observer session not authenticated"
             );
-            crate::types::NotificationError::InvalidOpaqueKey
+            crate::types::NotificationError::Denied
         })?;
         if source_session.zone() != observer_session.zone() {
             debug!(
                 provider = "notification-desktop",
                 "delivery refused: source and observer zone mismatch"
             );
-            return Err(crate::types::NotificationError::InvalidOpaqueKey);
+            return Err(crate::types::NotificationError::Denied);
         }
         let observer_session = observer_session.session_key();
         self.nonces.gc(now_secs);
@@ -271,11 +271,11 @@ impl NotificationSink {
                 notification,
             },
         );
-        self.projection_nonces.insert(request_id, issued_keys);
+        self.projection_nonces.insert(request_id.clone(), issued_keys);
         self.projection_sessions
-            .insert(format!("notification-{notification_id}"), observer_session);
+            .insert(request_id.clone(), observer_session);
         self.projection_deadlines.insert(
-            format!("notification-{notification_id}"),
+            request_id.clone(),
             now_secs.saturating_add(self.acknowledge_timeout_secs),
         );
         let result = NotificationResult::Accepted {
@@ -285,15 +285,22 @@ impl NotificationSink {
         if let Some(key) = idempotency_key {
             self.idempotency.insert(
                 key.clone(),
-                (format!("notification-{notification_id}"), result.clone()),
+                (request_id.clone(), result.clone()),
             );
-            self.projection_idempotency
-                .insert(format!("notification-{notification_id}"), key);
+            self.projection_idempotency.insert(request_id, key);
         }
         Ok(result)
     }
 
     /// Deliver after the configured Guest-source category admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::types::NotificationError::Denied`] when the Guest
+    /// source rejects the session or request, and the delivery validation
+    /// errors (`FieldBounds`, `InvalidIcon`, `InvalidActions`,
+    /// `InvalidTimeout`, `InvalidOpaqueKey`, `ObserverDisabled`) when the
+    /// request or observer stream fails its bounded validation.
     pub fn deliver_from_guest_source<P: DesktopNotificationPort + ?Sized>(
         &mut self,
         port: &mut P,
@@ -305,7 +312,7 @@ impl NotificationSink {
     ) -> Result<NotificationResult, crate::types::NotificationError> {
         source
             .validate_authenticated(source_session, &request)
-            .map_err(|_| crate::types::NotificationError::InvalidOpaqueKey)?;
+            .map_err(|_| crate::types::NotificationError::Denied)?;
         self.deliver(port, source_session, observer_session, request, now_secs)
     }
 
@@ -373,13 +380,17 @@ impl NotificationSink {
 
     /// Evict a projection when its desktop notification closes.
     pub fn close(&mut self, notification_id: u32) {
-        let request_id = format!("notification-{notification_id}");
-        self.projections.remove(&request_id);
-        self.revoke_projection_nonces(&request_id);
-        self.remove_projection_idempotency(&request_id);
-        self.projection_sessions.remove(&request_id);
-        self.projection_deadlines.remove(&request_id);
-        self.order.retain(|value| value != &request_id);
+        self.close_by_request_id(&format!("notification-{notification_id}"));
+    }
+
+    /// Evict a projection by its internal request id.
+    fn close_by_request_id(&mut self, request_id: &str) {
+        self.projections.remove(request_id);
+        self.revoke_projection_nonces(request_id);
+        self.remove_projection_idempotency(request_id);
+        self.projection_sessions.remove(request_id);
+        self.projection_deadlines.remove(request_id);
+        self.order.retain(|value| value != request_id);
     }
 
     /// Revoke all projections and action capabilities for a closed session.
@@ -392,12 +403,7 @@ impl NotificationSink {
             .map(|(request_id, _)| request_id.clone())
             .collect::<Vec<_>>();
         for request_id in request_ids {
-            if let Some(notification_id) = request_id
-                .strip_prefix("notification-")
-                .and_then(|value| value.parse::<u32>().ok())
-            {
-                self.close(notification_id);
-            }
+            self.close_by_request_id(&request_id);
         }
         self.nonces.revoke_session(&session_key);
     }
@@ -488,12 +494,7 @@ impl NotificationSink {
             })
             .collect::<Vec<_>>();
         for request_id in expired {
-            if let Some(notification_id) = request_id
-                .strip_prefix("notification-")
-                .and_then(|value| value.parse::<u32>().ok())
-            {
-                self.close(notification_id);
-            }
+            self.close_by_request_id(&request_id);
         }
     }
 }
@@ -576,7 +577,7 @@ mod tests {
         let source = test_source("guest");
         assert_eq!(
             sink.deliver(&mut port, &source, &source, request_with_action(), 100),
-            Err(crate::types::NotificationError::InvalidOpaqueKey)
+            Err(crate::types::NotificationError::Denied)
         );
 
         let observer = test_observer("alice");
@@ -615,7 +616,7 @@ mod tests {
                 request_with_action(),
                 100,
             ),
-            Err(crate::types::NotificationError::InvalidOpaqueKey)
+            Err(crate::types::NotificationError::Denied)
         );
     }
 

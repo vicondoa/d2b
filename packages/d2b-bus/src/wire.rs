@@ -34,6 +34,23 @@ pub struct ZoneBoundPolicyIdentity {
     policy: EndpointPolicyIdentity,
 }
 
+/// Zone-bound policy identity construction failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZoneBoundPolicyIdentityError {
+/// The bound resource is not a Provider.
+    NotProviderRef,
+}
+
+impl core::fmt::Display for ZoneBoundPolicyIdentityError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::NotProviderRef => "zone-bound-policy-identity-provider-ref-invalid",
+        })
+    }
+}
+
+impl std::error::Error for ZoneBoundPolicyIdentityError {}
+
 impl ZoneBoundPolicyIdentity {
     /// Construct a Zone-bound identity.
     pub fn new(zone: ZoneId, policy: EndpointPolicyIdentity) -> Self {
@@ -50,9 +67,9 @@ impl ZoneBoundPolicyIdentity {
         zone: ZoneId,
         provider_ref: ResourceRef,
         policy: EndpointPolicyIdentity,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, ZoneBoundPolicyIdentityError> {
         if provider_ref.resource_type().as_str() != "Provider" {
-            return Err("provider identity must name Provider");
+            return Err(ZoneBoundPolicyIdentityError::NotProviderRef);
         }
         Ok(Self {
             zone,
@@ -76,7 +93,11 @@ impl ZoneBoundPolicyIdentity {
         self.provider_ref.as_ref()
     }
 
-    /// Render the stable digest used in local policy comparison.
+    /// Render the stable digest used in local policy comparison..
+    ///
+    /// # Errors
+    /// Returns the `BinaryError` from `EndpointPolicyIdentity::encode_canonical`
+    /// when the component-session wire shape cannot represent this policy.
     pub fn digest(
         &self,
     ) -> Result<String, d2b_contracts_zone_session::v3::component_session::BinaryError> {
@@ -182,7 +203,7 @@ mod tests {
                 identity(),
             )
             .unwrap_err(),
-            "provider identity must name Provider"
+            ZoneBoundPolicyIdentityError::NotProviderRef
         );
     }
 }

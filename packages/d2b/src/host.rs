@@ -7,7 +7,7 @@ use crate::{
     CliFailure,
     context::{CliContext, OutputMode, RequestDeadline, ZoneContext},
     dispatch::{GenericGetArgs, GenericListArgs},
-    dispatch::{emit_host_error, host_error_envelope, missing_mutation_flag_envelope},
+    dispatch::{emit_host_error, host_error_envelope},
     doctor, host_validate, print_json, print_stdout, resource,
 };
 
@@ -68,6 +68,25 @@ pub(crate) struct HostReconcileArgs {
     pub(crate) dry_run: bool,
     #[arg(long, conflicts_with = "dry_run")]
     pub(crate) apply: bool,
+}
+
+/// The `host` verb a mutation-mode refusal names, for a subcommand that
+/// mutates state and selected neither `--dry-run` nor `--apply`.
+///
+/// The rule belongs to the invocation rather than to the runtime, so
+/// [`crate::dispatch::modern_run`] asks this before it resolves a Zone: a
+/// missing mode is owed the `--apply-or-dry-run-required` envelope even when
+/// the public socket cannot be reached.
+pub(crate) fn missing_mutation_mode(command: &HostCommand) -> Option<&'static str> {
+    let (verb, dry_run, apply) = match command {
+        HostCommand::Prepare(args) => ("host prepare", args.dry_run, args.apply),
+        HostCommand::Destroy(args) => ("host destroy", args.dry_run, args.apply),
+        HostCommand::Reconcile(args) => ("host reconcile", args.dry_run, args.apply),
+        HostCommand::Validate(args) => ("host validate", args.dry_run, args.apply),
+        HostCommand::Get(_) | HostCommand::List(_) | HostCommand::Status(_) => return None,
+        HostCommand::Doctor(_) => return None,
+    };
+    (!dry_run && !apply).then_some(verb)
 }
 
 pub(crate) fn run(
@@ -175,8 +194,8 @@ pub(crate) fn run(
 
 fn can_fallback_to_local_state(error: &CliFailure) -> bool {
     matches!(
-        error.message.split(':').next(),
-        Some("zone-unavailable" | "deadline-exceeded" | "exec-protocol-error")
+        error.code.as_str(),
+        "zone-unavailable" | "deadline-exceeded" | "exec-protocol-error"
     )
 }
 
@@ -271,14 +290,6 @@ fn mutation(
     mode: OutputMode,
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
-    if !args.dry_run && !args.apply {
-        return Err(context.failure(
-            "ref-invalid",
-            "host mutation requires --dry-run or --apply",
-            mode,
-            2,
-        ));
-    }
     let value = context.invoke(
         "Reconcile",
         json!({
@@ -300,14 +311,6 @@ fn reconcile(
     mode: OutputMode,
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
-    if !args.dry_run && !args.apply {
-        return Err(context.failure(
-            "ref-invalid",
-            "host reconcile requires --dry-run or --apply",
-            mode,
-            78,
-        ));
-    }
     if !args.network {
         return Err(context.failure("ref-invalid", "host reconcile requires --network", mode, 78));
     }
@@ -329,12 +332,6 @@ fn reconcile(
 }
 
 fn validate(args: &HostValidateArgs, mode: OutputMode) -> Result<i32, CliFailure> {
-    if !args.dry_run && !args.apply {
-        return emit_host_error(
-            &missing_mutation_flag_envelope("host validate"),
-            mode.is_json(),
-        );
-    }
     let validation_mode = if args.apply {
         host_validate::ValidateMode::Apply
     } else {
@@ -369,8 +366,8 @@ fn validate(args: &HostValidateArgs, mode: OutputMode) -> Result<i32, CliFailure
                     "unknown-wave",
                     78,
                     "host validate --wave argument.",
-                    &format!("--wave {only_wave} is not in the readiness-wave catalog"),
-                    &format!(
+                    format!("--wave {only_wave} is not in the readiness-wave catalog"),
+                    format!(
                         "Re-run with one of: {}. The catalog mirrors readinessWaveSpecs in nixos-modules/options-daemon.nix.",
                         known_list.join(", ")
                     ),

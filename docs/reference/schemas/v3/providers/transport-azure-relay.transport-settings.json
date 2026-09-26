@@ -8,12 +8,17 @@
   "properties": {
     "relayNamespaceId": {
       "type": "string",
+      "description": "Bare Relay namespace identifier: no scheme, no DNS suffix. Non-secret.",
       "pattern": "^[a-zA-Z0-9][a-zA-Z0-9-]{1,48}[a-zA-Z0-9]$",
       "maxLength": 50
     },
     "relayEntityId": {
       "type": "string",
+      "description": "Hybrid Connection entity identifier: lowercase kebab. Non-secret, and never a SAS token shape.",
       "pattern": "^[a-z][a-z0-9-]{1,49}$",
+      "not": {
+        "pattern": "SharedAccessSignature"
+      },
       "maxLength": 50
     }
   }

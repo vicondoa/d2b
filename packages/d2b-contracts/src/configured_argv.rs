@@ -6,13 +6,49 @@ pub const MAX_CONFIGURED_ARGC: usize = 128;
 pub const MAX_CONFIGURED_ARG_BYTES: usize = 16 * 1024;
 pub const MAX_CONFIGURED_ARG_LEN: usize = 4096;
 
+/// Failure classes for [`ConfiguredArgv`] construction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfiguredArgvError {
+    Empty,
+    TooManyArgs { max: usize },
+    NulByte,
+    ArgTooLong { max: usize },
+    ByteCountOverflow,
+    TooManyBytes { max: usize },
+}
+
+impl core::fmt::Display for ConfiguredArgvError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ConfiguredArgvError::Empty => f.write_str("configured argv must not be empty"),
+            ConfiguredArgvError::TooManyArgs { max } => {
+                write!(f, "configured argv exceeds {max} arguments")
+            }
+            ConfiguredArgvError::NulByte => {
+                f.write_str("configured argv must not contain NUL")
+            }
+            ConfiguredArgvError::ArgTooLong { max } => {
+                write!(f, "configured argv argument exceeds {max} bytes")
+            }
+            ConfiguredArgvError::ByteCountOverflow => {
+                f.write_str("configured argv byte count overflow")
+            }
+            ConfiguredArgvError::TooManyBytes { max } => {
+                write!(f, "configured argv exceeds {max} bytes")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ConfiguredArgvError {}
+
 /// Serialized configured argv whose debug representation is always redacted.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(transparent)]
 pub struct ConfiguredArgv(Vec<String>);
 
 impl ConfiguredArgv {
-    pub fn new(argv: Vec<String>) -> Result<Self, String> {
+    pub fn new(argv: Vec<String>) -> Result<Self, ConfiguredArgvError> {
         validate_argv(&argv)?;
         Ok(Self(argv))
     }
@@ -45,33 +81,33 @@ impl<'de> Deserialize<'de> for ConfiguredArgv {
     }
 }
 
-fn validate_argv(argv: &[String]) -> Result<(), String> {
+fn validate_argv(argv: &[String]) -> Result<(), ConfiguredArgvError> {
     if argv.is_empty() {
-        return Err("configured argv must not be empty".to_owned());
+        return Err(ConfiguredArgvError::Empty);
     }
     if argv.len() > MAX_CONFIGURED_ARGC {
-        return Err(format!(
-            "configured argv exceeds {MAX_CONFIGURED_ARGC} arguments"
-        ));
+        return Err(ConfiguredArgvError::TooManyArgs {
+            max: MAX_CONFIGURED_ARGC,
+        });
     }
     let mut bytes = 0usize;
     for arg in argv {
         if arg.contains('\0') {
-            return Err("configured argv must not contain NUL".to_owned());
+            return Err(ConfiguredArgvError::NulByte);
         }
         if arg.len() > MAX_CONFIGURED_ARG_LEN {
-            return Err(format!(
-                "configured argv argument exceeds {MAX_CONFIGURED_ARG_LEN} bytes"
-            ));
+            return Err(ConfiguredArgvError::ArgTooLong {
+                max: MAX_CONFIGURED_ARG_LEN,
+            });
         }
         bytes = bytes
             .checked_add(arg.len())
-            .ok_or_else(|| "configured argv byte count overflow".to_owned())?;
+            .ok_or(ConfiguredArgvError::ByteCountOverflow)?;
     }
     if bytes > MAX_CONFIGURED_ARG_BYTES {
-        return Err(format!(
-            "configured argv exceeds {MAX_CONFIGURED_ARG_BYTES} bytes"
-        ));
+        return Err(ConfiguredArgvError::TooManyBytes {
+            max: MAX_CONFIGURED_ARG_BYTES,
+        });
     }
     Ok(())
 }
@@ -99,7 +135,13 @@ mod tests {
         assert!(ConfiguredArgv::new(at_cap).is_ok());
         let over_cap = vec!["x".to_owned(); MAX_CONFIGURED_ARGC + 1];
         let error = ConfiguredArgv::new(over_cap).expect_err("argc cap+1 is refused");
-        assert!(error.contains(&format!("{MAX_CONFIGURED_ARGC} arguments")));
+        assert_eq!(
+            error,
+            ConfiguredArgvError::TooManyArgs {
+                max: MAX_CONFIGURED_ARGC
+            }
+        );
+        assert!(error.to_string().contains(&format!("{MAX_CONFIGURED_ARGC} arguments")));
     }
 
     #[test]
@@ -111,6 +153,12 @@ mod tests {
         // individual argument is within its own length cap.
         let over_cap = vec!["x".repeat(MAX_CONFIGURED_ARG_LEN); 5];
         let error = ConfiguredArgv::new(over_cap).expect_err("total byte cap+1 is refused");
-        assert!(error.contains(&format!("{MAX_CONFIGURED_ARG_BYTES} bytes")));
+        assert_eq!(
+            error,
+            ConfiguredArgvError::TooManyBytes {
+                max: MAX_CONFIGURED_ARG_BYTES
+            }
+        );
+        assert!(error.to_string().contains(&format!("{MAX_CONFIGURED_ARG_BYTES} bytes")));
     }
 }

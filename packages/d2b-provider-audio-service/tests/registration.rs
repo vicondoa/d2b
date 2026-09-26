@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef};
+use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ZoneId};
 use d2b_provider_audio_pipewire::AudioServiceSpec;
 use d2b_provider_audio_service::{
     AudioService, audio_service_descriptor, audio_service_spec_decoder,
@@ -43,7 +43,7 @@ impl InteractionDriverEffects for UnusedEffects {
 
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
     audio_service_descriptor(InteractionDriverArgs {
-        zone: "work".to_owned(),
+        zone: ZoneId::parse("work").expect("zone"),
         controller_generation: ControllerGeneration::new(3).expect("generation"),
         effects: Arc::new(UnusedEffects),
         behavior: AudioService,
@@ -55,8 +55,7 @@ fn service_value() -> Value {
     let spec = AudioServiceSpec::owner(
         ResourceRef::parse("Endpoint/audio-host").expect("endpoint"),
         "work",
-    )
-    .expect("service spec");
+    );
     serde_json::to_value(&spec).expect("spec json")
 }
 
@@ -140,9 +139,9 @@ fn the_service_row_decodes_and_reads_nothing() {
 #[test]
 fn a_foreign_row_is_refused() {
     let envelope = envelope(&json!({"providerRef": "Provider/audio-pipewire"}));
-    assert_eq!(
+    assert!(matches!(
         AudioService.validate(&envelope),
-        Err(InteractionEffectError::InvalidResource)
-    );
+        Err(InteractionEffectError::InvalidSpec(_))
+    ));
     assert!(audio_service_spec_decoder().decode(b"[]").is_err());
 }

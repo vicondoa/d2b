@@ -28,6 +28,11 @@ use tracing::warn;
 /// adapter.  Descriptors are numbered from zero and may not repeat, reorder,
 /// or skip an index; rejecting before dispatch prevents an adapter from
 /// confusing a stale attachment with a current one.
+///
+/// # Errors
+///
+/// Returns [`ProviderToolkitError::NonMonotoneAttachmentIndexes`] when an
+/// index is not exactly its zero-based position.
 pub fn validate_attachment_indexes(indexes: &[u32]) -> Result<(), ProviderToolkitError> {
     for (expected, observed) in indexes.iter().enumerate() {
         if *observed != expected as u32 {
@@ -308,13 +313,7 @@ where
             if cancellation.is_cancelled() {
                 return Ok(());
             }
-            let current_route = self
-                .authenticated_route
-                .lock()
-                .await
-                .clone()
-                .ok_or(ProviderToolkitError::SessionUnauthenticated)?;
-            if current_route != route {
+            if self.authenticated_route.lock().await.as_ref() != Some(&route) {
                 warn!(zone = ?route.zone(), "provider session loop aborted: bound controller route changed mid-session");
                 return Err(ProviderToolkitError::SessionUnauthenticated);
             }
@@ -325,17 +324,18 @@ where
             let request = codec.decode_request(&frame).inspect_err(|e| {
                 warn!(zone = ?route.zone(), reason = %e, "provider frame decode failed; closing session");
             })?;
+            let ProviderRequest {
+                request_id,
+                zone,
+                provider_ref,
+                method,
+                payload,
+            } = request;
             let response = self
-                .dispatch_for_route(
-                    &route,
-                    request.zone().clone(),
-                    request.provider_ref().clone(),
-                    request.method().clone(),
-                    request.payload().clone(),
-                )
+                .dispatch_for_route(&route, zone, provider_ref, method, payload)
                 .await?;
             let encoded = codec
-                .encode_response(request.request_id(), &response)
+                .encode_response(&request_id, &response)
                 .inspect_err(|e| {
                     warn!(zone = ?route.zone(), reason = %e, "provider response encode failed; closing session");
                 })?;

@@ -11,7 +11,8 @@
 //! explicit fail-closed handler used by the broker dispatch table when
 //! one of those live-routing variants is invoked before support.
 
-use d2b_host::nftables::{BusId, ChainHook, NftBatch, NftError, Sha256};
+use d2b_host::media::BusId;
+use d2b_host::nftables::{ChainHook, NftBatch, NftError, Sha256};
 use serde::{Deserialize, Serialize};
 
 /// Audit-event payload for `UsbipBindFirewallRule`. Combined with the
@@ -45,7 +46,7 @@ pub fn bind_firewall_rule(
     Ok(UsbipBindFirewallRuleDecision {
         batch,
         audit: UsbipBindFirewallRuleAudit {
-            busid: bus_id.0.clone(),
+            busid: bus_id.as_str().to_owned(),
             rule_hash,
         },
     })
@@ -57,17 +58,20 @@ pub fn bind_firewall_rule(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum W6UsbipOperation {
-    UsbipBind,
-    UsbipUnbind,
-    UsbipProxyReconcile,
+    #[serde(rename = "usbip-bind")]
+    Bind,
+    #[serde(rename = "usbip-unbind")]
+    Unbind,
+    #[serde(rename = "usbip-proxy-reconcile")]
+    ProxyReconcile,
 }
 
 impl W6UsbipOperation {
     pub const fn as_kebab_case(&self) -> &'static str {
         match self {
-            Self::UsbipBind => "usbip-bind",
-            Self::UsbipUnbind => "usbip-unbind",
-            Self::UsbipProxyReconcile => "usbip-proxy-reconcile",
+            Self::Bind => "usbip-bind",
+            Self::Unbind => "usbip-unbind",
+            Self::ProxyReconcile => "usbip-proxy-reconcile",
         }
     }
 }
@@ -98,9 +102,10 @@ mod tests {
 
     #[test]
     fn bind_firewall_rule_produces_audit_with_busid_and_hash() {
+        let bus_id = BusId::new("1-1.4").expect("busid");
         let decision = bind_firewall_rule(
             d2b_host::nftables::build_inet_d2b_chains(),
-            &BusId::new("1-1.4"),
+            &bus_id,
             "iifname \"br-work-up\" tcp dport 3240 accept",
         )
         .unwrap();
@@ -115,9 +120,10 @@ mod tests {
 
     #[test]
     fn carveout_ordering_invariant_via_op() {
+        let bus_id = BusId::new("2-3.1").expect("busid");
         let decision = bind_firewall_rule(
             d2b_host::nftables::build_inet_d2b_chains(),
-            &BusId::new("2-3.1"),
+            &bus_id,
             "iifname \"br-work-up\" tcp dport 3240 accept",
         )
         .unwrap();
@@ -127,13 +133,28 @@ mod tests {
     #[test]
     fn w6_ops_refused_with_unknown_operation_audit() {
         for op in [
-            W6UsbipOperation::UsbipBind,
-            W6UsbipOperation::UsbipUnbind,
-            W6UsbipOperation::UsbipProxyReconcile,
+            W6UsbipOperation::Bind,
+            W6UsbipOperation::Unbind,
+            W6UsbipOperation::ProxyReconcile,
         ] {
             let audit = refuse_w6_operation(op);
             assert_eq!(audit.reason, "unknown-operation");
             assert_eq!(audit.operation, op);
+        }
+    }
+
+    #[test]
+    fn w6_operation_serialized_labels_are_pinned() {
+        for (op, label) in [
+            (W6UsbipOperation::Bind, "usbip-bind"),
+            (W6UsbipOperation::Unbind, "usbip-unbind"),
+            (W6UsbipOperation::ProxyReconcile, "usbip-proxy-reconcile"),
+        ] {
+            let encoded = serde_json::to_value(op).expect("serialize operation");
+            assert_eq!(encoded, serde_json::json!(label));
+            let decoded: W6UsbipOperation =
+                serde_json::from_value(encoded).expect("deserialize operation");
+            assert_eq!(decoded, op);
         }
     }
 }

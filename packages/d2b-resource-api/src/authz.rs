@@ -6,6 +6,9 @@ use std::{
 };
 
 use d2b_contracts_resource::redacted_debug;
+use d2b_contracts_resource::v3::execution_policy::{
+    redacted_debug_field_ref, redacted_debug_field_value,
+};
 use d2b_contracts_resource::v3::identity::STANDARD_RESOURCE_TYPES;
 use d2b_contracts_resource::v3::identity::{AuthenticatedSubjectContext, EvidenceClass, Locality};
 use d2b_contracts_resource::v3::{
@@ -117,13 +120,8 @@ impl Default for ApiCatalog {
     }
 }
 
-impl core::fmt::Debug for ApiCatalog {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ApiCatalog")
-            .field("resource_type_count", &self.resource_types.len())
-            .finish()
-    }
-}
+redacted_debug!(ApiCatalog,
+    resource_type_count: redacted_debug_field_value(|s| s.resource_types.len()));
 
 /// Resource methods distinguished from their authorization verb.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -282,18 +280,9 @@ impl BootstrapStoreFacts {
         }
     }
 }
-impl core::fmt::Debug for BootstrapStoreFacts {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter
-            .debug_struct("BootstrapStoreFacts")
-            .field("policy_revision", &"<redacted>")
-            .field(
-                "bootstrap_provider_count",
-                &self.bootstrap_provider_uids.len(),
-            )
-            .finish_non_exhaustive()
-    }
-}
+redacted_debug!(BootstrapStoreFacts, non_exhaustive,
+    policy_revision: redacted_debug_field_value(|_| "<redacted>"),
+    bootstrap_provider_count: redacted_debug_field_value(|s| s.bootstrap_provider_uids.len()));
 
 /// Derive the bootstrap phase from trusted store state only.
 ///
@@ -355,15 +344,10 @@ pub struct DurablePolicyRow {
     pub provenance: DurableRowProvenance,
 }
 
-impl core::fmt::Debug for DurablePolicyRow {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("DurablePolicyRow")
-            .field("resource_ref", &"<redacted>")
-            .field("canonical_bytes", &self.canonical_json.len())
-            .field("provenance", &self.provenance)
-            .finish()
-    }
-}
+redacted_debug!(DurablePolicyRow,
+    resource_ref: redacted_debug_field_value(|_| "<redacted>"),
+    canonical_bytes: redacted_debug_field_value(|s| s.canonical_json.len()),
+    provenance: redacted_debug_field_ref(|s| &s.provenance));
 
 /// The compiled authorization facts for one Zone (KTD6): the installed
 /// policy set (absent while bootstrap is open) and the durable bootstrap
@@ -374,14 +358,9 @@ pub struct CompiledAuthorizationFacts {
     pub bootstrap: BootstrapStoreFacts,
 }
 
-impl core::fmt::Debug for CompiledAuthorizationFacts {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("CompiledAuthorizationFacts")
-            .field("has_policy", &self.policy.is_some())
-            .field("bootstrap", &self.bootstrap)
-            .finish()
-    }
-}
+redacted_debug!(CompiledAuthorizationFacts,
+    has_policy: redacted_debug_field_value(|s| s.policy.is_some()),
+    bootstrap: redacted_debug_field_ref(|s| &s.bootstrap));
 
 /// The Zone's durable policy revision derives from the Nix bundle
 /// generation (seeded at materialization time) plus durable row state. Any
@@ -454,8 +433,8 @@ pub fn compile_authorization_facts(
     controller_generation: ControllerGeneration,
     provider_generation: d2b_contracts_resource::v3::ResourceGeneration,
 ) -> Result<CompiledAuthorizationFacts, AuthorizationPolicyError> {
-    let mut roles = Vec::new();
-    let mut bindings = Vec::new();
+    let mut roles = Vec::with_capacity(rows.len());
+    let mut bindings = Vec::with_capacity(rows.len());
     let mut subject_uids: BTreeMap<ResourceRef, ResourceUid> = BTreeMap::new();
     let mut bootstrap_provider_uids = BTreeMap::new();
     for row in rows {
@@ -555,75 +534,42 @@ pub struct PolicyRule {
     execution_refs: BTreeSet<ResourceRef>,
 }
 
-impl core::fmt::Debug for AuthorizationTarget {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("AuthorizationTarget")
-            .field("verb", &self.verb)
-            .field("resource_type", &"<redacted>")
-            .field("has_resource_name", &self.resource_name.is_some())
-            .field("has_subresource", &self.subresource.is_some())
-            .field("has_execution_ref", &self.execution_ref.is_some())
-            .finish()
-    }
-}
+redacted_debug!(AuthorizationTarget,
+    verb: redacted_debug_field_ref(|s| &s.verb),
+    resource_type: redacted_debug_field_value(|_| "<redacted>"),
+    has_resource_name: redacted_debug_field_value(|s| s.resource_name.is_some()),
+    has_subresource: redacted_debug_field_value(|s| s.subresource.is_some()),
+    has_execution_ref: redacted_debug_field_value(|s| s.execution_ref.is_some()));
 
-impl core::fmt::Debug for AuthorizationRequest {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("AuthorizationRequest")
-            .field("method", &self.method)
-            .field("zone", &"<redacted>")
-            .field("target_count", &self.targets.len())
-            .finish()
-    }
-}
+redacted_debug!(AuthorizationRequest,
+    method: redacted_debug_field_ref(|s| &s.method),
+    zone: redacted_debug_field_value(|_| "<redacted>"),
+    target_count: redacted_debug_field_value(|s| s.targets.len()));
 
-impl core::fmt::Debug for AuthorizationState {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("AuthorizationState")
-            .field("snapshot", &"<redacted>")
-            .field("zone_policy_revision", &"<redacted>")
-            .field("bootstrap_phase", &self.bootstrap_phase)
-            .field("now_tick", &"<redacted>")
-            .finish()
-    }
-}
+redacted_debug!(AuthorizationState,
+    snapshot: redacted_debug_field_value(|_| "<redacted>"),
+    zone_policy_revision: redacted_debug_field_value(|_| "<redacted>"),
+    bootstrap_phase: redacted_debug_field_ref(|s| &s.bootstrap_phase),
+    now_tick: redacted_debug_field_value(|_| "<redacted>"));
 
-impl core::fmt::Debug for BootstrapPhase {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(match self {
-            Self::Unprovisioned { .. } => "BootstrapPhase::Unprovisioned(<redacted>)",
-            Self::Provisioned { .. } => "BootstrapPhase::Provisioned(<redacted>)",
-            Self::Disabled => "BootstrapPhase::Disabled",
-        })
-    }
-}
+redacted_debug!(BootstrapPhase, variants: Unprovisioned, Provisioned; plain: Disabled);
 
 redacted_debug!(BoundSubject);
 
-impl core::fmt::Debug for BindingScope {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("BindingScope")
-            .field("zone_count", &self.zones.len())
-            .field("resource_name_count", &self.resource_names.len())
-            .field("resource_ref_count", &self.resource_refs.len())
-            .field("execution_ref_count", &self.execution_refs.len())
-            .finish()
-    }
-}
+redacted_debug!(BindingScope,
+    zone_count: redacted_debug_field_value(|s| s.zones.len()),
+    resource_name_count: redacted_debug_field_value(|s| s.resource_names.len()),
+    resource_ref_count: redacted_debug_field_value(|s| s.resource_refs.len()),
+    execution_ref_count: redacted_debug_field_value(|s| s.execution_refs.len()));
 
-impl core::fmt::Debug for PolicyRule {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("PolicyRule")
-            .field("resource_type_count", &self.resource_types.len())
-            .field("resource_verb_count", &self.resource_verbs.len())
-            .field("session_verb_count", &self.session_verbs.len())
-            .field("subresource_count", &self.subresources.len())
-            .field("resource_name_count", &self.resource_names.len())
-            .field("zone_count", &self.zones.len())
-            .field("execution_ref_count", &self.execution_refs.len())
-            .finish()
-    }
-}
+redacted_debug!(PolicyRule,
+    resource_type_count: redacted_debug_field_value(|s| s.resource_types.len()),
+    resource_verb_count: redacted_debug_field_value(|s| s.resource_verbs.len()),
+    session_verb_count: redacted_debug_field_value(|s| s.session_verbs.len()),
+    subresource_count: redacted_debug_field_value(|s| s.subresources.len()),
+    resource_name_count: redacted_debug_field_value(|s| s.resource_names.len()),
+    zone_count: redacted_debug_field_value(|s| s.zones.len()),
+    execution_ref_count: redacted_debug_field_value(|s| s.execution_refs.len()));
 
 impl PolicyRule {
     #[allow(clippy::too_many_arguments)]
@@ -851,16 +797,12 @@ pub struct CompiledRole {
     pub rules: Vec<PolicyRule>,
 }
 
-impl core::fmt::Debug for CompiledRole {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("CompiledRole")
-            .field("role_ref", &"<redacted>")
-            .field("rule_count", &self.rules.len())
-            .finish()
-    }
-}
+redacted_debug!(CompiledRole,
+    role_ref: redacted_debug_field_value(|_| "<redacted>"),
+    rule_count: redacted_debug_field_value(|s| s.rules.len()));
 
 impl CompiledRole {
+    /// Validate and compile one signed role's rule set.
     pub fn new(
         role_ref: ResourceRef,
         rules: Vec<PolicyRule>,
@@ -897,18 +839,15 @@ pub struct CompiledRoleBinding {
     narrowing: Option<Vec<PolicyRule>>,
 }
 
-impl core::fmt::Debug for CompiledRoleBinding {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("CompiledRoleBinding")
-            .field("role_ref", &"<redacted>")
-            .field("subject_count", &self.subjects.len())
-            .field("scope", &self.scope)
-            .field("relay_authority", &self.relay_authority)
-            .finish()
-    }
-}
+redacted_debug!(CompiledRoleBinding,
+    role_ref: redacted_debug_field_value(|_| "<redacted>"),
+    subject_count: redacted_debug_field_value(|s| s.subjects.len()),
+    scope: redacted_debug_field_ref(|s| &s.scope),
+    relay_authority: redacted_debug_field_ref(|s| &s.relay_authority));
 
 impl CompiledRoleBinding {
+    /// Validate and compile one role binding's subject, scope, and relay
+    /// authority.
     pub fn new(
         role_ref: ResourceRef,
         subjects: impl IntoIterator<Item = BoundSubject>,
@@ -1078,18 +1017,14 @@ pub struct PolicySet {
     bindings: Vec<CompiledRoleBinding>,
 }
 
-impl core::fmt::Debug for PolicySet {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("PolicySet")
-            .field("policy_revision", &"<redacted>")
-            .field("catalog", &self.catalog)
-            .field("role_count", &self.roles.len())
-            .field("binding_count", &self.bindings.len())
-            .finish()
-    }
-}
+redacted_debug!(PolicySet,
+    policy_revision: redacted_debug_field_value(|_| "<redacted>"),
+    catalog: redacted_debug_field_ref(|s| &s.catalog),
+    role_count: redacted_debug_field_value(|s| s.roles.len()),
+    binding_count: redacted_debug_field_value(|s| s.bindings.len()));
 
 impl PolicySet {
+    /// Validate and index one policy revision's roles and bindings.
     pub fn new(
         catalog: &ApiCatalog,
         policy_revision: u64,
@@ -1135,14 +1070,9 @@ pub struct PositiveCapabilities {
     pub session_verbs: BTreeSet<SessionVerb>,
 }
 
-impl core::fmt::Debug for PositiveCapabilities {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("PositiveCapabilities")
-            .field("resource_count", &self.resources.len())
-            .field("session_verb_count", &self.session_verbs.len())
-            .finish()
-    }
-}
+redacted_debug!(PositiveCapabilities,
+    resource_count: redacted_debug_field_value(|s| s.resources.len()),
+    session_verb_count: redacted_debug_field_value(|s| s.session_verbs.len()));
 
 /// Typed fail-closed authorization outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1249,24 +1179,15 @@ pub struct AuthorizationLease {
     operation_id: String,
 }
 
-impl core::fmt::Debug for AuthorizationLease {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter
-            .debug_struct("AuthorizationLease")
-            .field("subject_uid", &"<redacted>")
-            .field("zone_uid", &"<redacted>")
-            .field("has_object_uid", &self.object_uid.is_some())
-            .field("has_object_generation", &self.object_generation.is_some())
-            .field("operation", &self.operation)
-            .field("policy_revision", &"<redacted>")
-            .field(
-                "has_provider_assignment_generation",
-                &self.provider_assignment_generation.is_some(),
-            )
-            .field("operation_id", &"<redacted>")
-            .finish()
-    }
-}
+redacted_debug!(AuthorizationLease,
+    subject_uid: redacted_debug_field_value(|_| "<redacted>"),
+    zone_uid: redacted_debug_field_value(|_| "<redacted>"),
+    has_object_uid: redacted_debug_field_value(|s| s.object_uid.is_some()),
+    has_object_generation: redacted_debug_field_value(|s| s.object_generation.is_some()),
+    operation: redacted_debug_field_ref(|s| &s.operation),
+    policy_revision: redacted_debug_field_value(|_| "<redacted>"),
+    has_provider_assignment_generation: redacted_debug_field_value(|s| s.provider_assignment_generation.is_some()),
+    operation_id: redacted_debug_field_value(|_| "<redacted>"));
 
 const _: fn() = || {
     trait CapabilityMustNotImplementCloneCopyDefaultOrFrom<A> {
@@ -1476,6 +1397,14 @@ impl NativeAuthorizer {
             .ok_or(StoreBindingError)
     }
 
+    /// Hand the one-use seal acceptor for a store to its owning service.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreSealHandoffError::AlreadyTaken`] when the store's seal
+    /// slot is already installed, and
+    /// [`StoreSealHandoffError::AuthorizerUnavailable`] when the authorizer
+    /// cannot take the slot.
     pub fn take_store_seal(
         &self,
         store: StoreSealIdentity,
@@ -1530,6 +1459,12 @@ impl NativeAuthorizer {
     /// authority.  This method only creates the Resource API capability after
     /// the live policy grants the subject a session connection, so generated
     /// handlers never receive an unbound or caller-authored identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthorizationDenial::ZoneMismatch`] when the session Zone is
+    /// invalid, and [`AuthorizationDenial::NoMatchingGrant`] when the
+    /// positive capabilities do not include the Connect session verb.
     pub fn issue_authenticated_subject(
         &self,
         context: AuthenticatedSubjectContext,
@@ -1547,6 +1482,20 @@ impl NativeAuthorizer {
         ))
     }
 
+    /// Authorize one request against the current policy and return the
+    /// one-use grant.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthorizationDenial::NoMatchingGrant`] when the request
+    /// targets no granted resource, [`AuthorizationDenial::UnknownResourceType`]
+    /// when a target names an unknown resource type,
+    /// [`AuthorizationDenial::ZoneMismatch`] when the subject Zone does not
+    /// match the request Zone, [`AuthorizationDenial::PolicyUnavailable`] or
+    /// [`AuthorizationDenial::PolicyRevisionChanged`] when the policy is
+    /// missing or stale, and the relay and bootstrap denials
+    /// (`RelayOriginInvalid`, `RelayGrantMissing`, `RelayTargetGrantMissing`,
+    /// `BootstrapDenied`) when the relay or bootstrap admission refuses.
     pub fn authorize(
         &self,
         context: &AuthenticatedSubjectContext,
@@ -3666,6 +3615,78 @@ mod tests {
                 )
                 .unwrap_err(),
             AuthorizationDenial::NoMatchingGrant,
+        );
+    }
+
+    #[test]
+    fn redaction_debug_shapes_remain_byte_identical() {
+        let zone = ZoneId::parse("dev").unwrap();
+        let facts = BootstrapStoreFacts::from_durable_spec_facts(
+            zone.clone(),
+            0,
+            BTreeMap::from([(
+                ResourceName::parse("system-core").unwrap(),
+                ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            )]),
+            ControllerGeneration::new(11).unwrap(),
+            ResourceGeneration::new(12).unwrap(),
+        );
+        assert_eq!(
+            format!("{facts:?}"),
+            "BootstrapStoreFacts { policy_revision: \"<redacted>\", \
+             bootstrap_provider_count: 1, .. }"
+        );
+        let row = DurablePolicyRow {
+            resource_ref: ResourceRef::parse("Role/probe-sentinel").unwrap(),
+            canonical_json: vec![1, 2, 3],
+            provenance: DurableRowProvenance::Bundle,
+        };
+        assert_eq!(
+            format!("{row:?}"),
+            "DurablePolicyRow { resource_ref: \"<redacted>\", canonical_bytes: 3, \
+             provenance: Bundle }"
+        );
+        let compiled = CompiledAuthorizationFacts {
+            policy: None,
+            bootstrap: facts.clone(),
+        };
+        assert_eq!(
+            format!("{compiled:?}"),
+            "CompiledAuthorizationFacts { has_policy: false, \
+             bootstrap: BootstrapStoreFacts { policy_revision: \"<redacted>\", \
+             bootstrap_provider_count: 1, .. } }"
+        );
+        let provisioned = BootstrapPhase::Provisioned {
+            zone: zone.clone(),
+            system_core_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            system_minijail_uid: ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap(),
+            controller_generation: ControllerGeneration::new(11).unwrap(),
+            provider_generation: ResourceGeneration::new(12).unwrap(),
+        };
+        assert_eq!(
+            format!("{provisioned:?}"),
+            "BootstrapPhase::Provisioned(<redacted>)"
+        );
+        assert_eq!(format!("{:?}", BootstrapPhase::Disabled), "BootstrapPhase::Disabled");
+        let lease = AuthorizationLease::issue(
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap(),
+            AuthorizationLeaseTarget {
+                uid: Some(ResourceUid::parse("323e4567-e89b-42d3-a456-426614174000").unwrap()),
+                generation: Some(ResourceGeneration::new(4).unwrap()),
+            },
+            AdmittedVerb::UpdateSpec,
+            7,
+            Some(ResourceGeneration::new(9).unwrap()),
+            "operation-lease".to_owned(),
+        )
+        .unwrap();
+        assert_eq!(
+            format!("{lease:?}"),
+            "AuthorizationLease { subject_uid: \"<redacted>\", zone_uid: \"<redacted>\", \
+             has_object_uid: true, has_object_generation: true, operation: UpdateSpec, \
+             policy_revision: \"<redacted>\", \
+             has_provider_assignment_generation: true, operation_id: \"<redacted>\" }"
         );
     }
 }

@@ -78,6 +78,11 @@ impl Drop for OfdLockGuard {
     }
 }
 
+/// One held open-file-description lock on the audio state file.
+///
+/// Holding the value keeps the OFD lock acquired by
+/// [`acquire_audio_state_lock`]; dropping it releases the lock and
+/// closes the file.
 pub struct AudioStateLock {
     _guard: OfdLockGuard,
     _file: File,
@@ -133,6 +138,21 @@ impl std::fmt::Display for AudioStateIoError {
             Self::TempWrite(e) => write!(f, "write audio state temp file: {e}"),
             Self::TempSync(e) => write!(f, "sync audio state temp file: {e}"),
             Self::AtomicRename(e) => write!(f, "atomic rename audio state: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for AudioStateIoError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::LockOpen(e)
+            | Self::LockAcquire(e)
+            | Self::StateRead(e)
+            | Self::TempFile(e)
+            | Self::TempWrite(e)
+            | Self::TempSync(e)
+            | Self::AtomicRename(e) => Some(e),
+            Self::StateParse(e) => Some(e),
         }
     }
 }

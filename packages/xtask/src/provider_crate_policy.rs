@@ -574,7 +574,7 @@ pub fn check(repo_root: &Path) -> Result<(), String> {
         .canonicalize()
         .map_err(|_| "provider-crate-layout-input-unreadable".to_owned())?;
     let members = cargo_workspace_members(&repo_root)?;
-    check_members(&repo_root, members.clone())?;
+    check_members(&repo_root, &members)?;
     check_closed_matrix(&repo_root, &members)?;
     check_bazel_dependency_visibility(&repo_root)?;
     check_committed_scope(&repo_root, &members)?;
@@ -2472,12 +2472,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "permanent: shared controller-session crate; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core-controller/src/coordinator.rs",
-        token: "usbip",
-        family: "device-usbip",
-        retires_with: "permanent: shared controller-session crate; no shared crate may depend on a provider crate",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/security_key.rs",
         token: "usbip",
         family: "device-usbip",
@@ -2954,12 +2948,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-broker/src/broker_wire.rs",
-        token: "otel",
-        family: "observability-otel",
-        retires_with: "U10-U12 family rollout (observability-otel)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-contracts-control/src/cli_output.rs",
         token: "otel",
         family: "observability-otel",
         retires_with: "U10-U12 family rollout (observability-otel)",
@@ -3545,6 +3533,18 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         token: "nixos",
         family: "activation-nixos",
         retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-contracts/src/unsafe_local_workloads.rs",
+        token: "network_local",
+        family: "network-local",
+        retires_with: "permanent: the local-vm workload limit is family-named shared wire vocabulary and no shared crate may depend on a provider crate. The signal is an assembled name, so it is invisible to a text search for the token: the module contains no occurrence of network_local, which is why this row is required rather than removable",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-contracts/src/unsafe_local_workloads.rs",
+        token: "volume_local",
+        family: "volume-local",
+        retires_with: "permanent: the local-vm workload limit is family-named shared wire vocabulary and no shared crate may depend on a provider crate. The signal is an assembled name, so it is invisible to a text search for the token: the module contains no occurrence of volume_local, which is why this row is required rather than removable",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/live_handlers.rs",
@@ -4682,6 +4682,8 @@ struct FamilyKnowledgeSignal {
     class: FamilySignalClass,
     /// The literal, identifier, or state-handle name that carried the signal.
     text: String,
+    /// The count of `ServerState` references for a [`FamilySignalClass::ServerState`] signal.
+    count: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5054,6 +5056,7 @@ fn module_family_signals(
                             line: index + 1,
                             class: FamilySignalClass::Assembled,
                             text: content.clone(),
+                            count: None,
                         });
                     }
                 }
@@ -5067,6 +5070,7 @@ fn module_family_signals(
                             line: index + 1,
                             class: FamilySignalClass::Literal,
                             text: content.clone(),
+                            count: None,
                         });
                     }
                 }
@@ -5084,6 +5088,7 @@ fn module_family_signals(
                         line: index + 1,
                         class: FamilySignalClass::Identifier,
                         text: identifier.to_owned(),
+                        count: None,
                     });
                 }
             }
@@ -5107,7 +5112,8 @@ fn module_family_signals(
             family: "d2bd-state",
             line,
             class: FamilySignalClass::ServerState,
-            text: format!("{server_state_count}"),
+            text: String::new(),
+            count: Some(server_state_count),
         });
     }
     Ok(())
@@ -5182,7 +5188,7 @@ fn render_family_knowledge_violation(signal: &FamilyKnowledgeSignal) -> String {
     if !matches!(signal.class, FamilySignalClass::ServerState) {
         diagnostic["text"] = serde_json::Value::String(signal.text.clone());
     } else {
-        diagnostic["count"] = serde_json::Value::from(signal.text.parse::<usize>().unwrap_or(0));
+        diagnostic["count"] = serde_json::Value::from(signal.count.unwrap_or(0));
     }
     diagnostic.to_string()
 }
@@ -5202,14 +5208,14 @@ fn check_shared_family_knowledge_with(
     ratchet: &[SharedFamilyKnowledgeExemption],
 ) -> Result<(), String> {
     let signals = collect_family_signals(repo_root)?;
-    let exempt: BTreeSet<(String, &str)> = ratchet
+    let exempt: BTreeSet<(&str, &str)> = ratchet
         .iter()
-        .map(|row| (row.module.to_owned(), row.token))
+        .map(|row| (row.module, row.token))
         .collect();
     let mut violations = Vec::new();
 
     for signal in &signals {
-        if !exempt.contains(&(signal.module.clone(), signal.token)) {
+        if !exempt.contains(&(signal.module.as_str(), signal.token)) {
             violations.push(render_family_knowledge_violation(signal));
         }
     }
@@ -5278,7 +5284,7 @@ const STRUCTURAL_ROLE_VOCABULARIES: &[&str] = &[
 
 /// The runner-role id strings the shared wire vocabulary spells. A string
 /// literal equal to one of these in a shared Nix module is a role literal:
-/// the role vocabulary is knowledge the owning providers must declare,and
+/// the role vocabulary is knowledge the owning providers must declare, and
 /// a hand-spelled id cannot hide behind a family's renamed spelling.
 const ROLE_ID_LITERALS: &[&str] = &[
     "provider-controller",
@@ -5349,7 +5355,7 @@ impl StructuralSignalClass {
 }
 
 /// One structural knowledge exemption row. A signal without a row beside it
-/// fails,arow whose signal the tree no longer carries fails the same way,and
+/// fails, arow whose signal the tree no longer carries fails the same way, and
 /// no row may be added because that is what a reintroduction looks like./
 ///
 /// Where a Rust structural signal's symbol contains a family token the module's
@@ -6362,9 +6368,9 @@ fn check_shared_structural_knowledge_with(
         .iter()
         .map(|row| (row.module, row.class, row.symbol))
         .collect();
-    let family_exempt: BTreeSet<(String, &str)> = family_ratchet
+    let family_exempt: BTreeSet<(&str, &str)> = family_ratchet
         .iter()
-        .map(|row| (row.module.to_owned(), row.token))
+        .map(|row| (row.module, row.token))
         .collect();
     let mut violations = Vec::new();
 
@@ -6378,7 +6384,7 @@ fn check_shared_structural_knowledge_with(
         let covered_by_family = signal.class != StructuralSignalClass::ProviderId
             && signal.class != StructuralSignalClass::RoleLiteral
             && structural_symbol_token(&signal.symbol)
-                .is_some_and(|token| family_exempt.contains(&(signal.module.clone(), token)));
+                .is_some_and(|token| family_exempt.contains(&(signal.module.as_str(), token)));
         if covered_by_family {
             continue;
         }
@@ -6431,7 +6437,7 @@ fn check_shared_structural_knowledge(repo_root: &Path) -> Result<(), String> {
 }
 /// The named shared-crate-to-provider dependency edges the
 /// dependency-direction detector lists. A shared crate may depend on
-/// a provider crate only through an edge named here;the list is empty
+/// a provider crate only through an edge named here; the list is empty
 /// today and only the owning crates' moves add edges to it./
 ///
 /// U4 re-homed the laneless primitive types into their owning provider
@@ -6666,13 +6672,8 @@ fn collect_self_binding_scope(
                         pending_role = None;
                     }
                     if code_text(lines[stop]).trim() == "}" {
-                        // A SeedSelfBinding row closes at a line whose trim is "}";
-                        // a multi-line row ends there too; clearing pendings keep
-                        // the next row from inheriting a stale half.
-                        if inner.contains("SeedSelfBinding") {
-                            pending_subject = None;
-                            pending_role = None;
-                        }
+                        // A SeedSelfBinding row closes at a line whose trim is "}".
+                        break;
                     }
                     stop += 1;
                 }
@@ -7260,7 +7261,7 @@ fn apply_citation_fixes(
             }
         }
         spans.sort_by_key(|(start, _, _)| std::cmp::Reverse(*start));
-        let mut line = lines[index].clone();
+        let mut line = std::mem::take(&mut lines[index]);
         for (start, end, keep) in spans {
             let replacement: String = keep.map(String::from).unwrap_or_default();
             line.replace_range(start..end, &replacement);
@@ -7919,7 +7920,7 @@ fn is_citation_cue(text: &str) -> bool {
     matches!(text, "see" | "cf" | "in" | "from" | "under" | "at" | "per")
 }
 
-fn check_members(repo_root: &Path, members: Vec<WorkspaceMember>) -> Result<(), String> {
+fn check_members(repo_root: &Path, members: &[WorkspaceMember]) -> Result<(), String> {
     let on_disk = on_disk_providers(repo_root)?;
     let has_provider_member = members.iter().any(|member| {
         name_kind(&member.package_name, member.declares_driver) == ProviderNameKind::Provider
@@ -7934,7 +7935,7 @@ fn check_members(repo_root: &Path, members: Vec<WorkspaceMember>) -> Result<(), 
         .collect();
     let mut violations = Vec::new();
 
-    for member in &members {
+    for member in members {
         match name_kind(&member.package_name, member.declares_driver) {
             ProviderNameKind::Provider => {
                 if !is_provider_directory(repo_root, &member.crate_dir, &member.package_name) {
@@ -8431,7 +8432,7 @@ fn provider_crate_family(crate_name: &str) -> String {
 /// `Process/<name>`, `Host/<name>`, `User/<name>`, or `Guest/<name>`. The
 /// resource model addresses providers and processes by name; naming the
 /// provider one delegates a child to is the one legitimate cross-family
-/// shape ((`d2b-provider-device-usbip/src/lifecycle.rs:25` names the
+/// shape (`d2b-provider-device-usbip/src/lifecycle.rs:25` names the
 /// system-minijail provider that owns its guest-proxy child). A reference
 /// names a provider; it is not knowledge about that provider.
 fn is_resource_reference_literal(content: &str) -> bool {
@@ -8643,27 +8644,21 @@ fn render_provider_family_violation(signal: &ProviderFamilySignal) -> String {
 
 /// One committed exemption row: a provider crate module that legitimately
 /// carries another family's identity token. The list only shrinks: a signal
-/// without a row is a policy failure ((a reintroduction),and a row whose
+/// without a row is a policy failure (a reintroduction), and a row whose
 /// signal the tree no longer carries is stale. No row may be added unless the
 /// change that introduces a legitimate cross-family reference also records
 /// its reason here.
-
-
 #[derive(Clone)]
 struct ProviderFamilyKnowledgeExemption {
-    /// The provider crate that carries the token ((its Cargo package name).
+    /// The provider crate that carries the token (its Cargo package name).
     crate_name: &'static str,
     /// Repository-relative module path that carries the token.
-
     module: &'static str,
     /// The family identity token the module writes.
-
     token: &'static str,
     /// The family that owns the token.
-
     family: &'static str,
     /// What the reference is and why it stays.
-
     reason: &'static str,
 }
 
@@ -8718,7 +8713,6 @@ const PROVIDER_FAMILY_KNOWLEDGE_EXEMPTIONS: &[ProviderFamilyKnowledgeExemption] 
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-supervisor", module: "packages/d2b-provider-supervisor/src/broker.rs", token: "system_minijail", family: "system-minijail", reason: "the supervisor dispatches runner roles" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-supervisor", module: "packages/d2b-provider-supervisor/src/broker.rs", token: "system_systemd", family: "system-systemd", reason: "the supervisor dispatches runner roles" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-system-core", module: "packages/d2b-provider-system-core/src/host.rs", token: "audio_pipewire", family: "audio-pipewire", reason: "the system-core host names the audio-pipewire workload kind" },
-    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-user", module: "packages/d2b-provider-user/src/driver.rs", token: "system_core", family: "system-core", reason: "the user error-code strings keep the system-core prefix stable" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-user", module: "packages/d2b-provider-user/src/probe.rs", token: "system_core", family: "system-core", reason: "the user probe implements the system-core-declared discovery port whose error type is system-core's" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-user", module: "packages/d2b-provider-user/src/test_support.rs", token: "system_core", family: "system-core", reason: "test-support fixture provider names the system-core provider" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-volume", module: "packages/d2b-provider-volume/src/driver.rs", token: "volume_local", family: "volume-local", reason: "the volume provider's own name const uses its sibling family's id" },
@@ -8730,6 +8724,7 @@ const PROVIDER_FAMILY_KNOWLEDGE_EXEMPTIONS: &[ProviderFamilyKnowledgeExemption] 
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-wayland-policy", module: "packages/d2b-provider-wayland-policy/src/vocabulary.rs", token: "shell_terminal", family: "shell-terminal", reason: "family-qualified resource type names the shell-terminal family's type" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-wayland-session", module: "packages/d2b-provider-wayland-session/src/wayland_session.rs", token: "display_wayland", family: "display-wayland", reason: "the wayland-session provider's interface types name the display-wayland surface" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-zone", module: "packages/d2b-provider-zone/src/zone_status.rs", token: "system_core", family: "system-core", reason: "the zone status emitter names the system-core session phases" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-zone", module: "packages/d2b-provider-zone/src/lib.rs", token: "system_core", family: "system-core", reason: "the crate re-exports the status emitter whose name states the system-core session phases" },
 ];
 
 fn provision_family_exemptions() -> Vec<ProviderFamilyKnowledgeExemption> {
@@ -8746,14 +8741,14 @@ fn check_provider_crate_family_knowledge_with(
     ratchet: &[ProviderFamilyKnowledgeExemption],
 ) -> Result<(), String> {
     let signals = collect_provider_family_signals(repo_root, provider_crates)?;
-    let exempt: BTreeSet<(String, String, &str)> = ratchet
+    let exempt: BTreeSet<(&str, &str, &str)> = ratchet
         .iter()
-        .map(|row| (row.crate_name.to_owned(), row.module.to_owned(), row.token))
+        .map(|row| (row.crate_name, row.module, row.token))
         .collect();
     let mut violations = Vec::new();
 
     for signal in &signals {
-        if !exempt.contains(&(signal.crate_name.clone(), signal.module.clone(), signal.token)) {
+        if !exempt.contains(&(signal.crate_name.as_str(), signal.module.as_str(), signal.token)) {
 
             violations.push(render_provider_family_violation(signal));
         }
@@ -8835,12 +8830,12 @@ enum CommittedScopeClass {
 }
 
 /// One row in the committed program scope: a workspace crate the plan's
-/// program may edit,classified into the class the plan names. The list is
+/// program may edit, classified into the class the plan names. The list is
 /// closed: a workspace crate without a row is an edit outside the declared
-/// scope (a crate no unit names),and a row whose crate no longer exists is
+/// scope (a crate no unit names), and a row whose crate no longer exists is
 /// stale. A committed-scope check cannot police every file outside these
-/// classes without encoding the whole plan's touch surface,so it polices
-/// the crate set and the declared artifact roots,the two surfaces the plan
+/// classes without encoding the whole plan's touch surface, so it polices
+/// the crate set and the declared artifact roots, the two surfaces the plan
 /// names; every other surface (docs/plans, changelog.d, tests/, Nix
 /// modules, Bazel files, ...) is out of its scope by construction.
 struct CommittedScopeEntry {
@@ -8850,7 +8845,7 @@ struct CommittedScopeEntry {
 }
 
 /// The committed workspace-crate scope, seeded from the tree the plan
-/// refactors. Every workspace member must appear exactly once;every entry
+/// refactors. Every workspace member must appear exactly once; every entry
 /// must stay a live member. The classes are the plan's own naming: the plan
 /// names provider crates as a class, the shared crates its lanes read
 /// through, the daemon, the broker, and the tooling its own check lives in.
@@ -9046,11 +9041,11 @@ const COMMITTED_SCOPE: &[CommittedScopeEntry] = &[
 ];
 const COMMITTED_SCOPE_ARTIFACT_ROOTS: &[&str] = &["docs/reference", "packages/policy-inputs"];
 
-/// Fail when a workspace crate has no committed scope row ((an edit to a
-/// crate no unit names),when a row names a crate the workspace no longer has,
+/// Fail when a workspace crate has no committed scope row (an edit to a
+/// crate no unit names), when a row names a crate the workspace no longer has,
 /// or when a declared artifact root has vanished. The committed scope is
 /// compared against the workspace rather than a diff: any crate present without
-/// a row is an edit outside the scope that happened, whiche is what a
+/// a row is an edit outside the scope that happened, which is what a
 /// committed scope gate can prove without a diff..
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn check_committed_scope(repo_root:&Path, members: &[WorkspaceMember]) -> Result<(), String> {
@@ -9563,7 +9558,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn check_fixture(root: &Path) -> Result<(), String> {
         let root = root.canonicalize().unwrap();
-        check_members(&root, manifest_workspace_members(&root)?)
+        check_members(&root, &manifest_workspace_members(&root)?)
     }
 
     impl Drop for Fixture {
@@ -10798,6 +10793,51 @@ mod tests {
         assert!(error.contains("self-binding-role-escape"), "{error}");
         assert!(error.contains("other"), "{error}");
         fs::remove_file(&leak).unwrap();
+        assert_eq!(check_self_binding_scope(&fixture.root), Ok(()));
+    }
+
+    /// The escape scan window is the declaring `SeedProvider` block: it
+    /// ends at the block's closing brace, not at the end of the file.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn the_self_binding_scan_window_ends_at_the_declaring_provider() {
+        let fixture = Fixture::new("self-binding-window");
+        let d2bd = fixture.root.join("packages/d2bd/src");
+        fs::create_dir_all(&d2bd).unwrap();
+        let seed = d2bd.join("seed.rs");
+        // A self-binding row that follows the declaring block belongs to
+        // no provider of its own, so it is not attributed to the
+        // provider that precedes it. An open-ended window would carry
+        // that provider's name and role list into the trailing row and
+        // report a second provider's row as that provider's escape.
+        fs::write(
+            &seed,
+            "SeedProvider {\n    provider_ref: ResourceRef::parse(\"Provider/system-minijail\"),\n    roles: vec![ResourceRef::parse(\"Role/worker\")],\n}\nSeedSelfBinding {\n    subject_ref: ResourceRef::parse(\"Provider/other\"),\n    role_ref: ResourceRef::parse(\"Role/other\"),\n}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            check_self_binding_scope(&fixture.root),
+            Ok(()),
+            "the window ends at the block's closing brace"
+        );
+        // Narrowing one block's window does not blind the file to a
+        // later block, which is scanned in its own right and reports
+        // its escape against its own declaring provider.
+        fs::write(
+            &seed,
+            "SeedProvider {\n    provider_ref: ResourceRef::parse(\"Provider/system-minijail\"),\n    roles: vec![ResourceRef::parse(\"Role/worker\")],\n}\nSeedProvider {\n    provider_ref: ResourceRef::parse(\"Provider/other\"),\n    roles: vec![ResourceRef::parse(\"Role/other\")],\n    self_bindings: vec![SeedSelfBinding {\n        subject_ref: ResourceRef::parse(\"Provider/third\"),\n        role_ref: ResourceRef::parse(\"Role/third\"),\n    }],\n}\n",
+        )
+        .unwrap();
+        let error = check_self_binding_scope(&fixture.root)
+            .expect_err("a later provider block is scanned in its own window");
+        assert!(error.contains("self-binding-subject-escape"), "{error}");
+        assert!(error.contains("self-binding-role-escape"), "{error}");
+        assert!(error.contains("third"), "{error}");
+        assert!(
+            !error.contains("system-minijail"),
+            "the earlier clean block does not inherit the later escape: {error}"
+        );
+        fs::remove_file(&seed).unwrap();
         assert_eq!(check_self_binding_scope(&fixture.root), Ok(()));
     }
 

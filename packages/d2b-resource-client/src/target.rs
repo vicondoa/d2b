@@ -420,9 +420,20 @@ impl ResolvedTarget {
                         .first()
                         .is_some_and(|label| label.as_str() == zone.as_str())
             }
-            AssignmentTarget::Execution { reference, .. } => {
-                self.resource_ref().as_ref() == Some(reference)
-            }
+            AssignmentTarget::Execution { reference, .. } => match &self.owner {
+                ServiceOwner::Resource { resource, .. } => resource == reference,
+                ServiceOwner::Guest { guest, .. } => {
+                    reference.resource_type().as_str() == "Guest" && reference.name() == guest
+                }
+                ServiceOwner::Provider { provider, .. } => {
+                    reference.resource_type().as_str() == "Provider"
+                        && reference.name() == provider
+                }
+                ServiceOwner::Host { host, .. } => {
+                    reference.resource_type().as_str() == "Host" && reference.name() == host
+                }
+                ServiceOwner::ZoneLocal(_) | ServiceOwner::Zone(_) => false,
+            },
         }
     }
 }

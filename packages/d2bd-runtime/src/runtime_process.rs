@@ -9,7 +9,7 @@ use std::{
 };
 
 use crate::daemon_config::{DEFAULT_SERVER_VERSION, DaemonConfig};
-use crate::typed_error::TypedError;
+use crate::typed_error::{TypedError, error_source};
 use crate::unix_transport::io_wrap;
 use nix::fcntl::{FcntlArg, fcntl};
 #[cfg(test)]
@@ -57,11 +57,13 @@ pub fn resolve_runtime_identity(
         .map_err(io_wrap("lookup daemon user"))?
         .ok_or_else(|| TypedError::InternalConfig {
             detail: format!("daemon user {} does not exist", config.daemon_user),
+            source: None,
         })?;
     let daemon_group = Group::from_name(&config.daemon_group)
         .map_err(io_wrap("lookup daemon group"))?
         .ok_or_else(|| TypedError::InternalConfig {
             detail: format!("daemon group {} does not exist", config.daemon_group),
+            source: None,
         })?;
     let public_group = Group::from_name(&config.public_socket_group)
         .map_err(io_wrap("lookup public socket group"))?
@@ -70,6 +72,7 @@ pub fn resolve_runtime_identity(
                 "public socket group {} does not exist",
                 config.public_socket_group
             ),
+            source: None,
         })?;
     let unsafe_local_helper_socket_gid = match (
         config.unsafe_local_helper_socket_path.as_ref(),
@@ -80,6 +83,7 @@ pub fn resolve_runtime_identity(
                 .map_err(io_wrap("lookup unsafe-local helper socket group"))?
                 .ok_or_else(|| TypedError::InternalConfig {
                     detail: format!("unsafe-local helper socket group {group_name} does not exist"),
+                    source: None,
                 })?
                 .gid,
         ),
@@ -88,6 +92,7 @@ pub fn resolve_runtime_identity(
             return Err(TypedError::InternalConfig {
                 detail: "unsafe-local helper socket path and group must be configured together"
                     .to_owned(),
+                source: None,
             });
         }
     };
@@ -110,12 +115,14 @@ pub fn resolve_unsafe_local_helper_uids(
             .map_err(io_wrap("lookup unsafe-local helper user"))?
             .ok_or_else(|| TypedError::InternalConfig {
                 detail: "configured unsafe-local helper user does not exist".to_owned(),
+                source: None,
             })?;
         let uid = user.uid.as_raw();
         if uid == 0 || uid == daemon_uid.as_raw() {
             return Err(TypedError::InternalConfig {
                 detail: "unsafe-local helper users must be non-root and distinct from d2bd"
                     .to_owned(),
+                source: None,
             });
         }
         uids.insert(uid);
@@ -200,11 +207,13 @@ pub fn ensure_locks_dir(path: &Path, identity: &RuntimeIdentity) -> Result<(), T
     fs::create_dir_all(path).map_err(|err| TypedError::InternalIo {
         context: format!("create locks dir {}", path.display()),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o750)).map_err(|err| {
         TypedError::InternalIo {
             context: format!("chmod locks dir {}", path.display()),
             detail: err.to_string(),
+            source: error_source(err),
         }
     })?;
     if identity.expect_root_owned_parent && unistd::geteuid().is_root() {
@@ -225,11 +234,13 @@ pub fn acquire_state_lock(path: &Path, identity: &RuntimeIdentity) -> Result<Fil
         .map_err(|err| TypedError::InternalIo {
             context: format!("open daemon lock {}", path.display()),
             detail: err.to_string(),
+            source: error_source(err),
         })?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o640)).map_err(|err| {
         TypedError::InternalIo {
             context: format!("chmod daemon lock {}", path.display()),
             detail: err.to_string(),
+            source: error_source(err),
         }
     })?;
     if identity.expect_root_owned_parent && unistd::geteuid().is_root() {
@@ -254,6 +265,7 @@ pub fn acquire_state_lock(path: &Path, identity: &RuntimeIdentity) -> Result<Fil
         Err(err) => Err(TypedError::InternalIo {
             context: format!("acquire OFD lock {}", path.display()),
             detail: err.to_string(),
+            source: error_source(err),
         }),
     }
 }
@@ -265,11 +277,13 @@ pub fn bind_public_socket(path: &Path, identity: &RuntimeIdentity) -> Result<Soc
             fs::remove_file(path).map_err(|err| TypedError::InternalIo {
                 context: format!("remove stale socket {}", path.display()),
                 detail: err.to_string(),
+                source: error_source(err),
             })?;
         } else {
             return Err(TypedError::InternalIo {
                 context: format!("bind public socket {}", path.display()),
                 detail: "existing path is not a socket".to_owned(),
+                source: None,
             });
         }
     }
@@ -278,6 +292,7 @@ pub fn bind_public_socket(path: &Path, identity: &RuntimeIdentity) -> Result<Soc
         fs::create_dir_all(parent).map_err(|err| TypedError::InternalIo {
             context: format!("create public socket parent {}", parent.display()),
             detail: err.to_string(),
+            source: error_source(err),
         })?;
     }
 
@@ -286,32 +301,38 @@ pub fn bind_public_socket(path: &Path, identity: &RuntimeIdentity) -> Result<Soc
             TypedError::InternalIo {
                 context: format!("create public seqpacket socket {}", path.display()),
                 detail: err.to_string(),
+                source: error_source(err),
             }
         })?;
     let address = SockAddr::unix(path).map_err(|err| TypedError::InternalIo {
         context: format!("encode public socket path {}", path.display()),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     socket
         .bind(&address)
         .map_err(|err| TypedError::InternalIo {
             context: format!("bind public socket {}", path.display()),
             detail: err.to_string(),
+            source: error_source(err),
         })?;
     socket.listen(128).map_err(|err| TypedError::InternalIo {
         context: format!("listen on public socket {}", path.display()),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     socket
         .set_nonblocking(true)
         .map_err(|err| TypedError::InternalIo {
             context: format!("set public socket {} nonblocking", path.display()),
             detail: err.to_string(),
+            source: error_source(err),
         })?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o660)).map_err(|err| {
         TypedError::InternalIo {
             context: format!("chmod public socket {}", path.display()),
             detail: err.to_string(),
+            source: error_source(err),
         }
     })?;
     // Always chgrp the socket to `public_socket_gid` (i.e. `d2b` in
@@ -439,7 +460,7 @@ pub fn drop_privileges_if_root(identity: &RuntimeIdentity) -> Result<(), TypedEr
 /// listeners write beside their redirected public socket.
 /// This lets the CLI's `crate::daemon_version::compute_restart_status` compute the
 /// `[pending restart]` signal post-restart. Failures are logged
-/// to stderr and non-fatal - the absence of the version file
+/// via tracing and non-fatal - the absence of the version file
 /// surfaces in the CLI as `DaemonRestartStatus::DaemonNotRunning`,
 /// which is a reasonable degraded shape.
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
@@ -447,7 +468,7 @@ pub fn write_daemon_version_file(config: &DaemonConfig) {
     let binary_path = match std::env::current_exe().and_then(std::fs::canonicalize) {
         Ok(p) => p.to_string_lossy().into_owned(),
         Err(err) => {
-            eprintln!("d2bd: could not canonicalize daemon binary path: {err}");
+            tracing::warn!(error = %err, "d2bd: could not canonicalize daemon binary path");
             return;
         }
     };
@@ -461,7 +482,7 @@ pub fn write_daemon_version_file(config: &DaemonConfig) {
     let json = match serde_json::to_vec_pretty(&payload) {
         Ok(v) => v,
         Err(err) => {
-            eprintln!("d2bd: could not serialize daemon version: {err}");
+            tracing::warn!(error = %err, "d2bd: could not serialize daemon version");
             return;
         }
     };
@@ -469,19 +490,28 @@ pub fn write_daemon_version_file(config: &DaemonConfig) {
     if let Some(parent) = path.parent()
         && let Err(err) = std::fs::create_dir_all(parent)
     {
-        eprintln!(
-            "d2bd: could not create {} for version file: {err}",
-            parent.display()
+        tracing::warn!(
+            error = %err,
+            path = %parent.display(),
+            "d2bd: could not create version-file parent directory"
         );
         return;
     }
     let tmp = path.with_extension("version.tmp");
     if let Err(err) = std::fs::write(&tmp, &json) {
-        eprintln!("d2bd: could not write {}: {err}", tmp.display());
+        tracing::warn!(
+            error = %err,
+            path = %tmp.display(),
+            "d2bd: could not write version file"
+        );
         return;
     }
-    if let Err(err) = std::fs::rename(&tmp, path) {
-        eprintln!("d2bd: could not rename version file into place: {err}");
+    if let Err(err) = std::fs::rename(&tmp, &path) {
+        tracing::warn!(
+            error = %err,
+            path = %path.display(),
+            "d2bd: could not rename version file into place"
+        );
     }
 }
 
@@ -526,6 +556,7 @@ pub fn days_to_ymd(days_since_epoch: i64) -> (i32, u32, u32) {
 mod sd_notify_tests {
     use super::*;
     use std::os::unix::net::UnixDatagram;
+    use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn unique_abstract_name(label: &str) -> Vec<u8> {
@@ -540,9 +571,73 @@ mod sd_notify_tests {
         String::from_utf8(bytes.to_vec()).expect("sd_notify payload is utf8")
     }
 
+    /// Minimal in-test tracing subscriber that records `(level, message)`
+    /// for every event emitted on the calling thread.
+    #[derive(Clone, Default)]
+    struct CapturingSubscriber(Arc<Mutex<Vec<(tracing::Level, String)>>>);
+
+    impl CapturingSubscriber {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn events(&self) -> Vec<(tracing::Level, String)> {
+            self.0.lock().expect("capture buffer").clone()
+        }
+    }
+
+    /// Captures the `message` field of one event.
+    struct MessageCapture(Option<String>);
+
+    impl tracing::field::Visit for MessageCapture {
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            if field.name() == "message" {
+                self.0 = Some(value.to_owned());
+            }
+        }
+
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" {
+                self.0 = Some(format!("{value:?}"));
+            }
+        }
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    impl tracing::Subscriber for CapturingSubscriber {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            let mut capture = MessageCapture(None);
+            event.record(&mut capture);
+            let message = capture.0.unwrap_or_default();
+            self.0
+                .lock()
+                .expect("capture buffer")
+                .push((*event.metadata().level(), message));
+        }
+
+        fn enter(&self, _span: &tracing::span::Id) {}
+
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
     #[test]
     fn sd_notify_ready_noops_without_notify_socket() {
-        sd_notify_ready(None);
+        let subscriber = CapturingSubscriber::default();
+        tracing::subscriber::with_default(subscriber.clone(), || sd_notify_ready(None));
+        let events = subscriber.events();
+        assert!(
+            events.is_empty(),
+            "no notify socket must be a silent no-op, got events: {events:?}"
+        );
     }
 
     #[test]
@@ -590,7 +685,17 @@ mod sd_notify_tests {
     fn sd_notify_ready_errors_when_socket_is_unreachable() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("missing").join("notify.sock");
-        sd_notify_ready(Some(path.as_os_str()));
+        let subscriber = CapturingSubscriber::default();
+        tracing::subscriber::with_default(subscriber.clone(), || {
+            sd_notify_ready(Some(path.as_os_str()));
+        });
+        let events = subscriber.events();
+        assert!(
+            events.iter().any(|(level, message)| {
+                *level == tracing::Level::WARN && message.contains("sendto failed")
+            }),
+            "unreachable notify socket must be reported, got events: {events:?}"
+        );
     }
 }
 

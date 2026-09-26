@@ -41,7 +41,7 @@ impl Default for NotificationProviderDescriptor {
 impl NotificationProviderDescriptor {
     /// Notification service package.
     pub const fn service_package(&self) -> &'static str {
-        "d2b.notification.v3"
+        crate::SERVICE_PACKAGE
     }
 
     /// Notification named streams.

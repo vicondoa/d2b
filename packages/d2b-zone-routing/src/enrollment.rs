@@ -84,6 +84,13 @@ impl ZoneEnrollmentExpectation {
     /// be constructed at all. The pinned peer fingerprint and the opaque
     /// allocator binding are the allocator's own sealed facts: they seal the
     /// enrollment record and never cross the wire.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZoneEnrollmentRefusal::SessionProfileRefused`] when the
+    /// session policy is not the enrolled Guest-local carriage profile and
+    /// [`ZoneEnrollmentRefusal::MalformedRequest`] when the fingerprint or
+    /// allocator binding is all zeros.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         zone: ZoneId,
@@ -421,6 +428,11 @@ redacted_debug!(ZoneEnrollmentAuthority);
 
 impl ZoneEnrollmentAuthority {
     /// Bind an enrollment authority to one clock and the default lifetime.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZoneEnrollmentRefusal::PolicyDenial`] when the default
+    /// lifetime is zero or above the ceiling.
     pub fn new(clock: Arc<dyn Fn() -> u64 + Send + Sync>) -> Result<Self, ZoneEnrollmentRefusal> {
         Self::with_lifetime(clock, ENROLLMENT_ADMISSION_LIFETIME_MS_DEFAULT)
     }
@@ -429,6 +441,11 @@ impl ZoneEnrollmentAuthority {
     ///
     /// A zero or over-ceiling lifetime is refused rather than clamped: an
     /// admission that never expires is as wrong as one that expires instantly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZoneEnrollmentRefusal::PolicyDenial`] when the lifetime is
+    /// zero or above the frozen ceiling.
     pub fn with_lifetime(
         clock: Arc<dyn Fn() -> u64 + Send + Sync>,
         lifetime_ms: u64,

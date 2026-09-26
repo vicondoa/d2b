@@ -73,6 +73,11 @@ pub struct Authorizer;
 
 impl Authorizer {
     /// Authorize the role bound to the current request before resource lookup.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShellTerminalError::NotAuthorized`] when the subject
+    /// carries no admin role.
     pub fn authorize_request(subject: &Subject) -> Result<(), ShellTerminalError> {
         if subject.is_admin() {
             Ok(())

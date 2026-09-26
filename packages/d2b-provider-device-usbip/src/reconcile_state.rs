@@ -3,7 +3,6 @@
 //! The daemon projects these closed reasons into the probe and status surfaces;
 //! the module adds no broker or public wire operation. Host carrier, flow, and
 //! sysfs reconciliation belong to the Provider's live lifecycle path instead.
-#![allow(missing_docs)]
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 
@@ -105,23 +104,38 @@ pub enum UsbipDegradedReason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum UsbipDegradedReasonCode {
+    /// One or more policy checks failed.
     PolicyFailed,
+    /// A desired device was not present at probe time.
     DeviceDepartedBeforeClaim,
+    /// Device disappeared after the daemon/broker acquired the lock.
     DeviceDepartedAfterLock,
+    /// Device disappeared while host or guest state was changing.
     DeviceDepartedDuringMutation,
+    /// A different device appeared at the expected location.
     DeviceReappearedWithDifferentTopology,
+    /// Another owner currently holds the claim.
     LockHeldByOtherOwner,
+    /// The broker-mediated claim is missing, stale, or invalid.
     InvalidPersistedLockClaim,
+    /// The host USBIP carrier or backend is unavailable.
     CarrierUnavailable,
+    /// The host device is not bound for USBIP export.
     HostBindUnavailable,
+    /// The per-environment USBIP proxy is unavailable.
     ProxyUnavailable,
+    /// The guest USBIP import has not converged.
     GuestImportUnavailable,
+    /// Host USBIP state remains after the claim was removed.
     StaleHostState,
+    /// Guest USBIP state remains after the claim was removed.
     StaleGuestState,
+    /// Probing did not produce a reconciliation-safe identity.
     ProbeIncomplete,
 }
 
 impl UsbipDegradedReasonCode {
+    /// Return the stable telemetry label.
     pub const fn telemetry_label(self) -> &'static str {
         match self {
             Self::PolicyFailed => "policy-failed",
@@ -143,6 +157,7 @@ impl UsbipDegradedReasonCode {
 }
 
 impl UsbipPolicyFailure {
+    /// Return the stable telemetry label.
     pub const fn telemetry_label(&self) -> &'static str {
         match self {
             Self::FeatureDisabled => "feature-disabled",
@@ -159,7 +174,9 @@ impl UsbipPolicyFailure {
 /// Bounded telemetry/log labels projected from a degraded reason.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UsbipTelemetryLabels {
+    /// Stable degraded-reason label.
     pub reason: &'static str,
+    /// Stable policy-failure label, or `"none"`.
     pub policy: &'static str,
 }
 
@@ -169,13 +186,18 @@ pub struct UsbipTelemetryLabels {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum UsbipEventType {
+    /// A reconciliation row became or stayed degraded.
     Degraded,
+    /// A reconciliation state transition occurred.
     StateTransition,
+    /// A repeated degraded summary was suppressed.
     SuppressedSummary,
+    /// Any other bounded event class.
     Other,
 }
 
 impl UsbipEventType {
+    /// Return the stable telemetry label.
     pub const fn telemetry_label(self) -> &'static str {
         match self {
             Self::Degraded => "degraded",
@@ -191,15 +213,22 @@ impl UsbipEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum UsbipEventSourceKind {
+    /// The guest VM the claim serves.
     Vm,
+    /// The host carrier reporting USB topology.
     Host,
+    /// The guest-side USBIP import surface.
     Guest,
+    /// The USBIP claim broker.
     Broker,
+    /// The reconciliation loop itself.
     Reconciler,
+    /// Any other bounded source class.
     Other,
 }
 
 impl UsbipEventSourceKind {
+    /// Return the stable telemetry label.
     pub const fn telemetry_label(self) -> &'static str {
         match self {
             Self::Vm => "vm",
@@ -216,16 +245,19 @@ impl UsbipEventSourceKind {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsbipEventSource {
+    /// Bounded source kind.
     pub kind: UsbipEventSourceKind,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "deserialize_optional_usbip_event_source_vm"
     )]
+    /// Projected, bounded VM label when the source is a VM.
     pub vm: Option<String>,
 }
 
 impl UsbipEventSource {
+    /// Build a VM-bucketed event source from an arbitrary VM label.
     pub fn vm(vm: impl AsRef<str>) -> Self {
         Self {
             kind: UsbipEventSourceKind::Vm,
@@ -233,10 +265,12 @@ impl UsbipEventSource {
         }
     }
 
+    /// Build a component-bucketed event source without a VM label.
     pub fn component(kind: UsbipEventSourceKind) -> Self {
         Self { kind, vm: None }
     }
 
+    /// Project the bounded telemetry label pair.
     pub fn telemetry_labels(&self) -> UsbipEventSourceLabels<'_> {
         UsbipEventSourceLabels {
             source_kind: self.kind.telemetry_label(),
@@ -254,8 +288,11 @@ impl UsbipEventSource {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Bounded telemetry label pair for one event source.
 pub struct UsbipEventSourceLabels<'a> {
+    /// Stable source-kind label.
     pub source_kind: &'static str,
+    /// Projected VM label, or `"none"`.
     pub vm: &'a str,
 }
 
@@ -265,6 +302,8 @@ pub struct UsbipEventSourceLabels<'a> {
 pub struct UsbipReconcileCorrelationId(String);
 
 impl UsbipReconcileCorrelationId {
+    /// Validate abounded correlation id, returning `None` when it is empty,
+    /// overlong, contains an unsupported character, or looks like a trace id.
     pub fn new(value: impl AsRef<str>) -> Option<Self> {
         let value = value.as_ref();
         let valid = !value.is_empty()
@@ -276,6 +315,7 @@ impl UsbipReconcileCorrelationId {
         valid.then(|| Self(value.to_owned()))
     }
 
+    /// Borrow the raw correlation id.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -304,10 +344,12 @@ impl<'de> Deserialize<'de> for UsbipReconcileCorrelationId {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsbipReconcileAttemptContext {
+    /// Correlation id for this reconcile attempt.
     pub correlation_id: UsbipReconcileCorrelationId,
 }
 
 impl UsbipDegradedReason {
+    /// Project the closed status code.
     pub fn code(&self) -> UsbipDegradedReasonCode {
         match self {
             Self::PolicyFailed(_) => UsbipDegradedReasonCode::PolicyFailed,
@@ -331,6 +373,7 @@ impl UsbipDegradedReason {
         }
     }
 
+    /// Project the bounded telemetry label pair.
     pub fn telemetry_labels(&self) -> UsbipTelemetryLabels {
         UsbipTelemetryLabels {
             reason: self.code().telemetry_label(),
@@ -341,6 +384,7 @@ impl UsbipDegradedReason {
         }
     }
 
+    /// Return the bounded human summary.
     pub fn summary(&self) -> &'static str {
         match self.code() {
             UsbipDegradedReasonCode::PolicyFailed => "USB policy does not allow this claim",
@@ -386,6 +430,7 @@ impl UsbipDegradedReason {
         }
     }
 
+    /// Return the bounded remediation guidance.
     pub fn remediation(&self) -> &'static str {
         match self.code() {
             UsbipDegradedReasonCode::PolicyFailed => {
@@ -429,6 +474,7 @@ impl UsbipDegradedReason {
         }
     }
 
+    /// Project the structured, redacted public reason detail.
     pub fn to_public_reason(&self) -> UsbipPublicDegradedReason {
         UsbipPublicDegradedReason {
             code: self.code(),
@@ -446,9 +492,70 @@ impl UsbipDegradedReason {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsbipPublicDegradedReason {
+    /// Closed status code.
     pub code: UsbipDegradedReasonCode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Policy failure detail when the code is policy-failed.
     pub policy_failure: Option<UsbipPolicyFailure>,
+    /// Bounded human summary.
     pub summary: String,
+    /// Bounded remediation guidance.
     pub remediation: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_source_round_trips_a_vm_source_payload() {
+        let payload = r#"{"kind":"vm","vm":"workload-a"}"#;
+        let source: UsbipEventSource = serde_json::from_str(payload).unwrap();
+        assert_eq!(source, UsbipEventSource::vm("workload-a"));
+        assert_eq!(serde_json::to_string(&source).unwrap(), payload);
+    }
+
+    #[test]
+    fn event_source_round_trips_a_component_source_payload_without_vm() {
+        let payload = r#"{"kind":"host"}"#;
+        let source: UsbipEventSource = serde_json::from_str(payload).unwrap();
+        assert_eq!(source, UsbipEventSource::component(UsbipEventSourceKind::Host));
+        assert_eq!(serde_json::to_string(&source).unwrap(), payload);
+    }
+
+    #[test]
+    fn reconcile_attempt_context_round_trips_a_correlation_id_payload() {
+        let payload = r#"{"correlationId":"reconcile-2026-09-25-01"}"#;
+        let context: UsbipReconcileAttemptContext = serde_json::from_str(payload).unwrap();
+        assert_eq!(
+            context,
+            UsbipReconcileAttemptContext {
+                correlation_id: UsbipReconcileCorrelationId::new("reconcile-2026-09-25-01").unwrap(),
+            }
+        );
+        assert_eq!(serde_json::to_string(&context).unwrap(), payload);
+    }
+
+    #[test]
+    fn public_degraded_reason_round_trips_a_policy_failure_payload() {
+        let payload = r#"{"code":"policy-failed","policyFailure":"feature-disabled","summary":"USB policy does not allow this claim","remediation":"fix the USBIP declaration or caller authorization, rebuild the bundle, and retry the USB lifecycle verb"}"#;
+        let reason: UsbipPublicDegradedReason = serde_json::from_str(payload).unwrap();
+        assert_eq!(
+            reason,
+            UsbipDegradedReason::PolicyFailed(UsbipPolicyFailure::FeatureDisabled)
+                .to_public_reason()
+        );
+        assert_eq!(serde_json::to_string(&reason).unwrap(), payload);
+    }
+
+    #[test]
+    fn public_degraded_reason_round_trips_a_non_policy_payload_without_policy_failure() {
+        let payload = r#"{"code":"probe-incomplete","summary":"USB probing did not produce a reconciliation-safe identity","remediation":"retry the USB probe; if it repeats, verify the declaration has a stable physical selector"}"#;
+        let reason: UsbipPublicDegradedReason = serde_json::from_str(payload).unwrap();
+        assert_eq!(
+            reason,
+            UsbipDegradedReason::ProbeIncomplete.to_public_reason()
+        );
+        assert_eq!(serde_json::to_string(&reason).unwrap(), payload);
+    }
 }

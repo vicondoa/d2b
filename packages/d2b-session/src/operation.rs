@@ -182,6 +182,12 @@ pub fn resource_operation(method: ApiMethod) -> &'static OperationCatalogEntry {
         .expect("every ApiMethod has one unary ResourceService member")
 }
 
+/// Wire-visible admission bound on one canonical `Service/Member` spelling.
+///
+/// Longer wire strings are refused at parse time so the session never
+/// admits an unbounded member spelling.
+pub const MAX_MEMBER_SPELLING_LEN: usize = 128;
+
 /// Canonically spelled generated service member.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct OperationMember {
@@ -204,7 +210,7 @@ impl OperationMember {
         let mut components = value.split('/');
         let service = components.next().unwrap_or_default();
         let member = components.next().unwrap_or_default();
-        if value.len() > 128
+        if value.len() > MAX_MEMBER_SPELLING_LEN
             || components.next().is_some()
             || !valid_identifier(service)
             || !valid_identifier(member)

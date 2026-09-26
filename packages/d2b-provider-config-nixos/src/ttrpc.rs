@@ -16,8 +16,9 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
 use crate::{
-    ConfigCaller, ConfigError, ConfigOperation, ConfigService, ConfigSyncRequest,
-    GuestConfigDocument, GuestSessionEvidence, SERVICE_NAME, SERVICE_PACKAGE,
+    ConfigApproveRequest, ConfigCaller, ConfigDiffRequest, ConfigError, ConfigOperation,
+    ConfigRejectRequest, ConfigService, ConfigStageRequest, ConfigStatusRequest,
+    ConfigSyncRequest, GuestConfigDocument, GuestSessionEvidence, SERVICE_NAME, SERVICE_PACKAGE,
 };
 use d2b_contracts_resource::v3::ResourceRef;
 
@@ -50,6 +51,13 @@ impl std::fmt::Debug for GuestConfigReader {
 
 impl GuestConfigReader {
     /// Bind the reader to one admitted Guest ComponentSession generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::InvalidRequest`] when the reference does not
+    /// name a Guest or the path is not an absolute, component-clean path, and
+    /// [`ConfigError::SessionMismatch`] when the boot identity or reconnect
+    /// generation fails the session evidence bounds.
     pub fn new(
         guest_ref: ResourceRef,
         boot_identity_digest: impl Into<String>,
@@ -108,7 +116,7 @@ impl ConfigServiceBackend for GuestConfigReader {
             ConfigCaller::Guest,
             &request,
             &self.evidence,
-            document.bytes().to_vec(),
+            document.into_bytes(),
         )?;
         serde_json::to_value(response).map_err(|error| {
             tracing::warn!(
@@ -214,29 +222,29 @@ impl ConfigNixosClient {
     }
 }
 
-/// The bound on admitted-but-unstarted blocking config dispatches, per seat。
+/// The bound on admitted-but-unstarted blocking config dispatches, per seat.
 ///
 /// The Guest read walks the working-copy path with `O_NOFOLLOW` and reads the
-/// document through `rustix`;that kernel path has no async form, so a
+/// document through `rustix`; that kernel path has no async form, so a
 /// dispatch must not run on the runtime worker that polls this service: a
 /// blocked worker stalls every other task sharing it. Dispatches run on one
 /// dedicated bounded worker (plan R4) instead of the runtime's shared
 /// blocking pool: the worker admits at most this many queued jobs, and a
 /// full queue refuses the caller (mapped to `Unavailable`) rather than
-/// parking an executor worker or growing a thread per call。
+/// parking an executor worker or growing a thread per call.
 const MAX_DISPATCH_QUEUE_DEPTH: usize = 16;
 
 type DispatchJob = Box<dyn FnOnce() + Send + 'static>;
 
-/// One dedicated dispatch worker thread with its own bounded queue。
+/// One dedicated dispatch worker thread with its own bounded queue.
 struct DispatchWorker {
     sender: SyncSender<DispatchJob>,
 }
 
-/// Start one named worker with its own bounded queue。
+/// Start one named worker with its own bounded queue.
 ///
 /// `None` records a worker that could not start, so every later call refuses
-/// rather than retrying a failing spawn。
+/// rather than retrying a failing spawn.
 fn start_dispatch_worker() -> Option<DispatchWorker> {
     let (sender, receiver) = sync_channel::<DispatchJob>(MAX_DISPATCH_QUEUE_DEPTH);
     thread::Builder::new()
@@ -254,15 +262,15 @@ fn start_dispatch_worker() -> Option<DispatchWorker> {
         .map(|_| DispatchWorker { sender })
 }
 
-/// The blocking config-dispatch seat, started on first use。
+/// The blocking config-dispatch seat, started on first use.
 static DISPATCH_WORKER: LazyLock<Option<DispatchWorker>> = LazyLock::new(start_dispatch_worker);
 
-/// Dispatch one operation on the dedicated bounded dispatch worker。
+/// Dispatch one operation on the dedicated bounded dispatch worker.
 ///
 /// The backend read is a synchronous kernel path, so it must not run on the
 /// runtime worker that polls this service: a blocked worker stalls every other
 /// task sharing it. Admission is a non-blocking `try_send`, so the caller's
-/// executor is never parked;the outcome is awaited from the worker。
+/// executor is never parked; the outcome is awaited from the worker.
 async fn dispatch_on_blocking_worker(
     backend: Arc<dyn ConfigServiceBackend>,
     operation: ConfigOperation,
@@ -277,7 +285,7 @@ async fn dispatch_on_blocking_worker(
             let backend = Arc::clone(&backend);
             move || {
                 // A panicking job drops the reply sender, so the waiter sees
-                // `Unavailable` instead of hanging on a dead worker。
+                // `Unavailable` instead of hanging on a dead worker.
 
                 let _ = reply.send(backend.dispatch(operation, payload));
             }
@@ -298,7 +306,7 @@ async fn dispatch_on_blocking_worker(
             })
         }
         // A saturated queue refuses instead of growing threads or parking the
-        // caller;the RPC surface maps that refusal to `Unavailable`, matching
+        // caller; the RPC surface maps that refusal to `Unavailable`, matching
         // the previous semaphore ceiling's error.
 
         Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
@@ -309,6 +317,14 @@ async fn dispatch_on_blocking_worker(
             Err(rpc_error(ConfigError::Unavailable))
         }
     }
+}
+
+/// Decode one typed request payload without copying the JSON tree.
+fn decode_typed_request<T>(payload: &Value) -> Result<T, ConfigError>
+where
+    T: DeserializeOwned,
+{
+    T::deserialize(payload).map_err(|_| ConfigError::InvalidRequest)
 }
 
 struct ConfigMethod {
@@ -332,7 +348,24 @@ impl ttrpc::r#async::MethodHandler for ConfigMethod {
                 );
                 rpc_error(ConfigError::InvalidRequest)
             })?;
-        if let Err(error) = ConfigService.validate_operation(self.operation, &payload) {
+        // Decode the typed request once and validate the typed value, so the
+        // admission path neither re-parses the JSON nor decodes a Stage
+        // document; the backend hop re-checks the original Value.
+        let validation = match self.operation {
+            ConfigOperation::ReadGuestConfig => decode_typed_request::<ConfigSyncRequest>(&payload)
+                .and_then(|request| ConfigService.validate_read_guest_config(&request)),
+            ConfigOperation::Stage => decode_typed_request::<ConfigStageRequest>(&payload)
+                .and_then(|request| ConfigService.validate_stage(&request)),
+            ConfigOperation::Diff => decode_typed_request::<ConfigDiffRequest>(&payload)
+                .and_then(|request| ConfigService.validate_diff(&request)),
+            ConfigOperation::Approve => decode_typed_request::<ConfigApproveRequest>(&payload)
+                .and_then(|request| ConfigService.validate_approve(&request)),
+            ConfigOperation::Reject => decode_typed_request::<ConfigRejectRequest>(&payload)
+                .and_then(|request| ConfigService.validate_reject(&request)),
+            ConfigOperation::Status => decode_typed_request::<ConfigStatusRequest>(&payload)
+                .and_then(|request| ConfigService.validate_status(&request)),
+        };
+        if let Err(error) = validation {
             tracing::debug!(
                 operation = self.operation.as_str(),
                 %error,
@@ -370,25 +403,33 @@ fn rpc_error(error: ConfigError) -> ttrpc::Error {
 }
 
 fn invalid_status() -> ttrpc::Status {
+    // Client-side encode/decode failures are implementation faults, not
+    // caller input errors, so report INTERNAL to match the code.
     ttrpc::get_status(
-        ttrpc::Code::INVALID_ARGUMENT,
+        ttrpc::Code::INTERNAL,
         ConfigError::EncodingFailed.code(),
     )
 }
 
-fn validate_reader_path(path: &Path) -> Result<(), ConfigError> {
+fn path_components(path: &Path) -> Result<Vec<&std::ffi::OsStr>, ConfigError> {
     if !path.is_absolute() {
         return Err(ConfigError::InvalidRequest);
     }
+    let mut components = Vec::new();
     for component in path.components() {
-        if matches!(
-            component,
-            Component::CurDir | Component::ParentDir | Component::Prefix(_)
-        ) {
-            return Err(ConfigError::InvalidRequest);
+        match component {
+            Component::RootDir => {}
+            Component::Normal(value) => components.push(value),
+            Component::CurDir | Component::ParentDir | Component::Prefix(_) => {
+                return Err(ConfigError::InvalidRequest);
+            }
         }
     }
-    Ok(())
+    Ok(components)
+}
+
+fn validate_reader_path(path: &Path) -> Result<(), ConfigError> {
+    path_components(path).map(|_| ())
 }
 
 fn read_bounded_file(path: &Path) -> Result<Vec<u8>, ConfigError> {
@@ -408,19 +449,7 @@ fn read_bounded_file(path: &Path) -> Result<Vec<u8>, ConfigError> {
         }
     }
 
-    if !path.is_absolute() {
-        return Err(ConfigError::InvalidRequest);
-    }
-    let mut components = Vec::new();
-    for component in path.components() {
-        match component {
-            Component::RootDir => {}
-            Component::Normal(value) => components.push(value),
-            Component::CurDir | Component::ParentDir | Component::Prefix(_) => {
-                return Err(ConfigError::InvalidRequest);
-            }
-        }
-    }
+    let components = path_components(path)?;
     let Some((leaf, parents)) = components.split_last() else {
         return Err(ConfigError::InvalidRequest);
     };

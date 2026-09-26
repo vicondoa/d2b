@@ -56,11 +56,12 @@ fn next_zone_link_handler_owner() -> u64 {
     }
 }
 
-/// Default absolute lifetime of one allocator-issued bootstrap PSK.
-pub const BOOTSTRAP_PSK_TTL_MS_DEFAULT: u64 = 300_000;
-
-/// Default maximum lifetime of one enrolled KK session.
-pub const KK_SESSION_MAX_LIFETIME_MS_DEFAULT: u64 = 86_400_000;
+// The cryptoperiod defaults live in `d2b_contracts_zone_session`; this module
+// re-exports them so the child-local handler and the bus-side enrollment
+// machine cannot drift apart on the values.
+pub use d2b_contracts_zone_session::v3::zone_session::{
+    BOOTSTRAP_PSK_TTL_MS_DEFAULT, KK_SESSION_MAX_LIFETIME_MS_DEFAULT,
+};
 
 /// Admission ceiling for `spec.limits.maxPendingIntents`.
 pub const MAX_PENDING_LOCAL_INTENTS: u32 = 1024;
@@ -86,7 +87,8 @@ pub const ZONE_LINK_ROUTE_ADMISSION_DEDUP_VERSION: u32 = 1;
 /// The set deliberately excludes `vm`, `zone`, `zone_id`, `zone_uid`, and
 /// `link_name_hash`, and every admitted value is drawn from a closed enum, so
 /// no ZoneLink, Zone, or resource identity can enter a label value.
-pub const ZONE_LINK_METRIC_LABEL_KEYS: &[&str] = &["phase", "reason", "outcome"];
+#[cfg(test)]
+pub(crate) const ZONE_LINK_METRIC_LABEL_KEYS: &[&str] = &["phase", "reason", "outcome"];
 
 /// Child-local ZoneLink enrollment-and-session state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -259,6 +261,11 @@ pub struct ZoneLinkLimits {
 
 impl ZoneLinkLimits {
     /// Validate one complete `spec.limits` object against its frozen bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZoneLinkError::InvalidLimits`] when a ceiling is zero or
+    /// exceeds its frozen bound.
     pub const fn new(
         max_pending_intents: u32,
         max_active_streams: u32,
@@ -772,6 +779,11 @@ impl ZoneLinkRecord {
     ///
     /// The controller generation is also the ZoneLink identity generation, so
     /// a route binding from another controller generation is refused.
+    /// # Errors
+    ///
+    /// Returns [`ZoneLinkError::RouteAdmissionBindingInvalid`] when a
+    /// binding is already set or the binding's controller generation does
+    /// not match the record's.
     pub fn with_route_binding(
         mut self,
         binding: ZoneLinkRouteBinding,
@@ -802,6 +814,14 @@ impl ZoneLinkRecord {
     /// The envelope is canonical, versioned, identity-bound, and bounded.
     /// There is no expiry or eviction because an OperationId remains
     /// non-reusable for the active ZoneLink identity and generation.
+    /// # Errors
+    ///
+    /// Returns [`ZoneLinkError::RouteAdmissionBindingInvalid`] when no
+    /// route binding is configured,
+    /// [`ZoneLinkError::RouteAdmissionOperationCapacity`] when the
+    /// committed set exceeds the bound, and
+    /// [`ZoneLinkError::RouteAdmissionDedupInvalid`] when the envelope
+    /// cannot be rendered canonically within the byte bound.
     pub fn encode_route_admission_dedup(&self) -> Result<Vec<u8>, ZoneLinkError> {
         let binding = self
             .route_binding
@@ -835,6 +855,11 @@ impl ZoneLinkRecord {
     /// Identity mismatch and unknown versions are quarantine conditions. The
     /// receiver is consumed so a failed recovery cannot partially mutate a
     /// live record.
+    /// # Errors
+    ///
+    /// Returns [`ZoneLinkError::RouteAdmissionDedupInvalid`] when the
+    /// envelope is empty, over the byte bound, not canonical, or carries
+    /// an unknown version or identity mismatch.
     pub fn with_route_admission_dedup(mut self, encoded: &[u8]) -> Result<Self, ZoneLinkError> {
         if encoded.is_empty() || encoded.len() > MAX_ROUTE_ADMISSION_DEDUP_BYTES {
             return Err(ZoneLinkError::RouteAdmissionDedupInvalid);
@@ -1291,6 +1316,12 @@ impl ZoneLinkHandler {
     ///
     /// Exactly one pass may be open per link; a second call fails closed with
     /// [`ZoneLinkError::ReconcileInFlight`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZoneLinkError::ReconcileInFlight`] when a pass is already
+    /// open and the planning refusal when the event is invalid for the
+    /// current record state.
     pub fn begin(&mut self, event: ZoneLinkEvent) -> Result<ZoneLinkPass, ZoneLinkError> {
         if self.pass_open {
             return Err(ZoneLinkError::ReconcileInFlight);
@@ -1309,6 +1340,11 @@ impl ZoneLinkHandler {
     }
 
     /// Apply the planned durable mutation and issue its commit proof.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZoneLinkError::StaleCommitProof`] when no pass is open or
+    /// the pass does not match the current owner token and sequence.
     pub fn commit(&mut self, pass: ZoneLinkPass) -> Result<ZoneLinkCommitProof, ZoneLinkError> {
         if !self.pass_open
             || pass.owner_token != self.owner_token
@@ -1331,6 +1367,12 @@ impl ZoneLinkHandler {
     }
 
     /// Consume one commit proof and release its effects exactly once.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZoneLinkError::StaleCommitProof`] when no effects are
+    /// pending or the proof does not match the pending owner token and
+    /// sequence.
     pub fn release_effects(
         &mut self,
         proof: ZoneLinkCommitProof,
@@ -1367,6 +1409,11 @@ impl ZoneLinkHandler {
     /// a context created from the committed record. It cannot supply identity,
     /// policy, connectivity, or time claims. The callback's implementation is
     /// expected to delegate directly to the runtime-owned sealed route issuer.
+    /// # Errors
+    ///
+    /// Returns the commit-proof refusal when the proof is stale,
+    /// [`ZoneLinkError::RouteAdmissionCursorUnavailable`] when the cursor
+    /// is not adopted, and the issuer's refusal otherwise.
     pub fn issue_route_admission<T>(
         &mut self,
         mut proof: ZoneLinkCommitProof,
@@ -1523,7 +1570,7 @@ impl ZoneLinkHandler {
                 if state != ZoneLinkSessionState::Kk {
                     return Err(ZoneLinkError::InvalidTransition);
                 }
-                let Some(enrollment) = record.enrollment.clone() else {
+                let Some(enrollment) = record.enrollment.as_ref() else {
                     return Err(ZoneLinkError::InvalidTransition);
                 };
                 if enrollment.key_fingerprint != peer_key_fingerprint {
@@ -1689,7 +1736,7 @@ impl ZoneLinkHandler {
                 verb,
                 policy_revision,
             } => {
-                let Some(mut binding) = record.route_binding.clone() else {
+                let Some(binding) = record.route_binding.as_mut() else {
                     return Err(ZoneLinkError::RouteAdmissionBindingInvalid);
                 };
                 if verb == OperationClass::Attach || policy_revision <= binding.policy_revision() {
@@ -1698,12 +1745,11 @@ impl ZoneLinkHandler {
                 binding.required_capability = required_capability;
                 binding.verb = verb;
                 binding.policy_revision = policy_revision;
-                record.route_binding = Some(binding);
             }
             ZoneLinkEvent::SessionGenerationAdvanced {
                 reconnect_generation,
             } => {
-                let Some(mut binding) = record.route_binding.clone() else {
+                let Some(binding) = record.route_binding.as_mut() else {
                     return Err(ZoneLinkError::RouteAdmissionBindingInvalid);
                 };
                 if reconnect_generation <= binding.reconnect_generation() {
@@ -1711,7 +1757,6 @@ impl ZoneLinkHandler {
                 }
                 let was_connected = record.connected;
                 binding.reconnect_generation = reconnect_generation;
-                record.route_binding = Some(binding);
                 record.connected = false;
                 record.advertised_routes = 0;
                 record.reconnect_attempts = 0;
@@ -1779,13 +1824,15 @@ impl core::fmt::Debug for ZoneLinkHandler {
 ///
 /// Every field is a closed enum, so no ZoneLink, Zone, or resource identity
 /// can reach a label value.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ZoneLinkMetricSample {
+pub(crate) struct ZoneLinkMetricSample {
     phase: ZoneLinkPhase,
     reason: Option<ZoneLinkError>,
     succeeded: bool,
 }
 
+#[cfg(test)]
 impl ZoneLinkMetricSample {
     /// Build one sample from closed semantic inputs.
     pub const fn new(phase: ZoneLinkPhase, reason: Option<ZoneLinkError>, succeeded: bool) -> Self {
@@ -2516,7 +2563,10 @@ mod tests {
             ZoneLinkSessionState::EnrollmentCommitted,
             ZoneLinkSessionState::Kk,
         ] {
-            assert!(!state.permits_resource_traffic());
+            assert!(
+                !state.permits_resource_traffic(),
+                "state: {state:?} must not permit resource traffic"
+            );
         }
         assert_eq!(
             refused(
@@ -3090,7 +3140,10 @@ mod tests {
     fn metric_labels_carry_no_identity() {
         let forbidden = ["vm", "zone", "zone_id", "zone_uid", "link_name_hash"];
         for key in ZONE_LINK_METRIC_LABEL_KEYS {
-            assert!(!forbidden.contains(key), "forbidden metric label key");
+            assert!(
+                !forbidden.contains(key),
+                "key: {key} must not be a forbidden metric label key"
+            );
         }
         let canary = "k1-uplink";
         let samples = [
@@ -3159,13 +3212,17 @@ mod tests {
             ZoneLinkError::RouteAdmissionDedupConflict,
         ] {
             let label = error.label();
-            assert!(!label.is_empty() && label.len() <= 64);
+            assert!(
+                !label.is_empty() && label.len() <= 64,
+                "error: {error:?} label must be a non-empty bounded token"
+            );
             assert!(
                 label
                     .chars()
-                    .all(|character| character.is_ascii_lowercase() || character == '-')
+                    .all(|character| character.is_ascii_lowercase() || character == '-'),
+                "error: {error:?} label must be lowercase-and-dash"
             );
-            assert_eq!(error.to_string(), label);
+            assert_eq!(error.to_string(), label, "error: {error:?}");
         }
         assert_eq!(
             ZoneLinkError::Disconnected.label(),

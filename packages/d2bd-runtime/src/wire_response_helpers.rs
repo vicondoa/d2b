@@ -1,5 +1,6 @@
 //! Provider-neutral public mutating-response construction and projection.
 
+use d2b_contracts_control::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
 use serde_json::Value;
 
 use crate::wire::mutating_verb_response;
@@ -10,8 +11,6 @@ pub fn broker_failure_response(
     remediation: String,
     target_wave: Option<String>,
 ) -> Value {
-    use d2b_contracts_control::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
-
     mutating_verb_response(MutatingVerbResponse {
         verb: verb.to_owned(),
         outcome: MutatingVerbOutcome::BrokerError,
@@ -31,8 +30,6 @@ pub fn invalid_request_response_with_summary(
     summary: String,
     remediation: String,
 ) -> Value {
-    use d2b_contracts_control::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
-
     mutating_verb_response(MutatingVerbResponse {
         verb: verb.to_owned(),
         outcome: MutatingVerbOutcome::InvalidRequest,
@@ -57,8 +54,6 @@ pub fn daemon_failure_response(verb: &str, summary: String) -> Value {
 }
 
 pub fn applied_response(verb: &str, summary: String) -> Value {
-    use d2b_contracts_control::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
-
     mutating_verb_response(MutatingVerbResponse {
         verb: verb.to_owned(),
         outcome: MutatingVerbOutcome::Applied,
@@ -84,8 +79,6 @@ pub fn append_response_summary(response: &mut Value, suffix: &str) {
 }
 
 pub fn api_ready_timeout_response(verb: &str, summary: String) -> Value {
-    use d2b_contracts_control::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
-
     mutating_verb_response(MutatingVerbResponse {
         verb: verb.to_owned(),
         outcome: MutatingVerbOutcome::ApiReadyTimeout,
@@ -96,8 +89,31 @@ pub fn api_ready_timeout_response(verb: &str, summary: String) -> Value {
     })
 }
 
+/// Parse the wire `outcome` field into the typed [`MutatingVerbOutcome`]
+/// vocabulary. Unknown or malformed outcome strings yield `None`.
+pub fn response_outcome_typed(value: &Value) -> Option<MutatingVerbOutcome> {
+    value
+        .get("outcome")
+        .cloned()
+        .and_then(|outcome| serde_json::from_value(outcome).ok())
+}
+
+/// The wire string for a typed mutating-verb outcome.
+fn mutating_verb_outcome_wire(outcome: MutatingVerbOutcome) -> &'static str {
+    match outcome {
+        MutatingVerbOutcome::DryRunPlanned => "dry-run-planned",
+        MutatingVerbOutcome::Applied => "applied",
+        MutatingVerbOutcome::ApiReadyTimeout => "api-ready-timeout",
+        MutatingVerbOutcome::NotYetImplemented => "not-yet-implemented",
+        MutatingVerbOutcome::BrokerError => "broker-error",
+        MutatingVerbOutcome::InvalidRequest => "invalid-request",
+    }
+}
+
+/// The wire `outcome` string, re-derived from the typed outcome vocabulary
+/// rather than read verbatim from the JSON.
 pub fn response_outcome(value: &Value) -> Option<&str> {
-    value.get("outcome").and_then(Value::as_str)
+    response_outcome_typed(value).map(mutating_verb_outcome_wire)
 }
 
 pub fn response_summary(value: &Value) -> Option<&str> {
@@ -116,17 +132,17 @@ pub fn response_target_wave(value: &Value) -> Option<String> {
 }
 
 pub fn retarget_mutating_response(value: &Value, verb: &str) -> Value {
-    match response_outcome(value) {
-        Some("applied") => {
+    match response_outcome_typed(value) {
+        Some(MutatingVerbOutcome::Applied) => {
             applied_response(verb, response_summary(value).unwrap_or_default().to_owned())
         }
-        Some("broker-error") => broker_failure_response(
+        Some(MutatingVerbOutcome::BrokerError) => broker_failure_response(
             verb,
             response_summary(value).unwrap_or_default().to_owned(),
             response_remediation(value).unwrap_or_default().to_owned(),
             response_target_wave(value),
         ),
-        Some("api-ready-timeout") => {
+        Some(MutatingVerbOutcome::ApiReadyTimeout) => {
             let mut retargeted = value.clone();
             if let Some(object) = retargeted.as_object_mut() {
                 object.insert("verb".to_owned(), Value::String(verb.to_owned()));

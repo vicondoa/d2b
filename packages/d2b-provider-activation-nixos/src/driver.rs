@@ -55,7 +55,7 @@ use d2b_contracts_broker::host_generation::{
 };
 use d2b_contracts_resource::v3::{
     ActivationDetail, ActivationMode, ActivationOutcomeCode, NIXOS_GENERATION_RESOURCE_TYPE,
-    NixosGenerationSpec, ResourcePhase, ResourceRef,
+    NixosGenerationSpec, ResourceName, ResourcePhase, ResourceRef,
 };
 use d2b_resource_runtime::context::{
     ChildEnsure, ResourceContext, SpecDecoder, WatchCondition, typed_spec_decoder,
@@ -423,7 +423,7 @@ impl ResourceDriverFactory for ActivationDriverFactory {
 // ---------------------------------------------------------------------------
 
 /// One `NixosGeneration` resource's driver.
-pub struct ActivationDriver {
+pub(crate) struct ActivationDriver {
     zone: String,
     effects: Arc<dyn ActivationDriverEffects>,
     verifier: Arc<dyn ActivationApplicationVerifier>,
@@ -552,8 +552,10 @@ impl ActivationDriver {
             return Err(self.error(ActivationDriverErrorKind::Policy, op));
         }
         let ordinal = ordinal_from_name(&row.key.name).unwrap_or(row.generation);
+        let name = ResourceName::parse(&row.key.name)
+            .map_err(|_| self.error(ActivationDriverErrorKind::Policy, op))?;
         Ok(vec![GenerationObservation::terminal(
-            row.key.name.as_str(),
+            name,
             GenerationPhase::Pending,
             ordinal,
         )])
@@ -762,8 +764,10 @@ impl ResourceDriver for ActivationDriver {
         // Old `ordinal_from_resource`: the trailing bounded generation
         // number, else the durable row generation.
         let ordinal = ordinal_from_name(ctx.key().name.as_str()).unwrap_or(ctx.generation());
+        let name = ResourceName::parse(ctx.key().name.as_str())
+            .map_err(|_| self.error(ActivationDriverErrorKind::Policy, DriverOp::Reconcile))?;
         let observed = GenerationObservation::terminal(
-            ctx.key().name.as_str(),
+            name,
             generation_phase(self.observed_phase(ctx)),
             ordinal,
         );
@@ -955,7 +959,6 @@ mod tests {
     use d2b_resource_runtime::identity::{
         ResourceKey, ResourceProvenance, StoredDesiredResource,
     };
-    use d2b_resource_runtime::target::TargetHandle;
 
     use super::{
         ACTIVATION_TYPE_NAME, RUNNER_TYPE_NAME, ActivationApplicationVerifier,
@@ -1049,7 +1052,6 @@ mod tests {
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
         let ctx = ResourceContext::new(
             row,
-            TargetHandle::Host,
             activation_spec_decoder(),
             Arc::new(manager.clone()),
             Arc::new(NullRequeue),
@@ -1075,14 +1077,18 @@ mod tests {
 
     // -- factory and validation ----------------------------------------------
 
-
-
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn validate_rejects_a_spec_outside_the_closed_generation_contract() {
         let effects = FakeActivationEffects::new(HostHandoffResult::Incomplete);
         let mut f = fixture(
-            generation_row("gen-1", "Host/host-system", ActivationMode::Switch, None, GENERATION_UID),
+            generation_row(
+                "gen-1",
+                "Host/host-system",
+                ActivationMode::Switch,
+                None,
+                GENERATION_UID,
+            ),
             RecordingManagerEndpoint::new().with_owner_uid(GENERATION_UID),
         );
         let mut d = driver(effects, Arc::new(AllowVerifier)).await;
@@ -1097,7 +1103,10 @@ mod tests {
             GENERATION_UID,
         );
         malformed.spec = b"{\"providerRef\":\"Provider/other\"}".to_vec();
-        let mut f_malformed = fixture(malformed, RecordingManagerEndpoint::new().with_owner_uid(GENERATION_UID));
+        let mut f_malformed = fixture(
+            malformed,
+            RecordingManagerEndpoint::new().with_owner_uid(GENERATION_UID),
+        );
         let mut d_malformed = driver(
             FakeActivationEffects::new(HostHandoffResult::Incomplete),
             Arc::new(AllowVerifier),
@@ -1115,13 +1124,15 @@ mod tests {
             source_generation: 1,
             target_generation: 2,
         });
-        let manager = RecordingManagerEndpoint::new().with_owner_uid(GENERATION_UID).with_row(generation_row(
-            "gen-1",
-            "Host/host-system",
-            ActivationMode::Switch,
-            None,
-            [0x41; 16],
-        ));
+        let manager = RecordingManagerEndpoint::new()
+            .with_owner_uid(GENERATION_UID)
+            .with_row(generation_row(
+                "gen-1",
+                "Host/host-system",
+                ActivationMode::Switch,
+                None,
+                [0x41; 16],
+            ));
         let mut f = fixture(
             generation_row(
                 "gen-2",
@@ -1192,13 +1203,15 @@ mod tests {
             },
             Arc::new(AllowVerifier),
         );
-        let manager = RecordingManagerEndpoint::new().with_owner_uid(GENERATION_UID).with_row(generation_row(
-            "gen-1",
-            "Host/host-system",
-            ActivationMode::Switch,
-            None,
-            [0x41; 16],
-        ));
+        let manager = RecordingManagerEndpoint::new()
+            .with_owner_uid(GENERATION_UID)
+            .with_row(generation_row(
+                "gen-1",
+                "Host/host-system",
+                ActivationMode::Switch,
+                None,
+                [0x41; 16],
+            ));
         let mut f = fixture(
             generation_row(
                 "gen-2",
@@ -1246,13 +1259,15 @@ mod tests {
             zone: "work".to_owned(),
             facets: crate::test_support::recording_facets(broker.clone()),
         });
-        let manager = RecordingManagerEndpoint::new().with_owner_uid(GENERATION_UID).with_row(generation_row(
-            "gen-1",
-            "Host/host-system",
-            ActivationMode::Switch,
-            None,
-            [0x41; 16],
-        ));
+        let manager = RecordingManagerEndpoint::new()
+            .with_owner_uid(GENERATION_UID)
+            .with_row(generation_row(
+                "gen-1",
+                "Host/host-system",
+                ActivationMode::Switch,
+                None,
+                [0x41; 16],
+            ));
         let mut f = fixture(
             generation_row(
                 "gen-2",
@@ -1336,20 +1351,20 @@ mod tests {
                 Some("gen-1"),
                 GENERATION_UID,
             ),
-            RecordingManagerEndpoint::new().with_owner_uid(GENERATION_UID).with_row(generation_row(
-                "gen-1",
-                "Host/other-host",
-                ActivationMode::Switch,
-                None,
-                [0x41; 16],
-            )),
+            RecordingManagerEndpoint::new()
+                .with_owner_uid(GENERATION_UID)
+                .with_row(generation_row(
+                    "gen-1",
+                    "Host/other-host",
+                    ActivationMode::Switch,
+                    None,
+                    [0x41; 16],
+                )),
         );
         let mut cross_driver = driver(effects.clone(), Arc::new(AllowVerifier)).await;
         assert!(cross_driver.reconcile(&mut cross.ctx).await.is_err());
         assert!(effects.dispatches().is_empty());
     }
-
-
 
     // -- guest-target reconcile -----------------------------------------------
 
@@ -1610,16 +1625,18 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn finalize_finalizes_the_owned_runner_before_the_generation_teardown() {
-        let manager = RecordingManagerEndpoint::new().with_owner_uid(GENERATION_UID).with_row(StoredDesiredResource {
-            owner_uid: Some(GENERATION_UID),
-            ..generation_row(
-                "runner-gen-1",
-                "Guest/workstation",
-                ActivationMode::Switch,
-                None,
-                [0x77; 16],
-            )
-        });
+        let manager = RecordingManagerEndpoint::new()
+            .with_owner_uid(GENERATION_UID)
+            .with_row(StoredDesiredResource {
+                owner_uid: Some(GENERATION_UID),
+                ..generation_row(
+                    "runner-gen-1",
+                    "Guest/workstation",
+                    ActivationMode::Switch,
+                    None,
+                    [0x77; 16],
+                )
+            });
         let Fixture { mut ctx, manager } = fixture(
             generation_row(
                 "gen-1",

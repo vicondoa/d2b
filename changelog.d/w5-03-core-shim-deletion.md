@@ -1,0 +1,4 @@
+### Fixed
+
+- Deleted the six one-line compat shim modules in d2b-core (`error`, `contract_id`, `configured_argv`, `privileges_w3`, `workload_identity`, `unsafe_local_workloads`) that re-exported d2b_contracts items, so every re-exported item now has a single public path under `d2b_contracts` (and `d2b_contracts_resource::v3::ZoneResourceIdentity`); the zero-consumer `UnsafeLocalWorkloadIdentity` alias was removed with its module.
+- Re-pointed all workspace import sites and the xtask `gen-error-codes` generator (and the generated `docs/reference/error-codes.md` anchors) from `d2b_core::error` to `d2b_contracts::error`.

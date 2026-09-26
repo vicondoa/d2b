@@ -135,6 +135,10 @@ pub struct OperationAudit {
 
 impl OperationAudit {
     /// Construct one audit facet after checking the field bounds.
+    /// # Errors
+    ///
+    /// Returns `TooManyAuditFields` when the retained-field or
+    /// redaction-key list exceeds its bound.
     pub fn new(
         required: bool,
         mode: AuditMode,
@@ -191,6 +195,10 @@ pub struct AuditJoin {
 
 impl AuditJoin {
     /// Construct one audit-join facet after checking the field bound.
+    /// # Errors
+    ///
+    /// Returns `InvalidAuditJoin` when the field list is empty or over
+    /// its bound.
     pub fn new(fields: Vec<BoundedText>) -> Result<Self, OperationContractError> {
         if fields.is_empty() || fields.len() > MAX_OPERATION_JOIN_FIELDS {
             return Err(OperationContractError::InvalidAuditJoin);
@@ -344,6 +352,10 @@ pub struct OperationFds {
 
 impl OperationFds {
     /// Construct one fd contract after checking the list bounds.
+    /// # Errors
+    ///
+    /// Returns `TooManyFds` when any of the request, response, or
+    /// preopened lists exceeds its bound.
     pub fn new(
         request: Vec<FdContract>,
         response: Vec<FdContract>,
@@ -402,6 +414,10 @@ impl Default for OperationBounds {
 
 impl OperationBounds {
     /// Construct one bounds facet.
+    /// # Errors
+    ///
+    /// Returns `InvalidBounds` when a limit is zero or exceeds its
+    /// ceiling.
     pub fn new(
         max_payload_bytes: u32,
         max_batch_entries: u32,
@@ -471,6 +487,15 @@ pub struct OperationSpec {
 
 impl OperationSpec {
     /// Construct an operation spec after checking the facet invariants.
+    /// # Errors
+    ///
+    /// Returns `InvalidOwnerRef` when the owner reference does not name
+    /// a `Command`, `InheritedWireTagOnMaterialized` when a materialized
+    /// operation carries a wire tag, `InvalidAuditJoin` when the join
+    /// names an undeclared or secret payload field,
+    /// `SecretAccessBelowPayload` when the payload declares secret
+    /// material without secret access, and `WriteOnlyRetainedField`
+    /// when the audit retains a write-only field.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         owner_ref: Option<ResourceRef>,

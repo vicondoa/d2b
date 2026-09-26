@@ -6,9 +6,10 @@
 //! remote ResourceRef, a transport locator, a descriptor, or a grant.
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 use super::resource_export::{ResourceExportSpec, ShareQuota, is_qualified_service_type};
+use d2b_contracts::wire_deserialize;
 use d2b_contracts_provider::v3::provider::{
     Exportability, ProjectionFactory, ProviderContractError,
 };
@@ -81,9 +82,6 @@ impl From<PrimitiveSpecError> for ResourceImportContractError {
         Self::InvalidCapability
     }
 }
-
-/// Compatibility alias used by controller and Provider adapter callers.
-pub type ResourceImportError = ResourceImportContractError;
 
 /// Disconnect behavior for a local projection Service.
 #[derive(
@@ -356,41 +354,36 @@ impl core::fmt::Debug for ResourceImportSpec {
     }
 }
 
-impl<'de> Deserialize<'de> for ResourceImportSpec {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            zone_link_ref: ResourceRef,
-            export_key: BoundedText,
-            expected_service_type: ResourceTypeName,
-            expected_projection_schema_fingerprint: SchemaFingerprint,
-            expected_factory_fingerprint: SchemaFingerprint,
-            projection_name: ResourceName,
-            requested_capabilities: Vec<BoundedToken>,
-            #[serde(default)]
-            requested_quota: ShareQuota,
-            #[serde(default)]
-            disconnect_policy: ImportDisconnectPolicy,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.zone_link_ref,
-            wire.export_key,
-            wire.expected_service_type,
-            wire.expected_projection_schema_fingerprint,
-            wire.expected_factory_fingerprint,
-            wire.projection_name,
-            wire.requested_capabilities,
-            wire.requested_quota,
-            wire.disconnect_policy,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ResourceImportSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        zone_link_ref: ResourceRef,
+        export_key: BoundedText,
+        expected_service_type: ResourceTypeName,
+        expected_projection_schema_fingerprint: SchemaFingerprint,
+        expected_factory_fingerprint: SchemaFingerprint,
+        projection_name: ResourceName,
+        requested_capabilities: Vec<BoundedToken>,
+        #[serde(default)]
+        requested_quota: ShareQuota,
+        #[serde(default)]
+        disconnect_policy: ImportDisconnectPolicy,
+    },
+    wire,
+    Self::new(
+        wire.zone_link_ref,
+        wire.export_key,
+        wire.expected_service_type,
+        wire.expected_projection_schema_fingerprint,
+        wire.expected_factory_fingerprint,
+        wire.projection_name,
+        wire.requested_capabilities,
+        wire.requested_quota,
+        wire.disconnect_policy,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 fn quota_fits(requested: ShareQuota, exported: ShareQuota) -> bool {
     bounded_option_fits(requested.max_consumers(), exported.max_consumers())

@@ -203,14 +203,15 @@ impl InteractionEffectsService {
         request: &InteractionEffectRequest<'_>,
     ) -> Result<InteractionEffectOutcome, InteractionEffectError> {
         let spec: WaylandSessionSpec = serde_json::from_value(request.spec.clone())
-            .map_err(|_| InteractionEffectError::InvalidResource)?;
+            .map_err(|error| InteractionEffectError::InvalidSpec(error.to_string()))?;
         let identity = self
             .facets
             .identity()
             .identity()
             .await
             .ok_or(InteractionEffectError::Unavailable)?;
-        let session_ref = key_ref(&request.target);
+        let session_ref = key_ref(&request.target)
+            .map_err(|_| InteractionEffectError::InvalidResource)?;
         if identity.wayland_session_ref != session_ref
             || identity.wayland_session_uid != request.uid
             || identity.subject_ref != *spec.guest_ref()
@@ -258,7 +259,9 @@ impl InteractionEffectsService {
         &self,
         request: &InteractionEffectRequest<'_>,
     ) -> Result<InteractionEffectOutcome, InteractionEffectError> {
-        let Some(target) = self.live_stored(&key_ref(&request.target)).await? else {
+        let target_ref = key_ref(&request.target)
+            .map_err(|_| InteractionEffectError::InvalidResource)?;
+        let Some(target) = self.live_stored(&target_ref).await? else {
             return Err(InteractionEffectError::Unavailable);
         };
         self.facets
@@ -275,9 +278,12 @@ impl InteractionEffectsService {
     ) -> Result<InteractionEffectOutcome, InteractionEffectError> {
         let spec: AudioBindingSpec = spec_with_provider_ref(&request.spec, request.provider_ref.as_ref())
             .and_then(|spec| {
-                serde_json::from_value(spec).map_err(|_| InteractionEffectError::InvalidResource)
+                serde_json::from_value(spec)
+                    .map_err(|error| InteractionEffectError::InvalidSpec(error.to_string()))
             })?;
-        let Some(target) = self.live_stored(&key_ref(&request.target)).await? else {
+        let target_ref = key_ref(&request.target)
+            .map_err(|_| InteractionEffectError::InvalidResource)?;
+        let Some(target) = self.live_stored(&target_ref).await? else {
             return Err(InteractionEffectError::Unavailable);
         };
         let Some(service) = self.fresh_audio_dependency(&spec.service_ref).await? else {
@@ -309,7 +315,7 @@ impl InteractionEffectsService {
             .map_err(map_audio_effect_error)?
             .ok_or(InteractionEffectError::InvalidResource)?;
         let children = AudioBindingController::<Box<dyn d2b_provider_audio_pipewire::AudioMediator>>::child_resources(
-            &key_ref(&request.target),
+            &key_ref(&request.target).map_err(|_| InteractionEffectError::InvalidResource)?,
             &spec,
         )
         .map_err(|_| InteractionEffectError::InvalidResource)?;
@@ -435,7 +441,9 @@ impl InteractionDriverEffects for InteractionEffectsService {
             // references it (old `finalize_u9`): the owner stays with its
             // durable deleting mark and the pass retries.
             InteractionKind::AudioService => {
-                let target = key_ref(&request.target).to_canonical_string();
+                let target = key_ref(&request.target)
+                    .map_err(|_| InteractionEffectError::InvalidResource)?
+                    .to_canonical_string();
                 let dangling = self.specs_of_type(AUDIO_BINDING_TYPE).await?.iter().any(
                     |binding| {
                         binding.pointer("/serviceRef").and_then(Value::as_str)
@@ -449,7 +457,9 @@ impl InteractionDriverEffects for InteractionEffectsService {
                 })
             }
             InteractionKind::AudioBinding => {
-                let Some(target) = self.live_stored(&key_ref(&request.target)).await? else {
+                let target_ref = key_ref(&request.target)
+                    .map_err(|_| InteractionEffectError::InvalidResource)?;
+                let Some(target) = self.live_stored(&target_ref).await? else {
                     return Ok(InteractionFinalize::Complete);
                 };
                 self.facets
@@ -462,7 +472,9 @@ impl InteractionDriverEffects for InteractionEffectsService {
             // A ShellPool refuses to go away while a Session still
             // references it (old `finalize_u9`).
             InteractionKind::ShellPool => {
-                let target = key_ref(&request.target).to_canonical_string();
+                let target = key_ref(&request.target)
+                    .map_err(|_| InteractionEffectError::InvalidResource)?
+                    .to_canonical_string();
                 let dangling = self
                     .specs_of_type("shell-terminal.d2bus.org.ShellSession")
                     .await?
@@ -572,8 +584,8 @@ fn resource_phase(value: &Value) -> Option<&str> {
 /// spec for Nix rows, the `spec` member for API rows that persist the full
 /// envelope minus status.
 fn spec_document_value(bytes: &[u8]) -> Result<Value, InteractionEffectError> {
-    let value: Value =
-        serde_json::from_slice(bytes).map_err(|_| InteractionEffectError::InvalidResource)?;
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|error| InteractionEffectError::InvalidSpec(error.to_string()))?;
     Ok(envelope_spec_document(&value))
 }
 
@@ -606,8 +618,8 @@ fn spec_with_provider_ref(
 }
 
 fn spec_ref_at(bytes: &[u8], path: &str) -> Result<ResourceRef, InteractionEffectError> {
-    let value: Value =
-        serde_json::from_slice(bytes).map_err(|_| InteractionEffectError::InvalidResource)?;
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|error| InteractionEffectError::InvalidSpec(error.to_string()))?;
     value
         .pointer(path)
         .and_then(Value::as_str)
@@ -662,7 +674,7 @@ fn validate_audio_dependency_identity(
         return Err(InteractionEffectError::InvalidResource);
     }
     let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
-        .map_err(|_| InteractionEffectError::InvalidResource)?;
+        .map_err(|error| InteractionEffectError::InvalidSpec(error.to_string()))?;
     let metadata = envelope.metadata();
     if metadata.zone() != zone
         || metadata.uid() != &resource.uid
@@ -671,7 +683,7 @@ fn validate_audio_dependency_identity(
         || envelope
             .digest()
             .map_err(|_| InteractionEffectError::InvalidResource)?
-            != resource.payload_digest
+            != resource.payload_digest.as_str()
     {
         return Err(InteractionEffectError::InvalidResource);
     }
@@ -680,6 +692,9 @@ fn validate_audio_dependency_identity(
 
 fn map_audio_effect_error(error: AudioResourceRuntimeError) -> InteractionEffectError {
     match error {
+        AudioResourceRuntimeError::InvalidSpec(reason) => {
+            InteractionEffectError::InvalidSpec(reason)
+        }
         AudioResourceRuntimeError::InvalidResource
         | AudioResourceRuntimeError::InvalidRelationship => {
             InteractionEffectError::InvalidResource

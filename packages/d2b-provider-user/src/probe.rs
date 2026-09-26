@@ -5,8 +5,15 @@
 //! effects: every call that touches the account database - the bounded
 //! `getpwnam` / `getgrnam` record reads and the group-membership checks -
 //! lives here, so this crate reaches host state through no daemon runtime.
+//!
+//! The reads have no async form, so the probe runs the whole blocking body
+//! on `d2b-core`'s bounded loader probe seat: a slow or wedged backend
+//! (LDAP/NIS) refuses later probes rather than parking this executor
+//! worker for the lookup (`spawn_blocking` is banned; the seat
+//! is the house replacement).
 
 use d2b_contracts_resource::v3::{ResourceRef, user::UserSpec};
+use d2b_core::loader_worker;
 use d2b_provider_system_core::{
     DiscoveredUser, SystemCoreError, UserBinding, UserDiscoveryEffectPort, UserIdentityDigest,
     UserObservation,
@@ -25,11 +32,26 @@ impl UserDiscoveryEffectPort for UserProbe {
         user_ref: &ResourceRef,
         spec: &UserSpec,
     ) -> Result<Option<DiscoveredUser>, SystemCoreError> {
-        discover_local_user(user_ref, spec).await
+        // The seat job owns the declared identity and builds the complete
+        // discovery on the worker; a seat that refuses is the ordinary
+        // "cannot complete" classification, so the driver's mapping and the
+        // hosted service's refusal code are unchanged.
+        let reference = user_ref.clone();
+        let declared = spec.clone();
+        loader_worker::run_probe(move || discover_local_user(&reference, &declared))
+            .await
+            .map_err(|refusal| {
+                tracing::warn!(
+                    user = %user_ref.name().as_str(),
+                    error = %refusal,
+                    "user probe refused: the bounded NSS probe seat is unavailable",
+                );
+                SystemCoreError::DiscoveryUnavailable
+            })?
     }
 }
 
-/// Resolve one declared User locally.
+/// Resolve one declared User locally, on the bounded loader probe seat.
 ///
 /// `Ok(None)` means the local machine resolves no such identity, which is
 /// an ordinary state rather than a failure; an NSS lookup that cannot
@@ -37,7 +59,7 @@ impl UserDiscoveryEffectPort for UserProbe {
 /// derived from the immutable identity material: the declared reference and
 /// username, the resolved numeric ids, and every declared group, in the
 /// fixed `d2b-system-core-user-v1` domain.
-async fn discover_local_user(
+fn discover_local_user(
     user_ref: &ResourceRef,
     spec: &UserSpec,
 ) -> Result<Option<DiscoveredUser>, SystemCoreError> {
@@ -101,23 +123,21 @@ mod tests {
     use super::*;
     use d2b_contracts_resource::v3::user::OsUsername;
 
-    #[tokio::test]
-    async fn the_real_nss_probe_resolves_absent_accounts_and_derives_the_frozen_root_digest() {
+    #[test]
+    fn the_real_nss_probe_resolves_absent_accounts_and_derives_the_frozen_root_digest() {
         let absent_spec =
             UserSpec::minimal(OsUsername::parse("d2b-u5-no-such-account").unwrap());
         assert!(matches!(
             discover_local_user(
                 &ResourceRef::parse("User/no-such-account").unwrap(),
                 &absent_spec,
-            )
-            .await,
+            ),
             Ok(None)
         ));
 
         let root_spec = UserSpec::minimal(OsUsername::parse("root").unwrap());
         let discovered =
             discover_local_user(&ResourceRef::parse("User/root").unwrap(), &root_spec)
-                .await
                 .expect("probe completes")
                 .expect("root resolves on the host account database");
         assert!(
@@ -132,7 +152,6 @@ mod tests {
             "d3e0054feb316672210c792a1a16b62ebb3d9a5fc3fdffaebae0b2d4e8f537bb"
         );
         let again = discover_local_user(&ResourceRef::parse("User/root").unwrap(), &root_spec)
-            .await
             .unwrap()
             .expect("root resolves on a second probe");
         assert_eq!(again.identity, discovered.identity);

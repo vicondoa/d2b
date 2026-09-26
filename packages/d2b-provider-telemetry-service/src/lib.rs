@@ -32,6 +32,7 @@ mod driver;
 pub use driver::{
     DEPENDENCY_READINESS_PROVEN, PHASE_DEGRADED, PHASE_PENDING, PHASE_READY,
     TELEMETRY_SERVICE_TYPE, TELEMETRY_SERVICE_RESYNC, TelemetryServiceDriver,
-    TelemetryServiceDriverError, TelemetryServiceDriverFactory, TelemetryServiceStatus,
+    TelemetryServiceDriverError, TelemetryServiceDriverFactory, TelemetryServicePhase,
+    TelemetryServiceProjection, TelemetryServiceStatus,
     telemetry_service_descriptor, telemetry_service_spec_decoder,
 };

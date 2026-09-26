@@ -12,7 +12,7 @@ use crate::{
 };
 use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use d2b_provider_toolkit::{AuthenticatedComponentSession, AuthenticatedSessionRouteBinding};
-use sha2::{Digest, Sha256};
+
 use std::collections::BTreeMap;
 
 /// Default shared-Runner repair interval for display resources.
@@ -461,7 +461,6 @@ impl FinalizationInput {
         clippy::too_many_arguments,
         reason = "finalization evidence keeps every owned authority explicit"
     )]
-    #[allow(dead_code)]
     pub(crate) const fn from_supervisor(
         stop_requested: StopRequest,
         proxy: WorkerState,
@@ -572,22 +571,6 @@ pub struct WaylandPolicySnapshot {
 }
 
 impl WaylandPolicySnapshot {
-    /// Resolve a policy snapshot for one authenticated Guest session.
-    ///
-    /// The route binding supplies the Zone and Provider identity; callers may
-    /// not substitute a different Zone or service boundary while compiling
-    /// the policy.
-    pub fn from_authenticated_session<C>(
-        session: &AuthenticatedComponentSession<C>,
-        policy_ref: ResourceRef,
-        generation: u64,
-        defaults: FilterInput,
-        zone_policy: FilterInput,
-    ) -> Result<Self, WaylandSpecError> {
-        let route = session.route_binding();
-        Self::from_authenticated_route(&route, policy_ref, generation, defaults, zone_policy)
-    }
-
     /// Resolve a policy snapshot from the daemon-retained authenticated route.
     ///
     /// This is the production adapter used after the Zone registrar consumed
@@ -703,6 +686,14 @@ pub struct PrincipalReleaseReceipt {
     session_key: String,
 }
 
+impl PrincipalReleaseReceipt {
+    /// Bind one release receipt to a session key reconciled by this
+    /// controller.
+    pub(crate) fn new(session_key: String) -> Self {
+        Self { session_key }
+    }
+}
+
 impl core::fmt::Debug for PrincipalReleaseReceipt {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("PrincipalReleaseReceipt(REDACTED)")
@@ -735,20 +726,31 @@ pub struct DisplayController {
 
 impl DisplayController {
     /// Construct a controller with a bounded dynamic principal pool.
-    pub fn new(pool_size: usize) -> Self {
-        Self {
-            principal_pool: PrincipalPool::new(pool_size)
-                .expect("display principal pool size is validated by the signed descriptor"),
+    ///
+    /// # Errors
+    ///
+    /// Returns `PrincipalPoolError::InvalidPoolSize` when the pool size is
+    /// outside the closed bound 1..=32.
+    pub fn new(pool_size: usize) -> Result<Self, crate::principal::PrincipalPoolError> {
+        Ok(Self {
+            principal_pool: PrincipalPool::new(pool_size)?,
             principals: BTreeMap::new(),
             active_policies: BTreeMap::new(),
             ready_sessions: BTreeMap::new(),
             worker_supervisor: WorkerSupervisor::new(WorkerSupervisor::DEFAULT_MAX_ATTEMPTS)
                 .expect("default worker retry bound is non-zero"),
-        }
+        })
     }
 
     /// Reconcile only after binding the desired state to an authenticated
     /// Guest ComponentSession.
+    ///
+    /// # Errors
+    ///
+    /// Returns `WaylandSpecError::InvalidReference` when the authenticated
+    /// session's guest or host ref, reconnect generation, or zone does not
+    /// match the spec, and any `WaylandSpecError` raised by the reconcile step
+    /// itself.
     #[expect(
         clippy::too_many_arguments,
         reason = "the authenticated controller fence keeps every authority input explicit"
@@ -1375,7 +1377,7 @@ impl DisplayController {
         true
     }
 
-    /// Release a session's dynamic principal after verified Process cleanup.
+        /// Release a session's dynamic principal after verified Process cleanup.
     pub fn release_session_principal(
         &mut self,
         receipt: PrincipalReleaseReceipt,
@@ -1428,7 +1430,7 @@ impl core::fmt::Debug for DisplayController {
     }
 }
 
-fn session_key(spec: &WaylandSessionSpec, controller_generation: u64) -> String {
+pub(crate) fn session_key(spec: &WaylandSessionSpec, controller_generation: u64) -> String {
     format!(
         "{}|{}|{}|{}|{}",
         spec.guest_ref().to_canonical_string(),
@@ -1440,17 +1442,7 @@ fn session_key(spec: &WaylandSessionSpec, controller_generation: u64) -> String 
 }
 
 pub(crate) fn session_digest(spec: &WaylandSessionSpec, controller_generation: u64) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(spec.guest_ref().to_canonical_string().as_bytes());
-    digest.update([0]);
-    digest.update(spec.host_ref().to_canonical_string().as_bytes());
-    digest.update([0]);
-    digest.update(spec.user_ref().to_canonical_string().as_bytes());
-    digest.update([0]);
-    digest.update(spec.reconnect_generation().to_be_bytes());
-    digest.update([0]);
-    digest.update(controller_generation.to_be_bytes());
-    digest.finalize().into()
+    spec.session_digest(controller_generation)
 }
 
 #[cfg(test)]
@@ -1491,7 +1483,7 @@ mod tests {
         .unwrap();
         assert_eq!(policy.generation(), 7);
 
-        let mut controller = DisplayController::new(1);
+        let mut controller = DisplayController::new(1).unwrap();
         let result = controller
             .reconcile_with_policy(
                 &spec,
@@ -1523,7 +1515,7 @@ mod tests {
             FilterInput::default(),
         )
         .unwrap();
-        let mut controller = DisplayController::new(1);
+        let mut controller = DisplayController::new(1).unwrap();
         controller
             .reconcile_with_policy(
                 &spec,

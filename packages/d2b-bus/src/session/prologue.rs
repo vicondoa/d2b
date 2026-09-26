@@ -69,13 +69,21 @@ impl SubjectContextDigest {
     pub fn of_subject(context: &AuthenticatedSubjectContext) -> Self {
         let mut hasher = Sha256::new();
         hasher.update(SUBJECT_CONTEXT_DOMAIN);
+        hash_resource_ref(
+            &mut hasher,
+            context.subject_ref().resource_type().as_str(),
+            context.subject_ref().name().as_str(),
+        );
+        hash_resource_ref(
+            &mut hasher,
+            context.zone_ref().resource_type().as_str(),
+            context.zone_ref().name().as_str(),
+        );
         for field in [
-            context.subject_ref().to_canonical_string(),
-            context.zone_ref().to_canonical_string(),
-            context.session_purpose().as_str().to_owned(),
-            context.service().as_str().to_owned(),
-            evidence_class_label(context.evidence_class()).to_owned(),
-            locality_label(context.transport_binding().locality()).to_owned(),
+            context.session_purpose().as_str(),
+            context.service().as_str(),
+            evidence_class_label(context.evidence_class()),
+            locality_label(context.transport_binding().locality()),
         ] {
             // Each field is length-prefixed so no two distinct field tuples
             // can produce one concatenation.
@@ -84,6 +92,16 @@ impl SubjectContextDigest {
         }
         Self(hasher.finalize().into())
     }
+}
+
+/// Hash one canonical `type/name` reference in the same length-prefixed
+/// form as its canonical string, without materializing that string.
+fn hash_resource_ref(hasher: &mut Sha256, resource_type: &str, name: &str) {
+    let canonical_len = resource_type.len() + 1 + name.len();
+    hasher.update((canonical_len as u64).to_be_bytes());
+    hasher.update(resource_type.as_bytes());
+    hasher.update(b"/");
+    hasher.update(name.as_bytes());
 }
 
 impl core::fmt::Debug for SubjectContextDigest {

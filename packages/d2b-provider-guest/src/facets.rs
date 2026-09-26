@@ -60,6 +60,10 @@ pub trait GuestManagerView: Send + Sync + 'static {
     /// The manager view of one row: `Ok(Some(view))` when the manager holds
     /// the row, `Ok(None)` when it answered that it holds no such row, and
     /// `Err` when the plane could not answer.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when the manager plane could not answer.
     async fn row_view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ()>;
 
     /// The committed Provider identity for one canonical Provider

@@ -68,6 +68,14 @@ impl std::error::Error for ScopedQueryFrameError {}
 
 /// Attach bus-admitted assignment evidence to the existing ttrpc CommitBatch
 /// request without creating another transport.
+///
+/// # Errors
+///
+/// Returns [`ScopedCommitFrameError::InvalidFrame`] when the frame is not a
+/// well-formed ttrpc request, [`ScopedCommitFrameError::InvalidRequest`] when
+/// the frame is not a `CommitBatch` call or already carries scoped admission,
+/// and [`ScopedCommitFrameError::Assignment`] when the assignment evidence
+/// cannot be encoded.
 pub fn attach_scoped_commit_frame(
     frame: &[u8],
     transport: &ScopedCommitTransport,
@@ -112,16 +120,32 @@ pub fn attach_scoped_commit_frame(
     Ok(result)
 }
 
+/// The query method a scoped frame must carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopedQueryMethod {
+    /// A List selector.
+    List,
+    /// A Watch selector.
+    Watch,
+}
+
 /// Attach an admitted List or Watch selector to the existing ttrpc request.
 ///
 /// The selector inputs are transport-neutral so the resource API does not
 /// depend on the message bus's query type.
+///
+/// # Errors
+///
+/// Returns [`ScopedQueryFrameError::InvalidFrame`] when the frame is not a
+/// well-formed ttrpc request, and [`ScopedQueryFrameError::InvalidRequest`]
+/// when the frame is not the expected query call or its payload does not
+/// decode.
 pub fn attach_scoped_query_frame(
     frame: &[u8],
     resource_types: &[ResourceTypeName],
     resource_names: &[ResourceName],
     filters: &[StoreFilter],
-    watch: bool,
+    method: ScopedQueryMethod,
 ) -> Result<Vec<u8>, ScopedQueryFrameError> {
     let header_bytes: [u8; MESSAGE_HEADER_LENGTH] = frame
         .get(..MESSAGE_HEADER_LENGTH)
@@ -138,7 +162,10 @@ pub fn attach_scoped_query_frame(
     }
     let mut rpc = TtrpcRequest::parse_from_bytes(&frame[MESSAGE_HEADER_LENGTH..])
         .map_err(|_| ScopedQueryFrameError::InvalidRequest)?;
-    let expected_method = if watch { "Watch" } else { "List" };
+    let expected_method = match method {
+        ScopedQueryMethod::List => "List",
+        ScopedQueryMethod::Watch => "Watch",
+    };
     if rpc.service != "d2b.resource.v3.ResourceService" || rpc.method != expected_method {
         return Err(ScopedQueryFrameError::InvalidRequest);
     }
@@ -164,7 +191,7 @@ pub fn attach_scoped_query_frame(
         .iter()
         .map(|resource_type| resource_type.as_str().to_owned())
         .collect();
-    if watch {
+    if matches!(method, ScopedQueryMethod::Watch) {
         let mut request = wire::WatchRequest::parse_from_bytes(&rpc.payload)
             .map_err(|_| ScopedQueryFrameError::InvalidRequest)?;
         request.resource_types = resource_types;
@@ -206,6 +233,12 @@ pub fn decode_scoped_commit_request(
 ///
 /// Scoped evidence is bus-owned. A plain ResourceCall must never be able to
 /// smuggle the field through the same RPC and receive a storage fence.
+///
+/// # Errors
+///
+/// Returns [`ScopedCommitFrameError::InvalidFrame`] when the frame is not a
+/// well-formed ttrpc request, and [`ScopedCommitFrameError::InvalidRequest`]
+/// when the frame is not a `CommitBatch` call or carries scoped admission.
 pub fn reject_scoped_commit_frame(frame: &[u8]) -> Result<(), ScopedCommitFrameError> {
     let header_bytes: [u8; MESSAGE_HEADER_LENGTH] = frame
         .get(..MESSAGE_HEADER_LENGTH)
@@ -246,15 +279,6 @@ impl core::fmt::Display for AdapterBindingError {
 
 impl std::error::Error for AdapterBindingError {}
 
-/// Current production reachability of the resource service.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResourceApiReachability {
-    RegisteredOnAuthenticatedComponentSession,
-}
-
-pub const RESOURCE_API_REACHABILITY: ResourceApiReachability =
-    ResourceApiReachability::RegisteredOnAuthenticatedComponentSession;
-
 /// Session-scoped dispatcher registered on an authenticated Resource server.
 pub struct ResourceBusAdapter<S, U> {
     service: Arc<ResourceService<S, U>>,
@@ -294,7 +318,7 @@ where
     pub async fn scoped_commit_batch(
         &self,
         request: wire::CommitBatchRequest,
-        scoped_mutations: Vec<ScopedResourceMutation>,
+        scoped_mutations: &[ScopedResourceMutation],
     ) -> wire::CommitBatchResponse {
         self.client()
             .scoped_commit_batch(request, scoped_mutations)
@@ -422,7 +446,7 @@ where
         Ok(match scoped {
             Some(transport) => {
                 self.client()
-                    .scoped_commit_batch(request, transport.mutations().to_vec())
+                    .scoped_commit_batch(request, transport.mutations())
                     .await
             }
             None => self.service().commit_batch(self.trusted(request)).await,
@@ -467,8 +491,8 @@ mod tests {
     use d2b_contracts_resource::v3::{
         CanonicalJsonValue, ConfigurationGeneration, ControllerGeneration,
         RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope, ResourceGeneration, ResourceName,
-        ResourceRef, ResourceTypeName, ResourceUid, SchemaFingerprint, ZoneId, ZoneRevision,
-        canonical_digest,
+        ResourceRef, ResourceTypeName, ResourceUid, SchemaFingerprint, StateDigest, ZoneId,
+        ZoneRevision, canonical_digest,
     };
     use d2b_core_controller::controller_assignment::{ScopedCommitTransport, ScopedResourceScope};
     use d2b_contracts_resource::v3::operations::seal::MutationSealAcceptor;
@@ -625,8 +649,11 @@ mod tests {
             values: vec![owner_uid.as_str().to_owned()],
         }];
 
-        for (method, watch) in [("List", false), ("Watch", true)] {
-            let payload = if watch {
+        for (method, query_method) in [
+            ("List", ScopedQueryMethod::List),
+            ("Watch", ScopedQueryMethod::Watch),
+        ] {
+            let payload = if matches!(query_method, ScopedQueryMethod::Watch) {
                 let mut request = wire::WatchRequest::new();
                 request.resource_types.push("Host".to_owned());
                 request.filters.push(wire::ListFilter {
@@ -657,10 +684,16 @@ mod tests {
             frame.extend_from_slice(&Vec::from(header));
             frame.extend_from_slice(&body);
 
-            let rewritten =
-                attach_scoped_query_frame(&frame, &resource_types, &[], &filters, watch).unwrap();
+            let rewritten = attach_scoped_query_frame(
+                &frame,
+                &resource_types,
+                &[],
+                &filters,
+                query_method,
+            )
+            .unwrap();
             let rpc = TtrpcRequest::parse_from_bytes(&rewritten[MESSAGE_HEADER_LENGTH..]).unwrap();
-            if watch {
+            if matches!(query_method, ScopedQueryMethod::Watch) {
                 let request = wire::WatchRequest::parse_from_bytes(&rpc.payload).unwrap();
                 assert_eq!(
                     request.resource_types,
@@ -847,7 +880,8 @@ mod tests {
             Ok(StoredSchema {
                 resource_type: ResourceTypeName::parse("Host").unwrap(),
                 canonical_json: b"inspect-schema-sentinel-112".to_vec(),
-                payload_digest: format!("sha256:{}", "1".repeat(64)),
+                payload_digest: SchemaFingerprint::parse(format!("sha256:{}", "1".repeat(64)))
+                    .unwrap(),
             })
         }
 
@@ -1199,16 +1233,12 @@ mod tests {
             generation: ResourceGeneration::new(1).unwrap(),
             revision: ZoneRevision::new(revision),
             canonical_json: format!("response-sentinel-{revision}").into_bytes(),
-            payload_digest: format!("sha256:{revision:064x}"),
+            payload_digest: StateDigest::parse(format!("sha256:{revision:064x}")).unwrap(),
         }
     }
 
     #[test]
     fn authenticated_service_map_contains_the_exact_thirteen_method_surface() {
-        assert_eq!(
-            RESOURCE_API_REACHABILITY,
-            ResourceApiReachability::RegisteredOnAuthenticatedComponentSession
-        );
         let services = denied_adapter().ttrpc_services();
         assert_eq!(services.len(), 1);
         let methods = &services["d2b.resource.v3.ResourceService"].methods;

@@ -169,21 +169,21 @@ async fn serve_inspect_user(
         service: USER_EFFECTS_SERVICE.id.to_owned(),
         reason: reason.to_owned(),
     };
-    let request = InspectUserRequest::parse(payload)?;
+    let InspectUserRequest { user_ref, username, groups } = InspectUserRequest::parse(payload)?;
     // The probe input is the declared identity itself: the spec carries the
     // declared groups, so the identity digest and the required bindings are
     // the ones the row's own reconcile would demand for that identity.
     let spec = UserSpec::new(
-        request.username.clone(),
+        username.clone(),
         BoundedText::parse(String::new()).expect("empty text is always valid"),
-        request.groups.clone(),
+        groups,
     )
     .map_err(|_| declined("inspect-user-request-invalid"))?;
     let report = reconciler
-        .reconcile(&request.user_ref, &spec)
+        .reconcile(&user_ref, &spec)
         .await
         .map_err(|_| declined("inspect-user-discovery-failed"))?;
-    inspect_user_response(&request.username, &report)
+    inspect_user_response(&username, &report)
 }
 
 /// The provider-owned User effects (U5), built from the daemon-supplied

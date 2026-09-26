@@ -10,7 +10,7 @@ use super::spawn_runner::SpawnRunnerPlan;
 
 /// Closed GPU worker roles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GpuBrokerRole {
+pub(crate) enum GpuBrokerRole {
     /// Full virtio-gpu worker.
     Full,
     /// Render-node-only worker.
@@ -21,7 +21,7 @@ pub enum GpuBrokerRole {
 
 /// Closed GPU device grant classes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum GpuDeviceClass {
+pub(crate) enum GpuDeviceClass {
     /// KVM device.
     Kvm,
     /// DRM render node.
@@ -38,16 +38,16 @@ pub enum GpuDeviceClass {
 
 /// Opaque broker-side identity.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct GpuOpaqueIdentity([u8; 32]);
+pub(crate) struct GpuOpaqueIdentity([u8; 32]);
 
 impl GpuOpaqueIdentity {
     /// Construct an identity at the trusted bundle/adapter boundary.
-    pub const fn from_core(bytes: [u8; 32]) -> Self {
+    pub(crate) const fn from_core(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 
     /// Whether this is the forbidden all-zero identity.
-    pub fn is_zero(self) -> bool {
+    pub(crate) fn is_zero(self) -> bool {
         self.0 == [0; 32]
     }
 }
@@ -60,7 +60,7 @@ impl fmt::Debug for GpuOpaqueIdentity {
 
 /// Opaque GPU launch request validated before a device open or clone.
 #[derive(Clone, PartialEq, Eq)]
-pub struct GpuLaunchRequest {
+pub(crate) struct GpuLaunchRequest {
     role: GpuBrokerRole,
     backing: GpuOpaqueIdentity,
     platform: GpuOpaqueIdentity,
@@ -71,7 +71,7 @@ pub struct GpuLaunchRequest {
 
 impl GpuLaunchRequest {
     /// Construct a request from Core-resolved opaque identities.
-    pub fn from_core(
+    pub(crate) fn from_core(
         role: GpuBrokerRole,
         backing: GpuOpaqueIdentity,
         platform: GpuOpaqueIdentity,
@@ -95,7 +95,7 @@ impl GpuLaunchRequest {
     }
 
     /// Validate the closed role-to-device matrix.
-    pub fn validate(&self) -> Result<(), GpuBrokerError> {
+    pub(crate) fn validate(&self) -> Result<(), GpuBrokerError> {
         let has = |class| self.device_classes.contains(&class);
         match self.role {
             GpuBrokerRole::Full
@@ -136,27 +136,27 @@ impl GpuLaunchRequest {
     }
 
     /// Borrow the opaque backing identity.
-    pub const fn backing(&self) -> GpuOpaqueIdentity {
+    pub(crate) const fn backing(&self) -> GpuOpaqueIdentity {
         self.backing
     }
 
     /// Borrow the opaque platform identity.
-    pub const fn platform(&self) -> GpuOpaqueIdentity {
+    pub(crate) const fn platform(&self) -> GpuOpaqueIdentity {
         self.platform
     }
 
     /// Borrow the expected worker principal.
-    pub const fn principal(&self) -> GpuOpaqueIdentity {
+    pub(crate) const fn principal(&self) -> GpuOpaqueIdentity {
         self.principal
     }
 
     /// Return the expected resource generation.
-    pub const fn generation(&self) -> u64 {
+    pub(crate) const fn generation(&self) -> u64 {
         self.generation
     }
 
     /// Return the worker role.
-    pub const fn role(&self) -> GpuBrokerRole {
+    pub(crate) const fn role(&self) -> GpuBrokerRole {
         self.role
     }
 }
@@ -174,7 +174,7 @@ impl fmt::Debug for GpuLaunchRequest {
 
 /// Broker-side process observation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GpuProcessObservation {
+pub(crate) enum GpuProcessObservation {
     /// One exact process matched.
     Matching,
     /// No exact process was found.
@@ -187,7 +187,7 @@ pub enum GpuProcessObservation {
 
 /// Closed GPU broker failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GpuBrokerError {
+pub(crate) enum GpuBrokerError {
     /// A persisted identity is missing or stale.
     StaleIdentity,
     /// The role and device allowlist disagree.
@@ -206,7 +206,7 @@ pub enum GpuBrokerError {
 
 impl GpuBrokerError {
     /// Return the stable identity-free error code.
-    pub const fn code(self) -> &'static str {
+    pub(crate) const fn code(self) -> &'static str {
         match self {
             Self::StaleIdentity => "gpu-device-identity-stale",
             Self::RoleDeviceMismatch => "gpu-role-device-mismatch",
@@ -228,7 +228,7 @@ impl fmt::Display for GpuBrokerError {
 impl std::error::Error for GpuBrokerError {}
 
 /// Validate identity evidence before adopting a worker.
-pub fn validate_observed_identity(
+pub(crate) fn validate_observed_identity(
     request: &GpuLaunchRequest,
     observed_principal: GpuOpaqueIdentity,
     observed_platform: GpuOpaqueIdentity,
@@ -260,7 +260,7 @@ pub fn validate_observed_identity(
 
 /// Validate a resolved SpawnRunner plan against the closed GPU isolation
 /// profile before the broker opens devices or clones a child.
-pub fn validate_spawn_plan(
+pub(crate) fn validate_spawn_plan(
     plan: &SpawnRunnerPlan,
     pre_opened_device_fds: usize,
 ) -> Result<(), GpuBrokerError> {
@@ -268,7 +268,7 @@ pub fn validate_spawn_plan(
 }
 
 /// Validate a GPU runner shape before the broker opens any device.
-pub fn validate_spawn_plan_preflight(plan: &SpawnRunnerPlan) -> Result<(), GpuBrokerError> {
+pub(crate) fn validate_spawn_plan_preflight(plan: &SpawnRunnerPlan) -> Result<(), GpuBrokerError> {
     validate_spawn_plan_shape(plan, None)
 }
 

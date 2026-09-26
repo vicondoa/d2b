@@ -4,8 +4,9 @@
 //! sets.  In particular, `relay` is transport forwarding authority and can
 //! never be smuggled into CRUD by treating all verbs as strings.
 
+use d2b_contracts::wire_deserialize;
 use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 use d2b_contracts_resource::v3::{ ResourceName, ResourceRef, ResourceTypeName, ZoneId, execution_policy::{
         BoundedText, BoundedToken, MAX_PATH_BYTES, parsed_deserialize, redacted_debug,
@@ -400,38 +401,36 @@ impl RoleRule {
 
 redacted_debug!(RoleRule);
 
-impl<'de> Deserialize<'de> for RoleRule {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            resource_types: Vec<ResourceTypeName>,
-            #[serde(default)]
-            verbs: Vec<RoleResourceVerb>,
-            #[serde(default)]
-            subresources: Vec<BoundedText>,
-            #[serde(default)]
-            resource_names: Vec<String>,
-            #[serde(default)]
-            zones: Vec<ZoneId>,
-            #[serde(default)]
-            execution_refs: Vec<ResourceRef>,
-            #[serde(default)]
-            session_verbs: Vec<RoleSessionVerb>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.resource_types,
-            wire.verbs,
-            wire.subresources,
-            wire.resource_names,
-            wire.zones,
-            wire.execution_refs,
-            wire.session_verbs,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    RoleRule,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        resource_types: Vec<ResourceTypeName>,
+        #[serde(default)]
+        verbs: Vec<RoleResourceVerb>,
+        #[serde(default)]
+        subresources: Vec<BoundedText>,
+        #[serde(default)]
+        resource_names: Vec<String>,
+        #[serde(default)]
+        zones: Vec<ZoneId>,
+        #[serde(default)]
+        execution_refs: Vec<ResourceRef>,
+        #[serde(default)]
+        session_verbs: Vec<RoleSessionVerb>,
+    },
+    wire,
+    Self::new(
+        wire.resource_types,
+        wire.verbs,
+        wire.subresources,
+        wire.resource_names,
+        wire.zones,
+        wire.execution_refs,
+        wire.session_verbs,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 fn duplicate<T: PartialEq>(values: &[T]) -> bool {
     values.windows(2).any(|pair| pair[0] == pair[1])
@@ -728,37 +727,35 @@ impl RolePosture {
 
 redacted_debug!(RolePosture);
 
-impl<'de> Deserialize<'de> for RolePosture {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            seccomp_ref: ResourceRef,
-            principal_ref: PrincipalRef,
-            #[serde(default)]
-            capabilities: Vec<BoundedToken>,
-            #[serde(default)]
-            namespaces: RoleNamespaces,
-            #[serde(default)]
-            mounts: Vec<RoleMount>,
-            #[serde(default)]
-            umask: Option<u32>,
-            #[serde(default)]
-            user_ns: bool,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.seccomp_ref,
-            wire.principal_ref,
-            wire.capabilities,
-            wire.namespaces,
-            wire.mounts,
-            wire.umask,
-            wire.user_ns,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    RolePosture,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        seccomp_ref: ResourceRef,
+        principal_ref: PrincipalRef,
+        #[serde(default)]
+        capabilities: Vec<BoundedToken>,
+        #[serde(default)]
+        namespaces: RoleNamespaces,
+        #[serde(default)]
+        mounts: Vec<RoleMount>,
+        #[serde(default)]
+        umask: Option<u32>,
+        #[serde(default)]
+        user_ns: bool,
+    },
+    wire,
+    Self::new(
+        wire.seccomp_ref,
+        wire.principal_ref,
+        wire.capabilities,
+        wire.namespaces,
+        wire.mounts,
+        wire.umask,
+        wire.user_ns,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// The complete Role desired state.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -830,29 +827,27 @@ impl RoleSpec {
 
 redacted_debug!(RoleSpec);
 
-impl<'de> Deserialize<'de> for RoleSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            rules: Vec<RoleRule>,
-            #[serde(default)]
-            operation_refs: Vec<ResourceRef>,
-            #[serde(default)]
-            command_refs: Vec<ResourceRef>,
-            #[serde(default)]
-            posture: Option<RolePosture>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::with_facets(
-            wire.rules,
-            wire.operation_refs,
-            wire.command_refs,
-            wire.posture,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    RoleSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        rules: Vec<RoleRule>,
+        #[serde(default)]
+        operation_refs: Vec<ResourceRef>,
+        #[serde(default)]
+        command_refs: Vec<ResourceRef>,
+        #[serde(default)]
+        posture: Option<RolePosture>,
+    },
+    wire,
+    Self::with_facets(
+        wire.rules,
+        wire.operation_refs,
+        wire.command_refs,
+        wire.posture,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// Closed Role condition names.
 #[derive(

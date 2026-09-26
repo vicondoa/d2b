@@ -19,5 +19,3 @@ pub mod zonelink;
 
 pub use driver::zone_link_descriptor;
 
-pub use zone_links::*;
-pub use zonelink::*;

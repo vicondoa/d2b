@@ -2,10 +2,11 @@
 
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex},
+    sync::Mutex,
 };
 use tracing::{error, warn};
 
+use crate::ProviderError;
 use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use sha2::{Digest, Sha256};
 
@@ -29,7 +30,7 @@ impl NotificationSourceIdentity {
         source_generation: u64,
         display_generation: u64,
         endpoint_digest: impl Into<String>,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, ProviderError> {
         let endpoint_digest = endpoint_digest.into();
         if provider_ref.resource_type().as_str() != "Provider"
             || source_ref.resource_type().as_str() != "Guest"
@@ -38,7 +39,7 @@ impl NotificationSourceIdentity {
             || endpoint_digest.is_empty()
             || endpoint_digest.len() > 128
         {
-            return Err("notification-lifecycle-source-invalid");
+            return Err(ProviderError::LifecycleSourceInvalid);
         }
         Ok(Self {
             zone,
@@ -95,7 +96,7 @@ impl NotificationHostSinkIdentity {
         display_provider_ref: ResourceRef,
         display_generation: u64,
         controller_generation: u64,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, ProviderError> {
         if provider_ref.resource_type().as_str() != "Provider"
             || host_execution_ref.resource_type().as_str() != "Host"
             || host_user_ref.resource_type().as_str() != "User"
@@ -103,7 +104,7 @@ impl NotificationHostSinkIdentity {
             || display_generation == 0
             || controller_generation == 0
         {
-            return Err("notification-lifecycle-host-sink-invalid");
+            return Err(ProviderError::LifecycleHostSinkInvalid);
         }
         Ok(Self {
             zone,
@@ -153,9 +154,9 @@ impl NotificationLifecyclePlan {
         mut stop_sources: Vec<NotificationSourceIdentity>,
         start_host_sink: Option<NotificationHostSinkIdentity>,
         stop_host_sink: Option<NotificationHostSinkIdentity>,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, ProviderError> {
         if provider_ref.resource_type().as_str() != "Provider" {
-            return Err("notification-lifecycle-provider-invalid");
+            return Err(ProviderError::LifecycleProviderInvalid);
         }
         start_sources.sort();
         stop_sources.sort();
@@ -183,7 +184,7 @@ impl NotificationLifecyclePlan {
                 .as_ref()
                 .is_some_and(|sink| sink.zone() != &zone || sink.provider_ref() != &provider_ref)
         {
-            return Err("notification-lifecycle-plan-invalid");
+            return Err(ProviderError::LifecyclePlanInvalid);
         }
         Ok(Self {
             zone,
@@ -288,19 +289,19 @@ impl NotificationLifecycleObservation {
 /// Host-owned lifecycle operations for notification sources and the sink.
 pub trait NotificationLifecycleBackend: Send + Sync + 'static {
     /// Start one generation-bound Guest source.
-    fn start_source(&self, source: &NotificationSourceIdentity) -> Result<(), &'static str>;
+    fn start_source(&self, source: &NotificationSourceIdentity) -> Result<(), ProviderError>;
     /// Stop one exact adopted Guest source.
-    fn stop_source(&self, source: &NotificationSourceIdentity) -> Result<(), &'static str>;
+    fn stop_source(&self, source: &NotificationSourceIdentity) -> Result<(), ProviderError>;
     /// Start one exact host sink.
-    fn start_host_sink(&self, sink: &NotificationHostSinkIdentity) -> Result<(), &'static str>;
+    fn start_host_sink(&self, sink: &NotificationHostSinkIdentity) -> Result<(), ProviderError>;
     /// Stop one exact adopted host sink.
-    fn stop_host_sink(&self, sink: &NotificationHostSinkIdentity) -> Result<(), &'static str>;
+    fn stop_host_sink(&self, sink: &NotificationHostSinkIdentity) -> Result<(), ProviderError>;
     /// Observe adoptable source and sink ownership after a supervisor restart.
     fn observe(
         &self,
         zone: &ZoneId,
         provider_ref: &ResourceRef,
-    ) -> Result<NotificationLifecycleObservation, &'static str>;
+    ) -> Result<NotificationLifecycleObservation, ProviderError>;
 }
 
 #[derive(Default)]
@@ -335,7 +336,7 @@ impl core::fmt::Debug for NotificationLifecycleReceipt {
 
 /// Core-owned lifecycle supervisor that issues receipts only after host effects.
 pub struct NotificationLifecycleSupervisor<B: NotificationLifecycleBackend> {
-    backend: Arc<B>,
+    backend: B,
     state: Mutex<LifecycleState>,
 }
 
@@ -343,7 +344,7 @@ impl<B: NotificationLifecycleBackend> NotificationLifecycleSupervisor<B> {
     /// Construct one lifecycle supervisor over an authoritative host backend.
     pub fn new(backend: B) -> Self {
         Self {
-            backend: Arc::new(backend),
+            backend,
             state: Mutex::new(LifecycleState::default()),
         }
     }
@@ -357,7 +358,7 @@ impl<B: NotificationLifecycleBackend> NotificationLifecycleSupervisor<B> {
         &self,
         zone: &ZoneId,
         provider_ref: &ResourceRef,
-    ) -> Result<usize, &'static str> {
+    ) -> Result<usize, ProviderError> {
         let observation = self.backend.observe(zone, provider_ref)?;
         let mut sources = BTreeMap::new();
         for source in observation.sources {
@@ -367,7 +368,7 @@ impl<B: NotificationLifecycleBackend> NotificationLifecycleSupervisor<B> {
                     .insert(source.source_ref().clone(), source)
                     .is_some()
             {
-                return Err("notification-lifecycle-adoption-invalid");
+                return Err(ProviderError::LifecycleAdoptionInvalid);
             }
         }
         if observation
@@ -375,13 +376,13 @@ impl<B: NotificationLifecycleBackend> NotificationLifecycleSupervisor<B> {
             .as_ref()
             .is_some_and(|sink| sink.zone() != zone || sink.provider_ref() != provider_ref)
         {
-            return Err("notification-lifecycle-adoption-invalid");
+            return Err(ProviderError::LifecycleAdoptionInvalid);
         }
         let count = sources.len() + usize::from(observation.host_sink.is_some());
         let mut state = self
             .state
             .lock()
-            .map_err(|_| "notification-lifecycle-state-unavailable")?;
+            .map_err(|_| ProviderError::LifecycleStateUnavailable)?;
         state.sources = sources;
         state.host_sink = observation.host_sink;
         Ok(count)
@@ -395,11 +396,11 @@ impl<B: NotificationLifecycleBackend> NotificationLifecycleSupervisor<B> {
     pub fn apply(
         &self,
         plan: &NotificationLifecyclePlan,
-    ) -> Result<NotificationLifecycleReceipt, &'static str> {
+    ) -> Result<NotificationLifecycleReceipt, ProviderError> {
         let mut state = self
             .state
             .lock()
-            .map_err(|_| "notification-lifecycle-state-unavailable")?;
+            .map_err(|_| ProviderError::LifecycleStateUnavailable)?;
         let mut stopped_sources = Vec::new();
         let mut stopped_host_sink = None;
         let mut started_sources = Vec::new();
@@ -407,7 +408,7 @@ impl<B: NotificationLifecycleBackend> NotificationLifecycleSupervisor<B> {
         let result = (|| {
             for source in &plan.stop_sources {
                 if state.sources.get(source.source_ref()) != Some(source) {
-                    return Err("notification-lifecycle-source-adoption-mismatch");
+                    return Err(ProviderError::LifecycleSourceAdoptionMismatch);
                 }
                 self.backend.stop_source(source)?;
                 state.sources.remove(source.source_ref());
@@ -415,7 +416,7 @@ impl<B: NotificationLifecycleBackend> NotificationLifecycleSupervisor<B> {
             }
             if let Some(sink) = &plan.stop_host_sink {
                 if state.host_sink.as_ref() != Some(sink) {
-                    return Err("notification-lifecycle-host-sink-adoption-mismatch");
+                    return Err(ProviderError::LifecycleHostSinkAdoptionMismatch);
                 }
                 self.backend.stop_host_sink(sink)?;
                 state.host_sink = None;
@@ -427,7 +428,7 @@ impl<B: NotificationLifecycleBackend> NotificationLifecycleSupervisor<B> {
                     .get(source.source_ref())
                     .is_some_and(|active| active != source)
                 {
-                    return Err("notification-lifecycle-source-already-active");
+                    return Err(ProviderError::LifecycleSourceAlreadyActive);
                 }
                 self.backend.start_source(source)?;
                 state
@@ -441,7 +442,7 @@ impl<B: NotificationLifecycleBackend> NotificationLifecycleSupervisor<B> {
                     .as_ref()
                     .is_some_and(|active| active != sink)
                 {
-                    return Err("notification-lifecycle-host-sink-already-active");
+                    return Err(ProviderError::LifecycleHostSinkAlreadyActive);
                 }
                 self.backend.start_host_sink(sink)?;
                 state.host_sink = Some(sink.clone());
@@ -453,7 +454,7 @@ impl<B: NotificationLifecycleBackend> NotificationLifecycleSupervisor<B> {
             warn!(
                 provider = "notification-desktop",
                 zone = ?plan.zone(),
-                error = error,
+                error = %error,
                 "lifecycle plan application failed; compensating"
             );
             let mut compensation_failed = false;
@@ -517,7 +518,7 @@ impl<B: NotificationLifecycleBackend> NotificationLifecycleSupervisor<B> {
                     "lifecycle compensation incomplete; attempting supervisor recovery"
                 );
                 self.recover(plan.zone(), plan.provider_ref())?;
-                return Err("notification-lifecycle-recovery-required");
+                return Err(ProviderError::LifecycleRecoveryRequired);
             }
             return Err(error);
         }
@@ -536,13 +537,13 @@ impl<B: NotificationLifecycleBackend> NotificationLifecycleSupervisor<B> {
     // impls (SourceProcessEffectPort/NotificationProcessEffectPort) call
     // it off any executor; it has no async form.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
-    pub fn is_drained(&self) -> Result<bool, &'static str> {
+    pub fn is_drained(&self) -> Result<bool, ProviderError> {
         let state = self.state.lock().map_err(|_| {
             warn!(
                 provider = "notification-desktop",
                 "lifecycle state lock poisoned; drained check unavailable"
             );
-            "notification-lifecycle-state-unavailable"
+            ProviderError::LifecycleStateUnavailable
         })?;
         Ok(state.sources.is_empty() && state.host_sink.is_none())
     }
@@ -595,7 +596,7 @@ mod tests {
                 1,
                 "digest",
             ),
-            Err("notification-lifecycle-source-invalid"),
+            Err(ProviderError::LifecycleSourceInvalid),
             "a non-Provider provider ref is refused"
         );
         assert_eq!(
@@ -607,22 +608,22 @@ mod tests {
                 1,
                 "digest",
             ),
-            Err("notification-lifecycle-source-invalid"),
+            Err(ProviderError::LifecycleSourceInvalid),
             "a non-Guest source ref is refused"
         );
         assert_eq!(
             NotificationSourceIdentity::new(zone(), provider_ref(), source_ref(), 0, 1, "digest"),
-            Err("notification-lifecycle-source-invalid"),
+            Err(ProviderError::LifecycleSourceInvalid),
             "a zero source generation is refused"
         );
         assert_eq!(
             NotificationSourceIdentity::new(zone(), provider_ref(), source_ref(), 1, 0, "digest"),
-            Err("notification-lifecycle-source-invalid"),
+            Err(ProviderError::LifecycleSourceInvalid),
             "a zero display generation is refused"
         );
         assert_eq!(
             NotificationSourceIdentity::new(zone(), provider_ref(), source_ref(), 1, 1, ""),
-            Err("notification-lifecycle-source-invalid"),
+            Err(ProviderError::LifecycleSourceInvalid),
             "an empty endpoint digest is refused"
         );
         assert_eq!(
@@ -634,7 +635,7 @@ mod tests {
                 1,
                 "x".repeat(129),
             ),
-            Err("notification-lifecycle-source-invalid"),
+            Err(ProviderError::LifecycleSourceInvalid),
             "an oversized endpoint digest is refused"
         );
         assert!(source_identity().zone() == &zone());
@@ -689,7 +690,7 @@ mod tests {
                     args.5,
                     args.6,
                 ),
-                Err("notification-lifecycle-host-sink-invalid"),
+                Err(ProviderError::LifecycleHostSinkInvalid),
                 "{field}"
             );
         }
@@ -703,7 +704,7 @@ mod tests {
                 0,
                 3,
             ),
-            Err("notification-lifecycle-host-sink-invalid"),
+            Err(ProviderError::LifecycleHostSinkInvalid),
             "a zero display generation is refused"
         );
         assert_eq!(
@@ -716,7 +717,7 @@ mod tests {
                 2,
                 0,
             ),
-            Err("notification-lifecycle-host-sink-invalid"),
+            Err(ProviderError::LifecycleHostSinkInvalid),
             "a zero controller generation is refused"
         );
     }

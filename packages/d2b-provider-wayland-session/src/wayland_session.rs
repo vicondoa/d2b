@@ -84,7 +84,14 @@ impl DisplayChildSource for SessionChildSource {
             request.spec,
             request.process_generation,
         )
-        .map_err(|_| InteractionEffectError::InvalidResource)
+        .map_err(|error| {
+            tracing::warn!(
+                provider = WAYLAND_SESSION_PROVIDER_REF,
+                reason = %error,
+                "display child derivation failed for wayland session"
+            );
+            InteractionEffectError::InvalidResource
+        })
     }
 }
 
@@ -149,7 +156,8 @@ impl InteractionType for WaylandSession {
         envelope: &InteractionSpecEnvelope,
     ) -> Result<Vec<ChildEnsure>, InteractionEffectError> {
         let spec = envelope.base_spec::<WaylandSessionSpec>()?;
-        let session_ref = key_ref(children.key);
+        let session_ref = key_ref(children.key)
+            .map_err(|_| InteractionEffectError::InvalidResource)?;
         let session_uid = resource_uid(children.uid)
             .ok_or(InteractionEffectError::InvalidResource)?;
         let intents = self.children.display_children(&DisplayChildRequest {

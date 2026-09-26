@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "OpInspectOutputV1",
+  "description": "`op inspect` output: trace, local, and per-realm views.",
   "type": "object",
   "required": [
     "command",
@@ -41,6 +42,7 @@
   "additionalProperties": false,
   "definitions": {
     "OpInspectDegradedOutputV1": {
+      "description": "One degraded scope in `op inspect` output.",
       "type": "object",
       "required": [
         "reason",
@@ -61,6 +63,7 @@
       "additionalProperties": false
     },
     "OpInspectLocalOutputV1": {
+      "description": "Local counts and source for one `op inspect` run.",
       "type": "object",
       "required": [
         "gatewayCount",
@@ -85,6 +88,7 @@
       "additionalProperties": false
     },
     "OpInspectRealmOutputV1": {
+      "description": "One realm's view in `op inspect` output.",
       "type": "object",
       "required": [
         "crossRealmPolicy",
@@ -103,18 +107,19 @@
           ]
         },
         "mode": {
-          "type": "string"
+          "$ref": "#/definitions/RealmMode"
         },
         "realm": {
           "type": "string"
         },
         "state": {
-          "type": "string"
+          "$ref": "#/definitions/RealmGatewayState"
         }
       },
       "additionalProperties": false
     },
     "OpInspectTraceOutputV1": {
+      "description": "Trace identifiers for one `op inspect` run.",
       "type": "object",
       "required": [
         "spanId",
@@ -129,6 +134,100 @@
         }
       },
       "additionalProperties": false
+    },
+    "RealmGatewayState": {
+      "description": "The gateway-side state of a realm row.\n\n`gateway_state` and `state` used to be free-form `String`s carrying the gateway guest's lifecycle label; the field is `local-only` for a host-resident realm, the daemon's lifecycle state for a gateway-backed realm whose gateway the daemon listed, and the preserved sentinel string when the daemon did not list the gateway at all.",
+      "oneOf": [
+        {
+          "description": "The realm has no gateway hop; it is dispatched on this host.",
+          "type": "string",
+          "enum": [
+            "local-only"
+          ]
+        },
+        {
+          "description": "The gateway guest is stopped.",
+          "type": "string",
+          "enum": [
+            "stopped"
+          ]
+        },
+        {
+          "description": "The gateway guest is starting.",
+          "type": "string",
+          "enum": [
+            "starting"
+          ]
+        },
+        {
+          "description": "The gateway guest has booted.",
+          "type": "string",
+          "enum": [
+            "booted"
+          ]
+        },
+        {
+          "description": "The gateway guest is running.",
+          "type": "string",
+          "enum": [
+            "running"
+          ]
+        },
+        {
+          "description": "The gateway guest is stopping.",
+          "type": "string",
+          "enum": [
+            "stopping"
+          ]
+        },
+        {
+          "description": "The gateway guest is restarting.",
+          "type": "string",
+          "enum": [
+            "restarting"
+          ]
+        },
+        {
+          "description": "The gateway guest failed its last lifecycle transition.",
+          "type": "string",
+          "enum": [
+            "failed"
+          ]
+        },
+        {
+          "description": "The daemon reported the gateway guest's lifecycle as unknown.",
+          "type": "string",
+          "enum": [
+            "unknown"
+          ]
+        },
+        {
+          "description": "The daemon's list response did not include the gateway VM.",
+          "type": "string",
+          "enum": [
+            "not reported by d2bd"
+          ]
+        }
+      ]
+    },
+    "RealmMode": {
+      "description": "How a realm's entrypoint is dispatched.\n\n`mode` used to be a free-form `String`; the realm entrypoint table admits exactly two modes, so both the wire protocol and the generated CLI schema carry enum constraints rather than a free-form string. Serde names match the canonical wire strings exactly.",
+      "oneOf": [
+        {
+          "description": "The realm entrypoint runs on the local daemon.",
+          "type": "string",
+          "enum": [
+            "host-resident"
+          ]
+        },
+        {
+          "description": "A gateway guest fronts the realm and owns its policy.",
+          "type": "string",
+          "enum": [
+            "gateway-backed"
+          ]
+        }
+      ]
     }
   }
 }

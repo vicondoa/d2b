@@ -28,9 +28,6 @@ use crate::{
 
 const ATTACHMENT_BATCH: u8 = 1;
 const ATTACHMENT_ACK: u8 = 2;
-const STREAM_CLOSE: u8 = 1;
-const STREAM_CREDIT: u8 = 2;
-const STREAM_RESET: u8 = 3;
 const ATTACHMENT_DESCRIPTOR_BYTES: usize = 62;
 const ACTIVE_REQUEST_RESERVATION_BYTES: usize = 4 * 1024;
 const MAX_ACTIVE_REQUESTS_PER_SESSION: usize = 256;
@@ -153,23 +150,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
         credentials: HandshakeCredentials,
         now: Instant,
     ) -> Result<Self> {
-        Self::establish_initiator_with_generation_discovery_and_metrics(
-            transport,
-            identity,
-            credentials,
-            now,
-            Arc::new(NoopMetrics),
-        )
-        .await
-    }
-
-    pub async fn establish_initiator_with_generation_discovery_and_metrics(
-        transport: T,
-        identity: EndpointPolicyIdentity,
-        credentials: HandshakeCredentials,
-        now: Instant,
-        metrics: Arc<dyn MetricsSink>,
-    ) -> Result<Self> {
+        let metrics = Arc::new(NoopMetrics);
         let descriptor = transport.descriptor();
         let metric_identity = identity.clone();
         let timeout = Duration::from_millis(u64::from(identity.limits.handshake_deadline_ms));
@@ -243,7 +224,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
         Self::establish_initiator_inner(transport, policy, credentials, now).await
     }
 
-    pub async fn establish_initiator(
+pub async fn establish_initiator(
         transport: T,
         policy: EndpointPolicy,
         credentials: HandshakeCredentials,
@@ -339,14 +320,47 @@ impl<T: OwnedTransport> SessionEngine<T> {
         credentials: HandshakeCredentials,
         now: Instant,
     ) -> Result<Self> {
-        Self::establish_responder_with_metrics(
-            transport,
-            policy,
-            credentials,
-            now,
-            Arc::new(NoopMetrics),
+        let metrics = Arc::new(NoopMetrics);
+        let descriptor = transport.descriptor();
+        let metric_policy = policy.clone();
+        let timeout = Duration::from_millis(u64::from(policy.limits.handshake_deadline_ms));
+        let result = match tokio::time::timeout(
+            timeout,
+            Self::establish_responder_inner(transport, policy, credentials, now),
         )
         .await
+        {
+            Ok(result) => {
+                if let Err(error) = &result {
+                    tracing::warn!(
+                        error = %error,
+                        purpose = metric_policy.purpose.as_str(),
+                        service = metric_policy.service.as_str(),
+                        timeout_ms = timeout.as_millis() as u64,
+                        "session handshake establishment failed (responder)"
+                    );
+                }
+                result
+            }
+            Err(_) => {
+                tracing::warn!(
+                    purpose = metric_policy.purpose.as_str(),
+                    service = metric_policy.service.as_str(),
+                    timeout_ms = timeout.as_millis() as u64,
+                    "session handshake timed out (responder)"
+                );
+                Err(SessionError::new(SessionErrorCode::HandshakeTimeout))
+            }
+        };
+        record_establishment(
+            metrics.as_ref(),
+            descriptor,
+            metric_policy.purpose,
+            metric_policy.service,
+            metric_policy.noise_profile,
+            &result,
+        );
+        result.map(|engine| engine.with_metrics(metrics))
     }
 
     /// Establish a responder while accepting a strictly newer reconnect
@@ -359,6 +373,29 @@ impl<T: OwnedTransport> SessionEngine<T> {
         credentials: HandshakeCredentials,
         minimum_generation: u64,
         now: Instant,
+    ) -> Result<Self> {
+        Self::establish_responder_with_generation_floor_and_metrics(
+            transport,
+            policy,
+            credentials,
+            minimum_generation,
+            now,
+            Arc::new(NoopMetrics),
+        )
+        .await
+    }
+
+    /// Establish a responder with a metrics sink while accepting a strictly
+    /// newer reconnect generation from the authenticated offer. All policy
+    /// fields remain exact; only `reconnect_generation` may advance beyond
+    /// the supplied floor.
+    pub async fn establish_responder_with_generation_floor_and_metrics(
+        transport: T,
+        policy: EndpointPolicy,
+        credentials: HandshakeCredentials,
+        minimum_generation: u64,
+        now: Instant,
+        metrics: Arc<dyn MetricsSink>,
     ) -> Result<Self> {
         if minimum_generation == 0 {
             return Err(SessionError::new(SessionErrorCode::GenerationMismatch));
@@ -398,55 +435,6 @@ impl<T: OwnedTransport> SessionEngine<T> {
                     minimum_generation = minimum_generation,
                     timeout_ms = timeout.as_millis() as u64,
                     "session handshake timed out (responder generation floor)"
-                );
-                Err(SessionError::new(SessionErrorCode::HandshakeTimeout))
-            }
-        };
-        record_establishment(
-            Arc::new(NoopMetrics).as_ref(),
-            descriptor,
-            metric_policy.purpose,
-            metric_policy.service,
-            metric_policy.noise_profile,
-            &result,
-        );
-        result
-    }
-
-    pub async fn establish_responder_with_metrics(
-        transport: T,
-        policy: EndpointPolicy,
-        credentials: HandshakeCredentials,
-        now: Instant,
-        metrics: Arc<dyn MetricsSink>,
-    ) -> Result<Self> {
-        let descriptor = transport.descriptor();
-        let metric_policy = policy.clone();
-        let timeout = Duration::from_millis(u64::from(policy.limits.handshake_deadline_ms));
-        let result = match tokio::time::timeout(
-            timeout,
-            Self::establish_responder_inner(transport, policy, credentials, now),
-        )
-        .await
-        {
-            Ok(result) => {
-                if let Err(error) = &result {
-                    tracing::warn!(
-                        error = %error,
-                        purpose = metric_policy.purpose.as_str(),
-                        service = metric_policy.service.as_str(),
-                        timeout_ms = timeout.as_millis() as u64,
-                        "session handshake establishment failed (responder)"
-                    );
-                }
-                result
-            }
-            Err(_) => {
-                tracing::warn!(
-                    purpose = metric_policy.purpose.as_str(),
-                    service = metric_policy.service.as_str(),
-                    timeout_ms = timeout.as_millis() as u64,
-                    "session handshake timed out (responder)"
                 );
                 Err(SessionError::new(SessionErrorCode::HandshakeTimeout))
             }
@@ -686,7 +674,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
         &mut self,
         policy: &EndpointPolicy,
     ) -> Result<crate::handshake::EstablishedAuthentication> {
-        if self.offer != HandshakeOffer::from(policy.clone()) {
+        if self.offer != HandshakeOffer::from(policy) {
             return Err(SessionError::new(SessionErrorCode::PolicyDenied));
         }
         self.authentication
@@ -874,7 +862,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
             .reserve_send(stream, fragment.as_bytes().len())?;
         let logical_limit = self.offer.limits.logical_named_stream_bytes;
         let mut payload = Vec::with_capacity(FRAGMENT_HEADER_LEN + fragment.as_bytes().len());
-        payload.extend_from_slice(&fragment.header.encode(len, logical_limit)?);
+        payload.extend_from_slice(&fragment.header().encode(len, logical_limit)?);
         payload.extend_from_slice(fragment.as_bytes());
         let protected =
             self.protector
@@ -932,7 +920,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
         self.send_logical(
             RecordKind::SessionControl,
             ChannelId::SESSION_CONTROL,
-            encode_stream_control(STREAM_CREDIT, stream, released),
+            encode_stream_control(StreamControlKind::Credit, stream, released),
             Vec::new(),
         )
         .await
@@ -943,7 +931,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
         self.send_logical(
             RecordKind::SessionControl,
             ChannelId::SESSION_CONTROL,
-            encode_stream_control(STREAM_CLOSE, stream, 0),
+            encode_stream_control(StreamControlKind::Close, stream, 0),
             Vec::new(),
         )
         .await?;
@@ -960,7 +948,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
         self.send_logical(
             RecordKind::SessionControl,
             ChannelId::SESSION_CONTROL,
-            encode_stream_control(STREAM_RESET, stream, 0),
+            encode_stream_control(StreamControlKind::Reset, stream, 0),
             Vec::new(),
         )
         .await?;
@@ -1295,16 +1283,16 @@ impl<T: OwnedTransport> SessionEngine<T> {
     fn receive_stream_control(&mut self, payload: &[u8]) -> Result<SessionEvent> {
         let (kind, stream, value) = decode_stream_control(payload)?;
         match kind {
-            STREAM_CLOSE => {
+            StreamControlKind::Close => {
                 let event = self.streams.receive_close(stream)?;
                 self.remove_terminal_stream(stream);
                 Ok(SessionEvent::NamedStream(event))
             }
-            STREAM_CREDIT => {
+            StreamControlKind::Credit => {
                 self.streams.grant_send_credit(stream, value)?;
                 Ok(SessionEvent::ControlProcessed)
             }
-            STREAM_RESET => {
+            StreamControlKind::Reset => {
                 self.scheduler.remove_stream(stream);
                 self.withheld_stream_credits.remove(&stream);
                 self.pending_stream_transport.remove(&stream);
@@ -1312,7 +1300,6 @@ impl<T: OwnedTransport> SessionEngine<T> {
                 self.remove_terminal_stream(stream);
                 Ok(SessionEvent::NamedStream(event))
             }
-            _ => Err(SessionError::new(SessionErrorCode::UnknownControl)),
         }
     }
 
@@ -1353,13 +1340,14 @@ impl<T: OwnedTransport> SessionEngine<T> {
 
     async fn flush(&mut self) -> Result<()> {
         while let Some(frame) = self.scheduler.dequeue() {
-            let (kind, channel) = match frame.class() {
-                QueueClass::SessionControl => (RecordKind::SessionControl, frame.channel()),
-                QueueClass::TtrpcControl => (RecordKind::Ttrpc, frame.channel()),
-                QueueClass::AttachmentControl => (RecordKind::Attachment, frame.channel()),
-                QueueClass::NamedStream => (RecordKind::NamedStream, frame.channel()),
+            let channel = frame.channel()?;
+            let kind = match frame.class() {
+                QueueClass::SessionControl => RecordKind::SessionControl,
+                QueueClass::TtrpcControl => RecordKind::Ttrpc,
+                QueueClass::AttachmentControl => RecordKind::Attachment,
+                QueueClass::NamedStream => RecordKind::NamedStream,
             };
-            self.send_logical(kind, channel, frame.as_bytes().to_vec(), Vec::new())
+            self.send_logical(kind, channel, frame.into_bytes(), Vec::new())
                 .await?;
         }
         Ok(())
@@ -1391,7 +1379,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
                 .map_err(|_| SessionError::new(SessionErrorCode::ArithmeticOverflow))?;
             let mut record_payload =
                 Vec::with_capacity(FRAGMENT_HEADER_LEN + fragment.as_bytes().len());
-            record_payload.extend_from_slice(&fragment.header.encode(fragment_len, limit)?);
+            record_payload.extend_from_slice(&fragment.header().encode(fragment_len, limit)?);
             record_payload.extend_from_slice(fragment.as_bytes());
             let protected = self.protector.protect(kind, channel, &record_payload)?;
             let packet_attachments = attachments.take().unwrap_or_default();
@@ -1691,20 +1679,51 @@ fn close_reason_from_tag(tag: u8) -> Result<CloseReason> {
     }
 }
 
-fn encode_stream_control(kind: u8, stream: StreamId, value: u32) -> Vec<u8> {
+/// Stream control kind carried on the session control channel.
+enum StreamControlKind {
+    /// Close one named stream.
+    Close,
+    /// Grant send credit to one named stream.
+    Credit,
+    /// Reset one named stream.
+    Reset,
+}
+
+impl StreamControlKind {
+    const fn tag(self) -> u8 {
+        match self {
+            Self::Close => 1,
+            Self::Credit => 2,
+            Self::Reset => 3,
+        }
+    }
+
+    const fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            1 => Some(Self::Close),
+            2 => Some(Self::Credit),
+            3 => Some(Self::Reset),
+            _ => None,
+        }
+    }
+}
+
+fn encode_stream_control(kind: StreamControlKind, stream: StreamId, value: u32) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(7);
-    bytes.push(kind);
+    bytes.push(kind.tag());
     bytes.extend_from_slice(&stream.channel().value().to_be_bytes());
     bytes.extend_from_slice(&value.to_be_bytes());
     bytes
 }
 
-fn decode_stream_control(bytes: &[u8]) -> Result<(u8, StreamId, u32)> {
+fn decode_stream_control(bytes: &[u8]) -> Result<(StreamControlKind, StreamId, u32)> {
     if bytes.len() != 7 {
         return Err(SessionError::new(SessionErrorCode::UnknownControl));
     }
+    let kind = StreamControlKind::from_tag(bytes[0])
+        .ok_or_else(|| SessionError::new(SessionErrorCode::UnknownControl))?;
     Ok((
-        bytes[0],
+        kind,
         StreamId::new(u16::from_be_bytes([bytes[1], bytes[2]]))?,
         u32::from_be_bytes(
             bytes[3..7]
@@ -1798,14 +1817,11 @@ fn decode_attachment_control(bytes: &[u8]) -> Result<AttachmentControl> {
             SessionErrorCode::AttachmentDescriptorMismatch,
         ));
     }
-    let mut descriptors = Vec::with_capacity(usize::from(count));
-    let mut offset = 3;
-    for _ in 0..count {
-        descriptors.push(decode_attachment_descriptor(
-            &bytes[offset..offset + ATTACHMENT_DESCRIPTOR_BYTES],
-        )?);
-        offset += ATTACHMENT_DESCRIPTOR_BYTES;
-    }
+    let descriptors = bytes[3..]
+        .chunks_exact(ATTACHMENT_DESCRIPTOR_BYTES)
+        .take(usize::from(count))
+        .map(decode_attachment_descriptor)
+        .collect::<Result<Vec<_>>>()?;
     Ok(AttachmentControl::Batch(AttachmentPacket {
         declared_count: count,
         descriptors: BoundedVec::new(descriptors)?,

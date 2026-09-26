@@ -69,19 +69,50 @@ impl core::fmt::Display for TelemetryFrameError {
 impl std::error::Error for TelemetryFrameError {}
 
 /// Parse one raw frame into the shared typed representation.
+///
+/// # Errors
+///
+/// Returns [`TelemetryFrameError::RawOversize`] when `bytes` exceed
+/// [`MAX_TELEMETRY_FRAME_BYTES`], [`TelemetryFrameError::UnknownField`] when a
+/// top-level field is not part of the frame schema, and
+/// [`TelemetryFrameError::Malformed`] for any other parse failure.
 pub fn parse_raw_frame(bytes: &[u8]) -> Result<TelemetryFrame, TelemetryFrameError> {
     if bytes.len() > MAX_TELEMETRY_FRAME_BYTES {
         return Err(TelemetryFrameError::RawOversize);
     }
-    serde_json::from_slice::<TelemetryFrame>(bytes).map_err(|_| TelemetryFrameError::Malformed)
+    serde_json::from_slice::<TelemetryFrame>(bytes).map_err(|error| {
+        // The pinned serde_json has no `Category::UnknownField`; the only way
+        // to distinguish a top-level unknown field is by its stable message.
+        if error.to_string().starts_with("unknown field") {
+            TelemetryFrameError::UnknownField
+        } else {
+            TelemetryFrameError::Malformed
+        }
+    })
 }
 
 /// Validate a previously parsed shared frame.
+///
+/// # Errors
+///
+/// Returns [`TelemetryFrameError::Malformed`] when the value is not an object
+/// or a field has an invalid shape, [`TelemetryFrameError::NonFiniteNumber`]
+/// when a number is not finite, [`TelemetryFrameError::UnknownField`] when a
+/// field is outside the signal's allowed set,
+/// [`TelemetryFrameError::DescriptorInvalid`] when a name or enumerated value
+/// is not in the closed vocabulary, [`TelemetryFrameError::LabelInvalid`] when
+/// a metric label key or value is not admitted, and
+/// [`TelemetryFrameError::ResourceAttributeInvalid`] when a resource attribute
+/// is malformed or a sensitive field is not null or a canonical digest.
 pub fn validate_frame(frame: &TelemetryFrame) -> Result<(), TelemetryFrameError> {
     validate_value_shape(frame.signal, &frame.value)
 }
 
 /// Parse and validate one raw frame.
+///
+/// # Errors
+///
+/// Returns every error of [`parse_raw_frame`] and [`validate_frame`].
 pub fn validate_raw_frame(bytes: &[u8]) -> Result<TelemetryFrame, TelemetryFrameError> {
     let frame = parse_raw_frame(bytes)?;
     validate_frame(&frame)?;
@@ -89,6 +120,12 @@ pub fn validate_raw_frame(bytes: &[u8]) -> Result<TelemetryFrame, TelemetryFrame
 }
 
 /// Redact and serialize one previously validated shared frame.
+///
+/// # Errors
+///
+/// Returns [`TelemetryFrameError::Malformed`] when the frame cannot be
+/// re-serialized and [`TelemetryFrameError::RedactedOversize`] when the
+/// redacted frame exceeds [`MAX_TELEMETRY_FRAME_BYTES`].
 pub fn redact_parsed_frame(mut frame: TelemetryFrame) -> Result<Vec<u8>, TelemetryFrameError> {
     redact_value(
         &mut frame.value,
@@ -103,6 +140,10 @@ pub fn redact_parsed_frame(mut frame: TelemetryFrame) -> Result<Vec<u8>, Telemet
 }
 
 /// Parse, validate, redact, and remeasure one complete frame.
+///
+/// # Errors
+///
+/// Returns every error of [`validate_raw_frame`] and [`redact_parsed_frame`].
 pub fn redact_frame(bytes: &[u8]) -> Result<Vec<u8>, TelemetryFrameError> {
     let frame = validate_raw_frame(bytes)?;
     redact_parsed_frame(frame)
@@ -484,6 +525,14 @@ fn json_kind(value: &Value) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_top_level_unknown_field_reports_the_unknown_field_class() {
+        assert_eq!(
+            parse_raw_frame(br#"{"signal":"metric","value":1,"extra":true}"#),
+            Err(TelemetryFrameError::UnknownField)
+        );
+    }
 
     #[test]
     fn shared_frame_rejects_unknown_keys_and_non_finite_values() {

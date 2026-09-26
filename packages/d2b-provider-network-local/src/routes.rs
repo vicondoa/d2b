@@ -242,7 +242,8 @@ impl core::fmt::Display for RouteProvenanceError {
 impl std::error::Error for RouteProvenanceError {}
 
 /// Validate a route before the broker can apply or remove it.
-pub fn validate_network_route_intent(
+#[cfg(test)]
+pub(crate) fn validate_network_route_intent(
     intent: &NetworkRouteIntent,
     network_uid: &ResourceUid,
     network_generation: ResourceGeneration,
@@ -261,8 +262,8 @@ pub fn validate_network_route_intent(
 }
 
 /// Validate a route against the complete admitted provenance tuple.
-#[allow(dead_code)]
-pub fn validate_network_route_intent_with_provenance(
+#[cfg(test)]
+pub(crate) fn validate_network_route_intent_with_provenance(
     intent: &NetworkRouteIntent,
     zone_uid: &ResourceUid,
     network_uid: &ResourceUid,

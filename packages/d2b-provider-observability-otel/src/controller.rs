@@ -3,7 +3,7 @@
 use d2b_contracts_provider::v3::semantic_services::{
     SemanticFamily,
     child_resources::{
-        BindingChildKind, BindingChildPlacement, BindingChildRequest, BindingChildSet,
+        ProcessChildKind, BindingChildPlacement, BindingChildRequest, BindingChildSet,
         explicit_binding_children,
     },
 };
@@ -97,6 +97,13 @@ impl TelemetryServiceController {
     }
 
     /// Reconcile one Service without opening or mutating a transport.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TelemetryServiceError::InvalidReference`] when the
+    /// service reference is not a Telemetry Service or the Provider
+    /// reference is not the canonical one, and the lifecycle refusal when
+    /// the service is deleted.
     pub fn reconcile(
         &mut self,
         service_ref: &ResourceRef,
@@ -212,6 +219,11 @@ pub struct TelemetryComponentSession;
 
 impl TelemetryComponentSession {
     /// Admit one stream and reject all resource-service-shaped references.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TelemetryControllerError::Admission`] when the service or
+    /// binding reference is not the Telemetry shape.
     pub fn open_stream(
         &self,
         request: TelemetryStreamRequest,
@@ -232,7 +244,7 @@ impl TelemetryComponentSession {
 
 const TELEMETRY_ZONE_BINDING_CHILD_REQUESTS: [BindingChildRequest; 2] = [
     BindingChildRequest::process(
-        BindingChildKind::Process,
+        ProcessChildKind::Process,
         BindingChildPlacement::Host,
         "collector",
         "Provider/system-minijail",
@@ -245,7 +257,7 @@ const TELEMETRY_ZONE_BINDING_CHILD_REQUESTS: [BindingChildRequest; 2] = [
 
 const TELEMETRY_GUEST_BINDING_CHILD_REQUESTS: [BindingChildRequest; 4] = [
     BindingChildRequest::process(
-        BindingChildKind::Process,
+        ProcessChildKind::Process,
         BindingChildPlacement::Host,
         "collector",
         "Provider/system-minijail",
@@ -255,7 +267,7 @@ const TELEMETRY_GUEST_BINDING_CHILD_REQUESTS: [BindingChildRequest; 4] = [
     ),
     BindingChildRequest::endpoint(BindingChildPlacement::Host, "ingest-endpoint", "collector"),
     BindingChildRequest::process(
-        BindingChildKind::Process,
+        ProcessChildKind::Process,
         BindingChildPlacement::Host,
         "forwarder",
         "Provider/system-minijail",

@@ -295,7 +295,7 @@ pub fn scan_source(
 }
 
 /// The method names of the mutex/rwlock lock-acquisition entries on the deny
-/// list (`std::sync`/`parking_lot` `Mutex::lock`, `RwLock::read`,
+/// list (`std::sync`/`lock_api` `Mutex::lock`, `RwLock::read`,
 /// `RwLock::write`): the conservative method-call shape the scanner flags
 /// inside async contexts. Derived from the deny list so the list stays the
 /// single source of truth - a new lock entry arms the gate automatically.

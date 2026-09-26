@@ -15,6 +15,42 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use async_trait::async_trait;
 
+macro_rules! async_request_handler {
+    ($class: ident, $ctx: ident, $req: ident, $req_type: path, $req_fn: ident) => {
+        let mut req = <$req_type>::new();
+        {
+            let mut s = CodedInputStream::from_bytes(&$req.payload);
+            req.merge_from(&mut s)
+                .map_err(::ttrpc::err_to_others!(e, ""))?;
+        }
+
+        let mut res = ::ttrpc::Response::new();
+        match $class.service.$req_fn(&$ctx, req).await {
+            Ok(rep) => {
+                res.set_status(::ttrpc::get_status(::ttrpc::Code::OK, "".to_string()));
+                res.payload.reserve(rep.compute_size() as usize);
+                let mut s = protobuf::CodedOutputStream::vec(&mut res.payload);
+                rep.write_to(&mut s)
+                    .map_err(::ttrpc::err_to_others!(e, ""))?;
+                s.flush().map_err(::ttrpc::err_to_others!(e, ""))?;
+            }
+            Err(x) => match x {
+                ::ttrpc::Error::RpcStatus(s) => {
+                    res.set_status(s);
+                }
+                _ => {
+                    res.set_status(::ttrpc::get_status(
+                        ::ttrpc::Code::UNKNOWN,
+                        format!("{:?}", x),
+                    ));
+                }
+            },
+        }
+
+        return Ok(res);
+    };
+}
+
 #[derive(Clone)]
 pub struct ResourceServiceClient {
     client: ::ttrpc::r#async::Client,
@@ -27,68 +63,68 @@ impl ResourceServiceClient {
         }
     }
 
-    pub async fn get(&self, ctx: ttrpc::context::Context, req: &super::d2b_resource_v3::GetRequest) -> ::ttrpc::Result<super::d2b_resource_v3::GetResponse> {
-        let mut cres = super::d2b_resource_v3::GetResponse::new();
+    pub async fn get(&self, ctx: ttrpc::context::Context, req: &d2b_contracts_resource::resource_proto::GetRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::GetResponse> {
+        let mut cres = d2b_contracts_resource::resource_proto::GetResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.resource.v3.ResourceService", "Get", cres);
     }
 
-    pub async fn list(&self, ctx: ttrpc::context::Context, req: &super::d2b_resource_v3::ListRequest) -> ::ttrpc::Result<super::d2b_resource_v3::ListResponse> {
-        let mut cres = super::d2b_resource_v3::ListResponse::new();
+    pub async fn list(&self, ctx: ttrpc::context::Context, req: &d2b_contracts_resource::resource_proto::ListRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::ListResponse> {
+        let mut cres = d2b_contracts_resource::resource_proto::ListResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.resource.v3.ResourceService", "List", cres);
     }
 
-    pub async fn watch(&self, ctx: ttrpc::context::Context, req: &super::d2b_resource_v3::WatchRequest) -> ::ttrpc::Result<super::d2b_resource_v3::WatchResponse> {
-        let mut cres = super::d2b_resource_v3::WatchResponse::new();
+    pub async fn watch(&self, ctx: ttrpc::context::Context, req: &d2b_contracts_resource::resource_proto::WatchRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::WatchResponse> {
+        let mut cres = d2b_contracts_resource::resource_proto::WatchResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.resource.v3.ResourceService", "Watch", cres);
     }
 
-    pub async fn create(&self, ctx: ttrpc::context::Context, req: &super::d2b_resource_v3::CreateRequest) -> ::ttrpc::Result<super::d2b_resource_v3::CreateResponse> {
-        let mut cres = super::d2b_resource_v3::CreateResponse::new();
+    pub async fn create(&self, ctx: ttrpc::context::Context, req: &d2b_contracts_resource::resource_proto::CreateRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::CreateResponse> {
+        let mut cres = d2b_contracts_resource::resource_proto::CreateResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.resource.v3.ResourceService", "Create", cres);
     }
 
-    pub async fn update_spec(&self, ctx: ttrpc::context::Context, req: &super::d2b_resource_v3::UpdateSpecRequest) -> ::ttrpc::Result<super::d2b_resource_v3::UpdateSpecResponse> {
-        let mut cres = super::d2b_resource_v3::UpdateSpecResponse::new();
+    pub async fn update_spec(&self, ctx: ttrpc::context::Context, req: &d2b_contracts_resource::resource_proto::UpdateSpecRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::UpdateSpecResponse> {
+        let mut cres = d2b_contracts_resource::resource_proto::UpdateSpecResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.resource.v3.ResourceService", "UpdateSpec", cres);
     }
 
-    pub async fn update_status(&self, ctx: ttrpc::context::Context, req: &super::d2b_resource_v3::UpdateStatusRequest) -> ::ttrpc::Result<super::d2b_resource_v3::UpdateStatusResponse> {
-        let mut cres = super::d2b_resource_v3::UpdateStatusResponse::new();
+    pub async fn update_status(&self, ctx: ttrpc::context::Context, req: &d2b_contracts_resource::resource_proto::UpdateStatusRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::UpdateStatusResponse> {
+        let mut cres = d2b_contracts_resource::resource_proto::UpdateStatusResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.resource.v3.ResourceService", "UpdateStatus", cres);
     }
 
-    pub async fn update_metadata(&self, ctx: ttrpc::context::Context, req: &super::d2b_resource_v3::UpdateMetadataRequest) -> ::ttrpc::Result<super::d2b_resource_v3::UpdateMetadataResponse> {
-        let mut cres = super::d2b_resource_v3::UpdateMetadataResponse::new();
+    pub async fn update_metadata(&self, ctx: ttrpc::context::Context, req: &d2b_contracts_resource::resource_proto::UpdateMetadataRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::UpdateMetadataResponse> {
+        let mut cres = d2b_contracts_resource::resource_proto::UpdateMetadataResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.resource.v3.ResourceService", "UpdateMetadata", cres);
     }
 
-    pub async fn update_finalizers(&self, ctx: ttrpc::context::Context, req: &super::d2b_resource_v3::UpdateFinalizersRequest) -> ::ttrpc::Result<super::d2b_resource_v3::UpdateFinalizersResponse> {
-        let mut cres = super::d2b_resource_v3::UpdateFinalizersResponse::new();
+    pub async fn update_finalizers(&self, ctx: ttrpc::context::Context, req: &d2b_contracts_resource::resource_proto::UpdateFinalizersRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::UpdateFinalizersResponse> {
+        let mut cres = d2b_contracts_resource::resource_proto::UpdateFinalizersResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.resource.v3.ResourceService", "UpdateFinalizers", cres);
     }
 
-    pub async fn delete(&self, ctx: ttrpc::context::Context, req: &super::d2b_resource_v3::DeleteRequest) -> ::ttrpc::Result<super::d2b_resource_v3::DeleteResponse> {
-        let mut cres = super::d2b_resource_v3::DeleteResponse::new();
+    pub async fn delete(&self, ctx: ttrpc::context::Context, req: &d2b_contracts_resource::resource_proto::DeleteRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::DeleteResponse> {
+        let mut cres = d2b_contracts_resource::resource_proto::DeleteResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.resource.v3.ResourceService", "Delete", cres);
     }
 
-    pub async fn commit_batch(&self, ctx: ttrpc::context::Context, req: &super::d2b_resource_v3::CommitBatchRequest) -> ::ttrpc::Result<super::d2b_resource_v3::CommitBatchResponse> {
-        let mut cres = super::d2b_resource_v3::CommitBatchResponse::new();
+    pub async fn commit_batch(&self, ctx: ttrpc::context::Context, req: &d2b_contracts_resource::resource_proto::CommitBatchRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::CommitBatchResponse> {
+        let mut cres = d2b_contracts_resource::resource_proto::CommitBatchResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.resource.v3.ResourceService", "CommitBatch", cres);
     }
 
-    pub async fn resolve_ref(&self, ctx: ttrpc::context::Context, req: &super::d2b_resource_v3::ResolveRefRequest) -> ::ttrpc::Result<super::d2b_resource_v3::ResolveRefResponse> {
-        let mut cres = super::d2b_resource_v3::ResolveRefResponse::new();
+    pub async fn resolve_ref(&self, ctx: ttrpc::context::Context, req: &d2b_contracts_resource::resource_proto::ResolveRefRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::ResolveRefResponse> {
+        let mut cres = d2b_contracts_resource::resource_proto::ResolveRefResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.resource.v3.ResourceService", "ResolveRef", cres);
     }
 
-    pub async fn inspect_schema(&self, ctx: ttrpc::context::Context, req: &super::d2b_resource_v3::InspectSchemaRequest) -> ::ttrpc::Result<super::d2b_resource_v3::InspectSchemaResponse> {
-        let mut cres = super::d2b_resource_v3::InspectSchemaResponse::new();
+    pub async fn inspect_schema(&self, ctx: ttrpc::context::Context, req: &d2b_contracts_resource::resource_proto::InspectSchemaRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::InspectSchemaResponse> {
+        let mut cres = d2b_contracts_resource::resource_proto::InspectSchemaResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.resource.v3.ResourceService", "InspectSchema", cres);
     }
 
-    pub async fn upgrade(&self, ctx: ttrpc::context::Context, req: &super::d2b_resource_v3::UpgradeRequest) -> ::ttrpc::Result<super::d2b_resource_v3::UpgradeResponse> {
-        let mut cres = super::d2b_resource_v3::UpgradeResponse::new();
+    pub async fn upgrade(&self, ctx: ttrpc::context::Context, req: &d2b_contracts_resource::resource_proto::UpgradeRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::UpgradeResponse> {
+        let mut cres = d2b_contracts_resource::resource_proto::UpgradeResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.resource.v3.ResourceService", "Upgrade", cres);
     }
 }
@@ -100,7 +136,7 @@ struct GetMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for GetMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, d2b_resource_v3, GetRequest, get);
+        async_request_handler!(self, ctx, req, d2b_contracts_resource::resource_proto::GetRequest, get);
     }
 }
 
@@ -111,7 +147,7 @@ struct ListMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for ListMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, d2b_resource_v3, ListRequest, list);
+        async_request_handler!(self, ctx, req, d2b_contracts_resource::resource_proto::ListRequest, list);
     }
 }
 
@@ -122,7 +158,7 @@ struct WatchMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for WatchMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, d2b_resource_v3, WatchRequest, watch);
+        async_request_handler!(self, ctx, req, d2b_contracts_resource::resource_proto::WatchRequest, watch);
     }
 }
 
@@ -133,7 +169,7 @@ struct CreateMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for CreateMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, d2b_resource_v3, CreateRequest, create);
+        async_request_handler!(self, ctx, req, d2b_contracts_resource::resource_proto::CreateRequest, create);
     }
 }
 
@@ -144,7 +180,7 @@ struct UpdateSpecMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for UpdateSpecMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, d2b_resource_v3, UpdateSpecRequest, update_spec);
+        async_request_handler!(self, ctx, req, d2b_contracts_resource::resource_proto::UpdateSpecRequest, update_spec);
     }
 }
 
@@ -155,7 +191,7 @@ struct UpdateStatusMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for UpdateStatusMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, d2b_resource_v3, UpdateStatusRequest, update_status);
+        async_request_handler!(self, ctx, req, d2b_contracts_resource::resource_proto::UpdateStatusRequest, update_status);
     }
 }
 
@@ -166,7 +202,7 @@ struct UpdateMetadataMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for UpdateMetadataMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, d2b_resource_v3, UpdateMetadataRequest, update_metadata);
+        async_request_handler!(self, ctx, req, d2b_contracts_resource::resource_proto::UpdateMetadataRequest, update_metadata);
     }
 }
 
@@ -177,7 +213,7 @@ struct UpdateFinalizersMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for UpdateFinalizersMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, d2b_resource_v3, UpdateFinalizersRequest, update_finalizers);
+        async_request_handler!(self, ctx, req, d2b_contracts_resource::resource_proto::UpdateFinalizersRequest, update_finalizers);
     }
 }
 
@@ -188,7 +224,7 @@ struct DeleteMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for DeleteMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, d2b_resource_v3, DeleteRequest, delete);
+        async_request_handler!(self, ctx, req, d2b_contracts_resource::resource_proto::DeleteRequest, delete);
     }
 }
 
@@ -199,7 +235,7 @@ struct CommitBatchMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for CommitBatchMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, d2b_resource_v3, CommitBatchRequest, commit_batch);
+        async_request_handler!(self, ctx, req, d2b_contracts_resource::resource_proto::CommitBatchRequest, commit_batch);
     }
 }
 
@@ -210,7 +246,7 @@ struct ResolveRefMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for ResolveRefMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, d2b_resource_v3, ResolveRefRequest, resolve_ref);
+        async_request_handler!(self, ctx, req, d2b_contracts_resource::resource_proto::ResolveRefRequest, resolve_ref);
     }
 }
 
@@ -221,7 +257,7 @@ struct InspectSchemaMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for InspectSchemaMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, d2b_resource_v3, InspectSchemaRequest, inspect_schema);
+        async_request_handler!(self, ctx, req, d2b_contracts_resource::resource_proto::InspectSchemaRequest, inspect_schema);
     }
 }
 
@@ -232,49 +268,49 @@ struct UpgradeMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for UpgradeMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, d2b_resource_v3, UpgradeRequest, upgrade);
+        async_request_handler!(self, ctx, req, d2b_contracts_resource::resource_proto::UpgradeRequest, upgrade);
     }
 }
 
 #[async_trait]
 pub trait ResourceService: Sync {
-    async fn get(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::d2b_resource_v3::GetRequest) -> ::ttrpc::Result<super::d2b_resource_v3::GetResponse> {
+    async fn get(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: d2b_contracts_resource::resource_proto::GetRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::GetResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.resource.v3.ResourceService/Get is not supported".to_string())))
     }
-    async fn list(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::d2b_resource_v3::ListRequest) -> ::ttrpc::Result<super::d2b_resource_v3::ListResponse> {
+    async fn list(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: d2b_contracts_resource::resource_proto::ListRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::ListResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.resource.v3.ResourceService/List is not supported".to_string())))
     }
-    async fn watch(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::d2b_resource_v3::WatchRequest) -> ::ttrpc::Result<super::d2b_resource_v3::WatchResponse> {
+    async fn watch(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: d2b_contracts_resource::resource_proto::WatchRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::WatchResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.resource.v3.ResourceService/Watch is not supported".to_string())))
     }
-    async fn create(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::d2b_resource_v3::CreateRequest) -> ::ttrpc::Result<super::d2b_resource_v3::CreateResponse> {
+    async fn create(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: d2b_contracts_resource::resource_proto::CreateRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::CreateResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.resource.v3.ResourceService/Create is not supported".to_string())))
     }
-    async fn update_spec(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::d2b_resource_v3::UpdateSpecRequest) -> ::ttrpc::Result<super::d2b_resource_v3::UpdateSpecResponse> {
+    async fn update_spec(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: d2b_contracts_resource::resource_proto::UpdateSpecRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::UpdateSpecResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.resource.v3.ResourceService/UpdateSpec is not supported".to_string())))
     }
-    async fn update_status(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::d2b_resource_v3::UpdateStatusRequest) -> ::ttrpc::Result<super::d2b_resource_v3::UpdateStatusResponse> {
+    async fn update_status(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: d2b_contracts_resource::resource_proto::UpdateStatusRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::UpdateStatusResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.resource.v3.ResourceService/UpdateStatus is not supported".to_string())))
     }
-    async fn update_metadata(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::d2b_resource_v3::UpdateMetadataRequest) -> ::ttrpc::Result<super::d2b_resource_v3::UpdateMetadataResponse> {
+    async fn update_metadata(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: d2b_contracts_resource::resource_proto::UpdateMetadataRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::UpdateMetadataResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.resource.v3.ResourceService/UpdateMetadata is not supported".to_string())))
     }
-    async fn update_finalizers(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::d2b_resource_v3::UpdateFinalizersRequest) -> ::ttrpc::Result<super::d2b_resource_v3::UpdateFinalizersResponse> {
+    async fn update_finalizers(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: d2b_contracts_resource::resource_proto::UpdateFinalizersRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::UpdateFinalizersResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.resource.v3.ResourceService/UpdateFinalizers is not supported".to_string())))
     }
-    async fn delete(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::d2b_resource_v3::DeleteRequest) -> ::ttrpc::Result<super::d2b_resource_v3::DeleteResponse> {
+    async fn delete(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: d2b_contracts_resource::resource_proto::DeleteRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::DeleteResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.resource.v3.ResourceService/Delete is not supported".to_string())))
     }
-    async fn commit_batch(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::d2b_resource_v3::CommitBatchRequest) -> ::ttrpc::Result<super::d2b_resource_v3::CommitBatchResponse> {
+    async fn commit_batch(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: d2b_contracts_resource::resource_proto::CommitBatchRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::CommitBatchResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.resource.v3.ResourceService/CommitBatch is not supported".to_string())))
     }
-    async fn resolve_ref(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::d2b_resource_v3::ResolveRefRequest) -> ::ttrpc::Result<super::d2b_resource_v3::ResolveRefResponse> {
+    async fn resolve_ref(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: d2b_contracts_resource::resource_proto::ResolveRefRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::ResolveRefResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.resource.v3.ResourceService/ResolveRef is not supported".to_string())))
     }
-    async fn inspect_schema(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::d2b_resource_v3::InspectSchemaRequest) -> ::ttrpc::Result<super::d2b_resource_v3::InspectSchemaResponse> {
+    async fn inspect_schema(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: d2b_contracts_resource::resource_proto::InspectSchemaRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::InspectSchemaResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.resource.v3.ResourceService/InspectSchema is not supported".to_string())))
     }
-    async fn upgrade(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::d2b_resource_v3::UpgradeRequest) -> ::ttrpc::Result<super::d2b_resource_v3::UpgradeResponse> {
+    async fn upgrade(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: d2b_contracts_resource::resource_proto::UpgradeRequest) -> ::ttrpc::Result<d2b_contracts_resource::resource_proto::UpgradeResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.resource.v3.ResourceService/Upgrade is not supported".to_string())))
     }
 }

@@ -172,6 +172,33 @@ impl<H> fmt::Debug for BackendLaunch<H> {
     }
 }
 
+/// The launch snapshot of one broker-retained runner handle.
+///
+/// [`ProcessEffectBackend::launched_runner_snapshot`] reports it so a
+/// consumer that learns of a kernel-spawned runner can register that runner
+/// (the family handlers' runner lookup) without a second broker round trip:
+/// the runner's `(vm, role)` keys, its live `(pid, start_time_ticks)`
+/// identity, and an owned duplicate of the retained pidfd.
+pub struct LaunchedSnapshot {
+    /// Broker VM scope the runner was launched under.
+    pub vm: String,
+    /// The launched runner's role key, including the resource suffix for a
+    /// multi-instance role.
+    pub role: String,
+    /// Live pid of the launched runner.
+    pub pid: i32,
+    /// The kernel start time that pins `pid` to this exact process.
+    pub start_time_ticks: u64,
+    /// Owned duplicate of the broker-retained pidfd.
+    pub pidfd: OwnedFd,
+}
+
+impl fmt::Debug for LaunchedSnapshot {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("LaunchedSnapshot(<redacted>)")
+    }
+}
+
 /// Stop class understood by a blocking process effect owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessStopClass {
@@ -253,6 +280,12 @@ pub trait ProcessEffectBackend: Send + Sync + 'static {
     type Handle: Send + Sync + 'static;
 
     /// Resolve and launch one ticket, returning mandatory local authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`ProcessEffectError`] the backend reports for the
+    /// failing launch step: ticket validation, identity resolution,
+    /// effect-port refusal, or launch failure.
     fn launch(
         &self,
         request: ProcessRequest,
@@ -307,16 +340,14 @@ pub trait ProcessEffectBackend: Send + Sync + 'static {
         Err(ProcessEffectError::PidfdUnavailable)
     }
 
-    /// The broker-retained launch snapshot of one handle: the runner's
-    /// `(vm, role)` keys, live `(pid, start_time_ticks)` and a duplicate of
-    /// the retained pidfd, so the daemon can register the kernel-spawned
-    /// runner in its authoritative pidfd table (the family handlers' runner
-    /// lookup). `None` for a backend that retains no pidfd.
-    #[allow(clippy::type_complexity)] // the launched-runner snapshot tuple is the trait's wire shape
+    /// The broker-retained launch snapshot of one handle, so the daemon can
+    /// register the kernel-spawned runner in its authoritative pidfd table
+    /// (the family handlers' runner lookup). `None` for a backend that
+    /// retains no pidfd.
     fn launched_runner_snapshot(
         &self,
         _handle: &Self::Handle,
-    ) -> Result<Option<(String, String, i32, u64, OwnedFd)>, ProcessEffectError> {
+    ) -> Result<Option<LaunchedSnapshot>, ProcessEffectError> {
         Ok(None)
     }
 

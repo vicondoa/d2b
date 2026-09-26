@@ -162,9 +162,10 @@ impl ResourceDriver for MetadataDriver {
 // ---------------------------------------------------------------------------
 
 /// The stored spec object fence every declaration-only metadata type shares:
-/// the manager's decode hook must have produced a JSON object, which is
-/// exactly what the old `validate_spec` required of the canonical row JSON.
-fn spec_object(ctx: &ResourceContext, op: DriverOp) -> Result<Value, DriverFailure> {
+/// validates that the manager's decode hook produced a JSON object - exactly
+/// what the old `validate_spec` required of the canonical row JSON - without
+/// materializing the decoded value.
+fn spec_object(ctx: &ResourceContext, op: DriverOp) -> Result<(), DriverFailure> {
     let spec = ctx.spec::<Value>().map_err(|error| {
         DriverFailure::refused(op, FailureKinds::CORE_SPEC_INVALID)
             .with_detail(FailureDetail::at("spec/decode").with_note(error.to_string()))
@@ -188,7 +189,7 @@ fn spec_object(ctx: &ResourceContext, op: DriverOp) -> Result<Value, DriverFailu
             ),
         );
     }
-    Ok(spec.clone())
+    Ok(())
 }
 
 /// The child-first drain: every owned child is nudged through its own
@@ -246,7 +247,6 @@ mod tests {
     };
     use crate::manager::ResourceView;
     use crate::spec_store::EnsureOutcome;
-    use crate::target::TargetHandle;
 
     use serde_json::json;
 
@@ -305,7 +305,7 @@ mod tests {
             _parent: &ResourceKey,
             _child: ChildEnsure,
         ) -> Result<EnsureOutcome, ResourceError> {
-            Err(ResourceError::ManagerRpc("unexpected ensure_child".into()))
+            Err(ResourceError::ManagerRejected { reason: "unexpected ensure_child".into() })
         }
 
         async fn get(
@@ -331,7 +331,7 @@ mod tests {
         ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
             self.calls.lock().await.push("list-owned");
             if self.fail_reads.load(Ordering::SeqCst) {
-                return Err(ResourceError::ManagerRpc("scripted read failure".into()));
+                return Err(ResourceError::ManagerRejected { reason: "scripted read failure".into() });
             }
             Ok(self.owned.lock().await.clone())
         }
@@ -396,7 +396,6 @@ mod tests {
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
         ResourceContext::new(
             target,
-            TargetHandle::Host,
             metadata_spec_decoder(),
             manager,
             Arc::new(NullRequeue),

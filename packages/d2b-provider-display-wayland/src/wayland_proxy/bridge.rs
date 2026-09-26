@@ -15,7 +15,7 @@ use std::{
 };
 
 use d2b_contracts::{workload::WorkloadProviderKind, workload_identity::WorkloadTarget};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::wayland_proxy::identity::ProxyIdentity;
 
@@ -28,6 +28,16 @@ pub struct BridgeConfig {
 }
 
 impl BridgeConfig {
+    /// Build the bridge configuration from an explicit socket path or the
+    /// identity-derived per-user path.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BridgeConfigError::InvalidReconnectPolicy` when the reconnect
+    /// initial delay exceeds the max delay, `BridgeConfigError::InvalidEndpointComponent`
+    /// when the identity-derived path component is not a valid endpoint
+    /// component, and `BridgeConfigError::SocketPathTooLong` when the socket
+    /// path exceeds the Linux `sockaddr_un` limit.
     pub fn from_identity_parts(
         explicit_socket: Option<PathBuf>,
         root: &Path,
@@ -66,6 +76,12 @@ pub struct BridgeReconnectPolicy {
     pub max_delay: Duration,
 }
 
+/// Derive the per-user bridge socket path for an identity.
+///
+/// # Errors
+///
+/// Returns `BridgeConfigError::InvalidEndpointComponent` when the identity's
+/// bridge component is empty, `.`, `..`, or contains `/` or NUL.
 pub fn path_for_user_identity(
     root: &Path,
     user_uid: u32,
@@ -274,7 +290,7 @@ pub enum BridgeTransferKind {
 
 impl BridgeHandoff for UnixStream {
     // Descriptor-passing sendmsg, MSG_DONTWAIT non-blocking on a poll-driven
-    // sync bridge surface;no async form fits the trait contract here.
+    // sync bridge surface; no async form fits the trait contract here.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn handoff_transfer_fd(
         &mut self,
@@ -363,6 +379,31 @@ fn bridge_frame(metadata: &BridgeTransferMetadata) -> String {
     let mut encoded = serde_json::to_string(&frame).expect("typed bridge frame serializes");
     encoded.push('\n');
     encoded
+}
+
+/// Frames `d2b-clipd` writes back over the bridge socket.
+///
+/// The representation mirrors the outbound `Frame` inside [`bridge_frame`] -
+/// one `type` tag, snake_case variant names - so both directions of the wire
+/// format live in this module. `d2b-clipd` writes
+/// `{"type":"refresh_selection"}` and nothing else today; a `type` tag this
+/// enum does not name is a decode error rather than a silent no-op, because a
+/// silent no-op is exactly how a drifted frame shape used to disable clipboard
+/// refresh without a diagnostic.
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum BridgeInboundFrame {
+    /// The host selection changed; the proxy re-reads and rebroadcasts it.
+    RefreshSelection,
+}
+
+/// Decodes one newline-delimited bridge frame.
+///
+/// Malformed input (bad JSON, a truncated write, an unknown `type` tag) is
+/// returned as an error, never a panic: the receive path logs the failure and
+/// keeps reading so one bad frame cannot take the bridge down.
+pub(crate) fn decode_bridge_frame(frame: &[u8]) -> Result<BridgeInboundFrame, serde_json::Error> {
+    serde_json::from_slice(frame)
 }
 
 #[cfg(test)]
@@ -604,5 +645,38 @@ mod tests {
         assert!(frame.contains("\"provider_kind\":\"unsafe-local\""));
         assert!(!frame.contains("legacy_vm_name"));
         assert!(frame.contains("\"mime_type\":\"text/html\""));
+    }
+
+    #[test]
+    fn clipd_refresh_frame_decodes_to_refresh_selection() {
+        // d2b-clipd writes this literal, plus a newline, to every bridge
+        // stream it holds (packages/d2b-provider-clipboard-wayland/src/bin/d2b-clipd.rs).
+        let frame = br#"{"type":"refresh_selection"}"#;
+
+        assert_eq!(
+            decode_bridge_frame(frame).expect("refresh frame decodes"),
+            BridgeInboundFrame::RefreshSelection
+        );
+        // Whitespace and key order belong to the JSON writer, not to the frame
+        // identity, and a later additive field must not turn the frame into a
+        // decode failure.
+        for equivalent in [
+            br#"{"type": "refresh_selection"}"#.as_slice(),
+            br#"{"type":"refresh_selection","source_id":7}"#.as_slice(),
+        ] {
+            assert_eq!(
+                decode_bridge_frame(equivalent).expect("equivalent frame decodes"),
+                BridgeInboundFrame::RefreshSelection
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_bridge_frames_report_decode_errors() {
+        assert!(decode_bridge_frame(b"{not-json}").is_err());
+        // A corrupt stream must surface as an error, not a panic.
+        assert!(decode_bridge_frame(b"\xff\xfe{").is_err());
+        assert!(decode_bridge_frame(br#"{"type":"host_selection_changed"}"#).is_err());
+        assert!(decode_bridge_frame(br#"{"refresh_selection":true}"#).is_err());
     }
 }

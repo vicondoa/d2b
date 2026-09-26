@@ -129,17 +129,15 @@ pub fn crate_dir(crate_name: &str) -> Option<PathBuf> {
 
 /// The workspace root, when it can be located from the environment.
 pub fn workspace_root() -> Option<PathBuf> {
-    let mut current = std::env::var("CARGO_MANIFEST_DIR")
+    let current = std::env::var("CARGO_MANIFEST_DIR")
         .ok()
         .map(PathBuf::from)
         .or_else(|| std::env::current_dir().ok())?;
-    for _ in 0..4 {
-        if current.join("Cargo.toml").is_file() && current.join("packages").is_dir() {
-            return Some(current);
-        }
-        current = current.parent()?.to_path_buf();
-    }
-    None
+    std::iter::successors(Some(current), |candidate| candidate.parent().map(Path::to_path_buf))
+        .take(4)
+        .find(|candidate| {
+            candidate.join("Cargo.toml").is_file() && candidate.join("packages").is_dir()
+        })
 }
 
 /// Run the offline half of the audit: probe one handler crate's sources on
@@ -214,6 +212,81 @@ fn collect_rs_files(directory: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
+/// Why the dependency-surface audit could not produce a report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SurfaceAuditError {
+    /// The workspace root could not be located in this environment.
+    WorkspaceUnavailable {
+        /// The audited crate.
+        crate_name: String,
+    },
+    /// `cargo metadata` could not be run or failed.
+    CargoFailed {
+        /// The underlying failure.
+        detail: String,
+    },
+    /// The metadata output was invalid or did not name the crate.
+    InvalidMetadata {
+        /// The underlying failure.
+        detail: String,
+    },
+}
+
+impl std::fmt::Display for SurfaceAuditError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::WorkspaceUnavailable { crate_name } => write!(
+                formatter,
+                "workspace root unavailable for {crate_name}"
+            ),
+            Self::CargoFailed { detail } => formatter.write_str(detail),
+            Self::InvalidMetadata { detail } => formatter.write_str(detail),
+        }
+    }
+}
+
+impl std::error::Error for SurfaceAuditError {}
+
+/// The subset of `cargo metadata --format-version 1` output the surface
+/// audit consumes.
+#[derive(serde::Deserialize)]
+struct CargoMetadata {
+    packages: Vec<Package>,
+    resolve: Resolve,
+}
+
+#[derive(serde::Deserialize)]
+struct Package {
+    name: String,
+    id: String,
+    manifest_path: String,
+}
+
+#[derive(serde::Deserialize)]
+struct Resolve {
+    nodes: Vec<ResolveNode>,
+}
+
+#[derive(serde::Deserialize)]
+struct ResolveNode {
+    id: String,
+    #[serde(default)]
+    deps: Vec<ResolveDep>,
+}
+
+#[derive(serde::Deserialize)]
+struct ResolveDep {
+    pkg: String,
+    #[serde(default)]
+    dep_kinds: Vec<DepKind>,
+}
+
+#[derive(serde::Deserialize)]
+struct DepKind {
+    kind: Option<String>,
+    target: Option<serde_json::Value>,
+}
+
 /// Run the full audit of one handler crate against the workspace's
 /// `cargo metadata`: its transitive dependency tree (dev-only edges and
 /// platform-gated edges excluded) plus its own source surface.
@@ -223,9 +296,11 @@ fn collect_rs_files(directory: &Path, files: &mut Vec<PathBuf>) {
 /// never as a pass: the registration-time probe and the CI gate own the
 /// pass/fail decision, and a skipped full audit is reported, not silently
 /// green.
-pub fn audit_crate(crate_name: &str) -> Result<SurfaceReport, String> {
+pub fn audit_crate(crate_name: &str) -> Result<SurfaceReport, SurfaceAuditError> {
     let Some(root) = workspace_root() else {
-        return Err(format!("workspace root unavailable for {crate_name}"));
+        return Err(SurfaceAuditError::WorkspaceUnavailable {
+            crate_name: crate_name.to_owned(),
+        });
     };
     let metadata = run_cargo_metadata(&root)?;
     // The delta semantics: only dependencies the handler's closure adds
@@ -247,12 +322,18 @@ pub fn audit_crate(crate_name: &str) -> Result<SurfaceReport, String> {
         build_script: false,
         source_violations: Vec::new(),
     };
-    for name in &added {
-        if FORBIDDEN_SYSCALL_SURFACE_CRATES.contains(&name.as_str()) {
-            report.forbidden_dependencies.push(name.clone());
-        }
-        if is_proc_macro(&metadata, name) {
-            report.proc_macro_dependencies.push(name.clone());
+    for name in added {
+        match (
+            FORBIDDEN_SYSCALL_SURFACE_CRATES.contains(&name.as_str()),
+            is_proc_macro(&metadata, &name),
+        ) {
+            (true, true) => {
+                report.forbidden_dependencies.push(name.clone());
+                report.proc_macro_dependencies.push(name);
+            }
+            (true, false) => report.forbidden_dependencies.push(name),
+            (false, true) => report.proc_macro_dependencies.push(name),
+            (false, false) => {}
         }
     }
     // A handler crate that DECLARES a syscall-surface dependency directly
@@ -269,7 +350,10 @@ pub fn audit_crate(crate_name: &str) -> Result<SurfaceReport, String> {
                 let aliased = regex::Regex::new(&format!(r#"package\s*=\s*"{crate_name}""#))
                     .expect("static pattern compiles");
                 if (direct_key.is_match(&text) || aliased.is_match(&text))
-                    && !report.forbidden_dependencies.contains(&crate_name.to_string())
+                    && !report
+                        .forbidden_dependencies
+                        .iter()
+                        .any(|name| name == crate_name)
                 {
                     report.forbidden_dependencies.push((*crate_name).to_owned());
                 }
@@ -289,7 +373,7 @@ pub fn audit_crate(crate_name: &str) -> Result<SurfaceReport, String> {
     Ok(report)
 }
 
-fn run_cargo_metadata(root: &Path) -> Result<serde_json::Value, String> {
+fn run_cargo_metadata(root: &Path) -> Result<CargoMetadata, SurfaceAuditError> {
     let manifest = root.join("Cargo.toml");
     let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
         .arg("metadata")
@@ -298,80 +382,68 @@ fn run_cargo_metadata(root: &Path) -> Result<serde_json::Value, String> {
         .arg("--manifest-path")
         .arg(&manifest)
         .output()
-        .map_err(|error| format!("cannot run cargo metadata: {error}"))?;
+        .map_err(|error| SurfaceAuditError::CargoFailed {
+            detail: format!("cannot run cargo metadata: {error}"),
+        })?;
     if !output.status.success() {
-        return Err(format!(
-            "cargo metadata failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
+        return Err(SurfaceAuditError::CargoFailed {
+            detail: format!(
+                "cargo metadata failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        });
     }
-    serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("cargo metadata produced invalid JSON: {error}"))
+    serde_json::from_slice(&output.stdout).map_err(|error| SurfaceAuditError::InvalidMetadata {
+        detail: format!("cargo metadata produced invalid JSON: {error}"),
+    })
 }
 
 /// The transitive dependency tree of one package: its own node plus every
 /// package reachable over non-dev, non-target-gated edges.
 fn dependency_tree(
-    metadata: &serde_json::Value,
+    metadata: &CargoMetadata,
     crate_name: &str,
-) -> Result<Vec<String>, String> {
-    let packages = metadata
-        .get("packages")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| "cargo metadata has no package array".to_owned())?;
-    let root_id = packages
+) -> Result<Vec<String>, SurfaceAuditError> {
+    let root_id = metadata
+        .packages
         .iter()
-        .find(|package| package.get("name").and_then(serde_json::Value::as_str) == Some(crate_name))
-        .and_then(|package| package.get("id").and_then(serde_json::Value::as_str))
-        .ok_or_else(|| format!("package {crate_name} is not a workspace member"))?;
-    let mut nodes: std::collections::HashMap<&str, &serde_json::Value> = std::collections::HashMap::new();
-    for node in metadata
-        .get("resolve")
-        .and_then(|resolve| resolve.get("nodes"))
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| "cargo metadata has no resolve graph".to_owned())?
-    {
-        let Some(id) = node.get("id").and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        nodes.insert(id, node);
-    }
+        .find(|package| package.name == crate_name)
+        .map(|package| package.id.as_str())
+        .ok_or_else(|| SurfaceAuditError::InvalidMetadata {
+            detail: format!("package {crate_name} is not a workspace member"),
+        })?;
+    let nodes: std::collections::HashMap<&str, &ResolveNode> = metadata
+        .resolve
+        .nodes
+        .iter()
+        .map(|node| (node.id.as_str(), node))
+        .collect();
     let mut reachable: Vec<String> = Vec::new();
-    let mut queue = vec![root_id.to_owned()];
+    let mut queue = vec![root_id];
     let mut seen = std::collections::BTreeSet::new();
     while let Some(id) = queue.pop() {
-        if !seen.insert(id.clone()) {
+        if !seen.insert(id) {
             continue;
         }
-        let Some(node) = nodes.get(id.as_str()) else {
+        let Some(node) = nodes.get(id) else {
             continue;
         };
-        if let Some(owner_name) = package_name_of_id(metadata, &id).filter(|name| *name != crate_name)
+        if let Some(owner_name) = package_name_of_id(metadata, id).filter(|name| *name != crate_name)
         {
             reachable.push(owner_name.to_owned());
         }
-        let Some(deps) = node.get("deps").and_then(serde_json::Value::as_array) else {
-            continue;
-        };
-        for dep in deps {
-            let Some(dep_id) = dep.get("pkg").and_then(serde_json::Value::as_str) else {
-                continue;
-            };
-            let Some(kinds) = dep.get("dep_kinds").and_then(serde_json::Value::as_array) else {
-                continue;
-            };
+        for dep in &node.deps {
             // Follow the edge when any of its kinds is a normal or
             // build-time edge for the host target; a dev-only edge or a
             // platform-gated edge is not part of the production closure.
-            let follows = kinds.iter().any(|kind| {
-                let kind_name = kind.get("kind").and_then(serde_json::Value::as_str);
-                if kind_name == Some("dev") {
+            let follows = dep.dep_kinds.iter().any(|kind| {
+                if kind.kind.as_deref() == Some("dev") {
                     return false;
                 }
-                kind.get("target").filter(|target| !target.is_null()).is_none()
+                kind.target.is_none()
             });
             if follows {
-                queue.push(dep_id.to_owned());
+                queue.push(dep.pkg.as_str());
             }
         }
     }
@@ -379,27 +451,22 @@ fn dependency_tree(
     Ok(reachable)
 }
 
-fn package_name_of_id<'a>(metadata: &'a serde_json::Value, id: &str) -> Option<&'a str> {
+fn package_name_of_id<'a>(metadata: &'a CargoMetadata, id: &str) -> Option<&'a str> {
     metadata
-        .get("packages")
-        .and_then(serde_json::Value::as_array)?
+        .packages
         .iter()
-        .find(|package| package.get("id").and_then(serde_json::Value::as_str) == Some(id))
-        .and_then(|package| package.get("name").and_then(serde_json::Value::as_str))
+        .find(|package| package.id == id)
+        .map(|package| package.name.as_str())
 }
 
 /// Whether one resolved package is a proc-macro crate, by lexical scan of
 /// its manifest (readable in development/CI registries).
-fn is_proc_macro(metadata: &serde_json::Value, name: &str) -> bool {
+fn is_proc_macro(metadata: &CargoMetadata, name: &str) -> bool {
     let Some(path) = metadata
-        .get("packages")
-        .and_then(serde_json::Value::as_array)
-        .and_then(|packages| {
-            packages
-                .iter()
-                .find(|package| package.get("name").and_then(serde_json::Value::as_str) == Some(name))
-        })
-        .and_then(|package| package.get("manifest_path").and_then(serde_json::Value::as_str))
+        .packages
+        .iter()
+        .find(|package| package.name == name)
+        .map(|package| package.manifest_path.as_str())
     else {
         return false;
     };

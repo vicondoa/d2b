@@ -31,6 +31,9 @@ sha2 = { workspace = true }
 # caller; `sync::oneshot` is a waker channel with no runtime or reactor
 # requirement, so the worker stays usable from any executor.
 tokio = { workspace = true, features = ["sync"] }
+# Bundle-load warnings (e.g. a pre-v2 bundle without bundleHash) are
+# emitted as structured records so the daemon's subscriber surfaces them.
+tracing = "0.1"
 bolero = { version = "0.10", optional = true }
 
 [dev-dependencies]

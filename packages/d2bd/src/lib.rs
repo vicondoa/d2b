@@ -1,5 +1,13 @@
 #![allow(clippy::result_large_err)]
 
+//! The `d2bd` daemon composition wires the static Provider deployment and
+//! effect adapter (U12), the Zone resource planes and their controller
+//! runtimes, the interaction families (display-wayland, audio,
+//! clipboard, notification, shell-pool),the guest target-control seam,
+//! and the operator dispatch over the public socket. [`serve`] runs the
+//! daemon accept loop; [`lock_only`] holds the state lock alone. The
+//! CLI contract the daemon serves is `docs/reference/cli-contract.md`,
+//! and its error surface is `docs/reference/error-codes.md`.
 
 pub(crate) mod shared_provider_effects;
 

@@ -1,5 +1,6 @@
 //! Bounded in-memory clipboard history and lifecycle controls.
 
+use crate::picker::{CompletionKey, EntryDigest};
 use crate::policy::Policy;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -41,7 +42,7 @@ impl std::error::Error for HistoryError {}
 
 /// A clipboard item retained only in clipd-host process memory.
 pub struct ClipboardEntry {
-    token: String,
+    token: EntryDigest,
     guest: String,
     mime: String,
     bytes: Vec<u8>,
@@ -74,7 +75,7 @@ impl ClipboardEntry {
         hasher.update([0]);
         hasher.update(bytes);
         hasher.update(created_at.to_le_bytes());
-        let token = format!("sha256:{:x}", hasher.finalize());
+        let token = EntryDigest::from_sha256_hex(format!("sha256:{:x}", hasher.finalize()));
         Ok(Self {
             token,
             guest,
@@ -84,9 +85,9 @@ impl ClipboardEntry {
         })
     }
 
-    /// Borrow the opaque entry token.
+/// Borrow the opaque entry token..
     pub fn token(&self) -> &str {
-        &self.token
+        self.token.as_str()
     }
 
     /// Borrow the authenticated owner label.
@@ -109,7 +110,7 @@ impl ClipboardEntry {
         self.bytes.is_empty()
     }
 
-    /// Return a bounded copy for an already-authorized materialization.
+    /// Borrow the payload bytes for an already-authorized materialization.
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
@@ -129,13 +130,13 @@ pub struct ClipboardHistory {
     total_bytes: usize,
     suspended: BTreeSet<String>,
     guest_requests: BTreeMap<String, VecDeque<u64>>,
-    picker_completions: BTreeMap<String, u64>,
+    picker_completions: BTreeMap<CompletionKey, u64>,
 }
 
 impl ClipboardHistory {
     /// Construct an empty history.
-    pub fn new(config: crate::ClipboardConfig) -> Result<Self, HistoryError> {
-        Ok(Self {
+    pub fn new(config: crate::ClipboardConfig) -> Self {
+        Self {
             config,
             entries: BTreeMap::new(),
             order: VecDeque::new(),
@@ -143,7 +144,7 @@ impl ClipboardHistory {
             suspended: BTreeSet::new(),
             guest_requests: BTreeMap::new(),
             picker_completions: BTreeMap::new(),
-        })
+        }
     }
 
     /// Insert an entry after policy, quota, and rate checks.
@@ -240,7 +241,7 @@ impl ClipboardHistory {
 
         self.guest_requests.remove(guest);
         self.picker_completions
-            .retain(|key, _| !key.split('|').any(|component| component == guest));
+            .retain(|key, _| !key.references_guest(guest));
     }
 
     /// Purge all retained payloads and replay/rate-limit state.
@@ -301,7 +302,7 @@ impl ClipboardHistory {
     /// Atomically claim one picker completion until its receipt expires.
     pub(crate) fn claim_picker_completion(
         &mut self,
-        key: String,
+        key: CompletionKey,
         expires_at: u64,
         now_secs: u64,
     ) -> bool {
@@ -398,12 +399,120 @@ impl core::fmt::Debug for ClipboardHistory {
 
 #[cfg(test)]
 mod tests {
-    use super::{ClipboardEntry, ClipboardHistory};
+    use super::{ClipboardEntry, ClipboardHistory, HistoryError};
+    use crate::picker::CompletionKey;
+    use crate::policy::Policy;
     use crate::ClipboardConfig;
+
+    fn small_history() -> ClipboardHistory {
+        let policy = Policy::new(
+            true,
+            true,
+            true,
+            true,
+            false,
+            3,
+            4096,
+            8192,
+            32,
+            60,
+        )
+        .expect("test policy");
+        ClipboardHistory::new(ClipboardConfig::from_policy(policy))
+    }
+
+    #[test]
+    fn insert_evicts_the_oldest_entry_past_the_count_bound() {
+        let mut history = small_history();
+        let mut tokens = Vec::new();
+        for index in 0..4 {
+            let entry = ClipboardEntry::new(
+                "Guest/work",
+                "text/plain",
+                format!("entry-{index}").as_bytes(),
+                100,
+            )
+            .unwrap();
+            let token = entry.token().to_owned();
+            tokens.push(token);
+            history.insert(entry).unwrap();
+        }
+
+        assert_eq!(history.len(), 3);
+        assert!(!history.entries.contains_key(&tokens[0]));
+        assert!(history.entries.contains_key(&tokens[1]));
+        assert!(history.entries.contains_key(&tokens[2]));
+        assert!(history.entries.contains_key(&tokens[3]));
+        assert_eq!(history.order.front().map(String::as_str), Some(tokens[1].as_str()));
+    }
+
+    #[test]
+    fn insert_evicts_oldest_until_the_byte_quota_holds() {
+        let mut history = small_history();
+        let mut tokens = Vec::new();
+        for index in 0..3 {
+            let payload = vec![index as u8; 4096];
+            let entry =
+                ClipboardEntry::new("Guest/work", "text/plain", &payload, 100).unwrap();
+            let token = entry.token().to_owned();
+            tokens.push(token);
+            history.insert(entry).unwrap();
+        }
+
+        assert_eq!(history.len(), 2);
+        assert_eq!(history.total_bytes, 8192);
+        assert!(!history.entries.contains_key(&tokens[0]));
+        assert!(history.entries.contains_key(&tokens[1]));
+        assert!(history.entries.contains_key(&tokens[2]));
+    }
+
+    #[test]
+    fn materialize_rejects_wrong_owner_and_expired_entries() {
+        let mut history = ClipboardHistory::new(ClipboardConfig::default());
+        let entry = ClipboardEntry::new("Guest/work", "text/plain", b"hello", 100).unwrap();
+        let token = entry.token().to_owned();
+        history.insert(entry).unwrap();
+
+        assert_eq!(
+            history.materialize(&token, "Guest/work", 100).as_deref(),
+            Ok(b"hello".as_slice())
+        );
+        assert_eq!(
+            history.materialize(&token, "Guest/other", 100),
+            Err(HistoryError::EntryUnavailable)
+        );
+        assert_eq!(
+            history.materialize(&token, "Guest/work", 100 + 3599).as_deref(),
+            Ok(b"hello".as_slice())
+        );
+        assert_eq!(
+            history.materialize(&token, "Guest/work", 100 + 3600),
+            Err(HistoryError::EntryUnavailable)
+        );
+        assert_eq!(
+            history.materialize(&token, "Guest/work", 100 + 3601),
+            Err(HistoryError::EntryUnavailable)
+        );
+    }
+
+    #[test]
+    fn entry_expiry_reports_ttl_only_for_owned_live_entries() {
+        let mut history = ClipboardHistory::new(ClipboardConfig::default());
+        let entry = ClipboardEntry::new("Guest/work", "text/plain", b"hello", 100).unwrap();
+        let token = entry.token().to_owned();
+        history.insert(entry).unwrap();
+
+        assert_eq!(
+            history.entry_expiry(&token, "Guest/work", 100),
+            Some(100 + 3600)
+        );
+        assert_eq!(history.entry_expiry(&token, "Guest/other", 100), None);
+        assert_eq!(history.entry_expiry(&token, "Guest/work", 100 + 3600), None);
+    }
 
     #[test]
     fn gc_prunes_idle_guest_rate_buckets() {
-        let mut history = ClipboardHistory::new(ClipboardConfig::default()).unwrap();
+        let mut history = ClipboardHistory::new(ClipboardConfig::default());
         history.record_guest_request("Guest/work", 100).unwrap();
         assert_eq!(history.guest_requests.len(), 1);
         history.gc(160);
@@ -412,7 +521,7 @@ mod tests {
 
     #[test]
     fn history_normalizes_mime_values_before_storage_and_matching() {
-        let mut history = ClipboardHistory::new(ClipboardConfig::default()).unwrap();
+        let mut history = ClipboardHistory::new(ClipboardConfig::default());
         let entry = ClipboardEntry::new("Guest/work", "TEXT/PLAIN", b"hello", 100).unwrap();
         let token = entry.token().to_owned();
         history.insert(entry).unwrap();
@@ -430,8 +539,16 @@ mod tests {
 
     #[test]
     fn purging_a_guest_releases_its_picker_completion_keys() {
-        let mut history = ClipboardHistory::new(ClipboardConfig::default()).unwrap();
-        let key = "operation|zone|Guest/work|1|zone|Guest/destination|1".to_owned();
+        let mut history = ClipboardHistory::new(ClipboardConfig::default());
+        let key = CompletionKey::new(
+            "operation".to_owned(),
+            "zone".to_owned(),
+            "Guest/work".to_owned(),
+            1,
+            "zone".to_owned(),
+            "Guest/destination".to_owned(),
+            1,
+        );
         assert!(history.claim_picker_completion(key.clone(), 200, 100));
         history.purge_guest("Guest/work");
         assert!(history.claim_picker_completion(key, 200, 100));

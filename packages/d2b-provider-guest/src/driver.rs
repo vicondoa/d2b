@@ -400,6 +400,11 @@ pub fn decode_metadata(raw: &[u8]) -> Result<Value, GuestEffectError> {
 /// Convert one durable 16-byte uid to its canonical identity (the manager
 /// persists the uid as bytes; the Provider effects key on the canonical
 /// string).
+///
+/// # Errors
+///
+/// Returns [`GuestEffectError::InvalidResource`] when the bytes are not a
+/// canonical resource uid.
 pub fn resource_uid(bytes: &[u8; 16]) -> Result<ResourceUid, GuestEffectError> {
     ResourceUid::from_bytes(bytes).map_err(|_| GuestEffectError::InvalidResource)
 }
@@ -499,11 +504,14 @@ pub fn view_phase(view: &d2b_resource_runtime::manager::ResourceView) -> &'stati
 /// controller's status write into: the converted Guest's status is
 /// actor-local, so the effect call that drives the controller is the only
 /// place it can be observed (R11: no dual-write into any store).
-pub type GuestStatusSink = Arc<parking_lot::Mutex<Option<Value>>>;
+///
+/// The capture point is an async lock: every write awaits it and no guard
+/// is ever held across another await.
+pub type GuestStatusSink = Arc<tokio::sync::Mutex<Option<Value>>>;
 
 /// A fresh, empty Guest status sink.
 pub fn guest_status_sink() -> GuestStatusSink {
-    Arc::new(parking_lot::Mutex::new(None))
+    Arc::new(tokio::sync::Mutex::new(None))
 }
 
 // ---------------------------------------------------------------------------
@@ -706,7 +714,7 @@ pub fn guest_descriptor(args: GuestDriverArgs) -> DriverDescriptor {
 #[derive(Clone)]
 pub struct GuestDriverArgs {
     /// The zone the plane serves.
-    pub zone: String,
+    pub zone: ZoneId,
     /// The controller generation every effect call binds (KTD7).
     pub controller_generation: ControllerGeneration,
     /// The daemon-supplied facet set the family's effects implementation is
@@ -780,12 +788,12 @@ impl GuestDriver {
     /// survives driver recreation; the construction site holds no
     /// externally built port (R2)).
     pub fn new(
-        zone: String,
+        zone: ZoneId,
         controller_generation: ControllerGeneration,
         effects: Arc<dyn GuestDriverEffects>,
     ) -> Self {
         Self {
-            zone: ZoneId::parse(zone).expect("driver zone was validated at construction"),
+            zone,
             controller_generation,
             effects,
             watched: Vec::new(),
@@ -860,15 +868,14 @@ impl GuestDriver {
 
     /// The runtime-only operation id of one pass (never persisted).
     fn operation_id(&self, ctx: &ResourceContext, kind: GuestKind) -> String {
-        format!(
-            "{}-{}-g{}",
-            kind.effect_id(),
-            ctx.uid()
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>(),
-            ctx.generation(),
-        )
+        use std::fmt::Write as _;
+        let mut id = String::with_capacity(kind.effect_id().len() + ctx.uid().len() * 2 + 8);
+        let _ = write!(id, "{}-", kind.effect_id());
+        for byte in ctx.uid() {
+            let _ = write!(id, "{byte:02x}");
+        }
+        let _ = write!(id, "-g{}", ctx.generation());
+        id
     }
 
     fn child_key(&self, target: &ResourceRef) -> ResourceKey {
@@ -978,7 +985,11 @@ impl GuestDriver {
                         .any(|child| owned_child_matches_child_ensure(row, child))
             })
             .collect::<Vec<_>>();
-        obsolete.sort_by_key(|row| (teardown_rank(&row.key.type_name), row.key.name.clone()));
+        obsolete.sort_by(|a, b| {
+            teardown_rank(&a.key.type_name)
+                .cmp(&teardown_rank(&b.key.type_name))
+                .then_with(|| a.key.name.cmp(&b.key.name))
+        });
         let mut mutated = false;
         for row in obsolete {
             ctx.delete(&row.key)
@@ -1493,7 +1504,7 @@ fn aca_child_ensures(
 mod tests {
     use std::sync::Arc;
 
-    use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef};
+    use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ZoneId};
     use d2b_provider_toolkit::testing::fakes::{RecordingManagerEndpoint, RecordingRequeue};
     use d2b_resource_runtime::context::ResourceContext;
     use d2b_resource_runtime::driver::{
@@ -1503,7 +1514,6 @@ mod tests {
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
     use d2b_resource_runtime::manager::ResourceView;
     use d2b_resource_runtime::resource::ResourceStatus;
-    use d2b_resource_runtime::target::TargetHandle;
 
     use super::{
         GUEST_REGISTRATIONS, GUEST_TYPE_NAME, GuestDriver, GuestDriverArgs, GuestDriverFactory,
@@ -1521,9 +1531,6 @@ mod tests {
         0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x42, 0x22, 0x82, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22,
         0x22,
     ];
-
-    // -- fakes ---------------------------------------------------------------
-
 
     // -- fixtures ------------------------------------------------------------
 
@@ -1586,7 +1593,6 @@ mod tests {
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
         ResourceContext::new(
             target,
-            TargetHandle::Host,
             guest_spec_decoder(),
             manager,
             Arc::new(requeue),
@@ -1597,7 +1603,7 @@ mod tests {
 
     fn driver(effects: Arc<ScriptedEffects>) -> GuestDriver {
         GuestDriver::new(
-            "work".to_owned(),
+            ZoneId::parse("work").expect("zone"),
             ControllerGeneration::new(3).expect("generation"),
             effects,
         )
@@ -1653,7 +1659,7 @@ mod tests {
     #[test]
     fn factory_registers_the_guest_type() {
         let factory = GuestDriverFactory::new(GuestDriverArgs {
-            zone: "work".to_owned(),
+            zone: ZoneId::parse("work").expect("zone"),
             controller_generation: ControllerGeneration::new(1).expect("generation"),
             facets: crate::test_support::ScriptedFacets::new().facet_set(),
         });
@@ -1718,28 +1724,34 @@ mod tests {
     #[tokio::test]
     async fn driver_recreation_shares_the_factorys_controller_state() {
         let facets = crate::test_support::ScriptedFacets::new();
-        facets.add_row(crate::test_support::row_fixture(
-            "work",
-            "Provider",
-            "runtime-azure-container-apps",
-            aca_provider_spec(),
-            ResourceStatus::Ready,
-        ));
-        facets.add_row(crate::test_support::row_fixture_with_metadata(
-            "work",
-            "Guest",
-            "gateway",
-            serde_json::json!({}),
-            ResourceStatus::Ready,
-            serde_json::json!({ "zone": "work" }),
-        ));
-        facets.add_row(crate::test_support::row_fixture(
-            "work",
-            "Credential",
-            "control",
-            serde_json::json!({ "scope": { "executionRef": "Guest/gateway" } }),
-            ResourceStatus::Ready,
-        ));
+        facets
+            .add_row(crate::test_support::row_fixture(
+                "work",
+                "Provider",
+                "runtime-azure-container-apps",
+                aca_provider_spec(),
+                ResourceStatus::Ready,
+            ))
+            .await;
+        facets
+            .add_row(crate::test_support::row_fixture_with_metadata(
+                "work",
+                "Guest",
+                "gateway",
+                serde_json::json!({}),
+                ResourceStatus::Ready,
+                serde_json::json!({ "zone": "work" }),
+            ))
+            .await;
+        facets
+            .add_row(crate::test_support::row_fixture(
+                "work",
+                "Credential",
+                "control",
+                serde_json::json!({ "scope": { "executionRef": "Guest/gateway" } }),
+                ResourceStatus::Ready,
+            ))
+            .await;
         facets.add_committed_provider(
             ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap(),
             d2b_contracts_resource::v3::ResourceUid::parse(
@@ -1752,7 +1764,7 @@ mod tests {
             d2b_contracts_resource::v3::identity::ReconnectGeneration::new(2).unwrap(),
         ));
         let factory = GuestDriverFactory::new(GuestDriverArgs {
-            zone: "work".to_owned(),
+            zone: ZoneId::parse("work").expect("zone"),
             controller_generation: ControllerGeneration::new(3).expect("generation"),
             facets: facets.facet_set(),
         });
@@ -1873,7 +1885,7 @@ mod tests {
         let (mut ctx, effects, manager) = qemu_fixture();
         manager.set_children_ready(true);
         let projection = serde_json::json!({ "phase": "Ready", "runtimeReady": true });
-        effects.set_projection(Some(projection.clone()));
+        effects.set_projection(Some(projection.clone())).await;
         let mut driver = driver(Arc::clone(&effects));
 
         let outcome = driver.reconcile(&mut ctx).await.expect("reconcile");
@@ -1886,7 +1898,7 @@ mod tests {
             ],
             "the qemu child graph is the runtime Volume then the VMM Process",
         );
-        let observation = effects.observations().pop().expect("effect call");
+        let observation = effects.observations().await.pop().expect("effect call");
         assert_eq!(observation.kind, GuestKind::QemuMedia);
         assert_eq!(observation.provider_spec, Some(qemu_provider_spec()));
         assert_eq!(
@@ -1916,7 +1928,7 @@ mod tests {
         manager.set_children_ready(true);
         let effects = ScriptedEffects::new();
         let projection = serde_json::json!({ "phase": "Ready", "runtimeReady": true });
-        effects.set_projection(Some(projection.clone()));
+        effects.set_projection(Some(projection.clone())).await;
         let mut ctx = context(
             guest_row(
                 "work-vm",
@@ -1934,7 +1946,7 @@ mod tests {
             vec!["ensure:Endpoint/work-vm-sandbox-agent".to_owned()],
             "the ACA child graph is the sandbox-agent control Endpoint",
         );
-        let observation = effects.observations().pop().expect("effect call");
+        let observation = effects.observations().await.pop().expect("effect call");
         assert_eq!(observation.kind, GuestKind::AzureContainerApps);
         assert_eq!(
             observation.children,
@@ -1960,7 +1972,7 @@ mod tests {
         assert_eq!(effects.call_order(), vec!["reconcile:runtime-qemu-media-guest".to_owned()]);
     }
 
-/// Issue #511 at the migrated provider-row read
+    /// Issue #511 at the migrated provider-row read
     /// ([`GuestDriver::provider_spec`], classified): an absent row and
     /// an unanswerable manager both defer (retryable - the actor requeues),
     /// while a present row that cannot be decoded names its terminal evidence
@@ -2046,7 +2058,9 @@ mod tests {
     #[tokio::test]
     async fn cloud_hypervisor_guests_commit_no_children_through_the_driver() {
         let effects = ScriptedEffects::new();
-        effects.set_projection(Some(serde_json::json!({ "phase": "Ready" })));
+        effects
+            .set_projection(Some(serde_json::json!({ "phase": "Ready" })))
+            .await;
         let manager = Arc::new(RecordingManagerEndpoint::new().with_owner_uid(GUEST_UID_BYTES));
         let mut ctx = context(
             guest_row(
@@ -2060,7 +2074,12 @@ mod tests {
 
         driver.reconcile(&mut ctx).await.expect("reconcile");
         assert_eq!(
-            effects.observations().pop().expect("effect call").kind,
+            effects
+            .observations()
+            .await
+            .pop()
+            .expect("effect call")
+            .kind,
             GuestKind::CloudHypervisor,
         );
         assert!(manager.ensure_order().is_empty());
@@ -2194,7 +2213,7 @@ mod tests {
             owned_row("Volume", "work-vm-stale", serde_json::json!({})),
             ResourceStatus::Ready,
         );
-        effects.set_finalize(GuestFinalizeStage::Pending);
+        effects.set_finalize(GuestFinalizeStage::Pending).await;
         let mut driver = driver(Arc::clone(&effects));
 
         let failure = driver.delete(&mut ctx).await.expect_err("stage pending");
@@ -2216,12 +2235,12 @@ mod tests {
         let (mut ctx, effects, manager) = qemu_fixture();
         manager.set_children_ready(true);
         let projection = serde_json::json!({ "phase": "Ready", "runtimeReady": true });
-        effects.set_projection(Some(projection.clone()));
+        effects.set_projection(Some(projection.clone())).await;
         let mut driver = driver(Arc::clone(&effects));
         driver.reconcile(&mut ctx).await.expect("first pass");
         assert_eq!(ctx.take_status_projection(), Some(projection.clone()));
 
-        effects.set_projection(None);
+        effects.set_projection(None).await;
         driver.reconcile(&mut ctx).await.expect("second pass");
         assert_eq!(ctx.take_status_projection(), Some(projection.clone()));
         let status = guest_status(&ctx);

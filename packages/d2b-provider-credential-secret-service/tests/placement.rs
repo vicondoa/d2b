@@ -13,7 +13,8 @@ fn only_user_agent_on_host_or_guest_is_accepted() {
                 ResourceRef::parse(execution).unwrap(),
                 user.clone(),
             )
-            .is_ok()
+            .is_ok(),
+            "case: {execution:?}",
         );
     }
     for binding in [PlacementBinding::HostSystem, PlacementBinding::GuestAgent] {
@@ -24,7 +25,8 @@ fn only_user_agent_on_host_or_guest_is_accepted() {
                 ResourceRef::parse("Guest/work-vm").unwrap(),
                 user.clone(),
             ),
-            Err(SecretServiceProviderError::InvalidPlacement)
+            Err(SecretServiceProviderError::InvalidPlacement),
+            "case: {binding:?}",
         );
     }
 }

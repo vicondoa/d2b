@@ -226,6 +226,29 @@ async fn running_sandbox_reaches_ready_without_exposing_identity() {
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
+async fn completed_operation_reconcile_replays_without_effects() {
+    let state = Arc::new(Mutex::new(FakeState {
+        candidates: vec![record(AcaSandboxLifecycle::Running)],
+        ..FakeState::default()
+    }));
+    let mut controller = controller(Arc::clone(&state)).with_clock(Arc::new(FixedClock(0)));
+    let operation = AcaOperationId::parse("operation-replay").unwrap();
+    assert_eq!(
+        controller.reconcile(operation.clone(), 1_000).await.unwrap(),
+        AcaReconcileOutcome::Converged
+    );
+    let calls = state.lock().await.calls.clone();
+    let revoked = state.lock().await.revoked;
+    assert_eq!(
+        controller.reconcile(operation, 1_000).await.unwrap(),
+        AcaReconcileOutcome::Converged
+    );
+    assert_eq!(state.lock().await.calls, calls);
+    assert_eq!(state.lock().await.revoked, revoked);
+}
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
 async fn running_sandbox_requires_authenticated_healthy_control() {
     let state = Arc::new(Mutex::new(FakeState {
         candidates: vec![record(AcaSandboxLifecycle::Running)],
@@ -533,5 +556,4 @@ fn stable_error_codes_are_bounded() {
         AcaControlError::new(AcaControlErrorKind::RateLimited).code(),
         "aca-control-rate-limited"
     );
-    let _ = ResourceRef::parse("Guest/gateway").unwrap();
 }

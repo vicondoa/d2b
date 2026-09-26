@@ -2,19 +2,23 @@
 //!
 //! Gated behind the `test-support` Cargo feature so production
 //! consumers never pull this in.
+//!
+//! The double's ordered log is the toolkit's `SharedLog`
+//! (`d2b_provider_toolkit::testing`), the canonical recorder shape every
+//! family crate's test-support module shares.
 
 use std::sync::Arc;
 
+use d2b_provider_toolkit::testing::SharedLog;
 use d2b_provider_volume_virtiofs::{SocketIdentity, StoredBinding};
 use d2b_resource_runtime::identity::ResourceKey;
-use parking_lot::Mutex;
 
 use crate::driver::BindingDriverEffects;
 
 /// Scripted serving port over the caller's ordered log, so the tests
 /// assert one sequence across manager calls and serving effects.
 pub struct FakeServingEffects {
-    log: Arc<Mutex<Vec<String>>>,
+    log: SharedLog,
     ready: std::sync::atomic::AtomicBool,
     mounted: std::sync::atomic::AtomicBool,
     fail_remove_socket: std::sync::atomic::AtomicBool,
@@ -23,12 +27,17 @@ pub struct FakeServingEffects {
 impl FakeServingEffects {
     /// A fresh double with its own ordered log.
     pub fn new() -> Arc<Self> {
-        Self::shared(Arc::new(Mutex::new(Vec::new())))
+        Arc::new(Self {
+            log: SharedLog::new(),
+            ready: std::sync::atomic::AtomicBool::new(false),
+            mounted: std::sync::atomic::AtomicBool::new(false),
+            fail_remove_socket: std::sync::atomic::AtomicBool::new(false),
+        })
     }
 
     /// A double whose ordered log is shared with the caller's manager
     /// logger, so manager calls and serving effects read as one sequence.
-    pub fn shared(log: Arc<Mutex<Vec<String>>>) -> Arc<Self> {
+    pub fn shared(log: SharedLog) -> Arc<Self> {
         Arc::new(Self {
             log,
             ready: std::sync::atomic::AtomicBool::new(false),
@@ -54,7 +63,7 @@ impl FakeServingEffects {
 
     /// The ordered serving-effect log, shared with any manager logger.
     pub fn call_order(&self) -> Vec<String> {
-        self.log.lock().clone()
+        self.log.entries()
     }
 
     /// The facet set the plane and this crate's tests build the driver and
@@ -76,7 +85,7 @@ struct ScriptedReady(Arc<FakeServingEffects>);
 #[async_trait::async_trait]
 impl crate::facets::SocketReadySource for ScriptedReady {
     async fn ready(&self, _socket: &SocketIdentity) -> bool {
-        self.0.log.lock().push("socket-ready".to_owned()); // async-gate-allow: test-support recorder lock
+        self.0.log.record("socket-ready".to_owned());
         self.0.ready.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
@@ -88,7 +97,7 @@ struct ScriptedRemove(Arc<FakeServingEffects>);
 #[async_trait::async_trait]
 impl crate::facets::SocketRemoveSource for ScriptedRemove {
     async fn remove(&self, _socket: &SocketIdentity) -> Result<(), String> {
-        self.0.log.lock().push("remove-socket".to_owned()); // async-gate-allow: test-support recorder lock
+        self.0.log.record("remove-socket".to_owned());
         if self.0.fail_remove_socket.load(std::sync::atomic::Ordering::SeqCst) {
             return Err("scripted remove failure".to_owned());
         }
@@ -103,7 +112,7 @@ struct ScriptedGuestMount(Arc<FakeServingEffects>);
 #[async_trait::async_trait]
 impl crate::facets::GuestMountSource for ScriptedGuestMount {
     async fn guest_mount_ready(&self, _key: &ResourceKey) -> Result<bool, String> {
-        self.0.log.lock().push("guest-mount".to_owned()); // async-gate-allow: test-support recorder lock
+        self.0.log.record("guest-mount".to_owned());
         Ok(self.0.mounted.load(std::sync::atomic::Ordering::SeqCst))
     }
 }
@@ -111,13 +120,13 @@ impl crate::facets::GuestMountSource for ScriptedGuestMount {
 #[async_trait::async_trait]
 impl BindingDriverEffects for FakeServingEffects {
     async fn socket_ready(&self, _socket: &SocketIdentity) -> bool {
-        self.log.lock().push("socket-ready".to_owned()); // async-gate-allow: test-support recorder lock
+        self.log.record("socket-ready".to_owned());
         self.ready.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     async fn remove_socket(&self, _socket: &SocketIdentity) -> Result<(), String> {
-        self.log.lock().push("remove-socket".to_owned()); // async-gate-allow: test-support recorder lock
-        if self.fail_remove_socket.load(std::sync::atomic::Ordering::SeqCst){
+        self.log.record("remove-socket".to_owned());
+        if self.fail_remove_socket.load(std::sync::atomic::Ordering::SeqCst) {
             return Err("scripted remove failure".to_owned());
         }
         Ok(())
@@ -128,7 +137,7 @@ impl BindingDriverEffects for FakeServingEffects {
         _key: &ResourceKey,
         _binding: &StoredBinding,
     ) -> Result<bool, String> {
-        self.log.lock().push("guest-mount".to_owned()); // async-gate-allow: test-support recorder lock
+        self.log.record("guest-mount".to_owned());
         Ok(self.mounted.load(std::sync::atomic::Ordering::SeqCst))
     }
 }

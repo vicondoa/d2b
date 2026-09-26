@@ -38,6 +38,7 @@ impl FakeSocketEffects {
     }
 
     /// The socket effect calls recorded so far, in order.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn call_order(&self) -> Vec<&'static str> {
         self.calls.lock().clone()
     }
@@ -66,6 +67,7 @@ impl FakeSocketEffects {
 struct ScriptedSocketSource(Arc<FakeSocketEffects>);
 
 #[async_trait::async_trait]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 impl EndpointSocketSource for ScriptedSocketSource {
     async fn present(&self, _producer_ref: &ResourceRef, _purpose: &str) -> bool {
         self.0.calls.lock().push("socket-present"); // async-gate-allow: test-support recorder lock
@@ -115,6 +117,7 @@ impl EndpointPurposeVocabulary for FakeSocketEffects {
 }
 
 #[async_trait::async_trait]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 impl EndpointDriverEffects for FakeSocketEffects {
     async fn socket_present(&self, _producer_ref: &ResourceRef, _purpose: &str) -> bool {
         self.calls.lock().push("socket-present"); // async-gate-allow: test-support recorder lock

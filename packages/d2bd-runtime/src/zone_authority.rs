@@ -203,7 +203,7 @@ pub async fn register_authoritative_zones(
     for zone in authoritative_zone_ids(resolver)? {
         let _ = coordinator.register_zone(zone);
     }
-    for (vm, runtime) in &resolver.manifest.vms {
+    for (vm, runtime) in &resolver.manifest().vms {
         let Some(environment) = runtime.env.as_deref() else {
             continue;
         };

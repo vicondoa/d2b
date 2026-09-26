@@ -173,6 +173,15 @@ impl<W: WallClock> CallDriver<W> {
     /// The resolved service must match the method's service, a method that
     /// requires an idempotency key must have been given one, and the deadline
     /// must still be in the future against `clock`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError::InvalidMethod`] when the resolved service
+    /// does not match the method's profile,
+    /// [`ClientError::IdempotencyRequired`] when the profile demands an
+    /// idempotency key and none was supplied,
+    /// [`ClientError::DeadlineExpired`] when the deadline has already
+    /// passed.
     pub fn new(
         target: &ResolvedTarget,
         profile: MethodProfile,
@@ -186,7 +195,6 @@ impl<W: WallClock> CallDriver<W> {
         if profile.requires_idempotency() && !options.metadata.has_idempotency_key() {
             return Err(ClientError::IdempotencyRequired);
         }
-        options.metadata.validate_lifetime()?;
         let remaining_ms = options
             .metadata
             .expires_at_unix_ms()

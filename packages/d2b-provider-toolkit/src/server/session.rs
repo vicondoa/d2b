@@ -127,17 +127,17 @@ where
         if cancellation.is_cancelled() {
             return Ok(());
         }
+        let route = session.route_binding();
         let frame = tokio::select! {
             biased;
             _ = cancellation.cancelled() => return Ok(()),
             frame = session.receive_ttrpc() => {
                 frame.map_err(|_| {
-                    warn!("component session receive failed; closing provider session");
+                    warn!(zone = ?route.zone(), provider = ?route.provider_ref(), "component session receive failed; closing provider session");
                     ProviderToolkitError::SessionClosed
                 })?
             }
         };
-        let route = session.route_binding();
         let request = codec.decode_request(&frame, &route).inspect_err(|e| {
             warn!(zone = ?route.zone(), reason = %e, "provider request decode failed; closing provider session");
         })?;
@@ -249,17 +249,18 @@ where
     S: ProviderService,
     C: AuthenticatedProviderFrameCodec,
 {
+    let route = session_admission.route().clone();
     entrypoint
         .publish_authenticated_ready(&registration, session_admission, session)
         .map_err(|_| {
-            warn!("authenticated readiness publication failed; provider runtime will not serve");
+            warn!(zone = ?route.zone(), provider = ?route.provider_ref(), "authenticated readiness publication failed; provider runtime will not serve");
             ProviderRuntimeError::NotAccepting
         })?;
     let adapter = ProviderAgentAdapter::new(service);
     serve_authenticated_component_session(&adapter, session, codec, cancellation, now_tick)
         .await
         .map_err(|_| {
-            warn!("authenticated provider session loop failed");
+            warn!(zone = ?route.zone(), provider = ?route.provider_ref(), "authenticated provider session loop failed");
             ProviderRuntimeError::SessionLoopFailed
         })
 }

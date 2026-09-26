@@ -75,6 +75,21 @@ impl Default for GpuSettings {
 
 impl GpuSettings {
     /// Validate bounds and the shared-arbitration/render-node invariant.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GpuSettingsError::ContextTypesOutOfRange`] when no context
+    /// type or more than three are declared,
+    /// [`GpuSettingsError::DuplicateContextType`] for a repeated context
+    /// type, [`GpuSettingsError::DisplaysOutOfRange`] for more than eight
+    /// displays, [`GpuSettingsError::SharedRequiresRenderNodeOnly`] when
+    /// shared arbitration is combined with a full GPU worker,
+    /// [`GpuSettingsError::VideoRequiresFullGpu`] when a video sidecar is
+    /// combined with a render-node-only worker,
+    /// [`GpuSettingsError::NvidiaDecodeRequiresVideoSidecar`] when NVIDIA
+    /// decode is set without a video sidecar, and
+    /// [`GpuSettingsError::VideoModesConflict`] when virgl video is combined
+    /// with a video sidecar.
     pub fn validate(&self, arbitration: DeviceArbitration) -> Result<(), GpuSettingsError> {
         if self.context_types.is_empty() || self.context_types.len() > 3 {
             return Err(GpuSettingsError::ContextTypesOutOfRange);

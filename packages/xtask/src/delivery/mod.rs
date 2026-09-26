@@ -44,6 +44,7 @@ pub use storage::{CandidateDir, StateRoot};
 
 /// Reader view of the immutable candidate snapshot shared by delivery stages.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SnapshotView {
     pub artifact_kind: String,
     pub schema_version: u32,

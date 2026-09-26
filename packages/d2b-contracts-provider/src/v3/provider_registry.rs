@@ -4,8 +4,9 @@
 //! permits.  This module contains only the signed, identity-safe publication
 //! shape that can cross the v3 Provider service boundary.
 
+use d2b_contracts::wire_deserialize;
 use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 use d2b_contracts_resource::v3::identity::ServiceName;
 use d2b_contracts_resource::v3::{
@@ -44,6 +45,7 @@ pub enum ProviderRegistryError {
     MappingBoundExceeded,
     UnknownAxis,
     AxisMismatch,
+    GenerationMismatch,
 }
 
 impl core::fmt::Display for ProviderRegistryError {
@@ -57,6 +59,7 @@ impl core::fmt::Display for ProviderRegistryError {
             Self::MappingBoundExceeded => "provider-registry-mapping-bound-exceeded",
             Self::UnknownAxis => "provider-registry-axis-unknown",
             Self::AxisMismatch => "provider-registry-axis-mismatch",
+            Self::GenerationMismatch => "provider-registry-generation-mismatch",
         })
     }
 }
@@ -144,30 +147,28 @@ impl ProviderRegistryEntry {
 
 redacted_debug!(ProviderRegistryEntry);
 
-impl<'de> Deserialize<'de> for ProviderRegistryEntry {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            provider_ref: ResourceRef,
-            service: ServiceName,
-            descriptor_fingerprint: SchemaFingerprint,
-            provider_generation: ResourceGeneration,
-            axis: ProviderBindingAxis,
-            mapping_id: String,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.provider_ref,
-            wire.service,
-            wire.descriptor_fingerprint,
-            wire.provider_generation,
-            wire.axis,
-            wire.mapping_id,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ProviderRegistryEntry,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        provider_ref: ResourceRef,
+        service: ServiceName,
+        descriptor_fingerprint: SchemaFingerprint,
+        provider_generation: ResourceGeneration,
+        axis: ProviderBindingAxis,
+        mapping_id: String,
+    },
+    wire,
+    Self::new(
+        wire.provider_ref,
+        wire.service,
+        wire.descriptor_fingerprint,
+        wire.provider_generation,
+        wire.axis,
+        wire.mapping_id,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// A complete immutable registry publication.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -183,14 +184,17 @@ impl ProviderRegistryPublication {
         generation: ResourceGeneration,
         mut entries: Vec<ProviderRegistryEntry>,
     ) -> Result<Self, ProviderRegistryError> {
-        if generation.get() == 0 || entries.len() > MAX_PROVIDER_REGISTRY_MAPPINGS {
+        if generation.get() == 0 {
+            return Err(ProviderRegistryError::ZeroGeneration);
+        }
+        if entries.len() > MAX_PROVIDER_REGISTRY_MAPPINGS {
             return Err(ProviderRegistryError::MappingBoundExceeded);
         }
         if entries
             .iter()
             .any(|entry| entry.provider_generation != generation)
         {
-            return Err(ProviderRegistryError::AxisMismatch);
+            return Err(ProviderRegistryError::GenerationMismatch);
         }
         entries.sort_by(|left, right| left.mapping_id.cmp(&right.mapping_id));
         if entries
@@ -218,18 +222,16 @@ impl ProviderRegistryPublication {
 
 redacted_debug!(ProviderRegistryPublication);
 
-impl<'de> Deserialize<'de> for ProviderRegistryPublication {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            generation: ResourceGeneration,
-            entries: Vec<ProviderRegistryEntry>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.generation, wire.entries).map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ProviderRegistryPublication,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        generation: ResourceGeneration,
+        entries: Vec<ProviderRegistryEntry>,
+    },
+    wire,
+    Self::new(wire.generation, wire.entries).map_err(serde::de::Error::custom)
+);
 
 #[cfg(test)]
 mod tests {
@@ -256,7 +258,7 @@ mod tests {
         );
         assert_eq!(
             ProviderRegistryPublication::new(generation, vec![entry(3, "one")]).unwrap_err(),
-            ProviderRegistryError::AxisMismatch
+            ProviderRegistryError::GenerationMismatch
         );
         assert_eq!(
             ProviderRegistryPublication::new(generation, vec![entry(4, "one"), entry(4, "one")])

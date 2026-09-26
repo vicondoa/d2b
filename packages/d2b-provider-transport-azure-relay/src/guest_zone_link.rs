@@ -31,28 +31,65 @@ fn system_now_unix() -> u64 {
 }
 
 /// Closed failures while composing the Gateway Guest ZoneLink transport.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GatewayGuestZoneLinkError {
     /// The execution or egress Network reference has the wrong ResourceType.
     InvalidPlacement,
-    /// The Guest-local sealed credential or sealing key could not be opened.
-    CredentialUnavailable,
+    /// The Guest-local sealed credential or the scoped credential request
+    /// could not be admitted.
+    CredentialUnavailable {
+        /// Typed origin of the credential refusal.
+        source: ZoneLinkCredentialRefusal,
+    },
     /// The selected Relay Provider rejected its non-secret configuration.
     TransportConfiguration,
     /// The Relay carriage or its enrollment proof was refused.
-    TransportUnavailable,
+    TransportUnavailable {
+        /// Typed origin of the transport refusal.
+        source: RelayTransportError,
+    },
     /// The non-secret Guest-local open observation could not be persisted.
     ObservationUnavailable,
 }
 
+/// Typed origin of a [`GatewayGuestZoneLinkError::CredentialUnavailable`]
+/// refusal: the sealed bootstrap credential or the scoped credential request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ZoneLinkCredentialRefusal {
+    /// The Guest-local sealed credential or sealing key could not be opened or
+    /// validated.
+    Sealed(CredentialError),
+    /// The scoped credential request failed its same-Zone scope, binding, or
+    /// deadline validation.
+    Scoped(RelayCredentialError),
+}
+
+impl std::fmt::Display for ZoneLinkCredentialRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Sealed(error) => write!(formatter, "{error}"),
+            Self::Scoped(error) => write!(formatter, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for ZoneLinkCredentialRefusal {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Sealed(error) => Some(error),
+            Self::Scoped(error) => Some(error),
+        }
+    }
+}
+
 impl GatewayGuestZoneLinkError {
     /// Return the stable path-free error code.
-    pub const fn code(self) -> &'static str {
+    pub const fn code(&self) -> &'static str {
         match self {
             Self::InvalidPlacement => "gateway-guest-zonelink-placement-invalid",
-            Self::CredentialUnavailable => "gateway-guest-zonelink-credential-unavailable",
+            Self::CredentialUnavailable { .. } => "gateway-guest-zonelink-credential-unavailable",
             Self::TransportConfiguration => "gateway-guest-zonelink-transport-invalid",
-            Self::TransportUnavailable => "gateway-guest-zonelink-transport-unavailable",
+            Self::TransportUnavailable { .. } => "gateway-guest-zonelink-transport-unavailable",
             Self::ObservationUnavailable => "gateway-guest-zonelink-observation-unavailable",
         }
     }
@@ -64,17 +101,29 @@ impl std::fmt::Display for GatewayGuestZoneLinkError {
     }
 }
 
-impl std::error::Error for GatewayGuestZoneLinkError {}
+impl std::error::Error for GatewayGuestZoneLinkError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::CredentialUnavailable { source } => Some(source),
+            Self::TransportUnavailable { source } => Some(source),
+            Self::InvalidPlacement
+            | Self::TransportConfiguration
+            | Self::ObservationUnavailable => None,
+        }
+    }
+}
 
 impl From<CredentialError> for GatewayGuestZoneLinkError {
-    fn from(_: CredentialError) -> Self {
-        Self::CredentialUnavailable
+    fn from(error: CredentialError) -> Self {
+        Self::CredentialUnavailable {
+            source: ZoneLinkCredentialRefusal::Sealed(error),
+        }
     }
 }
 
 impl From<RelayTransportError> for GatewayGuestZoneLinkError {
-    fn from(_: RelayTransportError) -> Self {
-        Self::TransportUnavailable
+    fn from(error: RelayTransportError) -> Self {
+        Self::TransportUnavailable { source: error }
     }
 }
 
@@ -138,6 +187,12 @@ pub struct RelayCarriageRequest {
     pub deadline_ms: u32,
 }
 
+/// Non-secret marker data carried by a sealed credential open.
+struct SealedObservation {
+    generation: u64,
+    send_key_digest: [u8; 32],
+}
+
 /// Gateway Guest-local Azure Relay Provider and credential boundary.
 ///
 /// Credential custody is supplied either by the Guest-local sealed bootstrap
@@ -146,8 +201,7 @@ pub struct RelayCarriageRequest {
 /// carrying protected ComponentSession data.
 pub struct GatewayGuestZoneLinkRuntime {
     provider: AzureRelayTransportProvider<GatewayGuestCredentialSource, AzureRelaySocketConnector>,
-    credential_generation: Option<u64>,
-    credential_send_key_digest: Option<[u8; 32]>,
+    credential_observation: Option<SealedObservation>,
 }
 
 impl std::fmt::Debug for GatewayGuestZoneLinkRuntime {
@@ -176,8 +230,10 @@ impl GatewayGuestZoneLinkRuntime {
             policy,
             system_now_unix(),
         )?;
-        let credential_generation = credentials.credential_generation();
-        let credential_send_key_digest = credentials.safe_observation_digest();
+        let observation = SealedObservation {
+            generation: credentials.credential_generation(),
+            send_key_digest: credentials.safe_observation_digest(),
+        };
         let provider = AzureRelayTransportProvider::new(
             RelayTransportConfig {
                 execution_ref: config.execution_ref,
@@ -194,8 +250,7 @@ impl GatewayGuestZoneLinkRuntime {
         .map_err(|_| GatewayGuestZoneLinkError::TransportConfiguration)?;
         Ok(Self {
             provider,
-            credential_generation: Some(credential_generation),
-            credential_send_key_digest: Some(credential_send_key_digest),
+            credential_observation: Some(observation),
         })
     }
 
@@ -230,8 +285,7 @@ impl GatewayGuestZoneLinkRuntime {
         .map_err(|_| GatewayGuestZoneLinkError::TransportConfiguration)?;
         Ok(Self {
             provider,
-            credential_generation: None,
-            credential_send_key_digest: None,
+            credential_observation: None,
         })
     }
 
@@ -249,10 +303,7 @@ impl GatewayGuestZoneLinkRuntime {
         &self,
         path: impl AsRef<Path>,
     ) -> Result<(), GatewayGuestZoneLinkError> {
-        let (Some(credential_generation), Some(credential_send_key_digest)) = (
-            self.credential_generation,
-            self.credential_send_key_digest,
-        ) else {
+        let Some(observation) = &self.credential_observation else {
             return Err(GatewayGuestZoneLinkError::ObservationUnavailable);
         };
         let path = path.as_ref();
@@ -268,8 +319,8 @@ impl GatewayGuestZoneLinkRuntime {
         let temporary = parent.join(format!(".{file_name}.{}", std::process::id()));
         let marker = format!(
             "schemaVersion=1\ngeneration={}\ndigest=sha256:{}\n",
-            credential_generation,
-            digest_hex(&credential_send_key_digest),
+            observation.generation,
+            digest_hex(&observation.send_key_digest),
         );
         let result = (|| {
             let mut file = OpenOptions::new()
@@ -317,14 +368,16 @@ impl GatewayGuestZoneLinkRuntime {
             binding,
             deadline_ms,
         )
-        .map_err(|_| {
+        .map_err(|error| {
             tracing::warn!(
                 provider = "transport-azure-relay",
                 role = ?role,
                 credential = %credential_for_log,
                 "zone link rejected: scoped credential request invalid"
             );
-            GatewayGuestZoneLinkError::CredentialUnavailable
+            GatewayGuestZoneLinkError::CredentialUnavailable {
+                source: ZoneLinkCredentialRefusal::Scoped(error),
+            }
         })?;
         let connection = self
             .provider
@@ -344,13 +397,13 @@ impl GatewayGuestZoneLinkRuntime {
             transcript,
             &connection.enrollment_challenge(),
         )
-        .map_err(|_| {
+        .map_err(|error| {
             tracing::warn!(
                 provider = "transport-azure-relay",
                 role = ?role,
                 "zone link enrollment refused: enrollment proof rejected"
             );
-            GatewayGuestZoneLinkError::TransportUnavailable
+            GatewayGuestZoneLinkError::TransportUnavailable { source: error }
         })?;
         connection
             .enroll(proof)
@@ -584,5 +637,47 @@ mod tests {
         );
         assert!(invalid.is_err());
         assert!(!invalid_marker.exists());
+    }
+
+    #[test]
+    fn zone_link_refusals_keep_the_code_text_and_the_typed_source() {
+        let dir = tempfile::tempdir().expect("temporary Guest state");
+        let error = GatewayGuestZoneLinkRuntime::from_sealed(
+            dir.path().join("missing.sealed.json"),
+            dir.path().join("missing.key"),
+            &CredentialFilePolicy::default(),
+            GatewayGuestZoneLinkTransportConfig {
+                execution_ref: ResourceRef::parse("Guest/gateway").expect("Guest ref"),
+                network_ref: ResourceRef::parse("Network/relay-egress").expect("Network ref"),
+                settings: RelayTransportSettings::new("relns-d2b-prod", "hc-d2b")
+                    .expect("Relay settings"),
+                max_concurrent_sessions: 32,
+                connect_timeout_seconds: 30,
+            },
+        )
+        .expect_err("missing sealed credential");
+        assert_eq!(
+            error.code(),
+            "gateway-guest-zonelink-credential-unavailable"
+        );
+        assert_eq!(error.to_string(), error.code());
+        let refusal = std::error::Error::source(&error).expect("typed credential refusal");
+        assert_eq!(refusal.to_string(), "gateway credential cannot be read");
+        assert!(refusal.source().is_some(), "sealed credential cause");
+
+        let transport = GatewayGuestZoneLinkError::from(RelayTransportError::Protocol);
+        assert_eq!(
+            transport.code(),
+            "gateway-guest-zonelink-transport-unavailable"
+        );
+        assert_eq!(transport.to_string(), transport.code());
+        assert_eq!(
+            std::error::Error::source(&transport).map(ToString::to_string),
+            Some("relay-protocol".to_owned())
+        );
+        assert_eq!(
+            ZoneLinkCredentialRefusal::Scoped(RelayCredentialError::InvalidScope).to_string(),
+            RelayCredentialError::InvalidScope.to_string()
+        );
     }
 }

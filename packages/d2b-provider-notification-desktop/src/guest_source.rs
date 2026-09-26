@@ -18,9 +18,9 @@ impl GuestSource {
     pub fn from_config_at_generation(
         config: &GuestSourceConfig,
         generation: u64,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, crate::ProviderError> {
         if generation == 0 {
-            return Err("notification-source-generation-invalid");
+            return Err(crate::ProviderError::SourceGenerationInvalid);
         }
         Ok(Self {
             source_ref: config.source_ref().clone(),
@@ -32,10 +32,10 @@ impl GuestSource {
 
     /// Construct an unbound source for unit tests only.
     #[cfg(test)]
-    pub fn new(categories: impl IntoIterator<Item = Category>) -> Result<Self, &'static str> {
+    pub fn new(categories: impl IntoIterator<Item = Category>) -> Result<Self, crate::ProviderError> {
         let categories = categories.into_iter().collect::<BTreeSet<_>>();
         if categories.is_empty() {
-            return Err("notification-category-set-empty");
+            return Err(crate::ProviderError::CategorySetEmpty);
         }
         Ok(Self {
             source_ref: ResourceRef::parse("Guest/test").unwrap(),
@@ -46,11 +46,11 @@ impl GuestSource {
     }
 
     /// Validate a request before opening a sink stream.
-    pub fn validate(&self, request: &NotificationRequest) -> Result<(), &'static str> {
+    pub fn validate(&self, request: &NotificationRequest) -> Result<(), crate::ProviderError> {
         if self.categories.contains(&request.category()) {
             Ok(())
         } else {
-            Err("notification-category-denied")
+            Err(crate::ProviderError::CategoryDenied)
         }
     }
 
@@ -59,15 +59,15 @@ impl GuestSource {
         &self,
         session: &SessionEvidence,
         request: &NotificationRequest,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), crate::ProviderError> {
         session
             .admit_source()
-            .map_err(|_| "notification-source-unauthenticated")?;
+            .map_err(|_| crate::ProviderError::SourceUnauthenticated)?;
         if session.subject_ref() != &self.source_ref || session.zone() != &self.zone {
-            return Err("notification-source-binding-mismatch");
+            return Err(crate::ProviderError::SourceBindingMismatch);
         }
         if session.generation() != self.generation {
-            return Err("notification-source-stale-generation");
+            return Err(crate::ProviderError::SourceStaleGeneration);
         }
         self.validate(request)
     }
@@ -99,7 +99,7 @@ mod tests {
         let request = NotificationRequest::new("summary", "body", Category::SystemInfo).unwrap();
         assert_eq!(
             source.validate_authenticated(&test_observer("alice"), &request),
-            Err("notification-source-unauthenticated")
+            Err(crate::ProviderError::SourceUnauthenticated)
         );
         assert!(
             source
@@ -108,11 +108,11 @@ mod tests {
         );
         assert_eq!(
             source.validate_authenticated(&crate::admission::test_source("other"), &request),
-            Err("notification-source-binding-mismatch")
+            Err(crate::ProviderError::SourceBindingMismatch)
         );
         assert_eq!(
             source.validate_authenticated(&crate::admission::test_source_at("guest", 2), &request),
-            Err("notification-source-stale-generation")
+            Err(crate::ProviderError::SourceStaleGeneration)
         );
     }
 }

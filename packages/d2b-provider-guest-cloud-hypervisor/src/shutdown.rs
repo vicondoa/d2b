@@ -417,7 +417,7 @@ pub fn plan_finalization(
     }
 
     let mut children = input.direct_children;
-    children.sort_by_key(|child| (deletion_rank(child.role), child.target.clone()));
+    children.sort_by_key(|child| (child.role.rank(), child.target.clone()));
     if let Some(child) = children
         .iter()
         .find(|child| !child.deletion_requested)
@@ -484,17 +484,9 @@ fn blocked_plan(guest_uid: ResourceUid, reason: FinalizationBlockReason) -> Gues
     }
 }
 
-fn deletion_rank(role: ChildRole) -> u8 {
-    match role {
-        ChildRole::ChApiEndpoint => 0,
-        ChildRole::GuestControlEndpoint => 1,
-        ChildRole::VmmProcess => 2,
-        ChildRole::SystemVolume => 3,
-    }
-}
-
 /// Infer one fixed direct-child role from its deterministic ResourceRef.
 pub fn child_role_for_ref(target: &ResourceRef) -> Option<ChildRole> {
+    let name = target.name().as_str();
     [
         ChildRole::VmmProcess,
         ChildRole::ChApiEndpoint,
@@ -504,11 +496,9 @@ pub fn child_role_for_ref(target: &ResourceRef) -> Option<ChildRole> {
     .into_iter()
     .find(|role| {
         target.resource_type().as_str() == role.resource_type()
-            && target
-                .name()
-                .as_str()
-                .strip_suffix(&format!("-{}", role.suffix()))
-                .is_some()
+            && name
+                .strip_suffix(role.suffix())
+                .is_some_and(|stem| stem.ends_with('-'))
     })
 }
 
@@ -572,11 +562,6 @@ impl GuestUpgradePlan {
         self.next_session_generation
     }
 
-    /// Whether durable state is preserved.
-    pub const fn preserve_state(&self) -> bool {
-        true
-    }
-
     /// Borrow ordered recycle steps.
     pub fn steps(&self) -> &[FinalizationStep] {
         &self.steps
@@ -605,7 +590,7 @@ pub fn plan_upgrade(
             return Err(LifecyclePlanError::ChildDuplicate);
         }
     }
-    children.sort_by_key(|child| (upgrade_rank(child.role), child.target.clone()));
+    children.sort_by_key(|child| (child.role.rank(), child.target.clone()));
     let durable_volumes = children
         .iter()
         .filter(|child| child.role == ChildRole::SystemVolume)
@@ -662,15 +647,6 @@ pub fn plan_upgrade(
         next_session_generation,
         steps,
     })
-}
-
-fn upgrade_rank(role: ChildRole) -> u8 {
-    match role {
-        ChildRole::ChApiEndpoint => 0,
-        ChildRole::GuestControlEndpoint => 1,
-        ChildRole::VmmProcess => 2,
-        ChildRole::SystemVolume => 3,
-    }
 }
 
 /// Failure while building a bounded lifecycle plan.

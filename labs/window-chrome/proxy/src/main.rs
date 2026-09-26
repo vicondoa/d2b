@@ -22,7 +22,7 @@ use std::{
 };
 
 use clap::Parser;
-use d2b_core::workload_identity::WorkloadTarget;
+use d2b_contracts::workload_identity::WorkloadTarget;
 use d2b_wayland_proxy::WorkloadProviderKind;
 use d2b_wayland_proxy::filter::{
     FilterStateHandler, VirtualClipboardState, build_state, install_client_handlers,

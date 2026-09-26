@@ -139,6 +139,32 @@ pub enum PickerResult {
     Failed,
 }
 
+/// Opaque sha256 entry digest validated once at construction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntryDigest(String);
+
+impl EntryDigest {
+    /// Parse a digest at the picker boundary.
+    pub(crate) fn parse(value: impl Into<String>) -> Result<Self, PickerError> {
+        let value = value.into();
+        if value.starts_with("sha256:") {
+            Ok(Self(value))
+        } else {
+            Err(PickerError::ResultMismatch)
+        }
+    }
+
+    /// Wrap a digest freshly minted for an entry; the prefix is guaranteed by construction.
+    pub(crate) fn from_sha256_hex(value: String) -> Self {
+        Self(value)
+    }
+
+    /// Borrow the canonical digest string.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A one-use picker receipt bound to one authenticated clipboard operation.
 ///
 /// The receipt is intentionally not cloneable and exposes no constructor.
@@ -149,7 +175,7 @@ pub struct PickerReceipt {
     source_zone: String,
     destination_zone: String,
     destination_guest: String,
-    entry_digest: String,
+    entry_digest: EntryDigest,
     entry_owner: String,
     expires_at: u64,
     source_reconnect_generation: u64,
@@ -161,7 +187,7 @@ impl PickerReceipt {
         source: &AuthenticatedClipboardSession,
         destination: &AuthenticatedClipboardSession,
         request: &PickerRequest,
-        entry_digest: String,
+        entry_digest: EntryDigest,
         expires_at: u64,
     ) -> Result<Self, PickerError> {
         if request.destination_guest() != destination.guest_ref()
@@ -172,7 +198,6 @@ impl PickerReceipt {
                 "Guest" | "User"
             )
             || !destination.is_guest()
-            || !entry_digest.starts_with("sha256:")
         {
             return Err(PickerError::ResultMismatch);
         }
@@ -200,7 +225,7 @@ impl PickerReceipt {
             && self.source_reconnect_generation == route.source_reconnect_generation()
             && self.destination_zone == route.destination_zone()
             && self.destination_guest == route.destination_guest()
-            && self.entry_digest == entry_digest
+            && self.entry_digest.as_str() == entry_digest
             && self.expires_at > now_secs
             && self.reconnect_generation == route.reconnect_generation()
     }
@@ -221,6 +246,50 @@ impl core::fmt::Debug for PickerReceipt {
     }
 }
 
+/// Key identifying one picker completion claim retained in history.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CompletionKey {
+    operation_id: String,
+    source_zone: String,
+    source_subject: String,
+    source_reconnect_generation: u64,
+    destination_zone: String,
+    destination_guest: String,
+    destination_reconnect_generation: u64,
+}
+
+impl CompletionKey {
+    /// Build the completion claim key for one authenticated picker completion.
+    pub(crate) fn new(
+        operation_id: impl Into<String>,
+        source_zone: impl Into<String>,
+        source_subject: impl Into<String>,
+        source_reconnect_generation: u64,
+        destination_zone: impl Into<String>,
+        destination_guest: impl Into<String>,
+        destination_reconnect_generation: u64,
+    ) -> Self {
+        Self {
+            operation_id: operation_id.into(),
+            source_zone: source_zone.into(),
+            source_subject: source_subject.into(),
+            source_reconnect_generation,
+            destination_zone: destination_zone.into(),
+            destination_guest: destination_guest.into(),
+            destination_reconnect_generation,
+        }
+    }
+
+    /// Whether one owner label appears anywhere in the key.
+    pub(crate) fn references_guest(&self, guest: &str) -> bool {
+        self.operation_id == guest
+            || self.source_zone == guest
+            || self.source_subject == guest
+            || self.destination_zone == guest
+            || self.destination_guest == guest
+    }
+}
+
 /// The picker-side completion authority.
 pub struct PickerAuthority;
 
@@ -235,28 +304,27 @@ impl PickerAuthority {
         history: &mut ClipboardHistory,
         now_secs: u64,
     ) -> Result<PickerReceipt, PickerError> {
-        let entry_digest = entry_digest.into();
+        let entry_digest = EntryDigest::parse(entry_digest)?;
         match result {
-            PickerResult::Selected(selected) if selected == entry_digest => {
+            PickerResult::Selected(selected) if selected == entry_digest.as_str() => {
                 let owner = entry_owner_for_session(source);
                 if source.is_guest() && history.authorize_guest(&owner).is_err() {
                     return Err(PickerError::ResultMismatch);
                 }
                 if !history.entry_matches_mime(
-                    &entry_digest,
+                    entry_digest.as_str(),
                     &owner,
                     request.mime_types(),
                     now_secs,
                 ) {
                     return Err(PickerError::ResultMismatch);
                 }
-                let Some(expires_at) = history.entry_expiry(&entry_digest, &owner, now_secs) else {
+                let Some(expires_at) = history.entry_expiry(entry_digest.as_str(), &owner, now_secs) else {
                     return Err(PickerError::ResultMismatch);
                 };
                 let receipt =
                     PickerReceipt::issue(source, destination, request, entry_digest, expires_at)?;
-                let completion_key = format!(
-                    "{}|{}|{}|{}|{}|{}|{}",
+                let completion_key = CompletionKey::new(
                     request.operation_id(),
                     source.zone(),
                     source.subject_ref().to_canonical_string(),

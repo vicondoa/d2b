@@ -68,7 +68,7 @@ const PROVIDER_PREFIX: &str = "d2b-provider-";
 const DECLARATION_FILE: &str = "resource-types.json";
 
 /// The repository-relative generated artifact path (relative to the source
-/// file that `include!`s it,so `include!("generated/...")` resolves it).
+/// file that `include!`s it, so `include!("generated/...")` resolves it).
 pub(crate) const GENERATED_ARTIFACT: &str =
     "packages/d2b-contracts/src/generated/v3_converted_resource_types.rs";
 
@@ -177,7 +177,10 @@ const COMMITTED_V3_ORDER: &[&str] = &[
 
 /// One provider crate's declaration file.
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct DeclarationFile {
+    /// The declaring crate package name; the wire key `crate` is a Rust
+    /// keyword, so it is renamed explicitly.
     #[serde(rename = "crate")]
     crate_name: String,
     types: Vec<TypeDeclaration>,
@@ -188,8 +191,8 @@ struct DeclarationFile {
 
 /// One declared resource type row.
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct TypeDeclaration {
-    #[serde(rename = "resourceType")]
     resource_type: String,
 }
 
@@ -225,7 +228,6 @@ struct RoleDeclaration {
 /// The parsed per-crate type authority inputs.
 struct AuthorityRegistry {
     /// Crate name -> declared type names.
-
     declarations: BTreeMap<String, BTreeSet<String>>,
     /// Crate name -> registered descriptor type names (extracted from the
     /// crate's Rust sources).
@@ -701,7 +703,7 @@ fn parity_errors(registry: &AuthorityRegistry) -> Vec<String> {
     }
     for (type_name, crates) in &declared_by {
         if crates.len() > 1 {
-errors.push(format!(
+            errors.push(format!(
                 "type-declared-twice: {type_name} is declared by both {}and {}",
                 crates[0], crates[1]
             ));
@@ -937,7 +939,7 @@ fn render(registry: &AuthorityRegistry) -> Result<String, String> {
     }
     entries.extend(declared_all);
     let mut out = String::new();
-out.push_str("// @generated\n");
+    out.push_str("// @generated\n");
     out.push_str("// Provenance:emitted from the per-crate `resource-types.json` declarations\n");
     out.push_str("// by `cargo xtask check-provider-crate-layout --fix`;the layout check's\n");
     out.push_str("// authority drift gate regenerates this file byte-for-byte,and refuses a\n");
@@ -1003,7 +1005,7 @@ mod tests {
 
         /// Create the committed schema files the Nix inventory render requires
         /// for a fixture declaring the given standard types: one Core schema per
-        /// standard type, the four semantic projection schemas,and the two provider
+        /// standard type, the four semantic projection schemas, and the two provider
         /// farm schemas. The render only verifies existence, so empty files
         /// suffice.
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -1080,7 +1082,7 @@ mod tests {
 
     impl Drop for Fixture {
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn drop(&mut self) {
+        fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
         }
     }

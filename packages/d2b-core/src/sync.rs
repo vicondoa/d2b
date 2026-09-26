@@ -3,8 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::contract_id::{ContractId, PathTemplate};
+use d2b_contracts::contract_id::{ContractId, PathTemplate};
 use crate::storage::{ActorRef, DegradeScope, DegradedReason};
+use crate::storage_lifecycle::SyncValidationError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -133,24 +134,27 @@ pub enum LockAdoptionPolicy {
 }
 
 impl SyncJson {
-    pub fn validate_lock_order(&self) -> Result<(), String> {
+    pub fn validate_lock_order(&self) -> Result<(), SyncValidationError> {
         let mut ids = BTreeSet::new();
         let mut order_keys: BTreeMap<(&LockScopeClass, &str, &str, &str), &ContractId> =
             BTreeMap::new();
         for lock in &self.locks {
             if !ids.insert(lock.id.as_str()) {
-                return Err(format!("duplicate lock id {}", lock.id));
+                return Err(SyncValidationError::DuplicateLockId {
+                    offending_id: lock.id.to_string(),
+                });
             }
             if lock.kind == LockKind::Ofd && !lock.cloexec_required {
-                return Err(format!("OFD lock {} must require O_CLOEXEC", lock.id));
+                return Err(SyncValidationError::OfdLockMissingCloexec {
+                    offending_id: lock.id.to_string(),
+                });
             }
             if lock.fd_passing_policy.mechanism != FdPassingMechanism::None
                 && !lock.fd_passing_policy.lease_transfer_record_required
             {
-                return Err(format!(
-                    "fd-passing lock {} must require a lease transfer record",
-                    lock.id
-                ));
+                return Err(SyncValidationError::FdPassingMissingLeaseTransferRecord {
+                    offending_id: lock.id.to_string(),
+                });
             }
             let key = (
                 &lock.acquire_order.scope_class,
@@ -159,10 +163,10 @@ impl SyncJson {
                 lock.acquire_order.lock_id.as_str(),
             );
             if let Some(existing) = order_keys.insert(key, &lock.id) {
-                return Err(format!(
-                    "lock {} shares acquire order key with {}",
-                    lock.id, existing
-                ));
+                return Err(SyncValidationError::DuplicateAcquireOrder {
+                    offending_id: lock.id.to_string(),
+                    existing_id: existing.to_string(),
+                });
             }
         }
         Ok(())

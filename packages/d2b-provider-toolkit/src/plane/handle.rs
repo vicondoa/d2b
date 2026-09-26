@@ -300,7 +300,7 @@ impl<'a> ZonePlaneHandle<'a> {
     }
 }
 
-/// A bounded drain deadline handed to [`crate::base::ProviderBase::drain`].
+/// A bounded drain deadline handed to [`crate::ProviderBase::drain`].
 #[derive(Clone)]
 pub struct DrainDeadline {
     started_unix_ms: u64,

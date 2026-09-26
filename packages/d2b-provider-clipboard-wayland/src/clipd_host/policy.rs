@@ -1,23 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-pub const ALLOWED_MIME_TYPES: &[&str] = &[
-    "text/plain;charset=utf-8",
-    "text/plain",
-    "text/html",
-    "image/png",
-];
+pub use d2b_provider_clipboard_wayland::{
+    ALLOWED_MIME_TYPES, SECRET_HINT_MIME_TYPES, normalize_mime,
+};
 
-pub const SECRET_HINT_MIME_TYPES: &[&str] = &[
-    "x-kde-passwordmanagerhint",
-    "application/x-kde-passwordmanagerhint",
-    "x-gnome-passwordmanagerhint",
-    "application/x-gnome-passwordmanagerhint",
-    "x-keepassxc-secret",
-    "application/x-keepassxc-secret",
-    "application/x-secret-service",
-];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReasonCode {
     Allowed,
@@ -39,6 +26,15 @@ pub enum ReasonCode {
     MemoryCapExceeded,
     AuditFailure,
     VirtualKeyboardFailed,
+}
+
+impl Serialize for ReasonCode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
 }
 
 impl ReasonCode {
@@ -86,15 +82,6 @@ pub fn has_secret_hint<'a>(mime_names: impl IntoIterator<Item = &'a str>) -> boo
         .into_iter()
         .map(normalize_mime)
         .any(|mime| SECRET_HINT_MIME_TYPES.contains(&mime.as_str()))
-}
-
-pub fn normalize_mime(mime: &str) -> String {
-    mime.trim()
-        .split(';')
-        .map(str::trim)
-        .collect::<Vec<_>>()
-        .join(";")
-        .to_ascii_lowercase()
 }
 
 #[cfg(test)]

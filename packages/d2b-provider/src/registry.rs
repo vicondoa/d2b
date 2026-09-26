@@ -61,6 +61,11 @@ pub struct RegistryLimits {
 
 impl RegistryLimits {
     /// Reject a zero cap or a per-provider cap above the total.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryBuildError::BoundExceeded`] when a cap is zero or
+    /// the per-provider cap exceeds the total.
     pub fn validate(self) -> Result<Self, RegistryBuildError> {
         if self.total_in_flight == 0
             || self.per_provider_in_flight == 0
@@ -96,6 +101,12 @@ pub struct RegistryDrainPolicy {
 impl RegistryDrainPolicy {
     /// Reject a zero or over-long deadline, or a policy that leaks work past
     /// retirement.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderRuntimeError::InvalidDrainPolicy`] when the
+    /// deadline is zero or over the ceiling, or the policy does not cancel
+    /// in-flight work and close sessions at retirement.
     pub const fn validate(&self) -> Result<(), ProviderRuntimeError> {
         if self.drain_deadline_ms == 0
             || self.drain_deadline_ms > MAX_REGISTRY_DRAIN_MS
@@ -326,6 +337,12 @@ impl<I> ProviderRegistryBuilder<I> {
     }
 
     /// Seal the generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryBuildError::TransactionAborted`] when a prior
+    /// builder step failed and [`RegistryBuildError::EmptyRegistry`] when
+    /// no instance was installed.
     pub fn finish(self) -> Result<ProviderRegistry<I>, RegistryBuildError> {
         if self.failed {
             return Err(RegistryBuildError::TransactionAborted);
@@ -406,6 +423,13 @@ impl<I: Clone> ProviderRegistry<I> {
     /// Provider must be installed here, the authenticated identity must match
     /// the descriptor exactly, the Provider must publish the method, and a
     /// permit must be available.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderRuntimeError::NotAccepting`] when the generation
+    /// is not accepting, [`ProviderRuntimeError::UnknownProvider`] when
+    /// the Provider is not installed here, and the identity, method, or
+    /// permit refusal otherwise.
     pub fn admit(
         &self,
         options: AdmissionOptions,

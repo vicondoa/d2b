@@ -11,11 +11,12 @@
 //! `Credential` resources.
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::Serialize;
 
 use super::execution_policy::{
     BoundedText, PrimitiveSpecError, parsed_deserialize, redacted_debug, string_schema,
 };
+use d2b_contracts::wire_deserialize;
 
 /// The canonical ResourceType name for this module.
 pub const USER_RESOURCE_TYPE: &str = "User";
@@ -147,25 +148,25 @@ impl UserSpec {
 
 redacted_debug!(UserSpec);
 
-impl<'de> Deserialize<'de> for UserSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            os_username: OsUsername,
-            #[serde(default)]
-            display_name: Option<BoundedText>,
-            #[serde(default)]
-            groups: Vec<OsGroupName>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
+wire_deserialize!(
+    UserSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        os_username: OsUsername,
+        #[serde(default)]
+        display_name: Option<BoundedText>,
+        #[serde(default)]
+        groups: Vec<OsGroupName>,
+    },
+    wire,
+    {
         let display_name = match wire.display_name {
             Some(name) => name,
             None => BoundedText::parse(String::new()).map_err(serde::de::Error::custom)?,
         };
         Self::new(wire.os_username, display_name, wire.groups).map_err(serde::de::Error::custom)
     }
-}
+);
 
 #[cfg(test)]
 mod tests {

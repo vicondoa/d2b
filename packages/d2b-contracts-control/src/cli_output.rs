@@ -3,14 +3,14 @@ use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub use d2b_contracts::audio::LevelPercent;
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
+/// `d2b vm list` output: one row per VM.
 pub struct ListOutputV2(pub Vec<ListItemOutputV2>);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One `d2b vm list` row.
 pub struct ListItemOutputV2 {
     pub name: String,
     pub env: Option<String>,
@@ -46,6 +46,7 @@ pub struct ListItemOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// `usb probe` output: the command echo plus one entry per probed device.
 pub struct UsbProbeOutputV1 {
     pub command: String,
     pub entries: Vec<crate::public_wire::UsbipProbeEntry>,
@@ -53,6 +54,7 @@ pub struct UsbProbeOutputV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// `realm list` output: one policy summary per realm.
 pub struct RealmListOutputV1 {
     pub command: String,
     pub realms: Vec<RealmPolicyOutputV1>,
@@ -60,6 +62,7 @@ pub struct RealmListOutputV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+/// `realm inspect` output: the flattened policy summary of one realm.
 pub struct RealmInspectOutputV1 {
     pub command: String,
     #[serde(flatten)]
@@ -68,6 +71,7 @@ pub struct RealmInspectOutputV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// `op inspect` output: trace, local, and per-realm views.
 pub struct OpInspectOutputV1 {
     pub command: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -79,6 +83,7 @@ pub struct OpInspectOutputV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Trace identifiers for one `op inspect` run.
 pub struct OpInspectTraceOutputV1 {
     pub trace_id: String,
     pub span_id: String,
@@ -86,6 +91,7 @@ pub struct OpInspectTraceOutputV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Local counts and source for one `op inspect` run.
 pub struct OpInspectLocalOutputV1 {
     pub vm_count: u32,
     pub gateway_count: u32,
@@ -94,17 +100,67 @@ pub struct OpInspectLocalOutputV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One realm's view in `op inspect` output.
 pub struct OpInspectRealmOutputV1 {
     pub realm: String,
-    pub mode: String,
+    pub mode: RealmMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gateway_vm: Option<String>,
-    pub state: String,
+    pub state: RealmGatewayState,
     pub cross_realm_policy: String,
+}
+
+/// How a realm's entrypoint is dispatched.
+///
+/// `mode` used to be a free-form `String`; the realm entrypoint table admits
+/// exactly two modes, so both the wire protocol and the generated CLI schema
+/// carry enum constraints rather than a free-form string. Serde names match
+/// the canonical wire strings exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum RealmMode {
+    /// The realm entrypoint runs on the local daemon.
+    HostResident,
+    /// A gateway guest fronts the realm and owns its policy.
+    GatewayBacked,
+}
+
+/// The gateway-side state of a realm row.
+///
+/// `gateway_state` and `state` used to be free-form `String`s carrying the
+/// gateway guest's lifecycle label; the field is `local-only` for a
+/// host-resident realm, the daemon's lifecycle state for a gateway-backed
+/// realm whose gateway the daemon listed, and the preserved sentinel string
+/// when the daemon did not list the gateway at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum RealmGatewayState {
+    /// The realm has no gateway hop; it is dispatched on this host.
+    LocalOnly,
+    /// The gateway guest is stopped.
+    Stopped,
+    /// The gateway guest is starting.
+    Starting,
+    /// The gateway guest has booted.
+    Booted,
+    /// The gateway guest is running.
+    Running,
+    /// The gateway guest is stopping.
+    Stopping,
+    /// The gateway guest is restarting.
+    Restarting,
+    /// The gateway guest failed its last lifecycle transition.
+    Failed,
+    /// The daemon reported the gateway guest's lifecycle as unknown.
+    Unknown,
+    /// The daemon's list response did not include the gateway VM.
+    #[serde(rename = "not reported by d2bd")]
+    NotReported,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One degraded scope in `op inspect` output.
 pub struct OpInspectDegradedOutputV1 {
     pub scope: String,
     pub reason: String,
@@ -113,28 +169,34 @@ pub struct OpInspectDegradedOutputV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One realm's policy summary, shared by list and inspect output.
 pub struct RealmPolicyOutputV1 {
     pub realm: String,
-    pub mode: String,
+    pub mode: RealmMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gateway_vm: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gateway_target: Option<String>,
-    pub gateway_state: String,
+    pub gateway_state: RealmGatewayState,
     pub cross_realm_policy: String,
     pub credential_boundary: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
+/// `d2b status` output: one of the VM, inventory, or bridge-check shapes.
 pub enum StatusOutputV2 {
+    /// Per-VM status.
     Vm(Box<StatusVmOutputV2>),
+    /// Whole-inventory status.
     Inventory(Box<StatusInventoryOutputV2>),
+    /// Bridge isolation check status.
     CheckBridges(Box<StatusBridgeCheckOutputV2>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// `d2b status --inventory` output: runtime plus one row per VM.
 pub struct StatusInventoryOutputV2 {
     pub runtime: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -144,27 +206,36 @@ pub struct StatusInventoryOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
+/// api-ready state of the last VM start in split mode.
 pub enum ApiReadyStatusV1 {
+    /// A simple closed state.
     Simple(ApiReadySimple),
+    /// A terminal error state.
     WithError(ApiReadyErrorV1),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+/// The error text of a failed api-ready wait.
 pub struct ApiReadyErrorV1 {
     pub error: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
+/// Closed api-ready states without an error payload.
 pub enum ApiReadySimple {
+    /// The API became ready.
     Yes,
+    /// The API is still starting.
     Pending,
+    /// The wait timed out.
     Timeout,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One VM's status row.
 pub struct StatusVmOutputV2 {
     pub name: String,
     pub env: Option<String>,
@@ -206,6 +277,7 @@ pub struct StatusVmOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Live-pool integrity verdict for one VM.
 pub struct LivePoolIntegrityOutputV1 {
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -219,6 +291,7 @@ pub struct LivePoolIntegrityOutputV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Legacy per-VM service-state map (V2).
 pub struct StatusServicesOutputV2 {
     pub d2b: String,
     pub microvm: String,
@@ -231,73 +304,9 @@ pub struct StatusServicesOutputV2 {
     pub swtpm: Option<String>,
 }
 
-/// Per-VM service-state map (V3) -- broker-spawn-aware status output.
-///
-/// All fields are optional so emitters can omit a role when the VM
-/// doesn't enable it. The wire shape uses camelCase
-/// + `deny_unknown_fields` to keep schema-drift gates honest.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct StatusServicesOutputV3 {
-    /// Cloud Hypervisor runner state (broker-spawned).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hypervisor: Option<String>,
-    /// Per-share virtiofsd state, keyed by share `tag`.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty", default)]
-    pub virtiofsd_per_share: BTreeMap<String, String>,
-    /// crosvm GPU sidecar state (broker-spawned).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub gpu: Option<String>,
-    /// vhost-device-sound audio sidecar state (broker-spawned).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub audio: Option<String>,
-    /// swtpm sidecar state (broker-spawned).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub swtpm: Option<String>,
-    /// Per-VM OtelGuestRelay state (broker-spawned).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub otel_relay: Option<String>,
-    /// Host-scoped OtelHostBridge state (broker-spawned).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub otel_host_bridge: Option<String>,
-    /// Per-env USBIP backend state, keyed by env name.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty", default)]
-    pub usbip_backend_per_env: BTreeMap<String, String>,
-    /// Per-env USBIP proxy state, keyed by env name.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty", default)]
-    pub usbip_proxy_per_env: BTreeMap<String, String>,
-}
-
-impl StatusServicesOutputV3 {
-    /// Conversion shim: takes a V2 record and projects it into V3
-    /// by applying the documented rename map. Used so callers
-    /// consuming the legacy V2 shape can be migrated incrementally
-    /// without breaking the bundle-resolver / status-output contract.
-    pub fn from_v2(v2: &StatusServicesOutputV2) -> Self {
-        let mut virtiofsd_per_share = BTreeMap::new();
-        // V2 had a single `virtiofsd` slot; we expose it under the
-        // synthetic share tag `default` so the V3 consumer can read
-        // it without losing data. v1.1.2+ wire bumps populate the
-        // map per-share via the broker's per-share spawn records.
-        virtiofsd_per_share.insert("default".to_owned(), v2.virtiofsd.clone());
-        Self {
-            hypervisor: Some(v2.microvm.clone()),
-            virtiofsd_per_share,
-            gpu: v2.gpu.clone(),
-            // V3 has no dedicated video field yet; keep V2 authoritative
-            // until a negotiated schema revision adds one.
-            audio: v2.snd.clone(),
-            swtpm: v2.swtpm.clone(),
-            otel_relay: None,
-            otel_host_bridge: None,
-            usbip_backend_per_env: BTreeMap::new(),
-            usbip_proxy_per_env: BTreeMap::new(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Runner-parity evidence for one VM.
 pub struct RunnerParityOutputV2 {
     pub declared_runner: String,
     pub runner_parity_path: String,
@@ -306,6 +315,7 @@ pub struct RunnerParityOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Bridge isolation check output for one runtime.
 pub struct StatusBridgeCheckOutputV2 {
     pub mode: String,
     pub status: String,
@@ -315,6 +325,7 @@ pub struct StatusBridgeCheckOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+/// Full `d2b audit` output: host posture plus per-VM sidecar evidence.
 pub struct AuditOutputV2 {
     pub kvm_dev_mode: String,
     pub wayland_user_in_kvm: bool,
@@ -335,6 +346,7 @@ pub struct AuditOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+/// One VM's virtiofsd audit evidence.
 pub struct AuditVirtiofsdOutputV2 {
     pub user: String,
     pub caps_dropped: Vec<String>,
@@ -344,6 +356,7 @@ pub struct AuditVirtiofsdOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+/// One VM's sshd password-authentication audit evidence.
 pub struct AuditSshOutputV2 {
     #[serde(rename = "PasswordAuthentication")]
     pub password_authentication: Option<bool>,
@@ -351,6 +364,7 @@ pub struct AuditSshOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+/// One bridge's isolation audit evidence.
 pub struct AuditBridgeIsolationOutputV2 {
     pub bridge: String,
     pub tap: String,
@@ -360,6 +374,7 @@ pub struct AuditBridgeIsolationOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+/// One VM's gpu/snd sidecar audit evidence.
 pub struct AuditSidecarsOutputV2 {
     pub gpu_active: bool,
     pub snd_active: bool,
@@ -369,6 +384,7 @@ pub struct AuditSidecarsOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+/// One environment's usbipd audit evidence.
 pub struct AuditUsbipEnvOutputV2 {
     pub socket_active: bool,
     pub backend_active: bool,
@@ -377,6 +393,7 @@ pub struct AuditUsbipEnvOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// `d2b auth status` output for the caller.
 pub struct AuthStatusOutputV2 {
     pub role: AuthRoleV2,
     pub effective_uid: u32,
@@ -387,14 +404,19 @@ pub struct AuthStatusOutputV2 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
+/// The caller's authenticated role.
 pub enum AuthRoleV2 {
+    /// No role is held.
     None,
+    /// Launcher scope only.
     Launcher,
+    /// Admin scope.
     Admin,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One admin socket's reachability evidence.
 pub struct AuthSocketStatusV2 {
     pub name: String,
     pub path: String,
@@ -404,6 +426,7 @@ pub struct AuthSocketStatusV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One subcommand denied to the caller, with the refusal reason.
 pub struct AuthDeniedSubcommandV2 {
     pub name: String,
     pub reason: String,
@@ -412,7 +435,7 @@ pub struct AuthDeniedSubcommandV2 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::public_wire::VmAutostartPosture;
+    use crate::public_wire::{VmAutostartMode, VmAutostartPosture};
     use serde_json::json;
 
     fn full_list_item() -> ListItemOutputV2 {
@@ -428,7 +451,7 @@ mod tests {
             guest_closure_out_path: Some("/nix/store/closure".to_owned()),
             runtime_kind: Some("cloud-hypervisor".to_owned()),
             autostart: Some(VmAutostartPosture {
-                mode: "on".to_owned(),
+                mode: VmAutostartMode::ManualOnly,
                 reason: "policy".to_owned(),
             }),
             runtime_capabilities: vec!["gpu".to_owned()],
@@ -484,40 +507,7 @@ mod tests {
     }
 
     #[test]
-    fn status_services_v3_and_audit_outputs_pin_exact_wire_keys() {
-        let services = StatusServicesOutputV3 {
-            hypervisor: Some("running".to_owned()),
-            virtiofsd_per_share: BTreeMap::from([("default".to_owned(), "running".to_owned())]),
-            gpu: None,
-            audio: Some("running".to_owned()),
-            swtpm: None,
-            otel_relay: None,
-            otel_host_bridge: Some("running".to_owned()),
-            usbip_backend_per_env: BTreeMap::new(),
-            usbip_proxy_per_env: BTreeMap::new(),
-        };
-        let value = serde_json::to_value(&services).unwrap();
-        let object = value.as_object().unwrap();
-        for key in ["hypervisor", "virtiofsdPerShare", "audio", "otelHostBridge"] {
-            assert!(object.contains_key(key), "missing camelCase key {key}");
-        }
-        for key in ["gpu", "swtpm", "otelRelay", "usbipBackendPerEnv", "usbipProxyPerEnv"] {
-            assert!(
-                !object.contains_key(key),
-                "empty or absent field {key} must be omitted"
-            );
-        }
-        assert_eq!(
-            serde_json::from_value::<StatusServicesOutputV3>(value).unwrap(),
-            services
-        );
-        let mut drifted = serde_json::to_value(&services).unwrap();
-        drifted
-            .as_object_mut()
-            .unwrap()
-            .insert("hypervisorX".to_owned(), json!("drift"));
-        assert!(serde_json::from_value::<StatusServicesOutputV3>(drifted).is_err());
-
+    fn audit_output_pins_its_explicit_legacy_renames() {
         // The audit output pins its explicit legacy renames verbatim.
         let audit = AuditOutputV2 {
             kvm_dev_mode: "0666".to_owned(),
@@ -550,6 +540,68 @@ mod tests {
             .unwrap()
             .insert("autoUpgrade_commits_lockX".to_owned(), json!(true));
         assert!(serde_json::from_value::<AuditOutputV2>(drifted).is_err());
+    }
+
+    /// The live services DTO has no in-tree consumer, so this pin is the only
+    /// thing standing behind its wire shape. It pins the asymmetry that is
+    /// easiest to drift silently: only `qemu_media` skips a `None`, while
+    /// `gpu`, `video`, `snd`, and `swtpm` serialize an explicit `null`.
+    #[test]
+    fn status_services_output_v2_pins_its_exact_wire_keys() {
+        let services = StatusServicesOutputV2 {
+            d2b: "running".to_owned(),
+            microvm: "running".to_owned(),
+            virtiofsd: "running".to_owned(),
+            qemu_media: Some("stopped".to_owned()),
+            gpu: Some("stopped".to_owned()),
+            video: None,
+            snd: Some("running".to_owned()),
+            swtpm: None,
+        };
+
+        let value = serde_json::to_value(&services).unwrap();
+        let object = value.as_object().unwrap();
+
+        // Populated fields keep their camelCase keys.
+        for key in ["d2b", "microvm", "virtiofsd", "qemuMedia", "gpu", "snd"] {
+            assert!(object.contains_key(key), "missing wire key {key}: {value}");
+        }
+
+        // Only `qemu_media` may be omitted when absent.
+        let without_media = serde_json::to_value(StatusServicesOutputV2 {
+            qemu_media: None,
+            ..services.clone()
+        })
+        .unwrap();
+        assert!(
+            !without_media
+                .as_object()
+                .unwrap()
+                .contains_key("qemuMedia"),
+            "qemuMedia must be omitted when None: {without_media}"
+        );
+
+        // The four sidecar fields emit an explicit null rather than vanishing.
+        for key in ["video", "swtpm"] {
+            assert_eq!(
+                object.get(key),
+                Some(&json!(null)),
+                "{key} must serialize as an explicit null: {value}"
+            );
+        }
+
+        assert_eq!(
+            serde_json::from_value::<StatusServicesOutputV2>(value).unwrap(),
+            services
+        );
+
+        // `deny_unknown_fields`: a drifted sibling key must fail to decode.
+        let mut drifted = serde_json::to_value(&services).unwrap();
+        drifted
+            .as_object_mut()
+            .unwrap()
+            .insert("d2bX".to_owned(), json!("running"));
+        assert!(serde_json::from_value::<StatusServicesOutputV2>(drifted).is_err());
     }
 }
 

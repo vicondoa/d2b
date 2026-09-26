@@ -40,6 +40,11 @@ pub struct OpaqueEndpointId(String);
 
 impl OpaqueEndpointId {
     /// Parse one allocator-issued endpoint identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VsockEffectError::EffectRejected`] when the value is not
+    /// a valid opaque endpoint identity.
     pub fn parse(value: impl Into<String>) -> Result<Self, VsockEffectError> {
         let value = value.into();
         if valid_opaque_id(&value) {
@@ -64,7 +69,7 @@ impl fmt::Debug for OpaqueEndpointId {
 
 impl fmt::Display for OpaqueEndpointId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("opaque-endpoint")
+        formatter.write_str(&self.0)
     }
 }
 
@@ -74,6 +79,11 @@ pub struct OpaqueBindingId(String);
 
 impl OpaqueBindingId {
     /// Parse one allocator-issued binding identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VsockEffectError::EffectRejected`] when the value is not
+    /// a valid opaque binding identity.
     pub fn parse(value: impl Into<String>) -> Result<Self, VsockEffectError> {
         let value = value.into();
         if valid_opaque_id(&value) {
@@ -98,7 +108,7 @@ impl fmt::Debug for OpaqueBindingId {
 
 impl fmt::Display for OpaqueBindingId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("opaque-binding")
+        formatter.write_str(&self.0)
     }
 }
 
@@ -121,6 +131,14 @@ pub trait VsockEffectPort: Send + Sync + 'static {
     type Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static;
 
     /// Open or accept one allocator-selected endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VsockEffectError::DeadlineExceeded`] when the deadline
+    /// expires, [`VsockEffectError::ConnectRefused`],
+    /// [`VsockEffectError::CidUnreachable`], or
+    /// [`VsockEffectError::PortConflict`] for the endpoint refusal modes,
+    /// or the error the effect port reports.
     async fn open(
         &self,
         endpoint_id: &OpaqueEndpointId,
@@ -130,6 +148,10 @@ pub trait VsockEffectPort: Send + Sync + 'static {
     ) -> Result<Self::Stream, VsockEffectError>;
 
     /// Close one stream after the bridge has stopped.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error the effect port reports when the close fails.
     async fn close(&self, stream: Self::Stream) -> Result<(), VsockEffectError>;
 }
 
@@ -184,6 +206,12 @@ impl OpenTransportRequest {
     }
 
     /// Parse a wire-shaped request at the service boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ServiceError::InvalidEndpointId`] when the endpoint id is
+    /// malformed and [`ServiceError::InvalidBindingId`] when the binding id
+    /// is malformed.
     pub fn from_raw(
         endpoint_id: impl Into<String>,
         binding_id: impl Into<String>,
@@ -323,6 +351,8 @@ struct TransportEntry {
     phase: Arc<Mutex<TransportPhase>>,
     exit: Arc<Mutex<Option<BridgeExit>>>,
     stats: Arc<BridgeStats>,
+    endpoint_id: OpaqueEndpointId,
+    binding_id: OpaqueBindingId,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -380,6 +410,22 @@ where
     }
 
     /// Open one authenticated transport and its named stream bridge.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ServiceError::SessionNotReady`] when the session is not
+    /// Ready, [`ServiceError::SessionIdentityMismatch`] when it is not
+    /// bound to this Provider's Guest and Zone,
+    /// [`ServiceError::InvalidDeadline`] or
+    /// [`ServiceError::InvalidSessionGeneration`] when the request fails
+    /// validation, [`ServiceError::SessionGenerationMismatch`] when the
+    /// request generation does not match the session,
+    /// [`ServiceError::ProviderOverloaded`] when the concurrency budget is
+    /// exhausted, [`ServiceError::Effect`] when the effect port refuses the
+    /// open or the deadline expires, [`ServiceError::StreamUnavailable`]
+    /// when the named stream cannot be created, and
+    /// [`ServiceError::CloseUnconfirmed`] when the failed open cannot be
+    /// confirmed closed.
     pub async fn open_transport(
         &self,
         session: &ReadySession,
@@ -525,9 +571,18 @@ where
         let task_stats = Arc::clone(&stats);
         let task_subscribers = Arc::clone(&subscribers);
         let task_history = Arc::clone(&history);
+        let task_endpoint_id = request.endpoint_id.clone();
+        let task_binding_id = request.binding_id.clone();
         let task = tokio::spawn(async move {
-            let (effect_stream, _named_stream, reason) =
-                run_bridge(effect_stream, named_stream, stop, Arc::clone(&task_stats)).await;
+            let (effect_stream, _named_stream, reason) = run_bridge(
+                effect_stream,
+                named_stream,
+                stop,
+                Arc::clone(&task_stats),
+                &task_endpoint_id,
+                &task_binding_id,
+            )
+            .await;
             let effect_result = timeout(
                 Duration::from_millis(CLOSE_GRACE_MS),
                 task_effect.close(effect_stream),
@@ -545,6 +600,8 @@ where
                 emit_event(
                     &task_subscribers,
                     &task_history,
+                    &task_endpoint_id,
+                    &task_binding_id,
                     TransportEvent::Error {
                         kind: "bridge-io",
                         recoverable: false,
@@ -558,6 +615,8 @@ where
                     emit_event(
                         &task_subscribers,
                         &task_history,
+                        &task_endpoint_id,
+                        &task_binding_id,
                         TransportEvent::BytesTransferred { rx_bytes, tx_bytes },
                     )
                     .await;
@@ -570,11 +629,20 @@ where
                 TransportPhase::Degraded
             };
             if released {
-                emit_event(&task_subscribers, &task_history, TransportEvent::Released).await;
+                emit_event(
+                    &task_subscribers,
+                    &task_history,
+                    &task_endpoint_id,
+                    &task_binding_id,
+                    TransportEvent::Released,
+                )
+                .await;
             } else {
                 emit_event(
                     &task_subscribers,
                     &task_history,
+                    &task_endpoint_id,
+                    &task_binding_id,
                     TransportEvent::Error {
                         kind: "close-unconfirmed",
                         recoverable: true,
@@ -595,6 +663,8 @@ where
                 phase,
                 exit,
                 stats,
+                endpoint_id: request.endpoint_id,
+                binding_id: request.binding_id,
                 _permit: permit,
             },
         );
@@ -606,6 +676,12 @@ where
     }
 
     /// Close one transport. The bridge closes before the effect is released.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ServiceError::UnknownTransportHandle`] when the handle is
+    /// not owned by this service and [`ServiceError::CloseUnconfirmed`]
+    /// when the bridge did not close within its bounded grace period.
     pub async fn close_transport(
         &self,
         request: CloseTransportRequest,
@@ -680,6 +756,11 @@ where
     }
 
     /// Observe one transport snapshot without exposing identity, path, CID, or port.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ServiceError::UnknownTransportHandle`] when the handle is
+    /// not owned by this service.
     pub async fn observe_snapshot(
         &self,
         request: ObserveTransportRequest,
@@ -720,6 +801,11 @@ where
     }
 
     /// Subscribe to one transport's bounded lifecycle event stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ServiceError::UnknownTransportHandle`] when the handle is
+    /// not owned by this service.
     pub async fn observe_transport(
         &self,
         request: ObserveTransportRequest,
@@ -734,6 +820,8 @@ where
                 {
                     tracing::debug!(
                         provider = "transport-vsock",
+                        endpoint = %entry.endpoint_id,
+                        binding = %entry.binding_id,
                         "transport event history dropped for a full observer channel"
                     );
                 }
@@ -774,6 +862,11 @@ where
     }
 
     /// Finalize all handles owned by this service.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error [`Self::close_transport`] reports; the
+    /// remaining handles are still finalized.
     pub async fn finalize(&self) -> Result<(), ServiceError> {
         let handles = self.active.lock().await.keys().copied().collect::<Vec<_>>();
         let mut first_error = None;
@@ -840,6 +933,8 @@ fn remaining_until(deadline: Instant) -> Duration {
 async fn emit_event(
     subscribers: &EventSubscribers,
     history: &Arc<Mutex<Vec<TransportEvent>>>,
+    endpoint_id: &OpaqueEndpointId,
+    binding_id: &OpaqueBindingId,
     event: TransportEvent,
 ) {
     history.lock().await.push(event);
@@ -850,6 +945,8 @@ async fn emit_event(
         } else if sender.try_send(event).is_err() {
             tracing::debug!(
                 provider = "transport-vsock",
+                endpoint = %endpoint_id,
+                binding = %binding_id,
                 "transport event dropped for a full or closed subscriber channel"
             );
             false

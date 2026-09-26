@@ -18,7 +18,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::ClientError;
+use crate::{AttemptDisposition, CallDriver, ClientError, SessionFailure};
 
 /// The protocol ceiling on one request's lifetime.
 pub const MAX_REQUEST_LIFETIME_MS: u64 = 15 * 60 * 1_000;
@@ -87,6 +87,12 @@ impl fmt::Debug for MetadataInput {
 
 impl MetadataInput {
     /// Build validated metadata for one request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError::InvalidMetadata`] when the issue time is
+    /// zero, the expiry precedes the issue time, or the lifetime exceeds
+    /// the protocol ceiling.
     pub fn new(
         request_id: [u8; REQUEST_ID_BYTES],
         issued_at_unix_ms: u64,
@@ -184,6 +190,11 @@ pub struct RetryPolicy {
 
 impl RetryPolicy {
     /// Allow up to `max_attempts` total attempts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError::InvalidMetadata`] when `max_attempts` is
+    /// zero or exceeds the retry bound.
     pub const fn new(max_attempts: u8) -> Result<Self, ClientError> {
         if max_attempts == 0 || max_attempts > MAX_RETRY_ATTEMPTS {
             return Err(ClientError::InvalidMetadata);
@@ -241,6 +252,46 @@ pub(crate) async fn retry_backoff(
     .await
 }
 
+/// Race one future against the shared cancellation token, refusing with
+/// [`ClientError::Cancelled`] when the token cancels first.
+pub(crate) async fn await_with_cancellation<F, T>(
+    future: F,
+    cancellation: &CancellationToken,
+) -> Result<T, ClientError>
+where
+    F: Future<Output = T> + Send,
+{
+    let mut future = Box::pin(future);
+    let mut cancelled = Box::pin(cancellation.cancelled());
+    core::future::poll_fn(move |context| {
+        if let core::task::Poll::Ready(value) = future.as_mut().poll(context) {
+            return core::task::Poll::Ready(Ok(value));
+        }
+        if let core::task::Poll::Ready(()) = cancelled.as_mut().poll(context) {
+            return core::task::Poll::Ready(Err(ClientError::Cancelled));
+        }
+        core::task::Poll::Pending
+    })
+    .await
+}
+
+/// Classify one call failure into the driver's session-failure ledger and
+/// the retry disposition it earns.
+pub(crate) fn classify_session_error<W: WallClock>(
+    driver: &CallDriver<W>,
+    error: ClientError,
+) -> AttemptDisposition {
+    match error {
+        ClientError::SessionLost => driver.record_session_failure(SessionFailure::Disconnected),
+        ClientError::TransportFailed => driver.record_session_failure(SessionFailure::Retryable),
+        ClientError::DeadlineExpired => driver.record_session_failure(SessionFailure::Deadline),
+        ClientError::Cancelled => driver.record_session_failure(SessionFailure::Cancelled),
+        ClientError::ContractViolation => driver.record_session_failure(SessionFailure::Protocol),
+        ClientError::Remote { kind, retry } => driver.record_remote_verdict(kind, retry),
+        other => AttemptDisposition::Fail(other),
+    }
+}
+
 /// A cooperative cancellation signal shared by a caller and a call driver.
 ///
 /// Cancellation is observed, never inferred: a driver checks the token before
@@ -278,7 +329,7 @@ impl Future for CancellationFuture {
         // and the critical section is a short push/retain with no suspension
         // point; the std lock is the sanctioned synchronous path (plan R11).
         #[allow(clippy::disallowed_methods, reason = "synchronous path")]
-        let mut waiters = state.waiters.lock().unwrap();
+        let mut waiters = state.waiters.lock().expect("waker registry lock is not poisoned: no user code runs under it");
         if state.cancelled.load(Ordering::Acquire) {
             return Poll::Ready(());
         }
@@ -306,7 +357,7 @@ impl Drop for CancellationFuture {
             return;
         };
         #[allow(clippy::disallowed_methods, reason = "synchronous path")]
-        let mut waiters = self.state.waiters.lock().unwrap();
+        let mut waiters = self.state.waiters.lock().expect("waker registry lock is not poisoned: no user code runs under it");
         waiters.retain(|(id, _)| *id != registered);
     }
 }
@@ -332,7 +383,7 @@ impl CancellationToken {
             // Synchronous cancellation surface (no async form): the waker
             // drain is a short take/wake with no suspension point (plan R11).
             #[allow(clippy::disallowed_methods, reason = "synchronous path")]
-            let waiters = std::mem::take(&mut *self.state.waiters.lock().unwrap());
+            let waiters = std::mem::take(&mut *self.state.waiters.lock().expect("waker registry lock is not poisoned: no user code runs under it"));
             for (_, waiter) in waiters {
                 waiter.wake();
             }

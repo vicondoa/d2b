@@ -59,7 +59,7 @@ impl DeviceWorkerScope {
     /// The per-Guest runtime socket directory the worker binds its socket in
     /// (`<runtime_root>/vms/<guest>`), validated to stay strictly inside the
     /// broker's own runtime root.
-    pub(crate) fn socket_directory(&self, runtime_root: &Path) -> Result<PathBuf, &'static str> {
+    pub(crate) fn socket_directory(&self, runtime_root: &Path) -> Result<PathBuf, GuestSocketError> {
         guest_socket_directory(runtime_root, &self.guest)
     }
 }
@@ -253,6 +253,30 @@ pub(crate) const fn binds_runtime_socket(role: &ProcessRole) -> bool {
     )
 }
 
+/// Why one Guest's runtime socket directory could not be derived.
+///
+/// The Display of each refusal keeps the stable static-code spelling the
+/// broker's launch-failure envelope surfaces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum GuestSocketError {
+    /// The runtime root is not an anchored absolute path.
+    RuntimeRootNotAnchored,
+    /// The Guest name is not one plain path component.
+    GuestNotAPlainName,
+    /// The derived directory escapes the runtime root.
+    DirectoryOutsideRuntimeRoot,
+}
+
+impl std::fmt::Display for GuestSocketError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::RuntimeRootNotAnchored => "device-worker-runtime-root-not-anchored",
+            Self::GuestNotAPlainName => "device-worker-guest-not-a-plain-name",
+            Self::DirectoryOutsideRuntimeRoot => "device-worker-socket-dir-outside-runtime-root",
+        })
+    }
+}
+
 /// The per-Guest runtime socket directory of one trusted Guest name.
 ///
 /// The name must be one plain component (never empty, `.`, `..`, or a
@@ -262,9 +286,9 @@ pub(crate) const fn binds_runtime_socket(role: &ProcessRole) -> bool {
 pub(crate) fn guest_socket_directory(
     runtime_root: &Path,
     guest: &str,
-) -> Result<PathBuf, &'static str> {
+) -> Result<PathBuf, GuestSocketError> {
     if !is_anchored_absolute(runtime_root) || runtime_root.parent().is_none() {
-        return Err("device-worker-runtime-root-not-anchored");
+        return Err(GuestSocketError::RuntimeRootNotAnchored);
     }
     let mut components = Path::new(guest).components();
     let plain_name = !guest.is_empty()
@@ -272,11 +296,11 @@ pub(crate) fn guest_socket_directory(
         && matches!(components.next(), Some(std::path::Component::Normal(_)))
         && components.next().is_none();
     if !plain_name {
-        return Err("device-worker-guest-not-a-plain-name");
+        return Err(GuestSocketError::GuestNotAPlainName);
     }
     let directory = runtime_root.join(RUNTIME_VM_DIR).join(guest);
     if directory == runtime_root || !directory.starts_with(runtime_root) {
-        return Err("device-worker-socket-dir-outside-runtime-root");
+        return Err(GuestSocketError::DirectoryOutsideRuntimeRoot);
     }
     Ok(directory)
 }
@@ -307,6 +331,20 @@ pub(crate) fn zone_bundle_for_uid<'a>(
     Some((zone.as_str().to_owned(), bytes))
 }
 
+/// The first row of a verified Zone resource bundle's `resources` array
+/// that satisfies `pred`, keeping the row-walk in one place for every
+/// bundle-shape consumer.
+fn find_resource_row<'a>(
+    bundle: &'a serde_json::Value,
+    pred: impl FnMut(&&'a serde_json::Value) -> bool,
+) -> Option<&'a serde_json::Value> {
+    bundle
+        .get("resources")?
+        .as_array()?
+        .iter()
+        .find(pred)
+}
+
 /// The authored `metadata.ownerRef` of one row of a verified Zone resource
 /// bundle, parsed into a canonical reference.
 pub(crate) fn row_owner_ref(
@@ -314,21 +352,20 @@ pub(crate) fn row_owner_ref(
     resource_type: &str,
     name: &str,
 ) -> Option<ResourceRef> {
-    let bundle: serde_json::Value = serde_json::from_slice(bundle_bytes).ok()?;
-    for resource in bundle.get("resources")?.as_array()? {
-        if resource.get("type").and_then(serde_json::Value::as_str) != Some(resource_type) {
-            continue;
-        }
-        let metadata = resource.get("metadata")?;
-        if metadata.get("name").and_then(serde_json::Value::as_str) != Some(name) {
-            continue;
-        }
-        return metadata
-            .get("ownerRef")
-            .and_then(serde_json::Value::as_str)
-            .and_then(|owner| ResourceRef::parse(owner).ok());
-    }
-    None
+let bundle: serde_json::Value = serde_json::from_slice(bundle_bytes).ok()?;
+    let resource = find_resource_row(&bundle, |row| {
+        row.get("type").and_then(serde_json::Value::as_str) == Some(resource_type)
+            && row
+                .get("metadata")
+                .and_then(|metadata| metadata.get("name"))
+                .and_then(serde_json::Value::as_str)
+                == Some(name)
+    })?;
+    resource
+        .get("metadata")?
+        .get("ownerRef")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|owner| ResourceRef::parse(owner).ok())
 }
 
 /// `Device.metadata.ownerRef == Guest/<guest>` for one Device row of a
@@ -338,25 +375,22 @@ pub(crate) fn row_owner_ref(
 /// worker's VM scope.
 pub(crate) fn device_guest_owner(bundle_bytes: &[u8], device: &str) -> Option<String> {
     let bundle: serde_json::Value = serde_json::from_slice(bundle_bytes).ok()?;
-    for resource in bundle.get("resources")?.as_array()? {
-        if resource.get("type").and_then(serde_json::Value::as_str) != Some("Device") {
-            continue;
-        }
-        let Some(metadata) = resource.get("metadata") else {
-            continue;
-        };
-        if metadata.get("name").and_then(serde_json::Value::as_str) != Some(device) {
-            continue;
-        }
-        let owner = metadata
-            .get("ownerRef")
-            .and_then(serde_json::Value::as_str)?;
-        return owner
-            .strip_prefix("Guest/")
-            .map(str::to_owned)
-            .filter(|guest| !guest.is_empty());
-    }
-    None
+    let resource = find_resource_row(&bundle, |row| {
+        row.get("type").and_then(serde_json::Value::as_str) == Some("Device")
+            && row
+                .get("metadata")
+                .and_then(|metadata| metadata.get("name"))
+                .and_then(serde_json::Value::as_str)
+                == Some(device)
+    })?;
+    let owner = resource
+        .get("metadata")?
+        .get("ownerRef")
+        .and_then(serde_json::Value::as_str)?;
+    owner
+        .strip_prefix("Guest/")
+        .map(str::to_owned)
+        .filter(|guest| !guest.is_empty())
 }
 
 /// Every TPM Device the verified bundles declare for one Guest, as
@@ -376,6 +410,7 @@ pub(crate) fn tpm_devices_of_guest(
         return Vec::new();
     };
     let mut devices = Vec::new();
+    let expected_owner = format!("Guest/{guest}");
     for zone in zones {
         let Some(bytes) = resolver.zone_resource_bundle_bytes(zone.as_str()) else {
             continue;
@@ -383,40 +418,33 @@ pub(crate) fn tpm_devices_of_guest(
         let Ok(bundle) = serde_json::from_slice::<serde_json::Value>(bytes) else {
             continue;
         };
-        let Some(resources) = bundle.get("resources").and_then(|rows| rows.as_array()) else {
+        let Some(resource) = find_resource_row(&bundle, |row| {
+            row.get("type").and_then(serde_json::Value::as_str) == Some("Device")
+                && row
+                    .get("metadata")
+                    .and_then(|metadata| metadata.get("ownerRef"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some(expected_owner.as_str())
+                && row
+                    .pointer("/spec/providerRef")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(DEVICE_TPM_PROVIDER_REF)
+        }) else {
             continue;
         };
-        for resource in resources {
-            if resource.get("type").and_then(serde_json::Value::as_str) != Some("Device") {
-                continue;
-            }
-            let Some(metadata) = resource.get("metadata") else {
-                continue;
-            };
-            let expected_owner = format!("Guest/{guest}");
-            if metadata.get("ownerRef").and_then(serde_json::Value::as_str)
-                != Some(expected_owner.as_str())
-            {
-                continue;
-            }
-            if resource
-                .pointer("/spec/providerRef")
-                .and_then(serde_json::Value::as_str)
-                != Some(DEVICE_TPM_PROVIDER_REF)
-            {
-                continue;
-            }
-            let Some(name) = metadata.get("name").and_then(serde_json::Value::as_str) else {
-                continue;
-            };
-            let Some(device_ref) = ResourceRef::parse(&format!("Device/{name}")).ok() else {
-                continue;
-            };
-            devices.push((
-                device_ref,
-                deterministic_resource_uid(zone.as_str(), "Device", name),
-            ));
-        }
+        let Some(name) = resource
+            .get("metadata")
+            .and_then(|metadata| metadata.get("name"))
+            .and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Some(device_ref) = ResourceRef::parse(&format!("Device/{name}")).ok() else {
+            continue;
+        };
+        devices.push((
+            device_ref,
+            deterministic_resource_uid(zone.as_str(), "Device", name),
+        ));
     }
     devices
 }

@@ -28,6 +28,28 @@ pub enum ClipboardEventType {
     PickerSessionFailed,
 }
 
+impl ClipboardEventType {
+    /// Return the stable wire label.
+    ///
+    /// These labels are part of the audit wire record emitted by
+    /// [`ClipboardAuditEvent::to_wire`] and must not change; they are spelled
+    /// out explicitly here rather than derived from `Debug`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::HostCapture => "hostcapture",
+            Self::GuestCapture => "guestcapture",
+            Self::PasteAuthorized => "pasteauthorized",
+            Self::PasteRejected => "pasterejected",
+            Self::EchoSuppressed => "echosuppressed",
+            Self::EntryExpired => "entryexpired",
+            Self::EntryPurged => "entrypurged",
+            Self::PickerSessionStarted => "pickersessionstarted",
+            Self::PickerSessionCompleted => "pickersessioncompleted",
+            Self::PickerSessionFailed => "pickersessionfailed",
+        }
+    }
+}
+
 /// Closed clipboard reason code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClipboardReason {
@@ -124,6 +146,20 @@ impl SizeBucket {
             _ => Self::GtM1,
         }
     }
+
+    /// Return the stable wire label.
+    ///
+    /// These labels are part of the audit wire record emitted by
+    /// [`ClipboardAuditEvent::to_wire`] and must not change; they are spelled
+    /// out explicitly here rather than derived from `Debug`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Lt1K => "Lt1K",
+            Self::K1To64K => "K1To64K",
+            Self::K64ToM1 => "K64ToM1",
+            Self::GtM1 => "GtM1",
+        }
+    }
 }
 
 /// Content-free clipboard audit event.
@@ -169,14 +205,17 @@ impl ClipboardAuditEvent {
     }
 
     /// Render the bounded wire record.
+    ///
+    /// All labels (`event`, `reason`, `size`) come from explicit stable
+    /// `as_str` methods, not from `Debug` formatting.
     pub fn to_wire(&self) -> String {
         format!(
-            "event={} source={} dest={} reason={} size={:?}",
-            format!("{:?}", self.event_type).to_ascii_lowercase(),
+            "event={} source={} dest={} reason={} size={}",
+            self.event_type.as_str(),
             self.source_zone_digest,
             self.dest_zone_digest,
             self.reason.as_str(),
-            self.size_bucket
+            self.size_bucket.as_str()
         )
     }
 }
@@ -197,6 +236,11 @@ impl ClipboardAuditQueue {
     }
 
     /// Append an event, refusing the operation when the queue is full.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClipboardReason::AuditQueueFull`] when the queue already
+    /// holds its fixed capacity of events.
     pub fn push(&mut self, event: ClipboardAuditEvent) -> Result<(), ClipboardReason> {
         if self.entries.len() >= self.capacity {
             return Err(ClipboardReason::AuditQueueFull);

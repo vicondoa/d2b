@@ -21,6 +21,7 @@ pub struct ProcessIdentity {
 
 impl ProcessIdentity {
     /// Construct deterministic identity evidence for hermetic tests.
+    #[doc(hidden)]
     pub fn for_test(value: &str) -> Self {
         let digest = Sha256::digest(value.as_bytes());
         let mut bytes = [0_u8; 32];

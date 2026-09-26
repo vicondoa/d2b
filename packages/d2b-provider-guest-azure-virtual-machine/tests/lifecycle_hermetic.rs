@@ -6,7 +6,7 @@ use d2b_contracts::{OpaqueAzureRef, ResourceRef};
 use d2b_provider_guest_azure_virtual_machine::{
     AzureAccessToken, AzureCredentialPort, AzureEffectPort, AzureOperationHandle, AzureVmConfig,
     AzureVmController, AzureVmError, AzureVmGuestSettings, AzureVmHandle, AzureVmPhase,
-    AzureVmReconcileOutcome, AzureVmRecoveryState, AzureVmState, AzureVmUpdate, BootstrapAdmission,
+    AzureVmReconcileOutcome, AzureVmRecoveryState, AzureVmState, BootstrapAdmission,
     BootstrapPsk, BootstrapPskDelivery, BootstrapService, DiskSku, LroStatus, PskExtensionPayload,
     TagDigest,
 };
@@ -273,9 +273,9 @@ async fn absent_vm_starts_non_blocking_provision() {
         state: AzureVmState::Absent,
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect {
+    let effect = FakeEffect {
         state: Arc::clone(&state),
-    });
+    };
     let mut controller = AzureVmController::new(
         provider,
         settings,
@@ -300,9 +300,9 @@ async fn observed_provisioning_vm_is_not_provisioned_again_after_restart() {
         state: AzureVmState::Provisioning,
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect {
+    let effect = FakeEffect {
         state: Arc::clone(&state),
-    });
+    };
     let mut controller =
         AzureVmController::new(provider, settings, effect, credential(), None).unwrap();
 
@@ -319,9 +319,9 @@ async fn observed_provisioning_vm_is_not_provisioned_again_after_restart() {
 async fn poll_rejects_an_operation_handle_that_is_not_current() {
     let (provider, settings) = config();
     let state = Arc::new(Mutex::new(FakeState::default()));
-    let effect = Arc::new(FakeEffect {
+    let effect = FakeEffect {
         state: Arc::clone(&state),
-    });
+    };
     let mut controller =
         AzureVmController::new(provider, settings, effect, credential(), None).unwrap();
     controller.reconcile("zone", "guest", 1).await.unwrap();
@@ -347,7 +347,7 @@ async fn finalize_preserves_the_first_delete_operation_id() {
         tags: Some(expected_tag_digest()),
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect { state });
+    let effect = FakeEffect { state };
     let mut controller = AzureVmController::new(provider, settings, effect, credential(), None)
         .unwrap()
         .with_bootstrap_service(enrolled_service());
@@ -370,13 +370,12 @@ async fn recovery_state_restores_opaque_lro_without_secret_material() {
         polls: vec![LroStatus::Succeeded, LroStatus::Succeeded],
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect {
-        state: Arc::clone(&state),
-    });
     let controller = AzureVmController::new(
         provider.clone(),
         settings.clone(),
-        Arc::clone(&effect),
+        FakeEffect {
+            state: Arc::clone(&state),
+        },
         credential(),
         Some(BootstrapPsk::from_bytes(b"one-time").unwrap()),
     )
@@ -391,7 +390,9 @@ async fn recovery_state_restores_opaque_lro_without_secret_material() {
     let mut restored = AzureVmController::new(
         provider,
         settings,
-        effect,
+        FakeEffect {
+            state: Arc::clone(&state),
+        },
         credential(),
         Some(BootstrapPsk::from_bytes(b"one-time").unwrap()),
     )
@@ -402,9 +403,48 @@ async fn recovery_state_restores_opaque_lro_without_secret_material() {
     restored.reconcile("zone", "guest", 1).await.unwrap();
 }
 
+#[test]
+fn legacy_operation_pair_recovery_record_still_loads() {
+    // Records written before the in-flight operation was grouped carry the
+    // `operation` + `operationStartedAtUnixMs` pair instead of
+    // `inFlightOperation`; they must still load, folding into the grouped
+    // shape, and re-serialize in the grouped shape.
+    let recovery: AzureVmRecoveryState = serde_json::from_value(serde_json::json!({
+        "phase": "provisioning",
+        "finalizerInstalled": true,
+        "operation": "cHJvdmlzaW9u",
+        "pendingDeleteOperationId": null,
+        "bootstrapStartedAtUnixMs": null,
+        "pskDeliveryAttempts": 0,
+        "operationStartedAtUnixMs": 42,
+        "pendingUpdate": null,
+        "bootstrapServiceState": "Waiting",
+        "bootstrapExtensionPresent": false,
+        "childCleanupComplete": false,
+        "bootstrapDeadlineFailed": false,
+    }))
+    .unwrap();
+    let in_flight = recovery
+        .in_flight_operation
+        .clone()
+        .expect("legacy pair folds into the grouped shape");
+    assert_eq!(
+        in_flight.operation,
+        AzureOperationHandle::from_core(b"provision").unwrap()
+    );
+    assert_eq!(in_flight.started_at, 42);
+    assert_eq!(recovery.phase, AzureVmPhase::Provisioning);
+
+    let encoded = serde_json::to_string(&recovery).unwrap();
+    assert!(encoded.contains("\"inFlightOperation\""));
+    assert!(!encoded.contains("operationStartedAtUnixMs"));
+    let reloaded: AzureVmRecoveryState = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(reloaded, recovery);
+}
+
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
-async fn restart_adopts_only_tagged_running_vm() {
+async fn restart_converges_only_tagged_running_vm() {
     let (provider, settings) = config();
     let state = Arc::new(Mutex::new(FakeState {
         state: AzureVmState::Running,
@@ -412,18 +452,22 @@ async fn restart_adopts_only_tagged_running_vm() {
         tags: Some(expected_tag_digest()),
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect {
+    let effect = FakeEffect {
         state: Arc::clone(&state),
-    });
+    };
     let mut controller = AzureVmController::new(provider, settings, effect, credential(), None)
         .unwrap()
         .with_bootstrap_service(enrolled_service());
     assert_eq!(
-        controller.adopt().await.unwrap(),
+        controller.reconcile("zone", "guest", 1).await.unwrap(),
         AzureVmReconcileOutcome::Converged
     );
     assert_eq!(controller.phase(), AzureVmPhase::Ready);
-    assert!(!format!("{:?}", controller.status()).contains("opaque-vm"));
+    assert_eq!(
+        state.lock().await.calls,
+        Vec::<&str>::new(),
+        "a running tagged VM is converged in place, never provisioned again"
+    );
 }
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -437,11 +481,11 @@ async fn delete_keeps_finalizer_until_lro_completion() {
         polls: vec![LroStatus::Succeeded, LroStatus::Succeeded],
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect { state });
+    let effect = FakeEffect { state };
     let mut controller = AzureVmController::new(provider, settings, effect, credential(), None)
         .unwrap()
         .with_bootstrap_service(enrolled_service());
-    controller.adopt().await.unwrap();
+    controller.reconcile("zone", "guest", 1).await.unwrap();
     assert!(matches!(
         controller.finalize("zone", "guest", 1).await.unwrap(),
         AzureVmReconcileOutcome::Progressing { .. }
@@ -470,7 +514,7 @@ async fn running_vm_waits_for_authenticated_enrollment() {
         tags: Some(expected_tag_digest()),
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect { state });
+    let effect = FakeEffect { state };
     let mut controller =
         AzureVmController::new(provider, settings, effect, credential(), None).unwrap();
     assert!(matches!(
@@ -478,60 +522,14 @@ async fn running_vm_waits_for_authenticated_enrollment() {
         AzureVmReconcileOutcome::Retry { .. }
     ));
     assert_eq!(controller.phase(), AzureVmPhase::Bootstrapping);
-    assert!(controller.status().identity_digest().is_none());
 }
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
-async fn ready_vm_accepts_typed_resize_and_commits_after_lro() {
+async fn failed_lro_honors_pending_delete_intent() {
     let (provider, settings) = config();
     let state = Arc::new(Mutex::new(FakeState {
-        state: AzureVmState::Running,
-        handle: Some(AzureVmHandle::from_core("opaque-vm").unwrap()),
-        tags: Some(expected_tag_digest()),
-        polls: vec![LroStatus::Succeeded],
-        ..FakeState::default()
-    }));
-    let effect = Arc::new(FakeEffect {
-        state: Arc::clone(&state),
-    });
-    let mut controller = AzureVmController::new(provider, settings, effect, credential(), None)
-        .unwrap()
-        .with_bootstrap_service(enrolled_service());
-    controller.adopt().await.unwrap();
-    assert!(matches!(
-        controller
-            .update(
-                "zone",
-                "guest",
-                1,
-                AzureVmUpdate::Resize {
-                    size: "standard-d8".into(),
-                },
-            )
-            .await
-            .unwrap(),
-        AzureVmReconcileOutcome::Progressing { .. }
-    ));
-    assert_eq!(controller.phase(), AzureVmPhase::Reconfiguring);
-    assert_eq!(
-        controller
-            .poll_operation(AzureOperationHandle::from_core(b"resize").unwrap())
-            .await
-            .unwrap(),
-        AzureVmReconcileOutcome::Converged
-    );
-    assert_eq!(controller.phase(), AzureVmPhase::Ready);
-}
-
-#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-#[tokio::test]
-async fn failed_update_lro_honors_pending_delete_intent() {
-    let (provider, settings) = config();
-    let state = Arc::new(Mutex::new(FakeState {
-        state: AzureVmState::Running,
-        handle: Some(AzureVmHandle::from_core("opaque-vm").unwrap()),
-        tags: Some(expected_tag_digest()),
+        state: AzureVmState::Absent,
         polls: vec![
             LroStatus::Succeeded,
             LroStatus::Succeeded,
@@ -539,36 +537,24 @@ async fn failed_update_lro_honors_pending_delete_intent() {
         ],
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect {
+    let effect = FakeEffect {
         state: Arc::clone(&state),
-    });
+    };
     let mut controller = AzureVmController::new(provider, settings, effect, credential(), None)
         .unwrap()
         .with_bootstrap_service(enrolled_service());
-    controller.adopt().await.unwrap();
-    controller
-        .update(
-            "zone",
-            "guest",
-            1,
-            AzureVmUpdate::Resize {
-                size: "standard-d8".into(),
-            },
-        )
-        .await
-        .unwrap();
+    controller.reconcile("zone", "guest", 1).await.unwrap();
     controller.finalize("zone", "guest", 2).await.unwrap();
     assert_eq!(
         controller
-            .poll_operation(AzureOperationHandle::from_core(b"resize").unwrap())
+            .poll_operation(AzureOperationHandle::from_core(b"provision").unwrap())
             .await
             .unwrap(),
         AzureVmReconcileOutcome::Progressing { after_ms: 1_000 }
     );
     assert_eq!(controller.phase(), AzureVmPhase::Deleting);
     assert!(controller.finalizer_installed());
-    assert!(controller.recovery_state().pending_update.is_none());
-    assert_eq!(state.lock().await.calls, ["delete"]);
+    assert_eq!(state.lock().await.calls, ["provision", "delete"]);
     controller
         .poll_operation(AzureOperationHandle::from_core(b"delete").unwrap())
         .await
@@ -589,20 +575,18 @@ async fn restart_with_pending_delete_never_reprovisions_an_absent_vm() {
         polls: vec![LroStatus::Succeeded],
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect {
+    let effect = FakeEffect {
         state: Arc::clone(&state),
-    });
+    };
     let controller = AzureVmController::new(provider, settings, effect, credential(), None)
         .unwrap()
         .restore_recovery_state(AzureVmRecoveryState {
             phase: AzureVmPhase::Deleting,
             finalizer_installed: true,
-            operation: None,
+            in_flight_operation: None,
             pending_delete_operation_id: Some("delete-id".to_owned()),
             bootstrap_started_at_unix_ms: None,
             psk_delivery_attempts: 0,
-            operation_started_at_unix_ms: None,
-            pending_update: None,
             bootstrap_service_state: BootstrapService::default().state(),
             bootstrap_extension_present: false,
             child_cleanup_complete: false,
@@ -626,7 +610,7 @@ async fn restart_with_pending_delete_never_reprovisions_an_absent_vm() {
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
-async fn foreign_tags_are_not_adopted() {
+async fn foreign_tags_are_not_reconciled() {
     let (provider, settings) = config();
     let state = Arc::new(Mutex::new(FakeState {
         state: AzureVmState::Running,
@@ -634,12 +618,12 @@ async fn foreign_tags_are_not_adopted() {
         tags: Some(TagDigest::from_core([9; 32])),
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect { state });
+    let effect = FakeEffect { state };
     let mut controller = AzureVmController::new(provider, settings, effect, credential(), None)
         .unwrap()
         .with_bootstrap_service(enrolled_service());
     assert_eq!(
-        controller.adopt().await.unwrap_err(),
+        controller.reconcile("zone", "guest", 1).await.unwrap_err(),
         AzureVmError::ArmResourceConflict
     );
     assert_eq!(controller.phase(), AzureVmPhase::Failed);
@@ -656,9 +640,9 @@ async fn restart_finalization_reobserves_before_clearing_finalizer() {
         polls: vec![LroStatus::Succeeded, LroStatus::Succeeded],
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect {
+    let effect = FakeEffect {
         state: Arc::clone(&state),
-    });
+    };
     let mut controller = AzureVmController::new(provider, settings, effect, credential(), None)
         .unwrap()
         .with_bootstrap_service(enrolled_service());
@@ -687,9 +671,9 @@ async fn provisioning_lro_delivers_psk_before_bootstrap_phase() {
         polls: vec![LroStatus::Succeeded, LroStatus::Succeeded],
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect {
+    let effect = FakeEffect {
         state: Arc::clone(&state),
-    });
+    };
     let mut controller = AzureVmController::new(
         provider,
         settings,
@@ -725,9 +709,9 @@ async fn failed_extension_lro_redelivers_psk_without_losing_secret() {
         ],
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect {
+    let effect = FakeEffect {
         state: Arc::clone(&state),
-    });
+    };
     let mut controller = AzureVmController::new(
         provider,
         settings,
@@ -768,9 +752,9 @@ async fn transient_extension_failure_does_not_consume_delivery_attempt() {
         extension_failures: 1,
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect {
+    let effect = FakeEffect {
         state: Arc::clone(&state),
-    });
+    };
     let mut controller = AzureVmController::new(
         provider,
         settings,
@@ -808,7 +792,7 @@ async fn running_vm_fails_closed_at_bootstrap_deadline() {
         tags: Some(expected_tag_digest()),
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect { state });
+    let effect = FakeEffect { state };
     let mut controller = AzureVmController::new(provider, settings, effect, credential(), None)
         .unwrap()
         .with_clock(Arc::new(FixedClock(Arc::clone(&now))));
@@ -830,9 +814,9 @@ async fn bootstrap_deadline_retries_failed_extension_cleanup() {
         polls: vec![LroStatus::Succeeded],
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect {
+    let effect = FakeEffect {
         state: Arc::clone(&state),
-    });
+    };
     let now = Arc::new(Mutex::new(60_000));
     let controller = AzureVmController::new(provider, settings, effect, credential(), None)
         .unwrap()
@@ -840,12 +824,10 @@ async fn bootstrap_deadline_retries_failed_extension_cleanup() {
     let recovery = AzureVmRecoveryState {
         phase: AzureVmPhase::Failed,
         finalizer_installed: true,
-        operation: None,
+        in_flight_operation: None,
         pending_delete_operation_id: None,
         bootstrap_started_at_unix_ms: Some(0),
         psk_delivery_attempts: 0,
-        operation_started_at_unix_ms: None,
-        pending_update: None,
         bootstrap_service_state: BootstrapService::default().state(),
         bootstrap_extension_present: true,
         child_cleanup_complete: false,

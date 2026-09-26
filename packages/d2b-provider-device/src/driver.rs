@@ -36,7 +36,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ResourceUid};
+use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ResourceUid, ZoneId};
 use d2b_provider_toolkit::{
     ProviderRow, SharedProviderDeclarationError, SharedProviderDriverArgs,
     SharedProviderDriverFactory, SharedProviderEffectError, SharedProviderEffectOutcome,
@@ -127,20 +127,63 @@ pub const DEVICE_REGISTRATIONS: [ProviderRow<DeviceComponent>; 4] = [
 #[derive(Default)]
 pub struct DeviceResourceState {
     /// TPM child-resource controllers (old `tpm_controllers`).
-    pub tpm_controllers: Arc<
+    tpm_controllers: Arc<
         Mutex<std::collections::BTreeMap<ResourceUid, d2b_provider_device_tpm::TpmResourceController>>,
     >,
     /// GPU authority-fenced lifecycle controllers (old `gpu_controllers`).
-    pub gpu_controllers:
+    gpu_controllers:
         Arc<Mutex<std::collections::BTreeMap<ResourceUid, d2b_provider_device_gpu::GpuController>>>,
     /// GPU authority leases (old `gpu_authority_leases`). The GPU port's
     /// declared construction contract locks this cache with
     /// `parking_lot::Mutex`, so the driver-owned state uses the same lock.
-    pub gpu_authority_leases: Arc<
+    gpu_authority_leases: Arc<
         parking_lot::Mutex<
             std::collections::BTreeMap<[u8; 16], d2b_core_controller::authority::AuthorityLease>,
         >,
     >,
+}
+
+impl DeviceResourceState {
+    /// The TPM child-resource controller cache (old `tpm_controllers`).
+    ///
+    /// Read-only access: callers lock the cache to take or store a
+    /// controller; the cache itself cannot be replaced from outside the
+    /// driver.
+    pub fn tpm_controllers(
+        &self,
+    ) -> &Arc<
+        Mutex<std::collections::BTreeMap<ResourceUid, d2b_provider_device_tpm::TpmResourceController>>,
+    > {
+        &self.tpm_controllers
+    }
+
+    /// The GPU authority-fenced lifecycle controller cache (old
+    /// `gpu_controllers`).
+    ///
+    /// Read-only access: callers lock the cache to take or store a
+    /// controller; the cache itself cannot be replaced from outside the
+    /// driver.
+    pub fn gpu_controllers(
+        &self,
+    ) -> &Arc<Mutex<std::collections::BTreeMap<ResourceUid, d2b_provider_device_gpu::GpuController>>>
+    {
+        &self.gpu_controllers
+    }
+
+    /// The GPU authority-lease cache (old `gpu_authority_leases`).
+    ///
+    /// The GPU port's declared construction contract locks this cache with
+    /// `parking_lot::Mutex`, so the driver-owned state uses the same lock;
+    /// the daemon hands the Arc clone to the GPU port unchanged.
+    pub fn gpu_authority_leases(
+        &self,
+    ) -> &Arc<
+        parking_lot::Mutex<
+            std::collections::BTreeMap<[u8; 16], d2b_core_controller::authority::AuthorityLease>,
+        >,
+    > {
+        &self.gpu_authority_leases
+    }
 }
 
 /// The Provider effect surface the Device driver needs.
@@ -173,7 +216,7 @@ pub trait DeviceDriverEffects: Send + Sync + 'static {
 /// factory for one zone.
 pub struct DeviceDriverArgs {
     /// The zone the driver serves.
-    pub zone: String,
+    pub zone: ZoneId,
     /// The controller generation every effect call binds (KTD7).
     pub controller_generation: ControllerGeneration,
     /// The daemon-supplied facet set the family's own effects

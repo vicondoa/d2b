@@ -47,6 +47,8 @@ const UHID_OPEN: u32 = 4;
 const UHID_CLOSE: u32 = 5;
 /// Kernel requests a GET_REPORT from the device.
 const UHID_GET_REPORT: u32 = 9;
+/// Reply to a GET_REPORT request (UHID_GET_REPORT_REPLY).
+const UHID_GET_REPORT_REPLY: u32 = 10;
 
 /// Fixed size of a CTAPHID HID report (input or output).
 pub const CTAPHID_REPORT_LEN: usize = 64;
@@ -175,37 +177,7 @@ impl UhidDevice {
     pub async fn read_event(&mut self) -> io::Result<Option<UhidEvent>> {
         let mut buf = [0u8; UHID_EVENT_SIZE];
         let n = self.read_nonblocking(&mut buf).await?;
-        if n == 0 {
-            return Ok(None);
-        }
-        if n < 4 {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                format!("short uhid event header: {n} bytes"),
-            ));
-        }
-        let event_type = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
-        let payload = &buf[4..];
-        let event = match event_type {
-            UHID_OUTPUT => {
-                // uhid_output_req layout (packed):
-                //   data[4096], size(__u16), rtype(__u8)
-                let size = u16::from_le_bytes([payload[4096], payload[4097]]) as usize;
-                let data = parse_output_report(payload, size);
-                UhidEvent::Output { data }
-            }
-            UHID_GET_REPORT => {
-                // uhid_get_report_req: id(__u32), rnum(__u8), rtype(__u8)
-                let id = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
-                UhidEvent::GetReport { id }
-            }
-            UHID_START | UHID_STOP | UHID_OPEN | UHID_CLOSE => {
-                let _ = event_type;
-                UhidEvent::Lifecycle(())
-            }
-            other => UhidEvent::Other(other),
-        };
-        Ok(Some(event))
+        parse_event(&buf[..n])
     }
 
     /// Inject a 64-byte CTAPHID input report (token response → browser).
@@ -258,6 +230,46 @@ impl UhidDevice {
         }
         Ok(())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Event parsing
+// ---------------------------------------------------------------------------
+
+/// Parse one raw event buffer read from /dev/uhid.
+///
+/// Returns `None` for an empty buffer (clean EOF) and errors on a short
+/// event header (fewer than 4 bytes). The kernel always delivers full-size
+/// events, so payload fields are read at their fixed packed offsets.
+fn parse_event(buf: &[u8]) -> io::Result<Option<UhidEvent>> {
+    if buf.is_empty() {
+        return Ok(None);
+    }
+    if buf.len() < 4 {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            format!("short uhid event header: {} bytes", buf.len()),
+        ));
+    }
+    let event_type = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+    let payload = &buf[4..];
+    let event = match event_type {
+        UHID_OUTPUT => {
+            // uhid_output_req layout (packed):
+            //   data[4096], size(__u16), rtype(__u8)
+            let size = u16::from_le_bytes([payload[4096], payload[4097]]) as usize;
+            let data = parse_output_report(payload, size);
+            UhidEvent::Output { data }
+        }
+        UHID_GET_REPORT => {
+            // uhid_get_report_req: id(__u32), rnum(__u8), rtype(__u8)
+            let id = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
+            UhidEvent::GetReport { id }
+        }
+        UHID_START | UHID_STOP | UHID_OPEN | UHID_CLOSE => UhidEvent::Lifecycle(()),
+        other => UhidEvent::Other(other),
+    };
+    Ok(Some(event))
 }
 
 // ---------------------------------------------------------------------------
@@ -337,8 +349,6 @@ fn parse_output_report(payload: &[u8], size: usize) -> [u8; CTAPHID_REPORT_LEN] 
 
 fn build_get_report_reply_error(id: u32) -> Vec<u8> {
     // uhid_get_report_reply_req: id(__u32), err(__u16), size(__u16), data[4096]
-    // UHID_GET_REPORT_REPLY = 10
-    const UHID_GET_REPORT_REPLY: u32 = 10;
     let mut buf = Vec::with_capacity(4 + 4 + 2 + 2 + 4096);
     buf.extend_from_slice(&UHID_GET_REPORT_REPLY.to_le_bytes());
     buf.extend_from_slice(&id.to_le_bytes());
@@ -585,5 +595,110 @@ mod tests {
         let rendered = format!("{event:?}");
         assert_eq!(rendered, "UhidEvent::Output(<redacted>)");
         assert!(!rendered.contains("a5"));
+    }
+
+    /// Full-size uhid_event buffer with the given event type in the header.
+    fn event_buffer(event_type: u32) -> Vec<u8> {
+        let mut buf = vec![0u8; UHID_EVENT_SIZE];
+        buf[..4].copy_from_slice(&event_type.to_le_bytes());
+        buf
+    }
+
+    #[test]
+    fn parse_event_dispatch_table() {
+        type Case = (u32, fn(&UhidEvent) -> bool);
+        let cases: &[Case] = &[
+            (UHID_OUTPUT, |e| matches!(e, UhidEvent::Output { .. })),
+            (UHID_GET_REPORT, |e| matches!(e, UhidEvent::GetReport { .. })),
+            (UHID_START, |e| matches!(e, UhidEvent::Lifecycle(()))),
+            (UHID_STOP, |e| matches!(e, UhidEvent::Lifecycle(()))),
+            (UHID_OPEN, |e| matches!(e, UhidEvent::Lifecycle(()))),
+            (UHID_CLOSE, |e| matches!(e, UhidEvent::Lifecycle(()))),
+            (0xdead_beef, |e| matches!(e, UhidEvent::Other(0xdead_beef))),
+        ];
+        for (event_type, expect) in cases {
+            let buf = event_buffer(*event_type);
+            let event = parse_event(&buf).unwrap().unwrap();
+            assert!(expect(&event), "type {event_type:#x} parsed as {event:?}");
+        }
+    }
+
+    #[test]
+    fn parse_event_output_reads_data_and_size_at_payload_offsets() {
+        let mut buf = event_buffer(UHID_OUTPUT);
+        // data lives at payload[0..64] (event offset 4)
+        for (i, byte) in buf[4..4 + CTAPHID_REPORT_LEN].iter_mut().enumerate() {
+            *byte = i as u8;
+        }
+        // size field sits at payload[4096..4098], rtype at payload[4098]
+        buf[4 + 4096..4 + 4098].copy_from_slice(&(CTAPHID_REPORT_LEN as u16).to_le_bytes());
+
+        let event = parse_event(&buf).unwrap().unwrap();
+        match event {
+            UhidEvent::Output { data } => {
+                for (i, byte) in data.iter().enumerate() {
+                    assert_eq!(*byte, i as u8);
+                }
+            }
+            other => panic!("expected Output, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_event_output_strips_zero_report_id_prefix() {
+        let mut buf = event_buffer(UHID_OUTPUT);
+        // report id prefix: payload[0] = 0, data at payload[1..65]
+        buf[4 + 1..4 + 65].fill(0x5a);
+        buf[4 + 64] = 0xee;
+        buf[4 + 4096..4 + 4098].copy_from_slice(&((CTAPHID_REPORT_LEN + 1) as u16).to_le_bytes());
+
+        let event = parse_event(&buf).unwrap().unwrap();
+        match event {
+            UhidEvent::Output { data } => {
+                assert_eq!(data[0], 0x5a);
+                assert_eq!(data[63], 0xee);
+            }
+            other => panic!("expected Output, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_event_get_report_reads_id_at_payload_start() {
+        let mut buf = event_buffer(UHID_GET_REPORT);
+        // uhid_get_report_req: id(__u32) at payload[0..4]
+        buf[4..8].copy_from_slice(&0x1122_3344u32.to_le_bytes());
+
+        let event = parse_event(&buf).unwrap().unwrap();
+        match event {
+            UhidEvent::GetReport { id } => assert_eq!(id, 0x1122_3344),
+            other => panic!("expected GetReport, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_event_empty_buffer_is_eof() {
+        assert!(parse_event(&[]).unwrap().is_none());
+    }
+
+    #[test]
+    fn parse_event_short_header_errors() {
+        let err = parse_event(&[UHID_OUTPUT as u8, 0]).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn get_report_reply_error_layout() {
+        let buf = build_get_report_reply_error(0x1020_3040);
+        // type(4) + id(4) + err(2) + size(2) + data(4096)
+        assert_eq!(buf.len(), 4 + 4 + 2 + 2 + 4096);
+        let event_type = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+        assert_eq!(event_type, UHID_GET_REPORT_REPLY);
+        let id = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
+        assert_eq!(id, 0x1020_3040);
+        let err = u16::from_le_bytes([buf[8], buf[9]]);
+        assert_eq!(err, 32); // EPIPE: report unavailable
+        let size = u16::from_le_bytes([buf[10], buf[11]]);
+        assert_eq!(size, 0);
+        assert!(buf[12..].iter().all(|&b| b == 0));
     }
 }

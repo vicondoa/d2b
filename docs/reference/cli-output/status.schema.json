@@ -1,19 +1,36 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "StatusOutputV2",
+  "description": "`d2b status` output: one of the VM, inventory, or bridge-check shapes.",
   "anyOf": [
     {
-      "$ref": "#/definitions/StatusVmOutputV2"
+      "description": "Per-VM status.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/StatusVmOutputV2"
+        }
+      ]
     },
     {
-      "$ref": "#/definitions/StatusInventoryOutputV2"
+      "description": "Whole-inventory status.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/StatusInventoryOutputV2"
+        }
+      ]
     },
     {
-      "$ref": "#/definitions/StatusBridgeCheckOutputV2"
+      "description": "Bridge isolation check status.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/StatusBridgeCheckOutputV2"
+        }
+      ]
     }
   ],
   "definitions": {
     "ApiReadyErrorV1": {
+      "description": "The error text of a failed api-ready wait.",
       "type": "object",
       "required": [
         "error"
@@ -26,24 +43,54 @@
       "additionalProperties": false
     },
     "ApiReadySimple": {
-      "type": "string",
-      "enum": [
-        "yes",
-        "pending",
-        "timeout"
+      "description": "Closed api-ready states without an error payload.",
+      "oneOf": [
+        {
+          "description": "The API became ready.",
+          "type": "string",
+          "enum": [
+            "yes"
+          ]
+        },
+        {
+          "description": "The API is still starting.",
+          "type": "string",
+          "enum": [
+            "pending"
+          ]
+        },
+        {
+          "description": "The wait timed out.",
+          "type": "string",
+          "enum": [
+            "timeout"
+          ]
+        }
       ]
     },
     "ApiReadyStatusV1": {
+      "description": "api-ready state of the last VM start in split mode.",
       "anyOf": [
         {
-          "$ref": "#/definitions/ApiReadySimple"
+          "description": "A simple closed state.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ApiReadySimple"
+            }
+          ]
         },
         {
-          "$ref": "#/definitions/ApiReadyErrorV1"
+          "description": "A terminal error state.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ApiReadyErrorV1"
+            }
+          ]
         }
       ]
     },
     "LivePoolIntegrityOutputV1": {
+      "description": "Live-pool integrity verdict for one VM.",
       "type": "object",
       "required": [
         "repairAttempted",
@@ -77,6 +124,25 @@
       },
       "additionalProperties": false
     },
+    "PublicReadModelKind": {
+      "description": "Which public response frame the daemon's cached read model describes.\n\n`kind` used to be a free-form `String`; the daemon publishes exactly two frames, the unfiltered `list` and `status` responses, so both the wire protocol and the generated CLI schema carry enum constraints rather than a free-form string. Serde names match the canonical wire strings exactly.",
+      "oneOf": [
+        {
+          "description": "The unfiltered public `list` frame.",
+          "type": "string",
+          "enum": [
+            "list"
+          ]
+        },
+        {
+          "description": "The unfiltered public `status` frame.",
+          "type": "string",
+          "enum": [
+            "status"
+          ]
+        }
+      ]
+    },
     "PublicReadModelMetadata": {
       "type": "object",
       "required": [
@@ -101,7 +167,7 @@
           "minimum": 0.0
         },
         "kind": {
-          "type": "string"
+          "$ref": "#/definitions/PublicReadModelKind"
         },
         "schemaVersion": {
           "type": "integer",
@@ -119,6 +185,39 @@
       },
       "additionalProperties": false
     },
+    "QemuMediaRegistryState": {
+      "description": "The media probe registry's convergence state for one attached source.\n\n`state` used to be a free-form `String`; the daemon classifies every source into exactly these four states, so both the wire protocol and the generated CLI schema carry enum constraints rather than a free-form string. Serde names match the canonical wire strings exactly.",
+      "oneOf": [
+        {
+          "description": "The source is declared as `direct-config` and needs no probe record.",
+          "type": "string",
+          "enum": [
+            "direct-config"
+          ]
+        },
+        {
+          "description": "A probe record matches the current declaration.",
+          "type": "string",
+          "enum": [
+            "present"
+          ]
+        },
+        {
+          "description": "A probe record exists but does not match the declaration.",
+          "type": "string",
+          "enum": [
+            "stale"
+          ]
+        },
+        {
+          "description": "No probe record exists for the declared source.",
+          "type": "string",
+          "enum": [
+            "missing"
+          ]
+        }
+      ]
+    },
     "QemuMediaRegistryStatus": {
       "type": "object",
       "required": [
@@ -132,12 +231,32 @@
           ]
         },
         "state": {
-          "type": "string"
+          "$ref": "#/definitions/QemuMediaRegistryState"
         }
       },
       "additionalProperties": false
     },
+    "QemuMediaRunnerState": {
+      "description": "Liveness of the qemu-media runner process the daemon projects.\n\n`state` used to be a free-form `String`; the daemon derives it from the pidfd table, which reports a role as running while its recorded process is alive at the same start time and stopped otherwise, so the wire protocol and the generated CLI schema carry enum constraints rather than a free-form string. Serde names match the canonical wire strings exactly.",
+      "oneOf": [
+        {
+          "description": "The registered runner process is alive.",
+          "type": "string",
+          "enum": [
+            "running"
+          ]
+        },
+        {
+          "description": "No live runner process is registered for the VM.",
+          "type": "string",
+          "enum": [
+            "stopped"
+          ]
+        }
+      ]
+    },
     "QemuMediaRunnerStatus": {
+      "description": "Runner-side QMP media state for one VM.",
       "type": "object",
       "required": [
         "preContProgress",
@@ -158,12 +277,13 @@
           "type": "string"
         },
         "state": {
-          "type": "string"
+          "$ref": "#/definitions/QemuMediaRunnerState"
         }
       },
       "additionalProperties": false
     },
     "QemuMediaSourceStatus": {
+      "description": "One attached media source's status.",
       "type": "object",
       "required": [
         "format",
@@ -196,6 +316,7 @@
       "additionalProperties": false
     },
     "QemuMediaStatus": {
+      "description": "Optional guest-media status attached to a VM row.",
       "type": "object",
       "required": [
         "firmwareMode",
@@ -219,6 +340,7 @@
       "additionalProperties": false
     },
     "RunnerParityOutputV2": {
+      "description": "Runner-parity evidence for one VM.",
       "type": "object",
       "required": [
         "declaredRunner",
@@ -239,6 +361,7 @@
       "additionalProperties": false
     },
     "StatusBridgeCheckOutputV2": {
+      "description": "Bridge isolation check output for one runtime.",
       "type": "object",
       "required": [
         "message",
@@ -263,6 +386,7 @@
       "additionalProperties": false
     },
     "StatusInventoryOutputV2": {
+      "description": "`d2b status --inventory` output: runtime plus one row per VM.",
       "type": "object",
       "required": [
         "runtime",
@@ -292,6 +416,7 @@
       "additionalProperties": false
     },
     "StatusServicesOutputV2": {
+      "description": "Legacy per-VM service-state map (V2).",
       "type": "object",
       "required": [
         "d2b",
@@ -342,6 +467,7 @@
       "additionalProperties": false
     },
     "StatusVmOutputV2": {
+      "description": "One VM's status row.",
       "type": "object",
       "required": [
         "declaredRoles",
@@ -644,6 +770,7 @@
       ]
     },
     "UsbipProbeEntry": {
+      "description": "One USBIP probe entry describing a bus, its owner, and the next action.",
       "type": "object",
       "required": [
         "busId",
@@ -654,9 +781,11 @@
       ],
       "properties": {
         "busId": {
+          "description": "Physical bus id probed.",
           "type": "string"
         },
         "candidateBusIds": {
+          "description": "Alternate bus ids that match the declaration.",
           "type": "array",
           "items": {
             "type": "string"
@@ -680,9 +809,11 @@
           ]
         },
         "env": {
+          "description": "Environment the VM belongs to.",
           "type": "string"
         },
         "followUpCommand": {
+          "description": "Command the operator should run next.",
           "type": [
             "string",
             "null"
@@ -714,15 +845,18 @@
           "$ref": "#/definitions/UsbProbeEntryKind"
         },
         "lockPath": {
+          "description": "Broker claim lock path.",
           "type": "string"
         },
         "mediaRef": {
+          "description": "Media resource bound to the slot, if any.",
           "type": [
             "string",
             "null"
           ]
         },
         "ownerVm": {
+          "description": "VM currently holding the claim, if any.",
           "type": [
             "string",
             "null"
@@ -735,19 +869,26 @@
           }
         },
         "slot": {
+          "description": "Attached USB slot, if any.",
           "type": [
             "string",
             "null"
           ]
         },
         "sourceKind": {
+          "description": "How the device was discovered.",
           "type": [
             "string",
             "null"
           ]
         },
         "status": {
-          "$ref": "#/definitions/UsbipProbeStatus"
+          "description": "Claim status.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/UsbipProbeStatus"
+            }
+          ]
         },
         "topologyPolicy": {
           "default": {
@@ -761,6 +902,7 @@
           ]
         },
         "vm": {
+          "description": "VM this entry describes.",
           "type": "string"
         }
       },
@@ -838,7 +980,20 @@
       },
       "additionalProperties": false
     },
+    "VmAutostartMode": {
+      "description": "How the daemon's autostart pass treats a VM that carries an autostart row.\n\n`mode` used to be a free-form `String`. The daemon emits a row only for VMs the pass refuses to start on its own, so the vocabulary has a single member today; a future posture is an additive variant here rather than a new string. Serde names match the canonical wire strings exactly.",
+      "oneOf": [
+        {
+          "description": "Autostart skips this VM; the operator starts it explicitly.",
+          "type": "string",
+          "enum": [
+            "manual-only"
+          ]
+        }
+      ]
+    },
     "VmAutostartPosture": {
+      "description": "Whether a VM is set to autostart, with the reason.",
       "type": "object",
       "required": [
         "mode",
@@ -846,7 +1001,7 @@
       ],
       "properties": {
         "mode": {
-          "type": "string"
+          "$ref": "#/definitions/VmAutostartMode"
         },
         "reason": {
           "type": "string"

@@ -781,13 +781,15 @@ fn render_projection_mutation(
 }
 
 fn projection_digest(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
     let raw: [u8; 32] = Sha256Hasher::digest(bytes).into();
-    format!(
-        "sha256:{}",
-        raw.iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    )
+    let mut digest = String::with_capacity("sha256:".len() + raw.len() * 2);
+    digest.push_str("sha256:");
+    for byte in raw {
+        digest.push(HEX[(byte >> 4) as usize] as char);
+        digest.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    digest
 }
 
 struct ProjectionLock(std::fs::File);
@@ -927,9 +929,8 @@ mod tests {
 
     fn usbip_script() -> (String, String) {
         let mut batch = build_inet_d2b_chains();
-        batch
-            .add_usbip_carveout(&d2b_host::nftables::BusId::new("1-1.2"))
-            .expect("carveout");
+        let bus_id = d2b_host::media::BusId::new("1-1.2").expect("busid");
+        batch.add_usbip_carveout(&bus_id).expect("carveout");
         let script = batch.render_nft_script();
         let hash = batch.canonical_hash().to_string();
         (script, hash)

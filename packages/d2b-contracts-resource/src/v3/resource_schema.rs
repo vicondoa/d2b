@@ -176,6 +176,16 @@ pub enum CanonicalJsonValue {
 
 impl CanonicalJsonValue {
     /// Parse JSON while rejecting duplicate keys before constructing a value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CanonicalJsonError::Syntax`] or
+    /// [`CanonicalJsonError::DuplicateKey`] for malformed input,
+    /// [`CanonicalJsonError::InvalidKey`] when a key is not printable ASCII or
+    /// too long, [`CanonicalJsonError::InvalidString`] when a string is not
+    /// NFC or carries a forbidden character, and
+    /// [`CanonicalJsonError::IntegerOutOfRange`] when a number is not a signed
+    /// 64-bit integer.
     pub fn parse(bytes: &[u8]) -> Result<Self, CanonicalJsonError> {
         validate_number_tokens(bytes)?;
         let mut deserializer = serde_json::Deserializer::from_slice(bytes);
@@ -346,6 +356,12 @@ pub struct CanonicalJsonObject(BTreeMap<String, CanonicalJsonValue>);
 
 impl CanonicalJsonObject {
     /// Parse a canonical JSON object.
+    ///
+    /// # Errors
+    ///
+    /// Returns every error of [`CanonicalJsonValue::parse`], plus
+    /// [`CanonicalJsonError::RootNotObject`] when the root value is not an
+    /// object.
     pub fn parse(bytes: &[u8]) -> Result<Self, CanonicalJsonError> {
         let value = CanonicalJsonValue::parse(bytes)?;
         match value {
@@ -372,6 +388,11 @@ impl CanonicalJsonObject {
     /// Iterate over top-level field names in canonical order.
     pub fn keys(&self) -> impl Iterator<Item = &str> {
         self.0.keys().map(String::as_str)
+    }
+
+    /// Iterate over top-level fields in canonical order.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&str, &CanonicalJsonValue)> {
+        self.0.iter().map(|(key, value)| (key.as_str(), value))
     }
 
     /// Look up one field.
@@ -511,6 +532,13 @@ pub(crate) fn validate_canonical_string(value: &str) -> Result<(), CanonicalJson
 }
 
 /// Canonicalize a serializable contract value.
+///
+/// # Errors
+///
+/// Returns [`CanonicalJsonError::Syntax`], [`CanonicalJsonError::DuplicateKey`],
+/// [`CanonicalJsonError::InvalidKey`], [`CanonicalJsonError::InvalidString`],
+/// or [`CanonicalJsonError::IntegerOutOfRange`] when the serialized value is
+/// not canonical JSON.
 pub fn canonical_json_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, CanonicalJsonError> {
     let json = serde_json::to_vec(value).map_err(canonical_json_error)?;
     Ok(CanonicalJsonValue::parse(&json)?.to_canonical_bytes())
@@ -596,6 +624,11 @@ pub struct SchemaVersion {
 
 impl SchemaVersion {
     /// Construct a schema version. Major zero is not admitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResourceSchemaError::InvalidSchemaVersion`] when `major` is
+    /// zero.
     pub fn new(major: u32, minor: u32) -> Result<Self, ResourceSchemaError> {
         if major == 0 {
             return Err(ResourceSchemaError::InvalidSchemaVersion);
@@ -603,7 +636,23 @@ impl SchemaVersion {
         Ok(Self { major, minor })
     }
 
+    /// Return the major schema version component.
+    pub const fn major(self) -> u32 {
+        self.major
+    }
+
+    /// Return the minor schema version component.
+    pub const fn minor(self) -> u32 {
+        self.minor
+    }
+
     /// Parse exactly `MAJOR.MINOR` without leading zeroes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResourceSchemaError::InvalidSchemaVersion`] when the value is
+    /// not exactly `MAJOR.MINOR` with numeric components and no leading zeroes,
+    /// or when the major component is zero.
     pub fn parse(value: &str) -> Result<Self, ResourceSchemaError> {
         let (major, minor) = value
             .split_once('.')
@@ -713,6 +762,11 @@ impl PlacementAnchor {
 
     /// Reject an anchor that disagrees with a registered ResourceType base
     /// contract.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResourceSchemaError::PlacementAnchorMismatch`] when the
+    /// ResourceType's canonical anchor differs from this one.
     pub fn validate_for(self, resource_type: &ResourceTypeName) -> Result<(), ResourceSchemaError> {
         if Self::canonical_for(resource_type).is_some_and(|expected| expected != self) {
             return Err(ResourceSchemaError::PlacementAnchorMismatch);
@@ -721,6 +775,15 @@ impl PlacementAnchor {
     }
 
     /// Resolve this anchor against one committed resource envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResourceSchemaError::PlacementTargetMissing`] when an
+    /// `ExecutionRef` anchor finds no `spec.executionRef` field,
+    /// [`ResourceSchemaError::PlacementTargetInvalid`] when that field is not a
+    /// string or not a parseable reference, and
+    /// [`ResourceSchemaError::PlacementTargetWrongType`] when it names neither
+    /// a Host nor a Guest.
     pub fn resolve(
         self,
         envelope: &ResourceEnvelope,
@@ -848,6 +911,12 @@ impl ExtensionSchemaId {
     }
 
     /// Parse `<provider>.d2bus.org/<ResourceType>/{spec|status}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResourceSchemaError::InvalidSchemaId`] when the value is not
+    /// exactly `<provider>.d2bus.org/<ResourceType>/{spec|status}` with valid
+    /// provider and ResourceType names.
     pub fn parse(value: &str) -> Result<Self, ResourceSchemaError> {
         let (authority, remainder) = value
             .split_once('/')
@@ -968,6 +1037,12 @@ pub struct ObjectFieldSchema {
 
 impl ObjectFieldSchema {
     /// Construct a closed object schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResourceSchemaError::InvalidFieldName`] when a key is not a
+    /// canonical field name and [`ResourceSchemaError::RequiredFieldNotAllowed`]
+    /// when a required key is not in the allowed set.
     pub fn new(
         allowed: impl IntoIterator<Item = String>,
         required: impl IntoIterator<Item = String>,
@@ -1075,6 +1150,17 @@ impl core::fmt::Debug for ResourceSchemaContract {
 
 impl ResourceSchemaContract {
     /// Construct a ResourceType schema contract.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResourceSchemaError::ProviderRefWrongType`] when a provider
+    /// reference does not name a Provider,
+    /// [`ResourceSchemaError::ProviderSchemaBinding`] when an extension schema
+    /// ID does not bind this ResourceType and layer,
+    /// [`ResourceSchemaError::ProviderFieldShadowsBase`] when an extension
+    /// field shadows a base field or a reserved name, and
+    /// [`ResourceSchemaError::DuplicateProviderRegistration`] when the same
+    /// Provider is registered twice.
     pub fn new(
         resource_type: ResourceTypeName,
         base_binding: BaseSchemaBinding,
@@ -1112,6 +1198,11 @@ impl ResourceSchemaContract {
     }
 
     /// Verify a Provider's advertised base schema versions and fingerprints.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResourceSchemaError::BaseSchemaMismatch`] when the advertised
+    /// binding differs from the contract's.
     pub fn verify_base_binding(
         &self,
         binding: &BaseSchemaBinding,
@@ -1123,6 +1214,20 @@ impl ResourceSchemaContract {
     }
 
     /// Validate a complete resource against all three spec and status layers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResourceSchemaError::ResourceTypeMismatch`] when the envelope
+    /// names a different ResourceType, [`ResourceSchemaError::UnknownField`] or
+    /// [`ResourceSchemaError::MissingField`] for a layer field-set violation,
+    /// [`ResourceSchemaError::ProviderRefRequired`] when a provider extension
+    /// carries no `providerRef`, [`ResourceSchemaError::ProviderNotRegistered`]
+    /// when the referenced Provider is not registered, and the provider
+    /// extension errors ([`ResourceSchemaError::ProviderRefMismatch`],
+    /// [`ResourceSchemaError::ProviderSchemaBinding`],
+    /// [`ResourceSchemaError::ProviderSchemaMismatch`], or
+    /// [`ResourceSchemaError::ProviderFieldShadowsBase`]) when an extension
+    /// disagrees with its registration.
     pub fn validate_envelope(
         &self,
         envelope: &ResourceEnvelope,
@@ -1168,6 +1273,13 @@ impl ResourceSchemaContract {
     }
 
     /// Validate the canonical minimal base spec without a Provider extension.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResourceSchemaError::ProviderExtensionNotMinimal`] when the
+    /// spec carries a `spec.provider` extension, and
+    /// [`ResourceSchemaError::UnknownField`] or
+    /// [`ResourceSchemaError::MissingField`] for a base field-set violation.
     pub fn validate_minimal_base_spec(
         &self,
         spec: &super::ResourceSpec,

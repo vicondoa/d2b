@@ -3,6 +3,6 @@ effective uid: 1000
 sockets:
 - public: reachable (version 0.4.0-test)
 - broker: unreachable
-allowed subcommands: audio, auth status, boot, build, console, down, generations, launch, list, op inspect, realm enter, realm inspect, realm list, realm run, restart, rollback, status, switch, test, up, usb
+allowed subcommands: activation, auth, complete, create, credential, debug, delete, device, emergency-policy, endpoint, exec, export, get, guest, host, import, list, network, op, process, provider, quota, reconcile, resource, shell, status, update-spec, upgrade, user, volume, watch, zone
 denied subcommands:
 - audit: audit requires admin role in `d2b.site.adminUsers`.

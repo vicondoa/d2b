@@ -9,26 +9,34 @@ use d2b_contracts::{
 };
 pub use d2b_contracts_resource::v3::ZoneResourceIdentity;
 use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
+/// Protocol version this wire vocabulary speaks; peers must agree on it.
 pub const UNSAFE_LOCAL_HELPER_PROTOCOL_VERSION: u32 = 3;
+/// Maximum bytes in one control frame on either direction.
 pub const MAX_HELPER_FRAME_SIZE: usize = 256 * 1024;
 /// Value requested through `SO_SNDBUF` and `SO_RCVBUF` on both control peers.
 pub const HELPER_SOCKET_BUFFER_REQUEST_BYTES: usize = MAX_HELPER_FRAME_SIZE;
 /// Minimum value that `getsockopt` must report after Linux doubles the request.
 pub const MIN_EFFECTIVE_HELPER_SOCKET_BUFFER_BYTES: usize = MAX_HELPER_FRAME_SIZE * 2;
+/// Maximum operations the helper queues per control peer before refusing.
 pub const MAX_HELPER_QUEUE_DEPTH: usize = 128;
+/// Maximum scopes one helper snapshot may carry.
 pub const MAX_HELPER_SNAPSHOT_SCOPES: usize = 1024;
+/// Maximum completed-operation records the daemon retains per uid.
 pub const MAX_COMPLETED_OPERATIONS_PER_UID: usize = 1024;
+/// How long a completed-operation record may age before it is dropped.
 pub const MAX_COMPLETED_OPERATION_AGE_SECS: u64 = 24 * 60 * 60;
 
+/// Whether a peer protocol version is the one this wire speaks.
 pub const fn unsafe_local_helper_protocol_supported(version: u32) -> bool {
     version == UNSAFE_LOCAL_HELPER_PROTOCOL_VERSION
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Helper-to-daemon greeting naming the protocol version and generation.
 pub struct HelperHello {
     pub protocol_version: u32,
     pub generation: u64,
@@ -38,6 +46,7 @@ pub struct HelperHello {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Daemon-to-helper acceptance of a greeting, pinning interval bounds.
 pub struct HelperHelloAccepted {
     pub protocol_version: u32,
     pub generation: u64,
@@ -47,6 +56,7 @@ pub struct HelperHelloAccepted {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Liveness frame carrying the generation and a monotonic sequence.
 pub struct HelperHeartbeat {
     pub generation: u64,
     pub sequence: u64,
@@ -54,13 +64,17 @@ pub struct HelperHeartbeat {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
+/// The kind of workload scope the helper runs.
 pub enum HelperScopeKind {
+    /// A launcher application scope.
     LauncherApp,
+    /// A Wayland proxy scope.
     WaylandProxy,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Opaque identity of one helper scope; the invocation id is redacted.
 pub struct ScopeIdentity {
     pub invocation_id: String,
     pub kind: HelperScopeKind,
@@ -77,16 +91,23 @@ impl fmt::Debug for ScopeIdentity {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
+/// Lifecycle state of one helper scope.
 pub enum HelperScopeState {
+    /// The scope is being set up.
     Starting,
+    /// The scope is serving.
     Active,
+    /// The scope is tearing down.
     Stopping,
+    /// The scope has exited.
     Exited,
+    /// The scope is serving degraded.
     Degraded,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One scope's observed state in a helper snapshot.
 pub struct HelperScopeSnapshot {
     pub operation_id: OperationId,
     pub workload: ZoneResourceIdentity,
@@ -94,15 +115,23 @@ pub struct HelperScopeSnapshot {
     pub state: HelperScopeState,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, try_from = "HelperSnapshotWire")]
+/// Bounded snapshot of every scope the helper currently runs.
 pub struct HelperSnapshot {
     pub generation: u64,
     pub scopes: Vec<HelperScopeSnapshot>,
 }
 
 impl HelperSnapshot {
-    pub fn validate(&self) -> Result<(), HelperFailureCode> {
+    /// Validate the snapshot bounds and every workload identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HelperFailureCode::InvalidRequest`] when the generation is
+    /// zero, the scope count exceeds the bound, or a workload identity is
+    /// not a helper-owned resource type.
+    pub(crate) fn validate(&self) -> Result<(), HelperFailureCode> {
         if self.generation == 0 {
             return Err(HelperFailureCode::InvalidRequest);
         }
@@ -122,25 +151,26 @@ struct HelperSnapshotWire {
     scopes: Vec<HelperScopeSnapshot>,
 }
 
-impl<'de> Deserialize<'de> for HelperSnapshot {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let wire = HelperSnapshotWire::deserialize(deserializer)?;
+impl TryFrom<HelperSnapshotWire> for HelperSnapshot {
+    type Error = &'static str;
+
+    fn try_from(wire: HelperSnapshotWire) -> Result<Self, Self::Error> {
         let snapshot = Self {
             generation: wire.generation,
             scopes: wire.scopes,
         };
         snapshot
             .validate()
-            .map_err(|_| serde::de::Error::custom("invalid helper snapshot"))?;
+            .map_err(|_| "invalid helper snapshot")?;
         Ok(snapshot)
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, try_from = "HelperLaunchRequestWire")]
+/// One launch request the daemon commits to the helper.
+///
+/// The workload target, item id, and argv are redacted in `Debug`.
 pub struct HelperLaunchRequest {
     pub request_id: u64,
     pub operation_id: OperationId,
@@ -168,7 +198,13 @@ impl fmt::Debug for HelperLaunchRequest {
 }
 
 impl HelperLaunchRequest {
-    pub fn validate_bounds(&self) -> Result<(), HelperFailureCode> {
+    /// Validate the workload identity bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HelperFailureCode::InvalidRequest`] when the workload is
+    /// not a helper-owned resource type.
+    pub(crate) fn validate_bounds(&self) -> Result<(), HelperFailureCode> {
         validate_unsafe_local_resource_identity(&self.workload)
     }
 }
@@ -186,12 +222,10 @@ struct HelperLaunchRequestWire {
     realm_accent_color: RealmAccentColor,
 }
 
-impl<'de> Deserialize<'de> for HelperLaunchRequest {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let wire = HelperLaunchRequestWire::deserialize(deserializer)?;
+impl TryFrom<HelperLaunchRequestWire> for HelperLaunchRequest {
+    type Error = &'static str;
+
+    fn try_from(wire: HelperLaunchRequestWire) -> Result<Self, Self::Error> {
         let request = Self {
             request_id: wire.request_id,
             operation_id: wire.operation_id,
@@ -204,16 +238,23 @@ impl<'de> Deserialize<'de> for HelperLaunchRequest {
         };
         request
             .validate_bounds()
-            .map_err(|_| serde::de::Error::custom("invalid helper launch request"))?;
+            .map_err(|_| "invalid helper launch request")?;
         Ok(request)
     }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(transparent)]
+/// A validated `#rrggbb` accent color.
 pub struct RealmAccentColor(#[schemars(regex(pattern = "^#[0-9a-f]{6}$"))] String);
 
 impl RealmAccentColor {
+    /// Validate and construct a `#rrggbb` accent color.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HelperFailureCode::InvalidRequest`] when the value is not
+    /// exactly `#` plus six lowercase hex digits.
     pub fn new(value: impl Into<String>) -> Result<Self, HelperFailureCode> {
         let value = value.into();
         let valid = value.len() == 7
@@ -226,6 +267,7 @@ impl RealmAccentColor {
             .ok_or(HelperFailureCode::InvalidRequest)
     }
 
+    /// Borrow the validated color text.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -247,6 +289,12 @@ impl<'de> Deserialize<'de> for RealmAccentColor {
     }
 }
 
+/// Refuse identities whose resource type the helper cannot own.
+///
+/// # Errors
+///
+/// Returns [`HelperFailureCode::InvalidRequest`] when the resource type is
+/// not Host, Guest, Process, or EphemeralProcess.
 pub fn validate_unsafe_local_resource_identity(
     identity: &ZoneResourceIdentity,
 ) -> Result<(), HelperFailureCode> {
@@ -260,7 +308,9 @@ pub fn validate_unsafe_local_resource_identity(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
+/// Closed failure code one helper operation can report.
 pub enum HelperFailureCode {
+    /// The request was malformed or out of bounds.
     InvalidRequest,
     OperationIdConflict,
     QueueFull,
@@ -279,14 +329,19 @@ pub enum HelperFailureCode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
+/// How a helper operation settled.
 pub enum HelperOperationDisposition {
+    /// The operation was newly committed.
     Committed,
+    /// The operation was already committed before.
     AlreadyCommitted,
+    /// The operation finished.
     Completed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Outcome of one committed helper operation.
 pub struct HelperOperationResult {
     pub request_id: u64,
     pub operation_id: OperationId,
@@ -297,6 +352,7 @@ pub struct HelperOperationResult {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Refusal of one helper operation with its closed failure code.
 pub struct HelperOperationRejected {
     pub request_id: u64,
     pub operation_id: OperationId,
@@ -305,24 +361,35 @@ pub struct HelperOperationRejected {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", content = "payload", rename_all = "camelCase")]
+/// One frame the daemon may send to the helper.
 pub enum DaemonToUnsafeLocalHelper {
+    /// The greeting was accepted.
     HelloAccepted(HelperHelloAccepted),
+    /// A liveness frame.
     Heartbeat(HelperHeartbeat),
+    /// A launch request.
     Launch(Box<HelperLaunchRequest>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", content = "payload", rename_all = "camelCase")]
+/// One frame the helper may send to the daemon.
 pub enum UnsafeLocalHelperToDaemon {
+    /// The initial greeting.
     Hello(HelperHello),
+    /// A scope snapshot.
     Snapshot(HelperSnapshot),
+    /// A liveness frame.
     Heartbeat(HelperHeartbeat),
+    /// A committed operation outcome.
     Operation(HelperOperationResult),
+    /// A refused operation.
     Rejected(HelperOperationRejected),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// The complete helper wire schema: version plus both frame directions.
 pub struct UnsafeLocalHelperWireSchema {
     pub protocol_version: u32,
     pub daemon_to_helper: DaemonToUnsafeLocalHelper,

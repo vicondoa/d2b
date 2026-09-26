@@ -15,16 +15,17 @@
 use std::collections::BTreeMap;
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 use super::{
     ResourceRef,
     execution_policy::{
-        BoundedToken, PrimitiveSpecError, redacted_debug, require_execution_ref,
+        BoundedToken, PrimitiveSpecError, ensure_unique, redacted_debug, require_execution_ref,
         require_resource_type,
     },
     process::validate_octal_mode,
 };
+use d2b_contracts::wire_deserialize;
 
 /// The canonical ResourceType name for this module.
 pub const VOLUME_RESOURCE_TYPE: &str = "Volume";
@@ -174,32 +175,30 @@ impl SourceSettings {
 
 redacted_debug!(SourceSettings);
 
-impl<'de> Deserialize<'de> for SourceSettings {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            kind: SourceKind,
-            #[serde(default)]
-            source_policy_id: Option<BoundedToken>,
-            #[serde(default)]
-            system_artifact_id: Option<BoundedToken>,
-            #[serde(default)]
-            image_format: Option<BlockImageFormat>,
-            #[serde(default)]
-            preallocate: bool,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new_with_artifact(
-            wire.kind,
-            wire.source_policy_id,
-            wire.system_artifact_id,
-            wire.image_format,
-            wire.preallocate,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    SourceSettings,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        kind: SourceKind,
+        #[serde(default)]
+        source_policy_id: Option<BoundedToken>,
+        #[serde(default)]
+        system_artifact_id: Option<BoundedToken>,
+        #[serde(default)]
+        image_format: Option<BlockImageFormat>,
+        #[serde(default)]
+        preallocate: bool,
+    },
+    wire,
+    Self::new_with_artifact(
+        wire.kind,
+        wire.source_policy_id,
+        wire.system_artifact_id,
+        wire.image_format,
+        wire.preallocate,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 const fn is_false(value: &bool) -> bool {
     !*value
@@ -239,18 +238,16 @@ impl VolumeSource {
 
 redacted_debug!(VolumeSource);
 
-impl<'de> Deserialize<'de> for VolumeSource {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            execution_ref: ResourceRef,
-            settings: SourceSettings,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.execution_ref, wire.settings).map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    VolumeSource,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        execution_ref: ResourceRef,
+        settings: SourceSettings,
+    },
+    wire,
+    Self::new(wire.execution_ref, wire.settings).map_err(serde::de::Error::custom)
+);
 
 /// Layout entry class.
 #[derive(
@@ -422,17 +419,16 @@ impl AclPrincipal {
 
 redacted_debug!(AclPrincipal);
 
-impl<'de> Deserialize<'de> for AclPrincipal {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(rename = "ref")]
-            reference: ResourceRef,
-        }
-        Self::new(Wire::deserialize(deserializer)?.reference).map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    AclPrincipal,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(rename = "ref")]
+        reference: ResourceRef,
+    },
+    wire,
+    Self::new(wire.reference).map_err(serde::de::Error::custom)
+);
 
 /// One POSIX ACL grant.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -476,18 +472,16 @@ impl AclGrant {
 
 redacted_debug!(AclGrant);
 
-impl<'de> Deserialize<'de> for AclGrant {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            principal: AclPrincipal,
-            permissions: String,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.principal, wire.permissions).map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    AclGrant,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        principal: AclPrincipal,
+        permissions: String,
+    },
+    wire,
+    Self::new(wire.principal, wire.permissions).map_err(serde::de::Error::custom)
+);
 
 /// One anchored layout entry relative to the Volume root.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -708,71 +702,69 @@ impl LayoutEntry {
 
 redacted_debug!(LayoutEntry);
 
-impl<'de> Deserialize<'de> for LayoutEntry {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            path: String,
-            #[serde(rename = "type")]
-            entry_type: EntryType,
-            owner_ref: ResourceRef,
-            group_ref: ResourceRef,
-            mode: String,
-            #[serde(default)]
-            target: Option<String>,
-            #[serde(default)]
-            access_acl: Vec<AclGrant>,
-            #[serde(default)]
-            default_acl: Vec<AclGrant>,
-            #[serde(default = "preserve")]
-            foreign_child_policy: ForeignChildPolicy,
-            #[serde(default = "yes")]
-            no_follow: bool,
-            #[serde(default)]
-            recursive: bool,
-            #[serde(default = "private")]
-            sensitivity: SensitivityClass,
-            #[serde(default = "create_if_absent")]
-            create_policy: CreatePolicy,
-            #[serde(default = "exact_owner")]
-            repair_policy: RepairPolicy,
-            #[serde(default = "never")]
-            cleanup_policy: CleanupPolicy,
-            #[serde(default = "adopt_with_live_owner_proof")]
-            adoption_policy: EntryAdoptionPolicy,
-            #[serde(default = "preserve_across_controller_restart")]
-            restart_policy: EntryRestartPolicy,
-            #[serde(default = "lease_none")]
-            lease_class: LeaseClass,
-            #[serde(default = "no_symlink")]
-            invariants: Vec<Invariant>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.path,
-            wire.entry_type,
-            wire.owner_ref,
-            wire.group_ref,
-            wire.mode,
-            wire.target,
-            wire.access_acl,
-            wire.default_acl,
-            wire.foreign_child_policy,
-            wire.no_follow,
-            wire.recursive,
-            wire.sensitivity,
-            wire.create_policy,
-            wire.repair_policy,
-            wire.cleanup_policy,
-            wire.adoption_policy,
-            wire.restart_policy,
-            wire.lease_class,
-            wire.invariants,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    LayoutEntry,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        path: String,
+        #[serde(rename = "type")]
+        entry_type: EntryType,
+        owner_ref: ResourceRef,
+        group_ref: ResourceRef,
+        mode: String,
+        #[serde(default)]
+        target: Option<String>,
+        #[serde(default)]
+        access_acl: Vec<AclGrant>,
+        #[serde(default)]
+        default_acl: Vec<AclGrant>,
+        #[serde(default = "preserve")]
+        foreign_child_policy: ForeignChildPolicy,
+        #[serde(default = "yes")]
+        no_follow: bool,
+        #[serde(default)]
+        recursive: bool,
+        #[serde(default = "private")]
+        sensitivity: SensitivityClass,
+        #[serde(default = "create_if_absent")]
+        create_policy: CreatePolicy,
+        #[serde(default = "exact_owner")]
+        repair_policy: RepairPolicy,
+        #[serde(default = "never")]
+        cleanup_policy: CleanupPolicy,
+        #[serde(default = "adopt_with_live_owner_proof")]
+        adoption_policy: EntryAdoptionPolicy,
+        #[serde(default = "preserve_across_controller_restart")]
+        restart_policy: EntryRestartPolicy,
+        #[serde(default = "lease_none")]
+        lease_class: LeaseClass,
+        #[serde(default = "no_symlink")]
+        invariants: Vec<Invariant>,
+    },
+    wire,
+    Self::new(
+        wire.path,
+        wire.entry_type,
+        wire.owner_ref,
+        wire.group_ref,
+        wire.mode,
+        wire.target,
+        wire.access_acl,
+        wire.default_acl,
+        wire.foreign_child_policy,
+        wire.no_follow,
+        wire.recursive,
+        wire.sensitivity,
+        wire.create_policy,
+        wire.repair_policy,
+        wire.cleanup_policy,
+        wire.adoption_policy,
+        wire.restart_policy,
+        wire.lease_class,
+        wire.invariants,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// One right granted by a named view.
 #[derive(
@@ -829,18 +821,16 @@ impl ViewSpec {
 
 redacted_debug!(ViewSpec);
 
-impl<'de> Deserialize<'de> for ViewSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            path: String,
-            rights: Vec<ViewRight>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.path, wire.rights).map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ViewSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        path: String,
+        rights: Vec<ViewRight>,
+    },
+    wire,
+    Self::new(wire.path, wire.rights).map_err(serde::de::Error::custom)
+);
 
 /// Transport of one Volume attachment.
 #[derive(
@@ -968,36 +958,34 @@ impl Default for AttachmentSettings {
 
 redacted_debug!(AttachmentSettings);
 
-impl<'de> Deserialize<'de> for AttachmentSettings {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            posix_acl: bool,
-            #[serde(default)]
-            xattr: bool,
-            #[serde(default = "cache_auto")]
-            cache: AttachmentCache,
-            #[serde(default = "handles_never")]
-            inode_file_handles: InodeFileHandles,
-            #[serde(default)]
-            thread_pool_size: Option<u32>,
-            #[serde(default)]
-            socket_group: Option<BoundedToken>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.posix_acl,
-            wire.xattr,
-            wire.cache,
-            wire.inode_file_handles,
-            wire.thread_pool_size,
-            wire.socket_group,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    AttachmentSettings,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default)]
+        posix_acl: bool,
+        #[serde(default)]
+        xattr: bool,
+        #[serde(default = "cache_auto")]
+        cache: AttachmentCache,
+        #[serde(default = "handles_never")]
+        inode_file_handles: InodeFileHandles,
+        #[serde(default)]
+        thread_pool_size: Option<u32>,
+        #[serde(default)]
+        socket_group: Option<BoundedToken>,
+    },
+    wire,
+    Self::new(
+        wire.posix_acl,
+        wire.xattr,
+        wire.cache,
+        wire.inode_file_handles,
+        wire.thread_pool_size,
+        wire.socket_group,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// One same-Zone Host or Guest attachment.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -1070,32 +1058,30 @@ impl VolumeAttachment {
 
 redacted_debug!(VolumeAttachment);
 
-impl<'de> Deserialize<'de> for VolumeAttachment {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            execution_ref: ResourceRef,
-            transport: AttachmentTransport,
-            view: BoundedToken,
-            #[serde(default = "attachment_read_only")]
-            access: AttachmentAccess,
-            mount_path: String,
-            #[serde(default)]
-            settings: AttachmentSettings,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.execution_ref,
-            wire.transport,
-            wire.view,
-            wire.access,
-            wire.mount_path,
-            wire.settings,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    VolumeAttachment,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        execution_ref: ResourceRef,
+        transport: AttachmentTransport,
+        view: BoundedToken,
+        #[serde(default = "attachment_read_only")]
+        access: AttachmentAccess,
+        mount_path: String,
+        #[serde(default)]
+        settings: AttachmentSettings,
+    },
+    wire,
+    Self::new(
+        wire.execution_ref,
+        wire.transport,
+        wire.view,
+        wire.access,
+        wire.mount_path,
+        wire.settings,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// Whether the backing filesystem must enforce the declared quota.
 #[derive(
@@ -1154,23 +1140,21 @@ impl QuotaSpec {
 
 redacted_debug!(QuotaSpec);
 
-impl<'de> Deserialize<'de> for QuotaSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            max_bytes: Option<u64>,
-            #[serde(default)]
-            max_inodes: Option<u64>,
-            #[serde(default = "quota_none")]
-            enforcement: QuotaEnforcement,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.max_bytes, wire.max_inodes, wire.enforcement)
-            .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    QuotaSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default)]
+        max_bytes: Option<u64>,
+        #[serde(default)]
+        max_inodes: Option<u64>,
+        #[serde(default = "quota_none")]
+        enforcement: QuotaEnforcement,
+    },
+    wire,
+    Self::new(wire.max_bytes, wire.max_inodes, wire.enforcement)
+        .map_err(serde::de::Error::custom)
+);
 
 /// The Volume ResourceType base spec.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -1207,17 +1191,9 @@ impl VolumeSpec {
         for name in views.keys() {
             BoundedToken::parse(name.clone())?;
         }
-        let mut paths: Vec<&str> = layout.iter().map(LayoutEntry::path).collect();
-        let declared = paths.len();
-        paths.sort_unstable();
-        paths.dedup();
-        if paths.len() != declared {
-            return Err(PrimitiveSpecError::DuplicateEntry);
-        }
+        let paths: Vec<&str> = layout.iter().map(LayoutEntry::path).collect();
+        ensure_unique(&paths)?;
         for attachment in &attachments {
-            if !views.contains_key(attachment.view.as_str()) {
-                return Err(PrimitiveSpecError::MissingRequiredField);
-            }
             let view = views
                 .get(attachment.view.as_str())
                 .ok_or(PrimitiveSpecError::MissingRequiredField)?;
@@ -1245,16 +1221,11 @@ impl VolumeSpec {
         {
             return Err(PrimitiveSpecError::ConflictingFields);
         }
-        let mut execution_refs: Vec<String> = attachments
+        let execution_refs: Vec<String> = attachments
             .iter()
             .map(|attachment| attachment.execution_ref.to_canonical_string())
             .collect();
-        let declared_execution_refs = execution_refs.len();
-        execution_refs.sort_unstable();
-        execution_refs.dedup();
-        if execution_refs.len() != declared_execution_refs {
-            return Err(PrimitiveSpecError::DuplicateEntry);
-        }
+        ensure_unique(&execution_refs)?;
         if source.settings().kind() == SourceKind::Tmpfs {
             if !matches!(kind, VolumeKind::Ephemeral | VolumeKind::Tmp) {
                 return Err(PrimitiveSpecError::ConflictingFields);
@@ -1315,33 +1286,31 @@ impl VolumeSpec {
 
 redacted_debug!(VolumeSpec);
 
-impl<'de> Deserialize<'de> for VolumeSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            source: VolumeSource,
-            kind: VolumeKind,
-            #[serde(default)]
-            layout: Vec<LayoutEntry>,
-            views: BTreeMap<String, ViewSpec>,
-            #[serde(default)]
-            attachments: Vec<VolumeAttachment>,
-            #[serde(default)]
-            quota: Option<QuotaSpec>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.source,
-            wire.kind,
-            wire.layout,
-            wire.views,
-            wire.attachments,
-            wire.quota,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    VolumeSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        source: VolumeSource,
+        kind: VolumeKind,
+        #[serde(default)]
+        layout: Vec<LayoutEntry>,
+        views: BTreeMap<String, ViewSpec>,
+        #[serde(default)]
+        attachments: Vec<VolumeAttachment>,
+        #[serde(default)]
+        quota: Option<QuotaSpec>,
+    },
+    wire,
+    Self::new(
+        wire.source,
+        wire.kind,
+        wire.layout,
+        wire.views,
+        wire.attachments,
+        wire.quota,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// Accepts one anchored path in a single normal form.
 ///

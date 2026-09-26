@@ -80,6 +80,7 @@ d2b_rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_core",
@@ -197,6 +198,7 @@ d2b_rust_test(
     use_libtest_harness = False,
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_core",
@@ -271,6 +273,21 @@ d2b_rust_test(
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_core_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
+    name = "storage_lifecycle_schema",
+    srcs = ["tests/storage_lifecycle_schema.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "//:docs/reference/schemas/v2/storage-lifecycle-report.json",  # keep
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        ":d2b_core",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

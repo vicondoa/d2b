@@ -32,8 +32,8 @@ use std::time::{Duration, Instant};
 use uzers::os::unix::UserExt;
 use uzers::{get_current_uid, get_user_by_uid};
 
-pub const SUPERVISOR_START_TIMEOUT: Duration = Duration::from_secs(25);
-pub const SNAPSHOT_RECONCILE_TIMEOUT: Duration = Duration::from_secs(20);
+const SUPERVISOR_START_TIMEOUT: Duration = Duration::from_secs(25);
+const SNAPSHOT_RECONCILE_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_LEDGER_BYTES: u64 = 1024 * 1024;
 const PROXY_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const FIRST_CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -152,7 +152,7 @@ pub struct ScopeRuntime<M: UserScopeManager> {
 
 pub(crate) struct RuntimeLedger {
     pub(crate) persisted: PersistedScopeLedger,
-    pub(crate) reservations: BTreeMap<String, LaunchReservation>,
+    pub(crate) reservations: BTreeMap<OperationId, LaunchReservation>,
     next_owner: u64,
 }
 
@@ -190,7 +190,6 @@ impl RuntimeLedger {
         operation_id: &OperationId,
         fingerprint: [u8; 32],
     ) -> Result<LaunchBegin, RuntimeError> {
-        let operation_key = operation_id.to_string();
         if let Some(scope) = self
             .persisted
             .scopes
@@ -203,7 +202,7 @@ impl RuntimeLedger {
                 Err(RuntimeError::OperationIdConflict)
             };
         }
-        if let Some(reservation) = self.reservations.get(&operation_key) {
+        if let Some(reservation) = self.reservations.get(operation_id) {
             return if reservation.fingerprint == fingerprint {
                 Err(RuntimeError::OperationInProgress)
             } else {
@@ -227,19 +226,19 @@ impl RuntimeLedger {
             fingerprint,
             owner: self.next_owner,
         };
-        self.reservations.insert(operation_key, reservation);
+        self.reservations.insert(operation_id.clone(), reservation);
         Ok(LaunchBegin::Started(reservation))
     }
 
     fn owns(&self, operation_id: &OperationId, reservation: LaunchReservation) -> bool {
         self.reservations
-            .get(operation_id.as_str())
+            .get(operation_id)
             .is_some_and(|active| active.owner == reservation.owner)
     }
 
     fn clear(&mut self, operation_id: &OperationId, reservation: LaunchReservation) {
         if self.owns(operation_id, reservation) {
-            self.reservations.remove(operation_id.as_str());
+            self.reservations.remove(operation_id);
         }
     }
 
@@ -256,6 +255,20 @@ impl<M: UserScopeManager> fmt::Debug for ScopeRuntime<M> {
                 &self.wayland_proxy_binary.is_some(),
             )
             .finish_non_exhaustive()
+    }
+}
+
+impl ScopeInspection {
+    /// The state a snapshot reports for this inspection: the inspected state
+    /// only when the identity matches, otherwise [`HelperScopeState::Degraded`].
+    fn observable_state(&self) -> HelperScopeState {
+        match self {
+            ScopeInspection {
+                state,
+                identity_matches: true,
+            } => *state,
+            _ => HelperScopeState::Degraded,
+        }
     }
 }
 
@@ -316,8 +329,7 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
         &self,
         request: HelperLaunchRequest,
     ) -> Result<HelperOperationResult, RuntimeError> {
-        request
-            .validate_bounds()
+        validate_unsafe_local_resource_identity(&request.workload)
             .map_err(|_| RuntimeError::InvalidRequest)?;
         let fingerprint = launch_fingerprint(&request)?;
         let reservation = match self
@@ -501,11 +513,8 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
             } else {
                 let verified = entry.verified();
                 match self.manager.inspect_scope(&verified) {
-                    Ok(ScopeInspection {
-                        state,
-                        identity_matches: true,
-                    }) => state,
-                    _ => HelperScopeState::Degraded,
+                    Ok(inspection) => inspection.observable_state(),
+                    Err(_) => HelperScopeState::Degraded,
                 }
             };
             let scope = entry.verified().wire_identity();
@@ -570,7 +579,7 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SupervisorSpec {
+struct SupervisorSpec {
     program: PathBuf,
     args: Vec<String>,
     environment: BTreeMap<String, String>,
@@ -1560,6 +1569,23 @@ mod tests {
             kind: HelperScopeKind::LauncherApp,
         };
         assert!(!format!("{persisted:?}").contains(canary));
+    }
+
+    #[test]
+    fn adoption_degrades_identity_ambiguity_without_stopping_scope() {
+        let mismatched = ScopeInspection {
+            state: HelperScopeState::Active,
+            identity_matches: false,
+        };
+        assert_eq!(
+            mismatched.observable_state(),
+            HelperScopeState::Degraded
+        );
+        let matched = ScopeInspection {
+            state: HelperScopeState::Starting,
+            identity_matches: true,
+        };
+        assert_eq!(matched.observable_state(), HelperScopeState::Starting);
     }
 
     #[test]

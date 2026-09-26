@@ -1282,6 +1282,7 @@ Stable closed error codes for this Provider:
 | `credential-invariant-failure` | IMDS response failed internal invariant checks (e.g. expiry in the past, malformed lease handle) |
 | `credential-schema-invalid` | `sign-challenge` operation class requested; or `spec.config` field fails validation |
 | `credential-queue-pressure` | Active lease count at `maxLeases` ceiling; retry after backpressure |
+| `credential-already-running` | The same Credential is already being handled by this controller |
 
 All error messages:
 - maximum 240 UTF-8 bytes;

@@ -609,7 +609,6 @@ use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumer
     use d2b_resource_runtime::error::{FailureClass, ResourceError};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
     use d2b_resource_runtime::spec_store::EnsureOutcome;
-    use d2b_resource_runtime::target::TargetHandle;
 
     use super::{
         EndpointDriver, EndpointDriverArgs, EndpointDriverEffects, EndpointDriverFactory,
@@ -624,22 +623,22 @@ use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumer
     /// each child retirement nudge, and every other mutating route still
     /// fails, so an unexpected flow is caught.
     struct DeadManager {
-        owned: parking_lot::Mutex<Vec<StoredDesiredResource>>,
-        deleted: parking_lot::Mutex<Vec<ResourceKey>>,
+        owned: tokio::sync::Mutex<Vec<StoredDesiredResource>>,
+        deleted: tokio::sync::Mutex<Vec<ResourceKey>>,
     }
 
     impl DeadManager {
         fn new() -> Self {
             Self {
-                owned: parking_lot::Mutex::new(Vec::new()),
-                deleted: parking_lot::Mutex::new(Vec::new()),
+                owned: tokio::sync::Mutex::new(Vec::new()),
+                deleted: tokio::sync::Mutex::new(Vec::new()),
             }
         }
 
         fn with_owned(row: StoredDesiredResource) -> Arc<Self> {
             Arc::new(Self {
-                owned: parking_lot::Mutex::new(vec![row]),
-                deleted: parking_lot::Mutex::new(Vec::new()),
+                owned: tokio::sync::Mutex::new(vec![row]),
+                deleted: tokio::sync::Mutex::new(Vec::new()),
             })
         }
     }
@@ -651,34 +650,34 @@ use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumer
             _parent: &ResourceKey,
             _child: ChildEnsure,
         ) -> Result<EnsureOutcome, ResourceError> {
-            Err(ResourceError::ManagerRpc("dead".into()))
+            Err(ResourceError::ManagerUnavailable("dead".into()))
         }
 
         async fn get(
             &self,
             _key: &ResourceKey,
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            Err(ResourceError::ManagerRpc("dead".into()))
+            Err(ResourceError::ManagerUnavailable("dead".into()))
         }
 
         async fn view(
             &self,
             _key: &ResourceKey,
         ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
-            Err(ResourceError::ManagerRpc("dead".into()))
+            Err(ResourceError::ManagerUnavailable("dead".into()))
         }
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-            self.deleted.lock().push(key.clone()); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            self.owned.lock().retain(|row| row.key != *key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            Err(ResourceError::ManagerRpc("dead".into()))
+            self.deleted.lock().await.push(key.clone());
+            self.owned.lock().await.retain(|row| row.key != *key);
+            Err(ResourceError::ManagerUnavailable("dead".into()))
         }
 
         async fn list_owned(
             &self,
             _owner_uid: [u8; 16],
         ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            Ok(self.owned.lock().clone())
+            Ok(self.owned.lock().await.clone())
         }
 
         async fn register_watch(
@@ -686,7 +685,7 @@ use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumer
             _subscriber: &ResourceKey,
             _registration: WatchRegistration,
         ) -> Result<WatchId, ResourceError> {
-            Err(ResourceError::ManagerRpc("dead".into()))
+            Err(ResourceError::ManagerUnavailable("dead".into()))
         }
 
         async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
@@ -732,7 +731,6 @@ use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumer
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
         ResourceContext::new(
             row,
-            TargetHandle::Host,
             endpoint_spec_decoder(),
             manager,
             Arc::new(NullRequeue),
@@ -896,7 +894,7 @@ use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumer
         let failure = d.finalize(&mut ctx).await.expect_err("owned child still live");
         assert_eq!(failure.class(), FailureClass::Retryable);
         assert_eq!(
-            manager.deleted.lock().len(), // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            manager.deleted.lock().await.len(),
             1,
             "the owned child is nudged through its own finalize-before-delete pass"
         );
@@ -1294,7 +1292,6 @@ use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumer
         (
             ResourceContext::new(
                 row,
-                TargetHandle::Host,
                 endpoint_spec_decoder(),
                 Arc::new(DeadManager::new()),
                 Arc::new(NullRequeue),

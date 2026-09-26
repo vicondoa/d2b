@@ -8,6 +8,7 @@ license.workspace = true
 [features]
 default = ["unix-transport"]
 unix-transport = ["dep:d2b-session-unix", "d2b-session-unix/host-socket"]
+test-support = []
 
 [lints.rust]
 unsafe_code = "forbid"
@@ -27,9 +28,6 @@ d2b-resource-runtime = { path = "../d2b-resource-runtime", version = "0.0.0-boot
 d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap" }
 d2b-session = { path = "../d2b-session", version = "0.0.0-bootstrap" }
 d2b-session-unix = { path = "../d2b-session-unix", version = "0.0.0-bootstrap", default-features = false, optional = true }
-# The testing fakes' recording doubles script their state over a parking_lot
-# mutex; a normal dep so the shared fakes build outside `cfg(test)` too.
-parking_lot = "0.12"
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -48,3 +46,8 @@ sha2.workspace = true
 [[bin]]
 name = "d2b-provider-toolkit"
 path = "src/bin/d2b-provider-toolkit.rs"
+
+[[test]]
+name = "supervised_runtime"
+path = "tests/supervised_runtime.rs"
+required-features = ["test-support"]

@@ -14,7 +14,7 @@
 //! registers its handler through [`crate::seam`]; this module is the
 //! single place the admission predicate lives.
 
-use d2b_broker::catalog::{BrokerOperationRow, OperationOwner, PayloadProvenance};
+use d2b_broker::catalog::{BrokerOperationRow, OperationOwner, PayloadProvenance, SecretAccess};
 
 /// Why one operation was refused admission to the in-broker table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,7 +95,7 @@ pub fn route_row(row: &BrokerOperationRow) -> RoutingVerdict {
         // (and therefore the in-broker leg) does not carry them.
         return RoutingVerdict::Forward(RefusalClass::NotGeneric);
     }
-    if row.authz.destructive || row.authz.secret_access != "None" || row.max_fds != 0 {
+    if row.authz.destructive || row.authz.secret_access != SecretAccess::None || row.max_fds != 0 {
         // A committed effect facet: destructive mutation, secret exposure,
         // or descriptor minting. Effects run on the forward carrier.
         return RoutingVerdict::Forward(RefusalClass::Effectful);
@@ -121,7 +121,7 @@ pub fn catalog_admitted_operations() -> Vec<&'static str> {
     d2b_broker::catalog::BROKER_OPERATION_CATALOG
         .iter()
         .filter(|row| route_row(row) == RoutingVerdict::InBroker)
-        .map(|row| row.operation)
+        .map(|row| row.operation.as_str())
         .collect()
 }
 
@@ -129,14 +129,15 @@ pub fn catalog_admitted_operations() -> Vec<&'static str> {
 mod tests {
     use super::*;
     use d2b_broker::catalog::{
-        BrokerAuthzFacets, BrokerProfileId, CellDurability, OperationOwner, PayloadProvenance,
+        AuditMode, BrokerAuthzFacets, BrokerOperationName, BrokerProfileId, BrokerRequirement,
+        CellDurability, Disposition, OperationOwner, PayloadProvenance,
     };
 
     /// A minimal pure, generic, provider-declared row (the shape a future
     /// pure transform will take; the fixture suite uses it as its happy
     /// path).
     const PURE_ROW: BrokerOperationRow = BrokerOperationRow {
-        operation: "d2b.fixture.pure.echo",
+        operation: BrokerOperationName::Hello,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -145,7 +146,7 @@ mod tests {
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "fixture",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -153,9 +154,9 @@ mod tests {
             scope: "per-zone",
             allowed_groups: &["d2bd"],
             destructive: false,
-            secret_access: "None",
-            broker_required: "No",
-            audit_mode: "Yes",
+            secret_access: SecretAccess::None,
+            broker_required: BrokerRequirement::No,
+            audit_mode: AuditMode::Yes,
         },
         payload_provenance: PayloadProvenance::Request,
         payload_fields: &["echo"],
@@ -168,7 +169,7 @@ mod tests {
         deadline_tier: d2b_broker::catalog::DeadlineTier::Standard,
     };
 
-    fn family_row(operation: &'static str) -> BrokerOperationRow {
+    fn family_row(operation: BrokerOperationName) -> BrokerOperationRow {
         let mut row = PURE_ROW;
         row.operation = operation;
         row.justification = None;
@@ -198,7 +199,7 @@ mod tests {
         // A census row is representative: an OpenVhostNet-class
         // operation is family-owned, so the rule must refuse it regardless
         // of any other facet.
-        let row = family_row("d2b.fixture.family.effect");
+        let row = family_row(BrokerOperationName::OpenVhostNet);
         assert_eq!(
             route_row(&row),
             RoutingVerdict::Forward(RefusalClass::FamilyOwned)
@@ -215,7 +216,7 @@ mod tests {
                     route_row(row),
                     RoutingVerdict::Forward(RefusalClass::NotProviderDeclared),
                     "broker-generic row {} must be refused",
-                    row.operation
+                    row.operation.as_str()
                 );
             }
         }
@@ -234,7 +235,7 @@ mod tests {
     #[test]
     fn a_secret_exposing_row_is_refused_as_effectful() {
         let mut row = PURE_ROW;
-        row.authz.secret_access = "RedactedOnly";
+        row.authz.secret_access = SecretAccess::RedactedOnly;
         assert_eq!(
             route_row(&row),
             RoutingVerdict::Forward(RefusalClass::Effectful)

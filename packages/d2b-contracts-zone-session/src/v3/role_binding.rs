@@ -6,6 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use super::role::{
     MAX_ROLE_RULE_EXECUTION_REFS, MAX_ROLE_RULE_RESOURCE_NAMES, RoleContractError, RoleRule,
 };
+use d2b_contracts::wire_deserialize;
 use d2b_contracts_resource::v3::{
     CanonicalJsonObject, ResourceRef, ZoneId, execution_policy::redacted_debug,
 };
@@ -149,17 +150,17 @@ impl ScopeNarrowing {
                     && narrowing_set_is_subset(
                         narrowed.subresources(),
                         allowed.subresources(),
-                        true,
+                        EmptyAllowedPolicy::Unrestricted,
                     )
                     && narrowing_names_are_subset(
                         narrowed.resource_names(),
                         allowed.resource_names(),
                     )
-                    && narrowing_set_is_subset(narrowed.zones(), allowed.zones(), false)
+                    && narrowing_set_is_subset(narrowed.zones(), allowed.zones(), EmptyAllowedPolicy::Deny)
                     && narrowing_set_is_subset(
                         narrowed.execution_refs(),
                         allowed.execution_refs(),
-                        true,
+                        EmptyAllowedPolicy::Unrestricted,
                     )
             })
         })
@@ -176,29 +177,41 @@ fn narrowing_names_are_subset(narrowed: &[String], allowed: &[String]) -> bool {
             .all(|item| item != "*" && allowed.contains(item))
 }
 
+/// How an empty allowed set is interpreted when checking a narrowing subset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EmptyAllowedPolicy {
+    /// An empty allowed set grants everything.
+
+    Unrestricted,
+    /// An empty allowed set grants nothing.
+    Deny,
+}
+
 fn narrowing_set_is_subset<T: PartialEq>(
     narrowed: &[T],
     allowed: &[T],
-    empty_allowed_is_unrestricted: bool,
+    empty_allowed: EmptyAllowedPolicy,
 ) -> bool {
     if allowed.is_empty() {
-        return empty_allowed_is_unrestricted || narrowed.is_empty();
+        return match empty_allowed {
+            EmptyAllowedPolicy::Unrestricted => true,
+            EmptyAllowedPolicy::Deny => narrowed.is_empty(),
+        };
     }
     !narrowed.is_empty() && narrowed.iter().all(|item| allowed.contains(item))
 }
 
 redacted_debug!(ScopeNarrowing);
 
-impl<'de> Deserialize<'de> for ScopeNarrowing {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            rules: Vec<RoleRule>,
-        }
-        Self::new(Wire::deserialize(deserializer)?.rules).map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ScopeNarrowing,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        rules: Vec<RoleRule>,
+    },
+    wire,
+    Self::new(wire.rules).map_err(serde::de::Error::custom)
+);
 
 /// Authority that created a relay-bearing binding.
 ///
@@ -379,41 +392,39 @@ impl RoleBindingSpec {
 
 redacted_debug!(RoleBindingSpec);
 
-impl<'de> Deserialize<'de> for RoleBindingSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            role_ref: ResourceRef,
-            #[serde(default)]
-            subjects: Vec<ResourceRef>,
-            #[serde(default)]
-            external_principal_selector: Option<ExternalPrincipalSelector>,
-            #[serde(default)]
-            scope_narrowing: Option<ScopeNarrowing>,
-            #[serde(default)]
-            resource_refs: Vec<ResourceRef>,
-            #[serde(default)]
-            zone_refs: Vec<ZoneId>,
-            #[serde(default)]
-            execution_refs: Vec<ResourceRef>,
-            #[serde(default)]
-            relay_authority: Option<RelayAuthority>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::with_facets(
-            wire.role_ref,
-            wire.subjects,
-            wire.external_principal_selector,
-            wire.scope_narrowing,
-            wire.resource_refs,
-            wire.zone_refs,
-            wire.execution_refs,
-            wire.relay_authority,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    RoleBindingSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        role_ref: ResourceRef,
+        #[serde(default)]
+        subjects: Vec<ResourceRef>,
+        #[serde(default)]
+        external_principal_selector: Option<ExternalPrincipalSelector>,
+        #[serde(default)]
+        scope_narrowing: Option<ScopeNarrowing>,
+        #[serde(default)]
+        resource_refs: Vec<ResourceRef>,
+        #[serde(default)]
+        zone_refs: Vec<ZoneId>,
+        #[serde(default)]
+        execution_refs: Vec<ResourceRef>,
+        #[serde(default)]
+        relay_authority: Option<RelayAuthority>,
+    },
+    wire,
+    Self::with_facets(
+        wire.role_ref,
+        wire.subjects,
+        wire.external_principal_selector,
+        wire.scope_narrowing,
+        wire.resource_refs,
+        wire.zone_refs,
+        wire.execution_refs,
+        wire.relay_authority,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// Closed RoleBinding condition names.
 #[derive(

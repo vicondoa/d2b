@@ -8,9 +8,15 @@ use zeroize::Zeroize;
 
 use crate::{Result, SessionError};
 
+/// A zeroized 32-byte secret.
 pub struct Secret32([u8; 32]);
 
 impl Secret32 {
+    /// Construct a secret, rejecting the all-zero value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionErrorCode::AuthenticationFailed`] when `bytes` is all zero.
     pub fn new(bytes: [u8; 32]) -> Result<Self> {
         if bytes == [0; 32] {
             return Err(SessionError::new(SessionErrorCode::AuthenticationFailed));
@@ -35,9 +41,15 @@ impl Drop for Secret32 {
     }
 }
 
+/// A bootstrap pre-shared key.
 pub struct BootstrapPsk(Secret32);
 
 impl BootstrapPsk {
+    /// Construct a bootstrap PSK, rejecting the all-zero value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionErrorCode::AuthenticationFailed`] when `bytes` is all zero.
     pub fn new(bytes: [u8; 32]) -> Result<Self> {
         Secret32::new(bytes).map(Self)
     }
@@ -49,6 +61,7 @@ impl fmt::Debug for BootstrapPsk {
     }
 }
 
+/// A bootstrap PSK admitted against a matching identity binding.
 pub struct AdmittedBootstrapPsk {
     psk: BootstrapPsk,
     identity: BootstrapIdentityBinding,
@@ -70,12 +83,18 @@ impl fmt::Debug for AdmittedBootstrapPsk {
     }
 }
 
+/// A single-use bootstrap admission bound to an operation, nonce, and identity.
 pub struct BootstrapAdmission {
     binding: BootstrapPskBinding,
     psk: Option<BootstrapPsk>,
 }
 
 impl BootstrapAdmission {
+    /// Construct an admission for one bootstrap operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns the binding validation error when `binding` is invalid.
     pub fn new(binding: BootstrapPskBinding, psk: BootstrapPsk) -> Result<Self> {
         binding.validate().map_err(SessionError::from)?;
         Ok(Self {
@@ -84,6 +103,14 @@ impl BootstrapAdmission {
         })
     }
 
+    /// Consume the admission, releasing the PSK when the proof matches.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HandshakeRejectReason::BootstrapOperationMismatch`] when the
+    /// operation, nonce, or identity does not match, [`HandshakeRejectReason::BootstrapExpired`]
+    /// when the admission expired, and [`HandshakeRejectReason::BootstrapReplayed`]
+    /// when the admission was already consumed.
     pub fn consume(
         &mut self,
         operation_id: &OperationId,
@@ -108,6 +135,7 @@ impl BootstrapAdmission {
             .ok_or_else(|| SessionError::from(HandshakeRejectReason::BootstrapReplayed))
     }
 
+    /// Return whether the admission was already consumed.
     pub fn is_consumed(&self) -> bool {
         self.psk.is_none()
     }

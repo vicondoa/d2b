@@ -93,6 +93,7 @@ fn last_errno() -> io::Error {
 
 fn lock_is_held(path: &std::path::Path) -> io::Result<bool> {
     let c_path = cstring_path(path)?;
+    // SAFETY: `c_path` is a `CString` whose pointer is NUL-terminated and valid for the call; the returned fd is checked for < 0 before any use.
     let fd = unsafe { libc::open(c_path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
     if fd < 0 {
         let err = last_errno();
@@ -109,8 +110,10 @@ fn lock_is_held(path: &std::path::Path) -> io::Result<bool> {
         l_len: 0,
         l_pid: 0,
     };
+    // SAFETY: fd is a valid open descriptor (checked >= 0 above); `flock` is fully initialized before the call, and the result is checked before use.
     let rc = unsafe { libc::fcntl(fd, libc::F_OFD_SETLK, &mut flock) };
     let saved = last_errno();
+    // SAFETY: fd is a valid open descriptor from the open above; it is closed exactly once here after the fcntl result was captured.
     unsafe { libc::close(fd) };
     if rc == 0 {
         Ok(false)
@@ -126,6 +129,7 @@ fn lock_is_held(path: &std::path::Path) -> io::Result<bool> {
 
 fn open_root(path: &std::path::Path) -> io::Result<libc::c_int> {
     let c_path = cstring_path(path)?;
+    // SAFETY: `c_path` is a `CString` whose pointer is NUL-terminated and valid for the call; the returned fd is checked for < 0 before use, and the caller owns it.
     let fd = unsafe {
         libc::open(
             c_path.as_ptr(),
@@ -137,15 +141,18 @@ fn open_root(path: &std::path::Path) -> io::Result<libc::c_int> {
 
 fn gid_for_fd(fd: libc::c_int) -> io::Result<libc::gid_t> {
     let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: fd is a valid open descriptor in the caller's ownership (checked when it was opened); `st` is only read via `assume_init` after the return value is checked for success below.
     let rc = unsafe { libc::fstat(fd, st.as_mut_ptr()) };
     if rc != 0 {
         return Err(last_errno());
     }
+    // SAFETY: the preceding fstat returned 0, so `st` was initialized by the kernel before `assume_init()` reads it.
     Ok(unsafe { st.assume_init() }.st_gid)
 }
 
 fn entry_stat(parent_fd: libc::c_int, name: &CStr) -> io::Result<libc::stat> {
     let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: parent_fd is a valid open directory fd; `name` is a `CStr` (NUL-terminated, valid for the call); `st` is written by the kernel and only read via `assume_init` after the return value is checked for success.
     let rc = unsafe {
         libc::fstatat(
             parent_fd,
@@ -157,6 +164,7 @@ fn entry_stat(parent_fd: libc::c_int, name: &CStr) -> io::Result<libc::stat> {
     if rc != 0 {
         return Err(last_errno());
     }
+    // SAFETY: the preceding fstatat returned 0, so `st` was initialized by the kernel before `assume_init()` reads it.
     Ok(unsafe { st.assume_init() })
 }
 
@@ -187,22 +195,27 @@ fn walk_dir(
     migrate: bool,
     leftovers: &mut u64,
 ) -> io::Result<()> {
+    // SAFETY: fd is a valid open descriptor in the caller's ownership (checked when it was opened); `dup` only aliases it for the duration of the call, and its own result is checked below before use.
     let dup_fd = unsafe { libc::dup(fd) };
     if dup_fd < 0 {
         return Err(last_errno());
     }
+    // SAFETY: dup_fd was checked >= 0 above; fdopendir takes ownership of dup_fd only on success (on failure we close it below, and the returned DIR* is checked for null before use.
     let dir = unsafe { libc::fdopendir(dup_fd) };
     if dir.is_null() {
         let err = last_errno();
+        // SAFETY: dup_fd was checked >= 0 above; fdopendir failed, so the fd is still owned by us, and must be closed to avoid a leak.
         unsafe { libc::close(dup_fd) };
         return Err(err);
     }
 
     loop {
         errno_clear();
+        // SAFETY: dir is a valid non-null DIR* from fdopendir above; errno was cleared before the call so a null result can be distinguished from end-of-stream, and the result is checked for null before dereference.
         let ent = unsafe { libc::readdir(dir) };
         if ent.is_null() {
             let err = last_errno();
+            // SAFETY: dir is a valid DIR* from fdopendir, and we stop reading before closing it, so no entry is dereferenced after the close.
             unsafe { libc::closedir(dir) };
             return if err.raw_os_error() == Some(0) {
                 Ok(())
@@ -210,6 +223,7 @@ fn walk_dir(
                 Err(err)
             };
         }
+        // SAFETY: ent is non-null (checked above); d_name is a NUL-terminated char array inside a valid dirent, guaranteed by readdir's contract; the CStr is used only within this iteration, before the next readdir or closedir.
         let name_c = unsafe { CStr::from_ptr((*ent).d_name.as_ptr()) };
         let name = name_c.to_bytes();
         if name == b"." || name == b".." {
@@ -227,6 +241,7 @@ fn walk_dir(
         if cfg.legacy_gids.contains(&st.st_gid) {
             if migrate {
                 let entry_path = path.join(std::ffi::OsStr::from_bytes(name));
+                // SAFETY: fd is a valid open directory descriptor; `name_owned` is a NUL-terminated `CString` valid for the call; the return value is checked for error before use.
                 let rc = unsafe {
                     libc::fchownat(
                         fd,
@@ -245,6 +260,7 @@ fn walk_dir(
             }
         }
         if is_dir(st.st_mode) {
+            // SAFETY: fd is a valid open directory descriptor; `name_owned` is a NUL-terminated `CString`; the returned fd is checked for < 0 before use, and later closed exactly once here.
             let child_fd = unsafe {
                 libc::openat(
                     fd,
@@ -261,6 +277,7 @@ fn walk_dir(
             }
             let child_path = path.join(std::ffi::OsStr::from_bytes(name));
             let result = walk_dir(child_fd, &child_path, cfg, migrate, leftovers);
+            // SAFETY: child_fd was checked >= 0 when opened above; walk_dir dups rather than consumes its descriptors, so it is still owned here, and closed exactly once after the recursive walk completes.
             unsafe { libc::close(child_fd) };
             result?;
         }
@@ -268,6 +285,7 @@ fn walk_dir(
 }
 
 fn errno_clear() {
+    // SAFETY: __errno_location() returns a valid pointer to the calling thread's errno, which is a plain int; writing 0 to it is always sound.
     unsafe {
         *libc::__errno_location() = 0;
     }
@@ -297,9 +315,11 @@ fn run(cfg: Config) -> io::Result<i32> {
     let root_fd = open_root(&cfg.root)?;
     if cfg.legacy_gids.contains(&gid_for_fd(root_fd)?) {
         let old_gid = gid_for_fd(root_fd)?;
+        // SAFETY: root_fd is a valid open directory fd from open_root (checked >= 0); the return value is checked for error before proceeding.
         let rc = unsafe { libc::fchown(root_fd, libc::uid_t::MAX, cfg.target_gid) };
         if rc != 0 {
             let err = last_errno();
+            // SAFETY: root_fd is a valid open descriptor (checked >= 0 at open_root), and is still owned by us on this error path, so it must be closed to avoid a leak.
             unsafe { libc::close(root_fd) };
             return Err(err);
         }
@@ -307,6 +327,7 @@ fn run(cfg: Config) -> io::Result<i32> {
     }
     let mut migration_leftovers = 0;
     let result = walk_dir(root_fd, &cfg.root, &cfg, true, &mut migration_leftovers);
+    // SAFETY: root_fd is a valid open descriptor from open_root; walk_dir dups rather than closes its arguments, so it is still owned here, and closed exactly once after the walk completes.
     unsafe { libc::close(root_fd) };
     result?;
 
@@ -333,6 +354,7 @@ fn scan_for_leftovers(cfg: &Config, leftovers: &mut u64) -> io::Result<()> {
         }
         walk_dir(root_fd, &cfg.root, cfg, false, leftovers)
     })();
+    // SAFETY: root_fd is a valid open descriptor from open_root; walk_dir dups rather than closes its arguments, so it is still owned here, and closed exactly once after the walk completes.
     unsafe { libc::close(root_fd) };
     result
 }

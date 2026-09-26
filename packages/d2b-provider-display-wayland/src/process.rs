@@ -3,6 +3,21 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+/// Closed failure set of the sealed display launch boundary.
+///
+/// The [`Display`](core::fmt::Display) message of each variant is the
+/// observable failure code; callers match the variant instead of the code
+/// text, so no caller ever depends on a string comparison.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum LaunchError {
+    /// The supplied session evidence cannot issue launch grants.
+    #[error("display-grant-session-invalid")]
+    SessionInvalid,
+    /// The requested role ticket violates the sealed launch contract.
+    #[error("display-launch-ticket-invalid")]
+    TicketInvalid,
+}
+
 /// Lifecycle evidence for one independently supervised worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkerState {
@@ -332,18 +347,23 @@ pub struct LaunchGrants {
 
 impl LaunchGrants {
     /// Issue grants bound to the authenticated controller generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaunchError::SessionInvalid`] when the session digest or one
+    /// of the reconnect, controller, and teardown generations is zero.
     pub fn issue_for_supervisor_with_controller_generation(
         session_digest: [u8; 32],
         reconnect_generation: u64,
         controller_generation: u64,
         teardown_generation: u64,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, LaunchError> {
         if reconnect_generation == 0
             || controller_generation == 0
             || teardown_generation == 0
             || session_digest == [0; 32]
         {
-            return Err("display-grant-session-invalid");
+            return Err(LaunchError::SessionInvalid);
         }
         Ok(
             Self::from_supervisor_for_session_with_frontend_and_controller(
@@ -399,7 +419,6 @@ impl LaunchGrants {
 
     /// Construct grants for both workers and one authenticated controller
     /// generation.
-    #[allow(dead_code)]
     pub(crate) const fn from_supervisor_for_session_with_frontend_and_controller(
         compositor: AttachmentGrantHandle,
         gpu: AttachmentGrantHandle,
@@ -673,7 +692,6 @@ impl ProcessObservation {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) const fn from_supervisor(
         proxy: WorkerState,
         frontend: WorkerState,
@@ -808,7 +826,7 @@ impl LaunchTicket {
         policy_generation: u64,
         identity_label: impl Into<String>,
         teardown_generation: u64,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, LaunchError> {
         Self::new_for_role_with_controller_generation(
             role,
             compositor_grant,
@@ -822,6 +840,12 @@ impl LaunchTicket {
 
     /// Construct one role-specific ticket with an authenticated controller
     /// generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaunchError::TicketInvalid`] when the policy digest is not a
+    /// sealed digest, the identity label is empty or too long, a generation is
+    /// zero, or the HostProxy role is missing its compositor grant.
     pub(crate) fn new_for_role_with_controller_generation(
         role: DisplayProcessRole,
         compositor_grant: Option<AttachmentGrantHandle>,
@@ -830,7 +854,7 @@ impl LaunchTicket {
         policy_generation: u64,
         identity_label: impl Into<String>,
         generations: LaunchGenerations,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, LaunchError> {
         let policy_digest = policy_digest.into();
         let identity_label = identity_label.into();
         if !policy_digest.starts_with("sha256:")
@@ -840,7 +864,7 @@ impl LaunchTicket {
             || generations.teardown == 0
             || (role == DisplayProcessRole::HostProxy && compositor_grant.is_none())
         {
-            return Err("display-launch-ticket-invalid");
+            return Err(LaunchError::TicketInvalid);
         }
         Ok(Self {
             role,
@@ -855,6 +879,12 @@ impl LaunchTicket {
     }
 
     /// Construct an opaque role ticket for daemon conformance tests.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaunchError::TicketInvalid`] for the same contract
+    /// violations rejected by
+    /// [`Self::new_for_role_with_controller_generation`].
     #[cfg(feature = "test-support")]
     pub fn new_for_daemon(
         role: DisplayProcessRole,
@@ -864,7 +894,7 @@ impl LaunchTicket {
         policy_generation: u64,
         identity_label: impl Into<String>,
         teardown_generation: u64,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, LaunchError> {
         Self::new_for_role(
             role,
             compositor_grant,

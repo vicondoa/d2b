@@ -15,7 +15,7 @@ use d2b_core_controller::{ResourceKey, ObservedChild, OwnerIndex, OwnerLimits};
 
 use crate::{
     adoption::ProcessAdoptionStatus,
-    bootstrap_graph::{BootstrapGraph, DependencyReadiness, GuestChildGraphPlan},
+    bootstrap_graph::{BootstrapGraph, DependencyReadiness, GuestChildGraphPlan, VmmReadinessSnapshot},
     descriptor::{
         GuestSetupDescriptor, GuestSetupDescriptorError, GuestSetupDescriptorVerifier,
         VerifiedGuestSetupDescriptor,
@@ -659,13 +659,13 @@ impl GuestDependencySnapshot {
         let devices_ready = self.devices_ready(graph);
         let networks_ready = self.networks_ready(graph);
         let volumes_ready = self.volumes_ready(graph);
-        let eligibility = graph.vmm_lifecycle(
+        let eligibility = graph.vmm_lifecycle(VmmReadinessSnapshot {
             devices_ready,
             networks_ready,
             volumes_ready,
-            self.bindings_ready(graph),
-            self.setup_ready,
-        );
+            bindings_ready: self.bindings_ready(graph),
+            setup_ready: self.setup_ready,
+        });
         let mut conditions = Vec::new();
         if !devices_ready {
             conditions.push(GuestCondition::DeviceDependencyNotReady);
@@ -1361,9 +1361,7 @@ where
     async fn assess_update(
         &self,
         guest: &GuestSnapshot,
-        children: &[OwnedChildSnapshot],
     ) -> Result<Option<UpgradeReason>, CloudHypervisorResourceApiError> {
-        let _ = children;
         match self
             .session
             .call(CloudHypervisorResourceRequest::AssessUpdate {
@@ -1571,7 +1569,6 @@ pub trait CloudHypervisorResourceApi: Send + Sync {
     async fn assess_update(
         &self,
         _guest: &GuestSnapshot,
-        _children: &[OwnedChildSnapshot],
     ) -> Result<Option<UpgradeReason>, CloudHypervisorResourceApiError> {
         Ok(None)
     }
@@ -1709,7 +1706,6 @@ struct StatusProjectionOptions<'a> {
 
 /// Cloud Hypervisor Guest controller.
 pub struct CloudHypervisorController<A> {
-    _config: crate::CloudHypervisorConfig,
     graph: BootstrapGraph,
     descriptor: VerifiedGuestSetupDescriptor,
     registration: CloudHypervisorControllerRegistration,
@@ -1719,7 +1715,6 @@ pub struct CloudHypervisorController<A> {
     pending_retired_child_uids: BTreeSet<(ZoneId, ResourceRef, ResourceUid)>,
     retired_child_uids: BTreeSet<(ZoneId, ResourceRef, ResourceUid)>,
     upgrade_progress: BTreeMap<ResourceUid, (UpgradeReason, usize)>,
-    observed_process_status: Option<ProcessAdoptionStatus>,
     lifecycle_intent: Option<DesiredLifecycle>,
 }
 
@@ -1741,7 +1736,6 @@ where
         let registration =
             CloudHypervisorControllerRegistration::from_verified_descriptor(&descriptor)?;
         Ok(Self {
-            _config: config,
             graph,
             descriptor,
             registration,
@@ -1751,7 +1745,6 @@ where
             pending_retired_child_uids: BTreeSet::new(),
             retired_child_uids: BTreeSet::new(),
             upgrade_progress: BTreeMap::new(),
-            observed_process_status: None,
             lifecycle_intent: None,
         })
     }
@@ -1808,7 +1801,7 @@ where
     pub fn private_runtime_scope(
         &self,
         guest: &GuestSnapshot,
-        role: &str,
+        role: ChildRole,
     ) -> Result<PrivateRuntimeScope, CloudHypervisorError> {
         derive_private_runtime_scope(
             guest.zone_uid(),
@@ -1857,7 +1850,6 @@ where
                 ),
             ));
         }
-        self.observed_process_status = None;
         let child_plan = BootstrapGraph::plan_children(
             guest.zone.clone(),
             guest.resource_ref.clone(),
@@ -1921,10 +1913,7 @@ where
                 .await;
         }
 
-        let upgrade_required = self
-            .api
-            .assess_update(&guest, &children.values().cloned().collect::<Vec<_>>())
-            .await
+        let upgrade_required = self.api.assess_update(&guest).await
             .inspect_err(|error| {
                 tracing::warn!(
                     zone = ?guest.zone,
@@ -2010,11 +1999,8 @@ where
                     );
                     lifecycle_conditions.push(GuestCondition::VmmProcessExited);
                     force_degraded = true;
-                    self.observed_process_status = Some(ProcessAdoptionStatus::Absent);
                 }
-                ProcessAdoptionStatus::Current | ProcessAdoptionStatus::Adopted => {
-                    self.observed_process_status = Some(ProcessAdoptionStatus::Current);
-                }
+                ProcessAdoptionStatus::Current | ProcessAdoptionStatus::Adopted => {}
             }
             if adoption_blocked {
                 let status = self.project_status(
@@ -2039,10 +2025,6 @@ where
                 return Ok(CloudHypervisorReconcileOutcome::from_status(status, false));
             }
         }
-        if self.observed_process_status.is_none() {
-            self.observed_process_status = Some(ProcessAdoptionStatus::Absent);
-        }
-
         let missing = expected_refs
             .iter()
             .filter(|target| !children.contains_key(*target))
@@ -2137,20 +2119,13 @@ where
                 }
             }
         }
-        let committed = BTreeMap::new();
-
         let desired_lifecycle = if dependency_readiness != DependencyReadiness::Ready {
             DesiredLifecycle::Stopped
         } else {
             self.lifecycle_intent.unwrap_or(DesiredLifecycle::Running)
         };
         match self
-            .repair_children(
-                child_plan.child_batch(),
-                &children,
-                &committed,
-                desired_lifecycle,
-            )
+            .repair_children(child_plan.child_batch(), &children, desired_lifecycle)
             .await
         {
             Ok(true) => {
@@ -2877,26 +2852,11 @@ where
         &self,
         batch: &GuestChildBatch,
         observed: &BTreeMap<ResourceRef, OwnedChildSnapshot>,
-        committed: &BTreeMap<ResourceRef, CommittedChild>,
         desired_lifecycle: DesiredLifecycle,
     ) -> Result<bool, CloudHypervisorError> {
         for mutation in batch.mutations() {
             let target = mutation.target();
             let Some(child) = observed.get(target) else {
-                if target.resource_type().as_str() == "Process"
-                    && desired_lifecycle == DesiredLifecycle::Running
-                    && let Some(identity) = committed.get(target)
-                {
-                    let update = ChildSpecUpdate::new(
-                        target.clone(),
-                        identity.uid().clone(),
-                        identity.revision(),
-                        mutation.body().clone(),
-                        Some(desired_lifecycle),
-                    )?;
-                    self.api.update_spec(update).await?;
-                    return Ok(true);
-                }
                 continue;
             };
             let lifecycle_drift = target.resource_type().as_str() == "Process"

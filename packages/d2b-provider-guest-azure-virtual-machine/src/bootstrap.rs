@@ -12,6 +12,11 @@ pub struct BootstrapPsk(Zeroizing<Vec<u8>>);
 
 impl BootstrapPsk {
     /// Construct a bounded PSK.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AzureVmError::InvalidConfiguration`] when the secret is
+    /// empty or exceeds the 8192-byte bound.
     pub fn from_bytes(bytes: impl Into<Vec<u8>>) -> Result<Self, AzureVmError> {
         let mut bytes = bytes.into();
         if bytes.is_empty() || bytes.len() > 8_192 {
@@ -22,6 +27,10 @@ impl BootstrapPsk {
     }
 
     /// Compare against a presented PSK without exposing it.
+    ///
+    /// The comparison is constant-time in the presented length: it walks
+    /// the longer of the two secrets with zero padding and never exits
+    /// early on a mismatch.
     pub fn matches(&self, presented: &[u8]) -> bool {
         let mut difference = self.0.len() ^ presented.len();
         let length = self.0.len().max(presented.len());
@@ -62,67 +71,106 @@ pub enum BootstrapAdmissionState {
 }
 
 /// A single-use bootstrap admission.
-pub struct BootstrapAdmission {
-    psk: Option<BootstrapPsk>,
-    expires_at_unix_ms: u64,
-    state: BootstrapAdmissionState,
+///
+/// The admission is one of three closed states: a `Pending` admission
+/// carries its secret and deadline; `Consumed` and `Expired` carry neither,
+/// so an expired or replayed admission cannot be constructed with a
+/// still-present secret.
+pub enum BootstrapAdmission {
+    /// The admission has not been consumed yet.
+    Pending {
+        /// The one-time secret held only during delivery.
+        psk: BootstrapPsk,
+        /// The deadline unix timestamp (milliseconds) after which the
+        /// admission refuses consumption.
+        expires_at_unix_ms: u64,
+    },
+    /// The admission has been consumed or exhausted by a failed attempt.
+    Consumed,
+    /// The admission refused consumption because its deadline elapsed.
+    Expired,
 }
 
 impl BootstrapAdmission {
     /// Create an admission record.
     pub fn new(psk: BootstrapPsk, expires_at_unix_ms: u64) -> Self {
-        Self {
-            psk: Some(psk),
+        Self::Pending {
+            psk,
             expires_at_unix_ms,
-            state: BootstrapAdmissionState::Pending,
         }
     }
 
-    /// Consume the PSK if the nonce is fresh and the deadline is valid.
+    /// Consume the PSK when the presented bytes match and the deadline is
+    /// valid. The admission becomes `Consumed` (or `Expired` when the
+    /// deadline elapsed) whether or not the PSK matches, so each admission
+    /// is single-use.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AzureVmError::BootstrapPskExpired`] when the deadline
+    /// elapsed, [`AzureVmError::BootstrapPskReplayed`] when the admission
+    /// was already consumed, and
+    /// [`AzureVmError::BootstrapEnrollmentFailed`] when the presented PSK
+    /// does not match.
     pub fn consume(
         &mut self,
         presented: &[u8],
         now_unix_ms: u64,
     ) -> Result<Zeroizing<Vec<u8>>, AzureVmError> {
-        if now_unix_ms >= self.expires_at_unix_ms {
-            tracing::warn!(
-                provider = "runtime-azure-virtual-machine",
-                "bootstrap PSK admission refused: admission expired"
-            );
-            self.state = BootstrapAdmissionState::Expired;
-            self.psk = None;
-            return Err(AzureVmError::BootstrapPskExpired);
+        match std::mem::replace(self, Self::Consumed) {
+            Self::Pending {
+                psk,
+                expires_at_unix_ms,
+            } => {
+                if now_unix_ms >= expires_at_unix_ms {
+                    tracing::warn!(
+                        provider = "runtime-azure-virtual-machine",
+                        "bootstrap PSK admission refused: admission expired"
+                    );
+                    *self = Self::Expired;
+                    return Err(AzureVmError::BootstrapPskExpired);
+                }
+                if !psk.matches(presented) {
+                    tracing::warn!(
+                        provider = "runtime-azure-virtual-machine",
+                        "bootstrap handshake failed: presented PSK does not match admission"
+                    );
+                    return Err(AzureVmError::BootstrapEnrollmentFailed);
+                }
+                Ok(psk.consume())
+            }
+            Self::Consumed => {
+                tracing::warn!(
+                    provider = "runtime-azure-virtual-machine",
+                    "bootstrap PSK admission refused: PSK replayed"
+                );
+                Err(AzureVmError::BootstrapPskReplayed)
+            }
+            Self::Expired => {
+                tracing::warn!(
+                    provider = "runtime-azure-virtual-machine",
+                    "bootstrap PSK admission refused: admission expired"
+                );
+                Err(AzureVmError::BootstrapPskExpired)
+            }
         }
-        let Some(psk) = self.psk.take() else {
-            tracing::warn!(
-                provider = "runtime-azure-virtual-machine",
-                "bootstrap PSK admission refused: PSK replayed"
-            );
-            self.state = BootstrapAdmissionState::Consumed;
-            return Err(AzureVmError::BootstrapPskReplayed);
-        };
-        if !psk.matches(presented) {
-            tracing::warn!(
-                provider = "runtime-azure-virtual-machine",
-                "bootstrap handshake failed: presented PSK does not match admission"
-            );
-            self.state = BootstrapAdmissionState::Consumed;
-            return Err(AzureVmError::BootstrapEnrollmentFailed);
-        }
-        self.state = BootstrapAdmissionState::Consumed;
-        Ok(psk.consume())
     }
 
     /// Return the current admission state.
     pub const fn state(&self) -> BootstrapAdmissionState {
-        self.state
+        match self {
+            Self::Pending { .. } => BootstrapAdmissionState::Pending,
+            Self::Consumed => BootstrapAdmissionState::Consumed,
+            Self::Expired => BootstrapAdmissionState::Expired,
+        }
     }
 }
 
 /// Bootstrap service session state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BootstrapServiceState {
     /// Waiting for one IKpsk2 enrollment.
+    #[default]
     Waiting,
     /// Enrollment completed and KK may be used.
     Enrolled,
@@ -131,16 +179,9 @@ pub enum BootstrapServiceState {
 }
 
 /// Gateway Guest bootstrap service.
+#[derive(Default)]
 pub struct BootstrapService {
     state: BootstrapServiceState,
-}
-
-impl Default for BootstrapService {
-    fn default() -> Self {
-        Self {
-            state: BootstrapServiceState::Waiting,
-        }
-    }
 }
 
 impl BootstrapService {

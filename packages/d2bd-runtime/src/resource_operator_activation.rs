@@ -124,24 +124,70 @@ impl Wave6ResourceSet {
     }
 }
 
+/// The operator-acceptance progression stage a dependency projection
+/// describes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Wave6DepStage {
+    /// The Volume backing is not ready yet; Network reconcile defers.
+    WaitingForVolume,
+    /// The Volume is ready but the Network is not; Guest reconcile defers.
+    WaitingForNetwork,
+    /// Volume and Network are ready; the Guest reconcile can proceed.
+    ReadyForGuest,
+    /// Every dependency is ready; the Guest is ready for adoption.
+    ReadyForAdoption,
+}
+
 /// Dependency state supplied to a provider reconcile boundary.
+///
+/// The acceptance progression is carried by [`Wave6DepStage`]; the readiness
+/// facts are private, so only the named constructors can build a projection
+/// and the impossible combinations cannot be represented.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Wave6Dependencies {
-    /// Whether Volume layout and backing are ready.
-    pub volume_ready: bool,
-    /// Whether Network realization is ready.
-    pub network_ready: bool,
-    /// Whether the Device TPM endpoint is ready.
-    pub device_tpm_ready: bool,
-    /// Whether the Guest process is ready.
-    pub guest_ready: bool,
-    /// Whether attachment realization is ready.
-    pub attachment_ready: bool,
+    stage: Wave6DepStage,
+    volume_ready: bool,
+    network_ready: bool,
+    device_tpm_ready: bool,
+    guest_ready: bool,
+    attachment_ready: bool,
 }
 
 impl Wave6Dependencies {
+    /// The acceptance progression stage this projection describes.
+    pub const fn stage(self) -> Wave6DepStage {
+        self.stage
+    }
+
+    /// Whether Volume layout and backing are ready.
+    pub const fn volume_ready(self) -> bool {
+        self.volume_ready
+    }
+
+    /// Whether Network realization is ready.
+    pub const fn network_ready(self) -> bool {
+        self.network_ready
+    }
+
+    /// Whether the Device TPM endpoint is ready.
+    pub const fn device_tpm_ready(self) -> bool {
+        self.device_tpm_ready
+    }
+
+    /// Whether the Guest process is ready.
+    pub const fn guest_ready(self) -> bool {
+        self.guest_ready
+    }
+
+    /// Whether attachment realization is ready.
+    pub const fn attachment_ready(self) -> bool {
+        self.attachment_ready
+    }
+
+    /// Network reconcile defers until the Volume backing is ready.
     pub const fn network_waiting_for_volume() -> Self {
         Self {
+            stage: Wave6DepStage::WaitingForVolume,
             volume_ready: false,
             network_ready: false,
             device_tpm_ready: true,
@@ -150,8 +196,10 @@ impl Wave6Dependencies {
         }
     }
 
+    /// Guest reconcile defers until the Network realization is ready.
     pub const fn guest_waiting_for_network() -> Self {
         Self {
+            stage: Wave6DepStage::WaitingForNetwork,
             volume_ready: true,
             network_ready: false,
             device_tpm_ready: true,
@@ -160,18 +208,22 @@ impl Wave6Dependencies {
         }
     }
 
+    /// Volume and Network are ready; the Guest reconcile can proceed.
     pub const fn network_ready_for_guest() -> Self {
         Self {
+            stage: Wave6DepStage::ReadyForGuest,
             volume_ready: true,
             network_ready: true,
             device_tpm_ready: true,
-            guest_ready: true,
-            attachment_ready: true,
+            guest_ready: false,
+            attachment_ready: false,
         }
     }
 
+    /// Every dependency is ready; the Guest is ready for adoption.
     pub const fn guest_ready_for_adoption() -> Self {
         Self {
+            stage: Wave6DepStage::ReadyForAdoption,
             volume_ready: true,
             network_ready: true,
             device_tpm_ready: true,

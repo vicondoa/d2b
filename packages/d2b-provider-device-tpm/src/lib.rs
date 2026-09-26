@@ -7,12 +7,10 @@
 
 #![deny(missing_docs)]
 
-mod migration;
 mod resource_controller;
 mod resource_effect;
 mod resources;
 mod runner;
-mod state;
 pub mod swtpm_argv;
 pub mod vocabulary;
 pub mod effects_service;
@@ -21,7 +19,6 @@ pub mod facets;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
-pub use migration::LegacyMigrationOutcome;
 pub use resource_controller::{
     TPM_MAX_REPAIR_INTERVAL_SECS, TPM_REPAIR_INTERVAL_SECS, TpmResourceController,
     TpmResourceControllerError, TpmResourceOutcome, TpmResourcePhase, TpmRunnerContract,
@@ -32,12 +29,10 @@ pub use resources::{
     build_swtpm_flush_spec, build_swtpm_process_spec, build_tpm_state_volume_resource,
     build_tpm_state_volume_spec,
 };
-pub use runner::{SwtpmArgvError, SwtpmSettings};
-pub use state::{
-    StateDirIntent, StateDirectoryToken, StateOwnerToken, TamperMarkerToken,
-};
+pub use runner::SwtpmSettings;
 pub use swtpm_argv::{
-    SwtpmArgvInput, SwtpmIoctlFlushInput, generate_swtpm_argv, generate_swtpm_ioctl_flush_argv,
+    SwtpmArgvError, SwtpmArgvInput, SwtpmIoctlFlushInput, generate_swtpm_argv,
+    generate_swtpm_ioctl_flush_argv,
 };
 
 /// Provider identity.

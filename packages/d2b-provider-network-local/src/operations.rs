@@ -372,6 +372,15 @@ fn kernel_bundle<'a>(ctx: &'a OperationCtx<'a>) -> Result<&'a BundleResolver, Op
         .ok_or_else(|| OperationFailure::new(KERNEL_SEAM_UNWIRED))
 }
 
+/// Map a trusted-bundle Network spec parse failure onto the family refusal
+/// surface, keeping the manifest-parse-error reason in the detail.
+fn intent_parse_failure(operation: &str, error: d2b_contracts::error::Error) -> OperationFailure {
+    OperationFailure::with_detail(
+        INTENT_MISMATCH,
+        format!("{operation}: trusted bundle Network spec parse failed: {error}"),
+    )
+}
+
 /// The exact Network effect provenance one request's identity tuple names.
 ///
 /// Mirrors the retired arms' provenance derivation: the complete admitted
@@ -395,8 +404,8 @@ fn network_provenance(
 /// The resolved bridge intent payload one bridge kernel invocation carries.
 fn resolved_bridge_payload(
     intent: &d2b_core::bundle_resolver::ResolvedBridgeIntent,
-) -> serde_json::Value {
-    serde_json::json!({
+) -> Result<serde_json::Value, OperationFailure> {
+    Ok(serde_json::json!({
         "intentId": intent.intent_id,
         "scopeLabel": intent.scope_label,
         "bridgeIfname": intent.bridge_ifname.as_str(),
@@ -405,9 +414,14 @@ fn resolved_bridge_payload(
         "multicastSnoopingDisabled": intent.multicast_snooping_disabled,
         "ipv6Suppressed": intent.ipv6_suppressed,
         "ipv4Address": intent.ipv4_address.as_ref().map(|cidr| cidr.as_str()),
-        "provenance": intent.provenance.as_ref().map(serde_json::to_value).transpose().ok().flatten(),
+        "provenance": intent.provenance.as_ref().map(serde_json::to_value).transpose().map_err(|error| {
+            OperationFailure::with_detail(
+                KERNEL_REFUSED,
+                format!("provenance serialization failed: {error}"),
+            )
+        })?,
         "ownershipMarker": intent.ownership_marker,
-    })
+    }))
 }
 
 /// The resolved route intent payload one apply-route kernel invocation
@@ -416,8 +430,8 @@ fn resolved_route_payload(
     intent: &d2b_core::bundle_resolver::ResolvedRouteIntent,
     provenance: &NetworkProvenance,
     destroy: bool,
-) -> serde_json::Value {
-    serde_json::json!({
+) -> Result<serde_json::Value, OperationFailure> {
+    Ok(serde_json::json!({
         "intentId": intent.intent_id,
         "routeSpec": intent.route_spec,
         "destination": intent.destination,
@@ -426,10 +440,15 @@ fn resolved_route_payload(
         "table": intent.table,
         "owned": intent.owned,
         "routeName": intent.route_name,
-        "provenance": serde_json::to_value(provenance).ok(),
+        "provenance": serde_json::to_value(provenance).map_err(|error| {
+            OperationFailure::with_detail(
+                KERNEL_REFUSED,
+                format!("provenance serialization failed: {error}"),
+            )
+        })?,
         "ownershipMarker": intent.ownership_marker,
         "destroy": destroy,
-    })
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -463,14 +482,14 @@ impl OperationHandler for ApplyNftablesHandler {
             &ctx,
             "apply-nftables",
             serde_json::json!({
-                "family": bundle.host.nftables.family,
-                "table": bundle.host.nftables.table,
+                "family": bundle.host().nftables.family,
+                "table": bundle.host().nftables.table,
                 "scriptBody": intent.script_body,
                 "ownershipId": intent.ownership_id,
                 "destroy": request.destroy,
                 "desiredHash": request.desired_hash,
-                "tableHashAfterApply": bundle.host.nftables.table_hash_after_apply,
-                "coexistencePolicy": bundle.host.firewall_coexistence_policy,
+                "tableHashAfterApply": bundle.host().nftables.table_hash_after_apply,
+                "coexistencePolicy": bundle.host().firewall_coexistence_policy,
             }),
             Vec::new(),
         )
@@ -508,6 +527,7 @@ impl OperationHandler for ApplyNftablesProjectionHandler {
                 request.bundle_nft_projection_intent_ref.as_str(),
                 &provenance,
             )
+            .map_err(|error| intent_parse_failure("ApplyNftablesProjection", error))?
             .ok_or_else(|| {
                 OperationFailure::with_detail(
                     INTENT_MISMATCH,
@@ -519,6 +539,7 @@ impl OperationHandler for ApplyNftablesProjectionHandler {
             })?;
         let marker = bundle
             .resolve_network_marker_intent(&intent.ownership_marker_intent_ref, &provenance)
+            .map_err(|error| intent_parse_failure("ApplyNftablesProjection", error))?
             .ok_or_else(|| {
                 OperationFailure::with_detail(
                     INTENT_MISMATCH,
@@ -636,6 +657,7 @@ impl OperationHandler for ApplyRouteHandler {
         );
         let intent = bundle
             .resolve_network_route_intent(request.bundle_route_intent_ref.as_str(), &provenance)
+            .map_err(|error| intent_parse_failure("ApplyRoute", error))?
             .ok_or_else(|| {
                 OperationFailure::with_detail(
                     INTENT_MISMATCH,
@@ -648,7 +670,7 @@ impl OperationHandler for ApplyRouteHandler {
         let reply = invoke_kernel_nested(
             &ctx,
             "apply-route",
-            resolved_route_payload(&intent, &provenance, request.destroy),
+            resolved_route_payload(&intent, &provenance, request.destroy)?,
             Vec::new(),
         )
         .await?;
@@ -681,6 +703,7 @@ impl OperationHandler for ApplySysctlHandler {
         );
         let intent = bundle
             .resolve_network_sysctl_intent(request.bundle_sysctl_intent_ref.as_str(), &provenance)
+            .map_err(|error| intent_parse_failure("ApplySysctl", error))?
             .ok_or_else(|| {
                 OperationFailure::with_detail(
                     INTENT_MISMATCH,
@@ -730,6 +753,7 @@ impl OperationHandler for CreateBridgeHandler {
         );
         let intent = bundle
             .resolve_network_bridge_intent(request.bundle_bridge_intent_ref.as_str(), &provenance)
+            .map_err(|error| intent_parse_failure("CreateBridge", error))?
             .ok_or_else(|| {
                 OperationFailure::with_detail(
                     INTENT_MISMATCH,
@@ -742,7 +766,7 @@ impl OperationHandler for CreateBridgeHandler {
         let reply = invoke_kernel_nested(
             &ctx,
             "create-bridge",
-            resolved_bridge_payload(&intent),
+            resolved_bridge_payload(&intent)?,
             Vec::new(),
         )
         .await?;
@@ -771,6 +795,7 @@ impl OperationHandler for DeleteBridgeHandler {
         );
         let intent = bundle
             .resolve_network_bridge_intent(request.bundle_bridge_intent_ref.as_str(), &provenance)
+            .map_err(|error| intent_parse_failure("DeleteBridge", error))?
             .ok_or_else(|| {
                 OperationFailure::with_detail(
                     INTENT_MISMATCH,
@@ -783,7 +808,7 @@ impl OperationHandler for DeleteBridgeHandler {
         let reply = invoke_kernel_nested(
             &ctx,
             "delete-bridge",
-            resolved_bridge_payload(&intent),
+            resolved_bridge_payload(&intent)?,
             Vec::new(),
         )
         .await?;
@@ -990,6 +1015,7 @@ impl OperationHandler for UpdateHostsFileHandler {
                         request.bundle_hosts_intent_ref.as_str(),
                         &provenance,
                     )
+                    .map_err(|error| intent_parse_failure("UpdateHostsFile", error))?
                     .ok_or_else(|| {
                         OperationFailure::with_detail(
                             INTENT_MISMATCH,

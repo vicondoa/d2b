@@ -27,13 +27,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use schemars::JsonSchema;
+use schemars::{JsonSchema, r#gen::SchemaGenerator};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::semantic_services::{
     LEGACY_ABSENT_PROTOCOL_VERSION, SEMANTIC_PROJECTION_PROTOCOL_VERSION,
     SemanticProjectionProtocolVersion,
 };
+use d2b_contracts::wire_deserialize;
 use d2b_contracts_resource::v3::{
     ArtifactId, ResourceRef, ResourceTypeName, SchemaFingerprint,
     execution_policy::{
@@ -247,6 +248,12 @@ pub struct BinaryRef(String);
 
 impl BinaryRef {
     /// Parse a `^[a-z][a-z0-9-]*$` binary reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderContractError::InvalidPrimitive`] when the value is
+    /// empty, longer than [`MAX_BINARY_REF_BYTES`], or does not match the
+    /// grammar.
     pub fn parse(value: impl Into<String>) -> Result<Self, ProviderContractError> {
         let value = value.into();
         if value.is_empty() || value.len() > MAX_BINARY_REF_BYTES {
@@ -354,19 +361,17 @@ impl ProviderSpec {
 
 redacted_debug!(ProviderSpec);
 
-impl<'de> Deserialize<'de> for ProviderSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            artifact_id: ArtifactId,
-            #[serde(default)]
-            config: CanonicalJsonObject,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Ok(Self::new(wire.artifact_id, wire.config))
-    }
-}
+wire_deserialize!(
+    ProviderSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        artifact_id: ArtifactId,
+        #[serde(default)]
+        config: CanonicalJsonObject,
+    },
+    wire,
+    Ok(Self::new(wire.artifact_id, wire.config))
+);
 
 /// Whether a signature over the artifact verified.
 #[derive(
@@ -478,6 +483,11 @@ redacted_debug!(TrustEvidence);
 
 impl TrustEvidence {
     /// Decide production admission, fail-closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderContractError::TrustNotEstablished`] when any
+    /// trust, signature, revocation, or policy evaluation does not admit.
     pub fn admit(&self) -> Result<(), ProviderContractError> {
         let admitted = self.publisher_trusted
             && self.signature == SignatureState::Valid
@@ -548,33 +558,13 @@ impl CompatibilityRange {
     /// state schema major must be exact and the installed minor must not be
     /// newer than this artifact's.
     pub fn admits_state(&self, installed: SchemaVersion) -> Result<(), ProviderContractError> {
-        let (installed_major, installed_minor) = schema_version_parts(installed);
-        let (artifact_major, artifact_minor) = schema_version_parts(self.state_schema_version);
-        if installed_major != artifact_major || installed_minor > artifact_minor {
+        if installed.major() != self.state_schema_version.major()
+            || installed.minor() > self.state_schema_version.minor()
+        {
             return Err(ProviderContractError::StateSchemaIncompatible);
         }
         Ok(())
     }
-}
-
-/// Split a canonical `MAJOR.MINOR` schema version into its two components.
-///
-/// `SchemaVersion` exposes no component accessor, and its canonical string
-/// is the contract's own round-trip spelling, so parsing that spelling back
-/// is exact rather than lossy.
-fn schema_version_parts(version: SchemaVersion) -> (u32, u32) {
-    let rendered = version.to_canonical_string();
-    let (major, minor) = rendered
-        .split_once('.')
-        .expect("a canonical schema version always carries one separator");
-    (
-        major
-            .parse()
-            .expect("a canonical schema version major is numeric"),
-        minor
-            .parse()
-            .expect("a canonical schema version minor is numeric"),
-    )
 }
 
 /// The closed Provider component type set.
@@ -699,25 +689,23 @@ impl core::fmt::Debug for ComponentTargetCapability {
     }
 }
 
-impl<'de> Deserialize<'de> for ComponentTargetCapability {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            target_kind: ControllerTargetKind,
-            artifact_digest: ArtifactDigest,
-            #[serde(default)]
-            required_effect_classes: BTreeSet<EffectPortClass>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.target_kind,
-            wire.artifact_digest,
-            wire.required_effect_classes,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ComponentTargetCapability,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        target_kind: ControllerTargetKind,
+        artifact_digest: ArtifactDigest,
+        #[serde(default)]
+        required_effect_classes: BTreeSet<EffectPortClass>,
+    },
+    wire,
+    Self::new(
+        wire.target_kind,
+        wire.artifact_digest,
+        wire.required_effect_classes,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// Shared daemon and broker artifacts selected for one target kind.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -770,20 +758,18 @@ impl core::fmt::Debug for TargetRuntimeArtifacts {
     }
 }
 
-impl<'de> Deserialize<'de> for TargetRuntimeArtifacts {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            target_kind: ControllerTargetKind,
-            d2bd_digest: ArtifactDigest,
-            broker_digest: ArtifactDigest,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.target_kind, wire.d2bd_digest, wire.broker_digest)
-            .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    TargetRuntimeArtifacts,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        target_kind: ControllerTargetKind,
+        d2bd_digest: ArtifactDigest,
+        broker_digest: ArtifactDigest,
+    },
+    wire,
+    Self::new(wire.target_kind, wire.d2bd_digest, wire.broker_digest)
+        .map_err(serde::de::Error::custom)
+);
 
 /// The closed dependency alias set a manifest may declare.
 ///
@@ -972,20 +958,17 @@ impl core::fmt::Debug for ComponentStateView {
     }
 }
 
-impl<'de> Deserialize<'de> for ComponentStateView {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            path: String,
-            rights: Vec<ViewRight>,
-        }
-
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.path, wire.rights).map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ComponentStateView,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default)]
+        path: String,
+        rights: Vec<ViewRight>,
+    },
+    wire,
+    Self::new(wire.path, wire.rights).map_err(serde::de::Error::custom)
+);
 
 /// One state Volume namespace signed into a component descriptor.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -1208,50 +1191,47 @@ impl core::fmt::Debug for ComponentStateNamespace {
     }
 }
 
-impl<'de> Deserialize<'de> for ComponentStateNamespace {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            id: BoundedToken,
-            kind: ComponentStateKind,
-            schema_id: VolumeStateSchemaId,
-            schema_version: SchemaVersion,
-            schema_digest: SchemaFingerprint,
-            persistence_class: PersistenceClass,
-            sensitivity_class: SensitivityClass,
-            migration_policy: MigrationPolicy,
-            quota_bytes: u64,
-            #[serde(default)]
-            storage_need: Option<StorageNeed>,
-            sealing_required: bool,
-            #[serde(default)]
-            placement_mode: Option<StatePlacementMode>,
-            #[serde(default)]
-            host_custody_permitted: bool,
-            views: BTreeMap<String, ComponentStateView>,
-        }
-
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.id,
-            wire.kind,
-            wire.schema_id,
-            wire.schema_version,
-            wire.schema_digest,
-            wire.persistence_class,
-            wire.sensitivity_class,
-            wire.migration_policy,
-            wire.quota_bytes,
-            wire.storage_need,
-            wire.sealing_required,
-            wire.placement_mode,
-            wire.host_custody_permitted,
-            wire.views,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ComponentStateNamespace,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        id: BoundedToken,
+        kind: ComponentStateKind,
+        schema_id: VolumeStateSchemaId,
+        schema_version: SchemaVersion,
+        schema_digest: SchemaFingerprint,
+        persistence_class: PersistenceClass,
+        sensitivity_class: SensitivityClass,
+        migration_policy: MigrationPolicy,
+        quota_bytes: u64,
+        #[serde(default)]
+        storage_need: Option<StorageNeed>,
+        sealing_required: bool,
+        #[serde(default)]
+        placement_mode: Option<StatePlacementMode>,
+        #[serde(default)]
+        host_custody_permitted: bool,
+        views: BTreeMap<String, ComponentStateView>,
+    },
+    wire,
+    Self::new(
+        wire.id,
+        wire.kind,
+        wire.schema_id,
+        wire.schema_version,
+        wire.schema_digest,
+        wire.persistence_class,
+        wire.sensitivity_class,
+        wire.migration_policy,
+        wire.quota_bytes,
+        wire.storage_need,
+        wire.sealing_required,
+        wire.placement_mode,
+        wire.host_custody_permitted,
+        wire.views,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// One declared dependency on an alias.
 ///
@@ -1306,18 +1286,38 @@ impl core::fmt::Debug for ComponentExecution {
     }
 }
 
-#[derive(Clone, Default, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ComponentExecutionWire {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    binary_ref: Option<BinaryRef>,
+impl Serialize for ComponentExecution {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(1))?;
+        if let Self::Launchable { binary_ref } = self {
+            map.serialize_entry("binaryRef", binary_ref)?;
+        }
+        map.end()
+    }
 }
 
-impl From<&ComponentExecution> for ComponentExecutionWire {
-    fn from(execution: &ComponentExecution) -> Self {
-        Self {
-            binary_ref: execution.binary_ref().cloned(),
-        }
+impl JsonSchema for ComponentExecution {
+    fn schema_name() -> String {
+        "ComponentExecution".to_owned()
+    }
+
+    fn json_schema(_gen: &mut SchemaGenerator) -> schemars::schema::Schema {
+        let mut properties = schemars::Map::new();
+        properties.insert(
+            "binaryRef".to_owned(),
+            _gen.subschema_for::<Option<BinaryRef>>(),
+        );
+        let validation = schemars::schema::ObjectValidation {
+            properties,
+            ..Default::default()
+        };
+        let object = schemars::schema::SchemaObject {
+            instance_type: Some(schemars::schema::InstanceType::Object.into()),
+            object: Some(Box::new(validation)),
+            ..Default::default()
+        };
+        object.into()
     }
 }
 
@@ -1330,8 +1330,6 @@ impl From<&ComponentExecution> for ComponentExecutionWire {
 #[serde(rename_all = "camelCase")]
 pub struct ComponentDescriptor {
     #[serde(flatten)]
-    execution_wire: ComponentExecutionWire,
-    #[serde(skip)]
     execution: ComponentExecution,
     component_id: BoundedToken,
     component_type: ComponentType,
@@ -1363,11 +1361,7 @@ impl ComponentDescriptor {
         cardinality: u32,
         config_digest: ArtifactDigest,
         dependencies: impl IntoIterator<Item = DependencyDeclaration>,
-        declares_state_volume: bool,
     ) -> Result<Self, ProviderContractError> {
-        if declares_state_volume {
-            return Err(ProviderContractError::MissingRequiredField);
-        }
         let exported_resource_types: BTreeSet<_> = exported_resource_types.into_iter().collect();
         let exported_methods: BTreeSet<_> = exported_methods.into_iter().collect();
         let allowed_domains: BTreeSet<_> = allowed_domains.into_iter().collect();
@@ -1416,7 +1410,6 @@ impl ComponentDescriptor {
         }
         Ok(Self {
             execution: ComponentExecution::InProcessBootstrap,
-            execution_wire: ComponentExecutionWire::default(),
             component_id,
             component_type,
             exported_resource_types,
@@ -1428,14 +1421,13 @@ impl ComponentDescriptor {
             target_capabilities: Vec::new(),
             config_digest,
             dependencies: dependency_set,
-            declares_state_volume,
+            declares_state_volume: false,
             state_namespaces: Vec::new(),
         })
     }
 
     /// Set the execution mode encoded by the signed descriptor.
     pub fn with_execution(mut self, execution: ComponentExecution) -> Self {
-        self.execution_wire = ComponentExecutionWire::from(&execution);
         self.execution = execution;
         self
     }
@@ -1454,9 +1446,9 @@ impl ComponentDescriptor {
         if state_namespaces.is_empty() && self.declares_state_volume {
             return Err(ProviderContractError::MissingRequiredField);
         }
-        let mut ids = BTreeSet::new();
+        let mut ids: BTreeSet<&BoundedToken> = BTreeSet::new();
         for namespace in &state_namespaces {
-            if !ids.insert(namespace.id().clone()) {
+            if !ids.insert(namespace.id()) {
                 return Err(ProviderContractError::DuplicateDeclaration);
             }
         }
@@ -1666,36 +1658,36 @@ impl core::fmt::Debug for ComponentDescriptor {
     }
 }
 
-impl<'de> Deserialize<'de> for ComponentDescriptor {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            binary_ref: Option<BinaryRef>,
-            component_id: BoundedToken,
-            component_type: ComponentType,
-            #[serde(default)]
-            exported_resource_types: BTreeSet<ResourceTypeName>,
-            #[serde(default)]
-            exported_methods: BTreeSet<BoundedToken>,
-            allowed_domains: BTreeSet<ExecutionDomain>,
-            cardinality: u32,
-            #[serde(default)]
-            instance_scope: Option<ControllerInstanceScope>,
-            #[serde(default)]
-            supported_target_kinds: BTreeSet<ControllerTargetKind>,
-            #[serde(default)]
-            target_capabilities: Vec<ComponentTargetCapability>,
-            config_digest: ArtifactDigest,
-            #[serde(default)]
-            dependencies: BTreeSet<DependencyDeclaration>,
-            #[serde(default)]
-            declares_state_volume: bool,
-            #[serde(default)]
-            state_namespaces: Vec<ComponentStateNamespace>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
+wire_deserialize!(
+    ComponentDescriptor,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default)]
+        binary_ref: Option<BinaryRef>,
+        component_id: BoundedToken,
+        component_type: ComponentType,
+        #[serde(default)]
+        exported_resource_types: BTreeSet<ResourceTypeName>,
+        #[serde(default)]
+        exported_methods: BTreeSet<BoundedToken>,
+        allowed_domains: BTreeSet<ExecutionDomain>,
+        cardinality: u32,
+        #[serde(default)]
+        instance_scope: Option<ControllerInstanceScope>,
+        #[serde(default)]
+        supported_target_kinds: BTreeSet<ControllerTargetKind>,
+        #[serde(default)]
+        target_capabilities: Vec<ComponentTargetCapability>,
+        config_digest: ArtifactDigest,
+        #[serde(default)]
+        dependencies: BTreeSet<DependencyDeclaration>,
+        #[serde(default)]
+        declares_state_volume: bool,
+        #[serde(default)]
+        state_namespaces: Vec<ComponentStateNamespace>,
+    },
+    wire,
+    {
         let execution = match wire.binary_ref {
             Some(binary_ref) => ComponentExecution::Launchable { binary_ref },
             None => ComponentExecution::InProcessBootstrap,
@@ -1717,7 +1709,6 @@ impl<'de> Deserialize<'de> for ComponentDescriptor {
             wire.cardinality,
             wire.config_digest,
             wire.dependencies,
-            false,
         )
         .map(|descriptor| descriptor.with_execution(execution))
         .and_then(|descriptor| {
@@ -1733,7 +1724,7 @@ impl<'de> Deserialize<'de> for ComponentDescriptor {
         .and_then(|descriptor| descriptor.with_state_namespaces(wire.state_namespaces))
         .map_err(serde::de::Error::custom)
     }
-}
+);
 
 /// Whether a Provider supports one optional base capability.
 #[derive(
@@ -2021,40 +2012,38 @@ impl core::fmt::Debug for ResourceApiBinding {
     }
 }
 
-impl<'de> Deserialize<'de> for ResourceApiBinding {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            resource_type: ResourceTypeName,
-            #[serde(default)]
-            placement_anchor: Option<PlacementAnchor>,
-            base_spec_version: SchemaVersion,
-            base_spec_fingerprint: SchemaFingerprint,
-            base_status_version: SchemaVersion,
-            base_status_fingerprint: SchemaFingerprint,
-            #[serde(default)]
-            capability_matrix: StandardCapabilityMatrix,
-            #[serde(default)]
-            spec_extension: Option<ExtensionSchemaRegistration>,
-            #[serde(default)]
-            status_extension: Option<ExtensionSchemaRegistration>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new_inner(
-            wire.resource_type,
-            wire.placement_anchor,
-            wire.base_spec_version,
-            wire.base_spec_fingerprint,
-            wire.base_status_version,
-            wire.base_status_fingerprint,
-            wire.capability_matrix,
-            wire.spec_extension,
-            wire.status_extension,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ResourceApiBinding,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        resource_type: ResourceTypeName,
+        #[serde(default)]
+        placement_anchor: Option<PlacementAnchor>,
+        base_spec_version: SchemaVersion,
+        base_spec_fingerprint: SchemaFingerprint,
+        base_status_version: SchemaVersion,
+        base_status_fingerprint: SchemaFingerprint,
+        #[serde(default)]
+        capability_matrix: StandardCapabilityMatrix,
+        #[serde(default)]
+        spec_extension: Option<ExtensionSchemaRegistration>,
+        #[serde(default)]
+        status_extension: Option<ExtensionSchemaRegistration>,
+    },
+    wire,
+    Self::new_inner(
+        wire.resource_type,
+        wire.placement_anchor,
+        wire.base_spec_version,
+        wire.base_spec_fingerprint,
+        wire.base_status_version,
+        wire.base_status_fingerprint,
+        wire.capability_matrix,
+        wire.spec_extension,
+        wire.status_extension,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// Whether a capability may leave its Zone, and how.
 #[derive(
@@ -2283,35 +2272,33 @@ fn legacy_absent_protocol_version() -> SemanticProjectionProtocolVersion {
         .expect("the legacy protocol version constant is valid")
 }
 
-impl<'de> Deserialize<'de> for ProjectionFactory {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            service_type: ResourceTypeName,
-            binding_type: ResourceTypeName,
-            #[serde(default = "legacy_absent_protocol_version")]
-            projection_protocol_version: SemanticProjectionProtocolVersion,
-            allowed_backing_ref_types: BTreeSet<ResourceTypeName>,
-            allowed_binding_target_ref_types: BTreeSet<BindingTargetType>,
-            projection_schema_fingerprint: SchemaFingerprint,
-            factory_fingerprint: SchemaFingerprint,
-            exportability: Exportability,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new_with_protocol_version(
-            wire.service_type,
-            wire.binding_type,
-            wire.projection_protocol_version,
-            wire.allowed_backing_ref_types,
-            wire.allowed_binding_target_ref_types,
-            wire.projection_schema_fingerprint,
-            wire.factory_fingerprint,
-            wire.exportability,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ProjectionFactory,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        service_type: ResourceTypeName,
+        binding_type: ResourceTypeName,
+        #[serde(default = "legacy_absent_protocol_version")]
+        projection_protocol_version: SemanticProjectionProtocolVersion,
+        allowed_backing_ref_types: BTreeSet<ResourceTypeName>,
+        allowed_binding_target_ref_types: BTreeSet<BindingTargetType>,
+        projection_schema_fingerprint: SchemaFingerprint,
+        factory_fingerprint: SchemaFingerprint,
+        exportability: Exportability,
+    },
+    wire,
+    Self::new_with_protocol_version(
+        wire.service_type,
+        wire.binding_type,
+        wire.projection_protocol_version,
+        wire.allowed_backing_ref_types,
+        wire.allowed_binding_target_ref_types,
+        wire.projection_schema_fingerprint,
+        wire.factory_fingerprint,
+        wire.exportability,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 fn admit_projection_factory(
     factory: &ProjectionFactory,
@@ -2357,7 +2344,7 @@ pub enum UpgradeDisposition {
 }
 
 /// The upgrade, drain, and restart policy a Provider manifest declares.
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpgradePolicy {
     /// Whether components are drained before an upgrade recycles them.
@@ -2369,16 +2356,6 @@ pub struct UpgradePolicy {
     /// TPM identity, recycling only realization and owned ephemeral
     /// Processes.
     pub preserves_durable_state: bool,
-}
-
-impl core::fmt::Debug for UpgradePolicy {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("UpgradePolicy")
-            .field("drain_before_upgrade", &self.drain_before_upgrade)
-            .field("max_automatic_disposition", &self.max_automatic_disposition)
-            .field("preserves_durable_state", &self.preserves_durable_state)
-            .finish()
-    }
 }
 
 /// The signed manifest and catalog entry one `artifactId` selects.
@@ -2429,30 +2406,30 @@ impl ProviderManifest {
         {
             return Err(ProviderContractError::BoundExceeded);
         }
-        let mut component_ids = BTreeSet::new();
-        let mut owned_types = BTreeSet::new();
+        let mut component_ids: BTreeSet<&BoundedToken> = BTreeSet::new();
+        let mut owned_types: BTreeSet<&ResourceTypeName> = BTreeSet::new();
         for component in &components {
             if component.declares_state_volume() == component.state_namespaces().is_empty() {
                 return Err(ProviderContractError::MissingRequiredField);
             }
-            if !component_ids.insert(component.component_id().clone()) {
+            if !component_ids.insert(component.component_id()) {
                 return Err(ProviderContractError::DuplicateDeclaration);
             }
             for resource_type in component.exported_resource_types() {
                 // "The same ResourceType is declared once." Several
                 // controller instances may run under different Hosts,
                 // Guests, or domains, but not under duplicate schemas.
-                if !owned_types.insert(resource_type.clone()) {
+                if !owned_types.insert(resource_type) {
                     return Err(ProviderContractError::DuplicateDeclaration);
                 }
             }
         }
-        let mut bound_types = BTreeSet::new();
+        let mut bound_types: BTreeSet<&ResourceTypeName> = BTreeSet::new();
         for binding in &api_bindings {
             if binding.placement_anchor().is_none() {
                 return Err(ProviderContractError::PlacementAnchorMissing);
             }
-            if !bound_types.insert(binding.resource_type().clone()) {
+            if !bound_types.insert(binding.resource_type()) {
                 return Err(ProviderContractError::DuplicateDeclaration);
             }
             if !owned_types.contains(binding.resource_type()) {
@@ -2495,14 +2472,13 @@ impl ProviderManifest {
 
     /// Validate the shared Host and Guest daemon/broker artifact declarations.
     pub fn validate_runtime_artifacts(
-        entries: impl IntoIterator<Item = TargetRuntimeArtifacts>,
+        entries: &[TargetRuntimeArtifacts],
     ) -> Result<(), ProviderContractError> {
-        let entries: Vec<_> = entries.into_iter().collect();
         if entries.len() > 3 {
             return Err(ProviderContractError::BoundExceeded);
         }
         let mut seen = BTreeSet::new();
-        for entry in &entries {
+        for entry in entries {
             if !seen.insert(entry.target_kind()) {
                 return Err(ProviderContractError::DuplicateDeclaration);
             }
@@ -2528,7 +2504,7 @@ impl ProviderManifest {
         entries: impl IntoIterator<Item = TargetRuntimeArtifacts>,
     ) -> Result<Self, ProviderContractError> {
         let mut entries: Vec<_> = entries.into_iter().collect();
-        Self::validate_runtime_artifacts(entries.clone())?;
+        Self::validate_runtime_artifacts(&entries)?;
         entries.sort_by_key(TargetRuntimeArtifacts::target_kind);
         self.runtime_artifacts = entries;
         Ok(self)
@@ -2577,7 +2553,7 @@ impl ProviderManifest {
                 }
             }
         }
-        Self::validate_runtime_artifacts(self.runtime_artifacts.clone())?;
+        Self::validate_runtime_artifacts(&self.runtime_artifacts)?;
         for target in required_targets {
             if !self
                 .runtime_artifacts
@@ -2707,39 +2683,37 @@ impl core::fmt::Debug for ProviderManifest {
     }
 }
 
-impl<'de> Deserialize<'de> for ProviderManifest {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            artifact_id: ArtifactId,
-            digests: ArtifactDigestSet,
-            trust: TrustEvidence,
-            compatibility: CompatibilityRange,
-            components: Vec<ComponentDescriptor>,
-            #[serde(default)]
-            api_bindings: Vec<ResourceApiBinding>,
-            #[serde(default)]
-            projection_factories: Vec<ProjectionFactory>,
-            #[serde(default)]
-            runtime_artifacts: Vec<TargetRuntimeArtifacts>,
-            upgrade_policy: UpgradePolicy,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.artifact_id,
-            wire.digests,
-            wire.trust,
-            wire.compatibility,
-            wire.components,
-            wire.api_bindings,
-            wire.projection_factories,
-            wire.upgrade_policy,
-        )
-        .and_then(|manifest| manifest.with_target_runtime_artifacts(wire.runtime_artifacts))
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ProviderManifest,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        artifact_id: ArtifactId,
+        digests: ArtifactDigestSet,
+        trust: TrustEvidence,
+        compatibility: CompatibilityRange,
+        components: Vec<ComponentDescriptor>,
+        #[serde(default)]
+        api_bindings: Vec<ResourceApiBinding>,
+        #[serde(default)]
+        projection_factories: Vec<ProjectionFactory>,
+        #[serde(default)]
+        runtime_artifacts: Vec<TargetRuntimeArtifacts>,
+        upgrade_policy: UpgradePolicy,
+    },
+    wire,
+    Self::new(
+        wire.artifact_id,
+        wire.digests,
+        wire.trust,
+        wire.compatibility,
+        wire.components,
+        wire.api_bindings,
+        wire.projection_factories,
+        wire.upgrade_policy,
+    )
+    .and_then(|manifest| manifest.with_target_runtime_artifacts(wire.runtime_artifacts))
+    .map_err(serde::de::Error::custom)
+);
 
 /// A Provider method identifier the specification itself names.
 ///
@@ -2877,7 +2851,6 @@ mod tests {
                 alias: DependencyAlias::Volume,
                 required: true,
             }],
-            false,
         )
         .unwrap()
         .with_execution(ComponentExecution::Launchable {
@@ -3067,7 +3040,6 @@ mod tests {
             1,
             ArtifactDigest::parse(DIGEST_A).unwrap(),
             [],
-            false,
         )
         .unwrap();
         let controller = controller
@@ -3128,7 +3100,6 @@ mod tests {
             32,
             ArtifactDigest::parse(DIGEST_A).unwrap(),
             [],
-            false,
         )
         .unwrap()
         .with_execution(ComponentExecution::Launchable {
@@ -3221,7 +3192,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            ProviderManifest::validate_runtime_artifacts([host, guest]),
+            ProviderManifest::validate_runtime_artifacts(&[host, guest]),
             Err(ProviderContractError::SharedRuntimeArtifactMismatch)
         );
     }
@@ -3453,24 +3424,6 @@ mod tests {
 
     #[test]
     fn declared_state_volume_requires_at_least_one_namespace() {
-        assert_eq!(
-            ComponentDescriptor::new(
-                BoundedToken::parse("volume-controller").unwrap(),
-                ComponentType::Controller,
-                [ResourceTypeName::parse("Volume").unwrap()],
-                [BoundedToken::parse("assess-update").unwrap()],
-                [ExecutionDomain::System],
-                1,
-                ArtifactDigest::parse(DIGEST_B).unwrap(),
-                [DependencyDeclaration {
-                    alias: DependencyAlias::Volume,
-                    required: true,
-                }],
-                true,
-            ),
-            Err(ProviderContractError::MissingRequiredField)
-        );
-
         let mut descriptor = controller();
         descriptor.declares_state_volume = true;
         assert_eq!(
@@ -3769,7 +3722,6 @@ mod tests {
                 4,
                 ArtifactDigest::parse(DIGEST_A).unwrap(),
                 dependencies,
-                false,
             )
         };
         assert!(worker(vec![], vec![]).is_ok());
@@ -3797,7 +3749,6 @@ mod tests {
                 1,
                 ArtifactDigest::parse(DIGEST_A).unwrap(),
                 [],
-                false,
             ),
             Err(ProviderContractError::ConflictingFields)
         );
@@ -3811,7 +3762,6 @@ mod tests {
                 1,
                 ArtifactDigest::parse(DIGEST_A).unwrap(),
                 [],
-                false,
             ),
             Err(ProviderContractError::MissingRequiredField)
         );
@@ -3829,7 +3779,6 @@ mod tests {
                 u32::MAX,
                 ArtifactDigest::parse(DIGEST_A).unwrap(),
                 [],
-                false,
             ),
             Err(ProviderContractError::BoundExceeded)
         );
@@ -4153,7 +4102,6 @@ mod tests {
             1,
             ArtifactDigest::parse(DIGEST_A).unwrap(),
             [],
-            false,
         )
         .unwrap();
         let duplicate_controller = duplicate_controller
@@ -4359,5 +4307,20 @@ mod tests {
         let component = format!("{:?}", controller());
         assert!(!component.contains("volume-controller"));
         assert!(!component.contains("sha256:"));
+    }
+
+    #[test]
+    fn execution_mode_round_trips_through_the_flat_binary_ref_field() {
+        for execution in [
+            ComponentExecution::InProcessBootstrap,
+            ComponentExecution::Launchable {
+                binary_ref: BinaryRef::parse("volume-controller").unwrap(),
+            },
+        ] {
+            let descriptor = controller().with_execution(execution.clone());
+            let wire = serde_json::to_value(&descriptor).unwrap();
+            let round_tripped = serde_json::from_value::<ComponentDescriptor>(wire).unwrap();
+            assert_eq!(round_tripped.execution(), &execution);
+        }
     }
 }

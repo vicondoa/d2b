@@ -13,6 +13,7 @@ use super::{
     identity::{SchemaFingerprint, Timestamp},
     resource_schema::{CanonicalJsonError, SchemaVersion, canonical_json_bytes},
 };
+use d2b_contracts::wire_deserialize;
 
 /// Largest component generation retained from the atomic-state contract.
 pub const MAX_STATE_GENERATION: u64 = 9_007_199_254_740_991;
@@ -135,7 +136,7 @@ impl StateDigest {
     /// Parse exactly `sha256:<64 lower-case hex>`.
     pub fn parse(value: impl Into<String>) -> Result<Self, VolumeStateError> {
         let value = value.into();
-        SchemaFingerprint::parse(value.clone()).map_err(|_| VolumeStateError::CanonicalJson)?;
+        SchemaFingerprint::parse(value.as_str()).map_err(|_| VolumeStateError::CanonicalJson)?;
         Ok(Self(value))
     }
 
@@ -376,19 +377,16 @@ impl core::fmt::Debug for QuotaUsage {
     }
 }
 
-impl<'de> Deserialize<'de> for QuotaUsage {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            used_bytes: u64,
-            inode_count: u64,
-        }
-
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.used_bytes, wire.inode_count).map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    QuotaUsage,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        used_bytes: u64,
+        inode_count: u64,
+    },
+    wire,
+    Self::new(wire.used_bytes, wire.inode_count).map_err(serde::de::Error::custom)
+);
 
 /// Provider-owned Volume status extension for payload state.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

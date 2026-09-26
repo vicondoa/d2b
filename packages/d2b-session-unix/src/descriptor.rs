@@ -19,6 +19,8 @@ use rustix::{
 };
 use std::{fmt, sync::Arc};
 
+/// Kernel-verified peer credentials of one socket peer, captured at
+/// accept or first packet.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PeerCredentials(UCred);
 

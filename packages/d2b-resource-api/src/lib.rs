@@ -6,7 +6,7 @@
 pub mod adapter;
 mod admission;
 pub mod authz;
-pub mod client;
+mod client;
 pub mod error;
 pub mod generated;
 mod identity;
@@ -16,12 +16,11 @@ mod store;
 pub mod watch;
 
 pub use adapter::{
-    AdapterBindingError, RESOURCE_API_REACHABILITY, ResourceApiReachability, ResourceBusAdapter,
-    ScopedCommitFrameError, ScopedQueryFrameError, attach_scoped_commit_frame,
-    attach_scoped_query_frame, decode_scoped_commit_request, reject_scoped_commit_frame,
+    AdapterBindingError, ResourceBusAdapter, ScopedCommitFrameError, ScopedQueryFrameError,
+    ScopedQueryMethod, attach_scoped_commit_frame, attach_scoped_query_frame,
+    decode_scoped_commit_request, reject_scoped_commit_frame,
 };
 pub use admission::{AdmissionError, AdmittedMutation};
-pub use protobuf;
 pub use authz::{AuthorizationLease, StoreSealHandoffError};
 pub use client::ResourceApiClient;
 pub use d2b_contracts_resource::v3::PreparedStoreMutation;

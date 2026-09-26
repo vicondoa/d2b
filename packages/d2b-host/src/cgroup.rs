@@ -51,6 +51,7 @@ pub enum Controller {
 }
 
 impl Controller {
+    /// The full controller set every delegated subtree must carry.
     pub const REQUIRED: &'static [Controller] = &[
         Controller::Cpu,
         Controller::Memory,
@@ -68,6 +69,7 @@ impl Controller {
         Controller::Cpuset,
     ];
 
+    /// The cgroup v2 controller name as written in `cgroup.controllers`.
     pub fn as_str(&self) -> &'static str {
         match self {
             Controller::Cpu => "cpu",
@@ -82,6 +84,8 @@ impl Controller {
         format!("+{}", self.as_str())
     }
 
+    /// Parse a controller name token (surrounding whitespace tolerated)
+    /// into the matching variant.
     pub fn from_token(token: &str) -> Option<Self> {
         match token.trim() {
             "cpu" => Some(Controller::Cpu),

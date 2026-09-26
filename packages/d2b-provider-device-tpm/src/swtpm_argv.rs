@@ -36,9 +36,10 @@
 //! starts the long-lived `swtpm socket` process.
 //!
 //! Crate invariant `#![forbid(unsafe_code)]` is honoured.
-#![allow(missing_docs)]
 
 use serde::{Deserialize, Serialize};
+
+use crate::{MAX_SWTPM_LOG_LEVEL, MIN_SWTPM_LOG_LEVEL};
 
 /// All inputs required to render the long-lived `swtpm socket ...`
 /// argv.
@@ -103,17 +104,32 @@ pub struct SwtpmIoctlFlushInput {
 #[serde(rename_all = "kebab-case", tag = "kind")]
 pub enum SwtpmArgvError {
     /// Binary path was empty or non-absolute.
-    InvalidBinaryPath { path: String },
+    InvalidBinaryPath {
+        /// The offending path.
+        path: String,
+    },
     /// `vm_name` was empty.
     EmptyVmName,
     /// `state_dir` was empty or non-absolute.
-    InvalidStateDir { path: String },
+    InvalidStateDir {
+        /// The offending path.
+        path: String,
+    },
     /// `ctrl_socket_path` or `server_socket_path` was empty.
-    EmptySocketPath { which: String },
+    EmptySocketPath {
+        /// The empty field name.
+        which: String,
+    },
     /// `log_path` or `pid_path` was empty.
-    EmptyFilePath { which: String },
+    EmptyFilePath {
+        /// The empty field name.
+        which: String,
+    },
     /// `log_level` was outside 1..=20.
-    LogLevelOutOfRange { level: u8 },
+    LogLevelOutOfRange {
+        /// The offending log level.
+        level: u8,
+    },
 }
 
 fn validate_absolute(path: &str, field: &str) -> Result<(), SwtpmArgvError> {
@@ -127,6 +143,16 @@ fn validate_absolute(path: &str, field: &str) -> Result<(), SwtpmArgvError> {
 }
 
 /// Render the long-lived swtpm argv.
+///
+/// # Errors
+///
+/// Returns [`SwtpmArgvError::InvalidBinaryPath`] for an empty or
+/// non-absolute swtpm binary path, [`SwtpmArgvError::EmptyVmName`] for an
+/// empty VM name, [`SwtpmArgvError::InvalidStateDir`] for an empty or
+/// non-absolute state directory, [`SwtpmArgvError::EmptySocketPath`] or
+/// [`SwtpmArgvError::EmptyFilePath`] for empty socket or file paths, and
+/// [`SwtpmArgvError::LogLevelOutOfRange`] when the log level is outside the
+/// frozen bound.
 pub fn generate_swtpm_argv(input: &SwtpmArgvInput) -> Result<Vec<String>, SwtpmArgvError> {
     if input.swtpm_binary_path.is_empty() || !input.swtpm_binary_path.starts_with('/') {
         return Err(SwtpmArgvError::InvalidBinaryPath {
@@ -157,7 +183,7 @@ pub fn generate_swtpm_argv(input: &SwtpmArgvInput) -> Result<Vec<String>, SwtpmA
             which: "pid_path".to_owned(),
         });
     }
-    if !(1..=20).contains(&input.log_level) {
+    if !(MIN_SWTPM_LOG_LEVEL..=MAX_SWTPM_LOG_LEVEL).contains(&input.log_level) {
         return Err(SwtpmArgvError::LogLevelOutOfRange {
             level: input.log_level,
         });
@@ -209,6 +235,13 @@ pub fn generate_swtpm_argv(input: &SwtpmArgvInput) -> Result<Vec<String>, SwtpmA
 }
 
 /// Render the pre-start `swtpm_ioctl -i --unix <ctrl>` flush argv.
+///
+/// # Errors
+///
+/// Returns [`SwtpmArgvError::InvalidBinaryPath`] for an empty or
+/// non-absolute swtpm_ioctl binary path, [`SwtpmArgvError::EmptyVmName`] for
+/// an empty VM name, and [`SwtpmArgvError::EmptySocketPath`] for an empty
+/// control socket path.
 pub fn generate_swtpm_ioctl_flush_argv(
     input: &SwtpmIoctlFlushInput,
 ) -> Result<Vec<String>, SwtpmArgvError> {

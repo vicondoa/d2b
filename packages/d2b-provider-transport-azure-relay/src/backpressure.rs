@@ -23,6 +23,10 @@ pub struct CreditWindow {
 impl CreditWindow {
     /// Construct a nonzero bounded window.
     pub fn new(max_bytes: usize) -> Result<Self, BackpressureError> {
+        // # Errors
+        //
+        // Returns [`BackpressureError::CreditExhausted`] when the window is
+        // zero or exceeds the fixed bound.
         if max_bytes == 0 || max_bytes > 16 * 1024 * 1024 {
             return Err(BackpressureError::CreditExhausted);
         }

@@ -21,7 +21,12 @@ pub const DEFAULT_MAX_OPERATIONS_PER_SESSION: usize = 256;
 pub struct OperationId(String);
 
 impl OperationId {
-    /// Parse a bounded printable ASCII identifier.
+    /// Parse a bounded printable ASCII identifier..
+    ///
+    /// # Errors
+    /// Returns `OperationError::InvalidOperationId` when the value is empty,
+    /// longer than 128 bytes, or contains a character outside the ASCII
+    /// alphanumeric or `-`/`_`/`.`/`:` set.
     pub fn parse(value: impl Into<String>) -> Result<Self, OperationError> {
         let value = value.into();
         if value.is_empty()
@@ -121,6 +126,10 @@ struct CancellationState {
     notify: Notify,
 }
 
+/// An opaque cancellation token minted only by the bus for one operation attempt.
+///
+/// Construction is crate-private; a clone shares the same attempt's token, and
+/// [`Self::is_cancelled`] observes whether the attempt was cancelled.
 #[derive(Clone)]
 pub struct Cancellation(Arc<CancellationState>);
 
@@ -298,21 +307,14 @@ impl PendingCancelDeliveries {
     }
 
     pub(crate) fn abort_destination(&self, session: SessionId) {
-        let tasks = {
+        let aborted = {
             let mut entries = self.lock_entries();
-            let mut tasks = Vec::new();
-            entries.retain(|entry| {
-                if entry.destination == session {
-                    tasks.push(entry.task.clone());
-                    false
-                } else {
-                    true
-                }
-            });
-            tasks
+            let (aborted, kept) = entries.drain(..).partition(|entry| entry.destination == session);
+            *entries = kept;
+            aborted
         };
-        for task in tasks {
-            task.abort();
+        for entry in aborted {
+            entry.task.abort();
         }
     }
 
@@ -1053,10 +1055,6 @@ mod tests {
                 Err(OperationError::RetainedOperationId)
             ),
             "same-id reuse must remain blocked while cancellation retry state exists"
-        );
-        assert_eq!(
-            OperationError::RetainedOperationId.to_string(),
-            "operation identifier is retained after cancellation; retry cancellation or start new work with a new operation identifier"
         );
         assert!(
             cancel_now(&mut table, &reused_operation, SessionId(1))

@@ -11,6 +11,9 @@
 //!      The listen socket is NEVER created before upstream connects.
 //!   5. Enter the dispatch loop.
 
+#[path = "../wayland_proxy/mod.rs"]
+mod wayland_proxy;
+
 use std::{
     cell::RefCell,
     io,
@@ -22,10 +25,8 @@ use std::{
 
 use clap::Parser;
 use d2b_contracts::{workload::WorkloadProviderKind, workload_identity::WorkloadTarget};
-use d2b_provider_display_wayland::wayland_proxy::filter::{
-    FilterStateHandler, VirtualClipboardState, build_state, install_client_handlers,
-};
-use d2b_provider_display_wayland::wayland_proxy::{
+use wayland_proxy::filter::{FilterStateHandler, VirtualClipboardState, build_state, install_client_handlers};
+use wayland_proxy::{
     bridge::{BridgeConfig, BridgeReconnectPolicy},
     decoration::{BorderConfig, Color, DecorationManager, LabelPosition, sanitize_label},
     diag::{DiagRateLimiter, bounded_error_detail},
@@ -145,7 +146,7 @@ struct Args {
     border_color_urgent: Color,
 
     /// Deprecated legacy border thickness; wrapper rails use a fixed width.
-    #[arg(long = "border-thickness", value_parser = parse_positive_u32, default_value_t = d2b_provider_display_wayland::wayland_proxy::decoration::DEFAULT_BORDER_THICKNESS)]
+    #[arg(long = "border-thickness", value_parser = parse_positive_u32, default_value_t = wayland_proxy::decoration::DEFAULT_BORDER_THICKNESS)]
     border_thickness: u32,
 
     /// Optional text rendered into the wrapper rail.
@@ -800,7 +801,7 @@ mod tests {
         assert!(!args.border_enable);
         assert_eq!(
             args.border_thickness,
-            d2b_provider_display_wayland::wayland_proxy::decoration::DEFAULT_BORDER_THICKNESS
+            wayland_proxy::decoration::DEFAULT_BORDER_THICKNESS
         );
         assert!(args.border_label.is_none());
     }

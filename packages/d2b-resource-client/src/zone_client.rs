@@ -9,19 +9,13 @@
 use core::future::Future;
 use std::{
     fmt,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicU8, Ordering},
 };
 
 use d2b_contracts_resource::v3::{
-    CanonicalJsonObject, ResourceGeneration, ResourceName, ResourceRef, ResourceTypeName,
-    ResourceUid, SchemaFingerprint, ZoneId,
+    CanonicalJsonObject, ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint, ZoneId,
 };
-use d2b_core_controller::controller_assignment::{
-    AssignmentError, ResourceClientLease, ScopedResourceFilter,
-};
+use d2b_core_controller::controller_assignment::ResourceClientLease;
 pub use d2b_core_controller::controller_assignment::{
     AssignmentIdentity, AssignmentVerb, OwnerChildScope, ScopedResourceMutation,
     ScopedResourceQuery, ScopedResourceScope,
@@ -29,7 +23,7 @@ pub use d2b_core_controller::controller_assignment::{
 
 use crate::{
     AttemptDisposition, CallDriver, CallOptions, ClientError, MethodProfile, ResolvedTarget,
-    ResourceClient, SessionFailure, SystemClock, TargetInput, TargetResolver, TransportKind,
+    ResourceClient, SystemClock, TargetInput, TargetResolver, TransportKind,
     TransportSelection, WallClock, ZoneServiceKind, call::REQUEST_ID_BYTES,
 };
 
@@ -77,14 +71,6 @@ impl ZonePeerIdentity {
             zone,
             static_key_fingerprint,
         }
-    }
-
-    /// Construct transport evidence from an enrolled peer key fingerprint.
-    pub const fn from_enrolled_peer(
-        zone: d2b_contracts_zone_session::v3::zone_routing::ZonePath,
-        static_key_fingerprint: [u8; 32],
-    ) -> Self {
-        Self::from_observed_static_key(zone, static_key_fingerprint)
     }
 
     /// Borrow the exact Zone route identity established by the adapter.
@@ -192,11 +178,6 @@ impl GuestControlEndpoint {
 
     /// Borrow the store-assigned Endpoint UID.
     pub const fn uid(&self) -> &ResourceUid {
-        &self.uid
-    }
-
-    /// Borrow the store-assigned Endpoint UID.
-    pub const fn endpoint_uid(&self) -> &ResourceUid {
         &self.uid
     }
 
@@ -356,11 +337,6 @@ impl ZoneSocketConnector {
     pub fn verify_session_pin(&self, pin: &ZoneSessionPin) -> Result<(), ClientError> {
         self.verify_peer(pin.peer())
     }
-
-    /// Return the endpoint identity pinned for the local Zone runtime.
-    pub fn local_daemon_endpoint_identity(&self) -> ZonePeerIdentity {
-        self.expected_peer.clone()
-    }
 }
 
 /// One authenticated Zone session supplied by the session adapter.
@@ -492,6 +468,12 @@ impl<'a> ResourceCallOptions<'a> {
     }
 }
 
+/// The single-atomic stream state machine shared by every caller-side named
+/// stream wrapper in this crate.
+pub(crate) const STREAM_OPEN: u8 = 0;
+pub(crate) const STREAM_CLOSING: u8 = 1;
+pub(crate) const STREAM_CLOSED: u8 = 2;
+
 /// A named Resource Watch stream supplied by the authenticated session.
 pub trait ResourceWatchTransport: Send + Sync {
     /// Receive one bounded canonical event, or `None` after terminal close.
@@ -509,8 +491,7 @@ pub trait ResourceWatchTransport: Send + Sync {
 /// callers must call [`ResourceWatch::close`] when they stop consuming.
 pub struct ResourceWatch<S> {
     transport: S,
-    state: Arc<AtomicBool>,
-    closing: Arc<AtomicBool>,
+    state: AtomicU8,
 }
 
 impl<S> ResourceWatch<S> {
@@ -518,8 +499,7 @@ impl<S> ResourceWatch<S> {
     pub fn new(transport: S) -> Self {
         Self {
             transport,
-            state: Arc::new(AtomicBool::new(false)),
-            closing: Arc::new(AtomicBool::new(false)),
+            state: AtomicU8::new(STREAM_OPEN),
         }
     }
 
@@ -530,11 +510,11 @@ impl<S> ResourceWatch<S> {
 
     /// Whether close has completed or the peer has ended the stream.
     pub fn is_closed(&self) -> bool {
-        self.state.load(Ordering::Acquire)
+        self.state.load(Ordering::Acquire) == STREAM_CLOSED
     }
 
     fn is_open(&self) -> bool {
-        !self.state.load(Ordering::Acquire) && !self.closing.load(Ordering::Acquire)
+        self.state.load(Ordering::Acquire) == STREAM_OPEN
     }
 }
 
@@ -558,30 +538,32 @@ where
         }
         let event = self.transport.receive_watch_event().await?;
         if event.is_none() {
-            self.state.store(true, Ordering::Release);
+            self.state.store(STREAM_CLOSED, Ordering::Release);
         }
         Ok(event)
     }
 
     /// Close the Watch stream exactly once after a successful remote close.
     pub async fn close(&self) -> Result<(), ClientError> {
-        if self.state.load(Ordering::Acquire) {
-            return Ok(());
-        }
         if self
-            .closing
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .state
+            .compare_exchange(
+                STREAM_OPEN,
+                STREAM_CLOSING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
             .is_err()
         {
             return Ok(());
         }
         match self.transport.close_watch().await {
             Ok(()) => {
-                self.state.store(true, Ordering::Release);
+                self.state.store(STREAM_CLOSED, Ordering::Release);
                 Ok(())
             }
             Err(error) => {
-                self.closing.store(false, Ordering::Release);
+                self.state.store(STREAM_OPEN, Ordering::Release);
                 Err(error)
             }
         }
@@ -629,30 +611,6 @@ where
     R: TargetResolver,
     W: WallClock,
 {
-    /// Mint the controller-scoped collection query used by the existing
-    /// Resource API route. The lease supplies the non-widenable assignment
-    /// filter; callers can only narrow its ResourceType/name selectors.
-    pub fn scoped_query(
-        &self,
-        lease: &ResourceClientLease,
-        resource_types: Vec<ResourceTypeName>,
-        resource_names: Vec<ResourceName>,
-        filters: Vec<ScopedResourceFilter>,
-    ) -> Result<ScopedResourceQuery, AssignmentError> {
-        lease.query(resource_types, resource_names, filters)
-    }
-
-    /// Mint an owner-bound Process child query for the controller lease.
-    pub fn scoped_child_query(
-        &self,
-        lease: &ResourceClientLease,
-        resource_types: Vec<ResourceTypeName>,
-        resource_names: Vec<ResourceName>,
-        filters: Vec<ScopedResourceFilter>,
-    ) -> Result<ScopedResourceQuery, AssignmentError> {
-        lease.child_query(resource_types, resource_names, filters)
-    }
-
     /// Resolve a target and prepare one bounded Resource call.
     pub fn prepare_resource_call(
         &self,
@@ -673,6 +631,13 @@ where
     }
 
     /// Establish a session over the exact route selected by the resolver.
+    ///
+    /// # Errors
+    ///
+    /// Returns the resolver's refusal when the target cannot be resolved,
+    /// the connector's error when the session cannot be established, and
+    /// [`ClientError::TransportPolicyMismatch`] when the session pin does
+    /// not match the resolved route.
     pub async fn connect(
         &self,
         target: &TargetInput,
@@ -694,40 +659,15 @@ where
         })
     }
 
-    /// Execute one Resource call over a caller-supplied authenticated session.
-    ///
-    /// New callers should prefer [`Self::connect`] plus
-    /// [`Self::call_connected`], which binds the session to the route pin.
-    /// This lower-level form remains useful to the bus adapter, which already
-    /// owns the authenticated session binding.
-    pub async fn call_resource<S>(
-        &self,
-        session: &S,
-        target: &TargetInput,
-        verb: ResourceVerb,
-        options: CallOptions,
-        selection: TransportSelection,
-        request: ResourceCallOptions<'_>,
-    ) -> Result<CanonicalJsonObject, ClientError>
-    where
-        S: ConnectedZoneSession,
-    {
-        let (resolved, _driver) =
-            self.prepare_resource_call(target, verb, options, selection, request.has_attachments)?;
-        execute_resource_call(
-            &self.resource,
-            session,
-            &resolved,
-            verb,
-            _driver,
-            request,
-            None,
-        )
-        .await
-    }
-
     /// Execute a typed call over a handle whose authenticated route pin was
     /// checked by [`Self::connect`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError::TransportPolicyMismatch`] when the pin no
+    /// longer matches the target, the profile or admission refusal when
+    /// the call cannot be admitted, and the session, transport, deadline,
+    /// or remote error the call itself reports.
     pub async fn call_connected(
         &self,
         connection: &ConnectedZoneClient<C::Session>,
@@ -769,6 +709,13 @@ where
     /// Each target and verb is re-admitted by the non-clonable lease. The
     /// resulting transport descriptor is derived from that same admission
     /// before the existing Resource transport is used.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError::ContractViolation`] when the batch is empty
+    /// or oversized, a mutation is not mutating or not admitted by the
+    /// lease, or the session pin does not match the target, and the
+    /// profile, admission, or call error otherwise.
     pub async fn scoped_commit_batch(
         &self,
         connection: &ConnectedZoneClient<C::Session>,
@@ -868,7 +815,7 @@ where
     loop {
         let attempt = driver.begin_attempt(cancellation)?;
         let result = if let Some((assignment, mutations)) = scoped_call.as_ref() {
-            await_with_cancellation(
+            crate::call::await_with_cancellation(
                 session.call_scoped_commit_batch(
                     assignment.clone(),
                     mutations.clone(),
@@ -879,7 +826,7 @@ where
             )
             .await
         } else {
-            await_with_cancellation(
+            crate::call::await_with_cancellation(
                 session.call_with_timeout(
                     verb,
                     resource_target.clone(),
@@ -901,7 +848,7 @@ where
 
         match result {
             Ok(response) => return Ok(response),
-            Err(error) => match classify_session_error(&driver, error) {
+            Err(error) => match crate::call::classify_session_error(&driver, error) {
                 AttemptDisposition::RetryNow => continue,
                 AttemptDisposition::RetryAfterMs(delay) => {
                     crate::call::retry_backoff(delay, cancellation).await?;
@@ -909,42 +856,6 @@ where
                 AttemptDisposition::Fail(error) => return Err(error),
             },
         }
-    }
-
-    async fn await_with_cancellation<F, T>(
-        future: F,
-        cancellation: &crate::CancellationToken,
-    ) -> Result<T, ClientError>
-    where
-        F: Future<Output = T> + Send,
-    {
-        let mut future = Box::pin(future);
-        let mut cancelled = Box::pin(cancellation.cancelled());
-        core::future::poll_fn(move |context| {
-            if let core::task::Poll::Ready(value) = future.as_mut().poll(context) {
-                return core::task::Poll::Ready(Ok(value));
-            }
-            if let core::task::Poll::Ready(()) = cancelled.as_mut().poll(context) {
-                return core::task::Poll::Ready(Err(ClientError::Cancelled));
-            }
-            core::task::Poll::Pending
-        })
-        .await
-    }
-}
-
-fn classify_session_error<W: WallClock>(
-    driver: &CallDriver<W>,
-    error: ClientError,
-) -> AttemptDisposition {
-    match error {
-        ClientError::SessionLost => driver.record_session_failure(SessionFailure::Disconnected),
-        ClientError::TransportFailed => driver.record_session_failure(SessionFailure::Retryable),
-        ClientError::DeadlineExpired => driver.record_session_failure(SessionFailure::Deadline),
-        ClientError::Cancelled => driver.record_session_failure(SessionFailure::Cancelled),
-        ClientError::ContractViolation => driver.record_session_failure(SessionFailure::Protocol),
-        ClientError::Remote { kind, retry } => driver.record_remote_verdict(kind, retry),
-        other => AttemptDisposition::Fail(other),
     }
 }
 
@@ -984,9 +895,46 @@ impl<S> fmt::Debug for LocalZoneSession<S> {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        collections::VecDeque,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
     use super::*;
     use crate::ServiceOwner;
     use crate::target::fixtures::zone;
+
+    #[derive(Default)]
+    struct FakeWatchTransport {
+        events: tokio::sync::Mutex<VecDeque<Result<Option<CanonicalJsonObject>, ClientError>>>,
+        closes: AtomicUsize,
+        close_results: tokio::sync::Mutex<VecDeque<Result<(), ClientError>>>,
+    }
+
+    impl ResourceWatchTransport for FakeWatchTransport {
+        fn receive_watch_event(
+            &self,
+        ) -> impl Future<Output = Result<Option<CanonicalJsonObject>, ClientError>> + Send {
+            let result = self
+                .events
+                .try_lock()
+                .expect("events lock")
+                .pop_front()
+                .unwrap_or(Ok(None));
+            core::future::ready(result)
+        }
+
+        fn close_watch(&self) -> impl Future<Output = Result<(), ClientError>> + Send {
+            self.closes.fetch_add(1, Ordering::AcqRel);
+            let result = self
+                .close_results
+                .try_lock()
+                .expect("close results lock")
+                .pop_front()
+                .unwrap_or(Ok(()));
+            core::future::ready(result)
+        }
+    }
 
     fn peer(zone: &str, key: u8) -> ZonePeerIdentity {
         ZonePeerIdentity::from_observed_static_key(
@@ -1064,10 +1012,35 @@ mod tests {
             true,
         )
         .unwrap();
-        assert_eq!(endpoint.endpoint_uid(), endpoint.uid());
         assert_eq!(endpoint.zone().as_str(), "work");
         assert!(!format!("{endpoint:?}").contains("gateway"));
         assert!(!format!("{endpoint:?}").contains("123e4567"));
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_failed_watch_close_rolls_back_to_open_and_a_second_close_retries() {
+        let transport = FakeWatchTransport {
+            events: tokio::sync::Mutex::new(VecDeque::from([Ok(Some(
+                CanonicalJsonObject::parse(br#"{"marker":"event"}"#).unwrap(),
+            ))])),
+            close_results: tokio::sync::Mutex::new(VecDeque::from([
+                Err(ClientError::TransportFailed),
+                Ok(()),
+            ])),
+            ..Default::default()
+        };
+        let watch = ResourceWatch::new(transport);
+        assert_eq!(
+            watch.close().await.unwrap_err(),
+            ClientError::TransportFailed
+        );
+        // The failed close rolls the state back to open: the watch still
+        // consumes events and a second close retries the transport.
+        assert!(watch.next().await.unwrap().is_some());
+        watch.close().await.unwrap();
+        assert_eq!(watch.transport().closes.load(Ordering::Acquire), 2);
+        assert!(watch.is_closed());
     }
 
     fn endpoint_fixture() -> GuestControlEndpoint {
@@ -1090,7 +1063,7 @@ mod tests {
         let valid = endpoint_fixture();
         assert!(valid.ready());
         // The Endpoint and Guest ref types are closed; zero generations and a
-        // not-ready state must each refuse InvalidTarget..
+        // not-ready state must each refuse InvalidTarget.
         assert_eq!(
             GuestControlEndpoint::new(
                 ResourceRef::parse("Guest/gateway").unwrap(),

@@ -175,7 +175,7 @@ impl UsbipCoreAdapter {
 
         let entry = self
             .resolver
-            .manifest
+            .manifest()
             .vms
             .get(vm)
             .ok_or(UsbipCoreAdapterError::VmNotFound)?;
@@ -200,7 +200,7 @@ impl UsbipCoreAdapter {
 
         let net = self
             .resolver
-            .host
+            .host()
             .environments
             .iter()
             .find(|candidate| candidate.env == env)

@@ -8,51 +8,15 @@ use d2b_contracts_resource::v3::{StoreError, StoreErrorKind};
 use protobuf::EnumOrUnknown;
 
 /// Map every store error kind onto the closed API set.
+///
+/// Resource-plane kinds pass through unchanged; the three store-only kinds
+/// collapse onto the resource-plane kinds their wire codes already carried.
 pub const fn map_store_error_kind(kind: StoreErrorKind) -> ResourceErrorKind {
     match kind {
-        StoreErrorKind::ResourceNotFound => ResourceErrorKind::ResourceNotFound,
-        StoreErrorKind::ResourceAlreadyExists => ResourceErrorKind::ResourceAlreadyExists,
-        StoreErrorKind::ResourceConflict => ResourceErrorKind::ResourceConflict,
-        StoreErrorKind::ResourceSchemaInvalid => ResourceErrorKind::ResourceSchemaInvalid,
-        StoreErrorKind::ResourceRefInvalid => ResourceErrorKind::ResourceRefInvalid,
-        StoreErrorKind::ResourceOwnerCycle => ResourceErrorKind::ResourceOwnerCycle,
-        StoreErrorKind::ResourceOwnerDepth => ResourceErrorKind::ResourceOwnerDepth,
-        StoreErrorKind::ResourceFinalizerDenied => ResourceErrorKind::ResourceFinalizerDenied,
-        StoreErrorKind::ResourceProviderUnavailable => {
-            ResourceErrorKind::ResourceProviderUnavailable
-        }
-        StoreErrorKind::ResourceControllerMismatch => ResourceErrorKind::ResourceControllerMismatch,
-        StoreErrorKind::ResourceStatusOwnerMismatch => {
-            ResourceErrorKind::ResourceStatusOwnerMismatch
-        }
-        StoreErrorKind::StatusOversize => ResourceErrorKind::StatusOversize,
-        StoreErrorKind::StatusProviderSchemaInvalid => {
-            ResourceErrorKind::StatusProviderSchemaInvalid
-        }
-        StoreErrorKind::StatusProviderOverlap => ResourceErrorKind::StatusProviderOverlap,
-        StoreErrorKind::SpecProviderSchemaInvalid => ResourceErrorKind::SpecProviderSchemaInvalid,
-        StoreErrorKind::SpecProviderShadow => ResourceErrorKind::SpecProviderShadow,
-        StoreErrorKind::UnsupportedCapability => ResourceErrorKind::UnsupportedCapability,
-        StoreErrorKind::ExpeditedNotAuthorized => ResourceErrorKind::ExpeditedNotAuthorized,
-        StoreErrorKind::ExpeditedQuotaExceeded => ResourceErrorKind::ExpeditedQuotaExceeded,
-        StoreErrorKind::ExpeditedReconcilePending => ResourceErrorKind::ExpeditedReconcilePending,
-        StoreErrorKind::UpgradeRequired => ResourceErrorKind::UpgradeRequired,
-        StoreErrorKind::EndpointResolveDenied => ResourceErrorKind::EndpointResolveDenied,
-        StoreErrorKind::RelayDenied => ResourceErrorKind::RelayDenied,
-        StoreErrorKind::RoleRelayGrantRestricted => ResourceErrorKind::RoleRelayGrantRestricted,
-        StoreErrorKind::AuthorizationDenied => ResourceErrorKind::AuthorizationDenied,
-        StoreErrorKind::RevisionExpired => ResourceErrorKind::RevisionExpired,
-        StoreErrorKind::Backpressure | StoreErrorKind::StoreBackpressure => {
-            ResourceErrorKind::Backpressure
-        }
-        StoreErrorKind::Timeout => ResourceErrorKind::Timeout,
-        StoreErrorKind::Cancelled => ResourceErrorKind::Cancelled,
-        StoreErrorKind::ResourcePlaneUnavailable | StoreErrorKind::StoreQuarantined => {
-            ResourceErrorKind::ResourcePlaneUnavailable
-        }
-        StoreErrorKind::InternalIntegrityFailure | StoreErrorKind::StoreIntegrityFailure => {
-            ResourceErrorKind::InternalIntegrityFailure
-        }
+        StoreErrorKind::Resource(kind) => kind,
+        StoreErrorKind::StoreIntegrityFailure => ResourceErrorKind::InternalIntegrityFailure,
+        StoreErrorKind::StoreBackpressure => ResourceErrorKind::Backpressure,
+        StoreErrorKind::StoreQuarantined => ResourceErrorKind::ResourcePlaneUnavailable,
     }
 }
 
@@ -203,13 +167,17 @@ mod tests {
 
     #[test]
     fn store_mapping_is_total_and_one_way() {
-        assert_eq!(StoreErrorKind::all().len(), 34);
+        // Every resource-plane kind passes through unchanged, so the shared
+        // set needs no store-side re-listing.
+        for kind in ResourceErrorKind::all() {
+            assert_eq!(map_store_error_kind(StoreErrorKind::Resource(*kind)), *kind);
+        }
         let mapped = StoreErrorKind::all()
             .iter()
             .copied()
             .map(map_store_error_kind)
             .collect::<Vec<_>>();
-        assert_eq!(mapped.len(), 34);
+        assert_eq!(mapped.len(), 3);
         assert_eq!(
             map_store_error_kind(StoreErrorKind::StoreIntegrityFailure),
             ResourceErrorKind::InternalIntegrityFailure
@@ -227,7 +195,7 @@ mod tests {
     #[test]
     fn assignment_required_conflict_is_wire_valid_and_retryable() {
         let error = map_store_error(StoreError::new(
-            StoreErrorKind::ResourceConflict,
+            StoreErrorKind::Resource(ResourceErrorKind::ResourceConflict),
             Some(ZoneRevision::new(8)),
             None,
             RetryClass::Reauthorize,
@@ -252,7 +220,7 @@ mod tests {
     #[test]
     fn invalid_store_error_metadata_fails_closed_without_panicking() {
         let error = map_store_error(StoreError::new(
-            StoreErrorKind::ResourceNotFound,
+            StoreErrorKind::Resource(ResourceErrorKind::ResourceNotFound),
             Some(ZoneRevision::new(8)),
             None,
             RetryClass::Never,
@@ -265,7 +233,7 @@ mod tests {
     fn authorization_denied_visible_revision_and_retry_survive_mapping() {
         let error = map_store_error_with_revision_visibility(
             StoreError::new(
-                StoreErrorKind::AuthorizationDenied,
+                StoreErrorKind::Resource(ResourceErrorKind::AuthorizationDenied),
                 Some(ZoneRevision::new(8)),
                 None,
                 RetryClass::Reauthorize,
@@ -293,7 +261,7 @@ mod tests {
     fn authorization_denied_revision_can_be_hidden_without_changing_kind_or_retry() {
         let error = map_store_error_with_revision_visibility(
             StoreError::new(
-                StoreErrorKind::AuthorizationDenied,
+                StoreErrorKind::Resource(ResourceErrorKind::AuthorizationDenied),
                 Some(ZoneRevision::new(8)),
                 None,
                 RetryClass::Reauthorize,

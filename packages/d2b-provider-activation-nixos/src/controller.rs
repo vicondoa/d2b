@@ -1,8 +1,9 @@
 //! Pure activation-nixos reconciliation policy.
 
 use d2b_contracts_resource::v3::{
-    ActivationMode, ActivationOutcomeCode, ActivationRunnerInput, ArtifactId, EnvironmentClass,
-    ExecutionDomain, NixosGenerationSpec, ResourceName, ResourcePhase, ResourceRef,
+    ActivationMode, ActivationOutcomeCode, ActivationRunnerInput, ArtifactId,
+    ConfigurationGeneration, EnvironmentClass, ExecutionDomain, IdentityError, NixosGenerationSpec,
+    ResourceName, ResourcePhase, ResourceRef,
     process::{EphemeralProcessSpec, ExecutionSpec, NamespaceClass, ProcessClass, SandboxSpec},
 };
 use ring::signature;
@@ -11,7 +12,7 @@ use sha2::{Digest, Sha256};
 /// The target-local Process template used for activation effects.
 pub const ACTIVATION_RUNNER_TEMPLATE: &str = "activation-nixos-runner";
 /// The generic one-shot process resource type used for activation effects.
-pub const ACTIVATION_RUNNER_RESOURCE_TYPE: &str = "EphemeralProcess";
+const ACTIVATION_RUNNER_RESOURCE_TYPE: &str = "EphemeralProcess";
 
 /// Caller role derived from the authenticated daemon request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,23 +105,28 @@ pub struct GenerationObservation {
 }
 
 impl GenerationObservation {
-    /// Construct a bounded observation.
-    pub fn new(name: impl Into<String>, phase: GenerationPhase) -> Self {
+    /// Construct a bounded observation from a generation row name.
+    ///
+    /// # Errors
+    ///
+    /// Returns `IdentityError` when `name` is empty, contains '/', or
+    /// exceeds the `ResourceName` bound (63-byte lowercase label).
+    pub fn new(name: impl Into<String>, phase: GenerationPhase) -> Result<Self, IdentityError> {
         let name = name.into();
         let ordinal = name
             .rsplit('-')
             .next()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(0);
-        Self::terminal(name, phase, ordinal)
+        Ok(Self::terminal(ResourceName::parse(name)?, phase, ordinal))
     }
 
     /// Construct a bounded terminal observation.
-    pub fn terminal(name: impl Into<String>, phase: GenerationPhase, ordinal: u64) -> Self {
-        let name = name.into();
-        assert!(!name.is_empty() && !name.contains('/') && name.len() <= 128);
+    ///
+    /// Never panics: `name` is already validated by `ResourceName`.
+    pub fn terminal(name: ResourceName, phase: GenerationPhase, ordinal: u64) -> Self {
         Self {
-            name,
+            name: name.to_canonical_string(),
             phase,
             ordinal,
         }
@@ -379,14 +385,12 @@ pub fn activation_runner_spec(request: &RunnerRequest) -> EphemeralProcessSpec {
         false,
     )
     .expect("static activation runner process");
-    spec.with_activation_input(
-        ActivationRunnerInput::new(
-            request.system_artifact_id.clone(),
-            request.target_generation,
-            request.activation_mode,
-        )
-        .expect("activation runner generation is nonzero"),
-    )
+    spec.with_activation_input(ActivationRunnerInput::new(
+        request.system_artifact_id.clone(),
+        ConfigurationGeneration::new(request.target_generation)
+            .expect("activation runner generation is nonzero"),
+        request.activation_mode,
+    ))
     .expect("activation runner accepts its typed input")
 }
 
@@ -559,6 +563,14 @@ impl ActivationTrust {
     }
 
     /// Verify all trust, Ed25519, artifact, and activation-catalog fences.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TrustEpochMismatch`, `RevocationRefMismatch`,
+    /// `TrustDenied`, `PublisherRootMismatch`, `SignatureIdMismatch`,
+    /// `ArtifactCatalogDigestMismatch`, `ArtifactDigestMismatch`,
+    /// `InvalidEvidence`, or `SignatureInvalid` for the corresponding
+    /// failed fence.
     pub fn verify(
         &self,
         expected: &ActivationTrustExpectation,
@@ -567,30 +579,35 @@ impl ActivationTrust {
     ) -> Result<(), ActivationVerificationError> {
         if self.trust_epoch == 0 || self.trust_epoch != expected.trust_epoch {
             tracing::warn!(
+                refusal = ?ActivationVerificationError::TrustEpochMismatch,
                 "activation verification refused: trust epoch mismatch",
             );
             return Err(ActivationVerificationError::TrustEpochMismatch);
         }
         if self.revocation_ref != expected.revocation_ref {
             tracing::warn!(
+                refusal = ?ActivationVerificationError::RevocationRefMismatch,
                 "activation verification refused: revocation reference mismatch",
             );
             return Err(ActivationVerificationError::RevocationRefMismatch);
         }
         if self.revocation_status != TrustStatus::Clear || self.deny_status != TrustStatus::Clear {
             tracing::warn!(
+                refusal = ?ActivationVerificationError::TrustDenied,
                 "activation verification refused: trust or deny status not clear",
             );
             return Err(ActivationVerificationError::TrustDenied);
         }
         if self.publisher_root.is_empty() || self.publisher_root != expected.publisher_root {
             tracing::warn!(
+                refusal = ?ActivationVerificationError::PublisherRootMismatch,
                 "activation verification refused: publisher root mismatch",
             );
             return Err(ActivationVerificationError::PublisherRootMismatch);
         }
         if self.signature_id.is_empty() || self.signature_id != expected.signature_id {
             tracing::warn!(
+                refusal = ?ActivationVerificationError::SignatureIdMismatch,
                 "activation verification refused: signature identifier mismatch",
             );
             return Err(ActivationVerificationError::SignatureIdMismatch);
@@ -600,6 +617,7 @@ impl ActivationTrust {
             || activation_catalog_digest != expected.artifact_catalog_digest
         {
             tracing::warn!(
+                refusal = ?ActivationVerificationError::ArtifactCatalogDigestMismatch,
                 "activation verification refused: artifact catalog digest mismatch",
             );
             return Err(ActivationVerificationError::ArtifactCatalogDigestMismatch);
@@ -607,12 +625,14 @@ impl ActivationTrust {
         let actual_artifact_digest = sha256_digest(artifact_bytes);
         if actual_artifact_digest != expected.artifact_digest {
             tracing::warn!(
+                refusal = ?ActivationVerificationError::ArtifactDigestMismatch,
                 "activation verification refused: artifact digest mismatch",
             );
             return Err(ActivationVerificationError::ArtifactDigestMismatch);
         }
         if self.public_key.len() != 32 || self.signature.len() != 64 {
             tracing::warn!(
+                refusal = ?ActivationVerificationError::InvalidEvidence,
                 "activation verification refused: trust evidence malformed",
             );
             return Err(ActivationVerificationError::InvalidEvidence);
@@ -621,6 +641,7 @@ impl ActivationTrust {
             .verify(&expected.signed_payload, &self.signature)
             .map_err(|_| {
                 tracing::warn!(
+                    refusal = ?ActivationVerificationError::SignatureInvalid,
                     "activation verification refused: Ed25519 signature invalid",
                 );
                 ActivationVerificationError::SignatureInvalid
@@ -708,6 +729,11 @@ impl ActivationController {
     }
 
     /// Gate activation/application on the complete signed artifact envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same `ActivationVerificationError` variants as
+    /// [`ActivationTrust::verify`] for the corresponding failed fence.
     pub fn verify_application(
         &self,
         trust: &ActivationTrust,
@@ -723,6 +749,11 @@ impl ActivationController {
     /// The runner performs only the steps the family declares
     /// ([`crate::vocabulary::ACTIVATION_RUNNER_STEPS`]); an activation that
     /// requests another step is refused before any runner is planned.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidSpec` when `step` is not one of the declared
+    /// runner steps.
     pub fn refuse_undeclared_runner_step(&self, step: &str) -> Result<(), ActivationError> {
         if crate::vocabulary::is_declared_runner_step(step) {
             Ok(())
@@ -732,6 +763,15 @@ impl ActivationController {
     }
 
     /// Reconcile one desired generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Unauthorized` or `TargetMismatch` when the caller is not
+    /// authorized for the spec's execution target, `InvalidSpec` when the
+    /// declared prior generation is missing from the observations, the
+    /// observed ordinal is zero, or the activation mode maps to no
+    /// declared runner step, and `AlreadyDeleted` when the observed
+    /// generation is already deleted.
     pub fn reconcile(
         &self,
         spec: &NixosGenerationSpec,
@@ -805,6 +845,13 @@ impl ActivationController {
 
     /// Apply a typed runner result while preserving the prior generation on
     /// every refusal or failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidSpec` when the source generation ordinal is zero,
+    /// `AlreadyDeleted` when the source generation is already deleted,
+    /// and `OutcomeMismatch` when the outcome does not match the spec's
+    /// activation mode.
     pub fn apply_runner_result(
         &self,
         spec: &NixosGenerationSpec,

@@ -171,7 +171,7 @@ impl EffectServiceBinding {
     /// The current generational revision. A respawn or republish bumps it;
     /// compare a captured value against this to detect staleness.
     pub fn revision(&self) -> u64 {
-        self.revision.load(Ordering::SeqCst)
+        self.revision.load(Ordering::Relaxed)
     }
 
     /// The actor generation this binding currently names. After a respawn
@@ -198,14 +198,30 @@ impl EffectServiceBinding {
     /// Call through the binding at its current revision; a mid-flight death
     /// of the actor surfaces as [`EffectServiceError::InFlightStale`] - the
     /// caller sees a refusal, never a hang.
-    pub async fn call(&self, call: ServiceCallData) -> Result<EffectResponse, EffectServiceError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EffectServiceError::UnboundService`] when no service is
+    /// published, [`EffectServiceError::WrongZone`] when the row belongs to
+    /// a different zone, [`EffectServiceError::ServiceUnavailable`] when
+    /// the actor refuses the call, [`EffectServiceError::InFlightStale`]
+    /// when the actor died mid-flight, and [`EffectServiceError::Declined`]
+    /// when the service declines the operation.
+        pub async fn call(&self, call: ServiceCallData) -> Result<EffectResponse, EffectServiceError> {
         self.send(call).await
     }
 
     /// Call guarded by a captured revision (KTD5): if a respawn or republish
     /// bumped the revision since the caller captured `expected`, refuse
     /// before dispatch. The rendezvous uses this admission check.
-    pub async fn call_expected(
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EffectServiceError::StaleRevision`] when the binding's
+    /// revision moved sincethe caller captured `expected`, and the same
+    /// refusals as [`EffectServiceBinding::call`]: UnboundService,
+    /// WrongZone, ServiceUnavailable, InFlightStale, and Declined.
+        pub async fn call_expected(
         &self,
         expected: u64,
         call: ServiceCallData,
@@ -257,17 +273,12 @@ pub(crate) struct EffectServiceActorState {
 /// inline - the fixture shape; production services forward long effects onto
 /// an unbounded channel pump like `ResourceActor` (KTD12) so the mailbox
 /// never blocks.
+#[derive(Default)]
 pub(crate) struct EffectServiceActor;
 
 impl EffectServiceActor {
     pub const fn new() -> Self {
         Self
-    }
-}
-
-impl Default for EffectServiceActor {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -400,17 +411,12 @@ pub(crate) struct EffectServiceSupervisorState {
 
 /// Per-zone supervisor for effect services (U8, KTD5): service actors are
 /// linked children, respawned from their durable rows on failure.
+#[derive(Default)]
 pub(crate) struct EffectServiceSupervisor;
 
 impl EffectServiceSupervisor {
     pub const fn new() -> Self {
         Self
-    }
-}
-
-impl Default for EffectServiceSupervisor {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -506,7 +512,7 @@ impl EffectServiceSupervisorState {
             // Respawn or republish of a live service: bump its generation
             // and point the shared binding at the fresh actor.
             Some(existing) => {
-                existing.revision.fetch_add(1, Ordering::SeqCst);
+                existing.revision.fetch_add(1, Ordering::Relaxed);
                 existing.actor = actor.clone();
                 existing.decl = row.decl;
                 existing.clone()
@@ -548,7 +554,9 @@ impl Actor for EffectServiceSupervisor {
         let zone = state.zone.clone();
         for row in args.rows.into_iter().filter(|row| row.zone == zone) {
             state.rows.insert(row.service.clone(), row.clone());
-            let _ = state.spawn_service_actor(&myself, &row).await;
+            if let Err(error) = state.spawn_service_actor(&myself, &row).await {
+                tracing::warn!(service = %row.service, zone = %row.zone, %error, "effect service actor respawn declined");
+            }
         }
         Ok(state)
     }
@@ -607,7 +615,9 @@ async fn supervise_exit(
         return;
     };
     // Respawn bumps the generational binding revision (KTD5).
-    let _ = state.spawn_service_actor(myself, &row).await;
+    if let Err(error) = state.spawn_service_actor(myself, &row).await {
+        tracing::warn!(service = %row.service, zone = %row.zone, %error, "effect service actor respawn declined");
+    }
 }
 
 #[cfg(test)]

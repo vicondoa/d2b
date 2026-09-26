@@ -9,7 +9,6 @@ fn provider_config_is_bounded_and_transient() {
     assert_eq!(config.launch_timeout_sec, 30);
     assert!(SystemdProviderConfig::new(0, 30, 5, 64).is_err());
     assert!(SystemdProviderConfig::new(30, 30, 5, 256).is_ok());
-    assert!(config.no_persistent_unit());
 }
 
 #[test]

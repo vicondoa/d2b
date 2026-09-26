@@ -10,7 +10,7 @@ use d2b_contracts::controller_config::{RealmControllerMetadataSummary, RealmCont
 use d2b_contracts::identity_config::{RealmIdentityConfigJson, RealmIdentityConfigSummary};
 use serde::{Deserialize, Serialize};
 
-use crate::typed_error::TypedError;
+use crate::typed_error::{TypedError, error_source};
 
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/d2b/daemon-config.json";
 pub const DEFAULT_GATEWAY_CONFIG_PATH: &str = "/etc/d2b/gateway.json";
@@ -374,9 +374,11 @@ pub fn load_config(path: &Path) -> Result<DaemonConfig, TypedError> {
     let bytes = fs::read(path).map_err(|err| TypedError::InternalIo {
         context: format!("read config {}", path.display()),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     serde_json::from_slice(&bytes).map_err(|err| TypedError::InternalConfig {
         detail: format!("{}: {err}", path.display()),
+        source: error_source(err),
     })
 }
 
@@ -399,15 +401,18 @@ pub fn load_realm_controllers_config(
     let bytes = fs::read(path).map_err(|err| TypedError::InternalIo {
         context: "read realm controllers config".to_owned(),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     let config: RealmControllersJson =
         serde_json::from_slice(&bytes).map_err(|err| TypedError::InternalConfig {
             detail: format!("invalid realm controllers config: {err}"),
+            source: error_source(err),
         })?;
     let summary = config
         .validate_metadata_only()
         .map_err(|err| TypedError::InternalConfig {
             detail: format!("invalid realm controllers config: {err}"),
+            source: error_source(err),
         })?;
     Ok(Some(LoadedRealmControllersConfig { config, summary }))
 }
@@ -431,15 +436,18 @@ pub fn load_realm_identity_config(
     let bytes = fs::read(path).map_err(|err| TypedError::InternalIo {
         context: "read realm identity config".to_owned(),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     let config: RealmIdentityConfigJson =
         serde_json::from_slice(&bytes).map_err(|err| TypedError::InternalConfig {
             detail: format!("invalid realm identity config: {err}"),
+            source: error_source(err),
         })?;
     let summary = config
         .validate_metadata_only()
         .map_err(|err| TypedError::InternalConfig {
             detail: format!("invalid realm identity config: {err}"),
+            source: error_source(err),
         })?;
     Ok(Some(LoadedRealmIdentityConfig { config, summary }))
 }

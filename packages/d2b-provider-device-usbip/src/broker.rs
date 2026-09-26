@@ -58,6 +58,11 @@ impl core::fmt::Debug for UsbipBindingContext {
 
 impl UsbipBindingContext {
     /// Construct a context only from Core-resolved opaque references.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ServiceLifecycleError::InvalidState`] when any identifier
+    /// is empty or the physical key is all zeros.
     pub fn new(
         vm_id: impl Into<String>,
         env: impl Into<String>,
@@ -127,9 +132,27 @@ impl AuthorityLedger {
     }
 }
 
+/// Handle to one zone's shared authority ledger.
+///
+/// The concrete synchronization primitive is an implementation detail:
+/// dispatchers and the daemon share this handle, never the lock type
+/// itself, so a lock change stays local to this crate.
+#[derive(Clone)]
+pub struct AuthorityLedgerHandle(Arc<tokio::sync::Mutex<AuthorityLedger>>);
+
+impl std::ops::Deref for AuthorityLedgerHandle {
+    type Target = tokio::sync::Mutex<AuthorityLedger>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// Construct one zone's shared authority ledger.
-pub fn new_authority_ledger() -> Arc<tokio::sync::Mutex<AuthorityLedger>> {
-    Arc::new(tokio::sync::Mutex::new(AuthorityLedger::default()))
+pub fn new_authority_ledger() -> AuthorityLedgerHandle {
+    AuthorityLedgerHandle(Arc::new(tokio::sync::Mutex::new(
+        AuthorityLedger::default(),
+    )))
 }
 
 /// The provider-owned implementation of the Provider dispatcher (U12 usbip
@@ -139,7 +162,7 @@ pub fn new_authority_ledger() -> Arc<tokio::sync::Mutex<AuthorityLedger>> {
 pub struct KernelUsbipDispatcher<'a> {
     dispatch: &'a dyn UsbipBrokerDispatch,
     context: UsbipBindingContext,
-    ledger: Arc<tokio::sync::Mutex<AuthorityLedger>>,
+    ledger: AuthorityLedgerHandle,
     attach_identity: Option<AttachProcessIdentity>,
     attach_slot: Option<BindingSlotLease>,
     attach_proxy: Option<BindingProxyLease>,
@@ -154,7 +177,7 @@ impl<'a> KernelUsbipDispatcher<'a> {
     pub fn new(
         dispatch: &'a dyn UsbipBrokerDispatch,
         context: UsbipBindingContext,
-        ledger: Arc<tokio::sync::Mutex<AuthorityLedger>>,
+        ledger: AuthorityLedgerHandle,
     ) -> Self {
         Self {
             dispatch,
@@ -199,13 +222,13 @@ impl<'a> UsbipBrokerDispatcher for KernelUsbipDispatcher<'a> {
             }
             return Err(ServiceLifecycleError::PhysicalAuthorityConflict);
         }
-        let lease = PhysicalAuthorityLease::from_adapter(ledger.token(1));
+        self.physical_lease = Some(PhysicalAuthorityLease::from_adapter(ledger.token(1)));
+        let lease = self.physical_lease.as_ref().expect("lease just stored");
         ledger.physical.insert(
             self.context.physical_key,
             (service_uid.to_canonical_string(), lease.clone()),
         );
-        self.physical_lease = Some(lease.clone());
-        Ok(lease)
+        Ok(lease.clone())
     }
 
     fn reserve_relay(
@@ -223,13 +246,13 @@ impl<'a> UsbipBrokerDispatcher for KernelUsbipDispatcher<'a> {
             }
             return Err(ServiceLifecycleError::RelayAuthorityConflict);
         }
-        let lease = ServiceRelayLease::from_adapter(ledger.token(2));
+        self.relay_lease = Some(ServiceRelayLease::from_adapter(ledger.token(2)));
+        let lease = self.relay_lease.as_ref().expect("lease just stored");
         ledger.relay.insert(
             self.context.env.clone(),
             (service_uid.to_canonical_string(), lease.clone()),
         );
-        self.relay_lease = Some(lease.clone());
-        Ok(lease)
+        Ok(lease.clone())
     }
 
     fn bind_owned(
@@ -315,10 +338,10 @@ impl<'a> UsbipBrokerDispatcher for KernelUsbipDispatcher<'a> {
             self.attach_slot = Some(slot.clone());
             return Ok(slot.clone());
         }
-        let slot = BindingSlotLease::from_adapter(ledger.token(4));
+        self.attach_slot = Some(BindingSlotLease::from_adapter(ledger.token(4)));
+        let slot = self.attach_slot.as_ref().expect("slot just stored");
         ledger.slots.insert(key, slot.clone());
-        self.attach_slot = Some(slot.clone());
-        Ok(slot)
+        Ok(slot.clone())
     }
 
     fn start_proxy(
@@ -335,10 +358,10 @@ impl<'a> UsbipBrokerDispatcher for KernelUsbipDispatcher<'a> {
             self.attach_proxy = Some(proxy.clone());
             return Ok(proxy.clone());
         }
-        let proxy = BindingProxyLease::from_adapter(ledger.token(5));
+        self.attach_proxy = Some(BindingProxyLease::from_adapter(ledger.token(5)));
+        let proxy = self.attach_proxy.as_ref().expect("proxy just stored");
         ledger.proxies.insert(key, proxy.clone());
-        self.attach_proxy = Some(proxy.clone());
-        Ok(proxy)
+        Ok(proxy.clone())
     }
 
     // The legacy attach seams below have no live consumer (U17 site 5): the v3

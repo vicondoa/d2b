@@ -46,6 +46,11 @@ pub struct DataDiskSpec {
 
 impl DataDiskSpec {
     /// Validate one data disk intent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AzureVmError::InvalidConfiguration`] when the size is zero
+    /// or exceeds the bound, or the label is empty, overlong, or malformed.
     pub fn validate(&self) -> Result<(), AzureVmError> {
         if self.size_gb == 0 || self.size_gb > 32_767 {
             return Err(AzureVmError::InvalidConfiguration);
@@ -100,6 +105,12 @@ pub struct AzureVmConfig {
 
 impl AzureVmConfig {
     /// Validate the root configuration and its gateway boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AzureVmError::InvalidConfiguration`] when the credential
+    /// reference is not a `Credential`, the controller execution reference
+    /// is not a `Guest`, or the network reference is not a `Network`.
     pub fn validate(&self) -> Result<(), AzureVmError> {
         if self.arm_credential_ref.resource_type().as_str() != "Credential"
             || self.controller_execution_ref.resource_type().as_str() != "Guest"
@@ -174,6 +185,12 @@ pub struct AzureVmGuestSettings {
 
 impl AzureVmGuestSettings {
     /// Validate all bounds and closed sets.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AzureVmError::InvalidConfiguration`] when a bound or
+    /// closed-set check fails (OS disk size, admin user, data-disk count,
+    /// bootstrap deadline, tag count, or a nested disk or LUN check).
     pub fn validate(&self) -> Result<(), AzureVmError> {
         if self
             .os_disk_size_gb

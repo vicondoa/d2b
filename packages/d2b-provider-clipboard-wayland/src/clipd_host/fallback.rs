@@ -2,8 +2,9 @@ use std::time::{Duration, Instant};
 
 use crate::clipd_host::niri::FocusedWindowSnapshot;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum FallbackState {
+    #[default]
     Idle,
     PickerOpen {
         target: FocusedWindowSnapshot,
@@ -32,17 +33,9 @@ pub enum FallbackClearReason {
     PickerCancelled,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct FallbackArming {
     state: FallbackState,
-}
-
-impl Default for FallbackArming {
-    fn default() -> Self {
-        Self {
-            state: FallbackState::Idle,
-        }
-    }
 }
 
 impl FallbackArming {
@@ -202,6 +195,28 @@ mod tests {
             arming.on_focus_changed(None),
             FallbackTransition::Cleared(FallbackClearReason::TargetDisappeared)
         );
+    }
+
+    #[test]
+    fn cancel_picker_clears_picker_open_and_armed_states() {
+        let mut arming = FallbackArming::default();
+        assert_eq!(arming.cancel_picker(), FallbackTransition::Idle);
+        assert_eq!(arming.state(), &FallbackState::Idle);
+
+        arming.capture_target_before_picker(target(7, "firefox"));
+        assert_eq!(
+            arming.cancel_picker(),
+            FallbackTransition::Cleared(FallbackClearReason::PickerCancelled)
+        );
+        assert_eq!(arming.state(), &FallbackState::Idle);
+
+        arming.capture_target_before_picker(target(7, "firefox"));
+        arming.arm_selected_entry("entry-a".to_owned(), Instant::now(), Duration::from_secs(2));
+        assert_eq!(
+            arming.cancel_picker(),
+            FallbackTransition::Cleared(FallbackClearReason::PickerCancelled)
+        );
+        assert_eq!(arming.state(), &FallbackState::Idle);
     }
 
     #[test]

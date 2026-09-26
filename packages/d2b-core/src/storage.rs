@@ -3,7 +3,8 @@ use std::collections::BTreeSet;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::contract_id::{ContractId, ContractText, PathTemplate};
+use d2b_contracts::contract_id::{ContractId, ContractText, PathTemplate};
+use crate::storage_lifecycle::StorageValidationError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -354,27 +355,30 @@ pub struct RemediationSpec {
 }
 
 impl StorageJson {
-    pub fn validate_unique_ids(&self) -> Result<(), String> {
+    pub fn validate_unique_ids(&self) -> Result<(), StorageValidationError> {
         let mut ids = BTreeSet::new();
         for path in &self.paths {
             if !ids.insert(path.id.as_str()) {
-                return Err(format!("duplicate storage path id {}", path.id));
+                return Err(StorageValidationError::DuplicateStoragePathId {
+                    offending_id: path.id.to_string(),
+                });
             }
         }
         let mut restart_ids = BTreeSet::new();
         for restart in &self.restart_policies {
             let key = (restart.vm.as_str(), restart.role_id.as_str());
             if !restart_ids.insert(key) {
-                return Err(format!(
-                    "duplicate restart policy for {}:{}",
-                    restart.vm, restart.role_id
-                ));
+                return Err(StorageValidationError::DuplicateRestartPolicy {
+                    offending_id: format!("{}:{}", restart.vm, restart.role_id),
+                });
             }
         }
         let mut reasons = BTreeSet::new();
         for state in &self.degraded_states {
             if !reasons.insert(state.reason) {
-                return Err(format!("duplicate degraded reason {:?}", state.reason));
+                return Err(StorageValidationError::DuplicateDegradedReason {
+                    offending_id: format!("{:?}", state.reason),
+                });
             }
         }
         Ok(())

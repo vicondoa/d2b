@@ -92,6 +92,11 @@ impl<S: GuestTargetSession> TargetControlChannel for SessionTargetControlChannel
 /// The returned handle is generation-bound: a request naming another
 /// generation is refused host-side, and the guest refuses it again on the
 /// wire.
+///
+/// # Errors
+///
+/// Returns the [`GuestTargetError`] the client construction reports when
+/// the session generation binding cannot be established.
 pub fn session_target_control<S: GuestTargetSession>(
     session: S,
     session_generation: u64,

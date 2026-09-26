@@ -317,6 +317,80 @@ mod tests {
         assert!(!device_worker_purpose("ch-api"));
     }
 
+    /// The string value of one canonical JSON field, if it is a string.
+    fn json_string(
+        value: Option<&d2b_contracts_resource::v3::CanonicalJsonValue>,
+    ) -> Option<&str> {
+        match value {
+            Some(d2b_contracts_resource::v3::CanonicalJsonValue::String(s)) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+
+    /// The `inspect-endpoint` payload rows equal the crate's own
+    /// derivations: every purpose the report commits derives to the same
+    /// class, producer, and locality the driver effects classify against,
+    /// and the committed purpose set is exactly the union of the two
+    /// derived families. A provider role or purpose rename that drifts the
+    /// report fails this pin.
+    #[test]
+    fn the_inspect_payload_rows_match_the_purpose_derivations() {
+        let response = inspect_endpoint_response().expect("the payload is canonical JSON");
+        let purposes = response
+            .payload
+            .get("purposes")
+            .and_then(|value| value.as_object())
+            .expect("purposes map");
+
+        let mut family_purposes = std::collections::BTreeSet::new();
+        for role in [ChildRole::ChApiEndpoint, ChildRole::GuestControlEndpoint] {
+            family_purposes.insert(role.purpose().expect("declared purpose"));
+        }
+        family_purposes.insert(d2b_provider_device_tpm::TPM_SERVER_ENDPOINT_PURPOSE);
+        family_purposes.insert(d2b_provider_device_tpm::TPM_CONTROL_ENDPOINT_PURPOSE);
+        assert_eq!(
+            purposes
+                .keys()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>(),
+            family_purposes,
+            "the committed purpose set is exactly the union of the derived families"
+        );
+
+        for (purpose, row) in purposes {
+            let row = row.as_object().expect("purpose row");
+            let class = json_string(row.get("class"));
+            if let Some(producer) = guest_control_producer(purpose) {
+                assert_eq!(class, Some("control"), "{purpose} is a guest-control purpose");
+                assert_eq!(
+                    json_string(row.get("producer")),
+                    Some(producer.resource_type()),
+                    "{purpose} producer derives from the provider role"
+                );
+                assert_eq!(
+                    json_string(row.get("locality")),
+                    serde_json::to_value(producer.locality())
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_owned))
+                        .as_deref(),
+                    "{purpose} locality derives from the producer"
+                );
+            } else {
+                let derived = device_worker_endpoint_class(purpose)
+                    .expect("every committed purpose belongs to a derived family");
+                assert_eq!(
+                    class,
+                    serde_json::to_value(derived)
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_owned))
+                        .as_deref(),
+                    "{purpose} class derives from the device-worker vocabulary"
+                );
+                assert!(row.get("producer").is_none(), "{purpose} has no producer");
+            }
+        }
+    }
+
     /// The service's vocabulary answers equal the free derivations, and the
     /// socket dispatch routes the evidence purposes onto the evidence
     /// facets and everything else onto the host socket facet.

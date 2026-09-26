@@ -15,7 +15,6 @@ use crate::{ConfigurationDigest, ProcessConformanceError, identity::WaitReapOwne
 pub struct CompiledSandbox {
     digest: ConfigurationDigest,
     domain: ExecutionDomain,
-    requires_cgroup_kill: bool,
 }
 
 /// The compiled semantic plan retained by a launch ticket so the privileged
@@ -56,11 +55,6 @@ impl CompiledSandbox {
     pub const fn domain(&self) -> ExecutionDomain {
         self.domain
     }
-
-    /// Whether intentional teardown needs the cgroup.kill proof.
-    pub const fn requires_cgroup_kill(&self) -> bool {
-        self.requires_cgroup_kill
-    }
 }
 
 /// The provider-neutral semantic sandbox compiler.
@@ -69,6 +63,12 @@ pub struct SandboxCompiler;
 
 impl SandboxCompiler {
     /// Compile one public SandboxSpec into an opaque digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessConformanceError::SandboxRejected`] when the spec
+    /// starts as root in a user domain or against a provider that does not
+    /// allow root, or when its canonical JSON rendering fails.
     pub fn compile(
         &self,
         sandbox: &SandboxSpec,
@@ -95,7 +95,6 @@ impl SandboxCompiler {
         Ok(CompiledSandbox {
             digest: ConfigurationDigest::from_bytes(digest),
             domain,
-            requires_cgroup_kill: true,
         })
     }
 

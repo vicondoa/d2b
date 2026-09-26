@@ -38,15 +38,17 @@
 //! is represented by its issuance ordinal and expiry only; an enrollment is
 //! represented by an opaque digest. Every `Debug` implementation is redacted.
 
-/// Default absolute lifetime of one allocator-issued bootstrap PSK.
-pub const BOOTSTRAP_PSK_TTL_MS_DEFAULT: u64 = 300_000;
+// The cryptoperiod defaults live in `d2b_contracts_zone_session`; this module
+// re-exports them so the bus-side enrollment machine and the child-local
+// ZoneLink handler cannot drift apart on the values.
+pub use d2b_contracts_zone_session::v3::zone_session::{
+    BOOTSTRAP_PSK_TTL_MS_DEFAULT, KK_SESSION_MAX_LIFETIME_MS_DEFAULT,
+};
 /// Frozen lower bound of the bootstrap PSK lifetime.
 pub const BOOTSTRAP_PSK_TTL_MS_MIN: u64 = 60_000;
 /// Frozen upper bound of the bootstrap PSK lifetime.
 pub const BOOTSTRAP_PSK_TTL_MS_MAX: u64 = 3_600_000;
 
-/// Default maximum lifetime of one enrolled `Noise_KK` session.
-pub const KK_SESSION_MAX_LIFETIME_MS_DEFAULT: u64 = 86_400_000;
 /// Frozen lower bound of the enrolled session lifetime.
 pub const KK_SESSION_MAX_LIFETIME_MS_MIN: u64 = 3_600_000;
 /// Frozen upper bound of the enrolled session lifetime.

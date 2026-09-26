@@ -3,26 +3,37 @@
 use crate::{
     AudioBindingSpec, AudioChannel, AudioGrant, AudioLeaseId, AudioMediator, AudioMediatorError,
     AudioReadiness, GuestAudioReadiness, HostAudioReadiness, MicDecision, SharedMicrophoneArbiter,
-    SpeakerMixer, validate_audio_binding_in_zone, validate_audio_service,
+    SpeakerMixer, validate_audio_binding_in_zone,
 };
 use d2b_contracts_provider::v3::semantic_services::{
     SemanticFamily,
     child_resources::{
-        BindingChildKind, BindingChildPlacement, BindingChildRequest, BindingChildSet,
+        ProcessChildKind, BindingChildPlacement, BindingChildRequest, BindingChildSet,
         explicit_binding_children,
     },
 };
 use d2b_contracts_resource::v3::{ExecutionDomain, ResourceRef};
+use std::num::NonZeroUsize;
 use tracing::{debug, warn};
 
 const AUDIO_PROVIDER_REF: &str = "Provider/audio-pipewire";
 
 /// Default shared-Runner repair interval for audio resources.
+///
+/// 300 seconds (5 minutes) bounds how long a failed audio worker can
+/// stay unrepaired before the next resync re-runs the repair path,
+/// while keeping the resync cadence well below the daemon's
+/// operator-visible stall threshold.
 pub const AUDIO_REPAIR_INTERVAL_SECS: u64 = 300;
+
+/// The arbiter and mixer admission bound: how many pending microphone
+/// leases or speaker consumers one controller admits before refusing
+/// further admission.
+pub const AUDIO_QUEUE_BOUND: NonZeroUsize = NonZeroUsize::new(64).expect("fixed nonzero bound");
 
 const AUDIO_BINDING_CHILD_REQUESTS: [BindingChildRequest; 4] = [
     BindingChildRequest::process(
-        BindingChildKind::Process,
+        ProcessChildKind::Process,
         BindingChildPlacement::Host,
         "host-effect",
         "Provider/system-minijail",
@@ -32,7 +43,7 @@ const AUDIO_BINDING_CHILD_REQUESTS: [BindingChildRequest; 4] = [
     ),
     BindingChildRequest::endpoint(BindingChildPlacement::Host, "host-endpoint", "host-effect"),
     BindingChildRequest::process(
-        BindingChildKind::Process,
+        ProcessChildKind::Process,
         BindingChildPlacement::Guest,
         "guest-agent",
         "Provider/system-systemd",
@@ -129,7 +140,7 @@ pub enum AudioLastSetApplied {
     /// Applied to the guest only.
     GuestOnly,
     /// No setting was applied in the current reconcile.
-    OfflineOnly,
+    NotApplied,
 }
 
 /// Typed AudioBinding status projection.
@@ -169,7 +180,14 @@ impl core::fmt::Display for AudioControllerError {
     }
 }
 
-impl std::error::Error for AudioControllerError {}
+impl std::error::Error for AudioControllerError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Admission => None,
+            Self::Mediator(error) => Some(error),
+        }
+    }
+}
 
 /// Controller result including separate readiness observations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,36 +209,53 @@ pub struct AudioReconcileResultWithChildren {
     pub children: BindingChildSet,
 }
 
+/// Whether finalization enables the promoted microphone lease through this
+/// binding's mediator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MicrophoneHandoff {
+    /// The promoted lease is enabled through this binding's mediator.
+    Enable,
+    /// The promoted lease is left inactive for the daemon to reconcile.
+    Defer,
+}
+
 /// AudioBinding controller over existing audio policy and mediator ports.
 #[derive(Debug)]
 pub struct AudioBindingController<M: AudioMediator> {
     mediator: M,
     microphone: SharedMicrophoneArbiter,
-    activate_promoted: bool,
+    handoff: MicrophoneHandoff,
     microphone_effect_applied: bool,
     speaker: SpeakerMixer,
 }
 
 impl<M: AudioMediator> AudioBindingController<M> {
     /// Construct a controller with bounded arbitration state.
+    ///
+    /// Finalization enables the promoted microphone lease through this
+    /// controller's mediator.
     pub fn new(mediator: M) -> Self {
         Self {
             mediator,
-            microphone: crate::shared_microphone_arbiter(64),
-            activate_promoted: true,
+            microphone: crate::shared_microphone_arbiter(AUDIO_QUEUE_BOUND),
+            handoff: MicrophoneHandoff::Enable,
             microphone_effect_applied: false,
-            speaker: SpeakerMixer::new(64),
+            speaker: SpeakerMixer::new(AUDIO_QUEUE_BOUND),
         }
     }
 
     /// Construct a controller sharing one AudioService microphone authority.
+    ///
+    /// Finalization leaves the promoted lease inactive; the caller
+    /// reconciles the owning binding so the effect is applied to the
+    /// correct target.
     pub fn with_shared_microphone(mediator: M, microphone: SharedMicrophoneArbiter) -> Self {
         Self {
             mediator,
             microphone,
-            activate_promoted: false,
+            handoff: MicrophoneHandoff::Defer,
             microphone_effect_applied: false,
-            speaker: SpeakerMixer::new(64),
+            speaker: SpeakerMixer::new(AUDIO_QUEUE_BOUND),
         }
     }
 
@@ -389,7 +424,7 @@ impl<M: AudioMediator> AudioBindingController<M> {
         if binding.grants.speaker == AudioGrant::On {
             let transition = self
                 .speaker
-                .set_grant(lease, true)
+                .grant(lease)
                 .map_err(|error| {
                     debug!(
                         zone = %service_zone,
@@ -411,7 +446,7 @@ impl<M: AudioMediator> AudioBindingController<M> {
                         error = %error,
                         "speaker grant mediation failed for binding"
                     );
-                    if let Err(rollback_error) = self.speaker.set_grant(lease, false) {
+                    if let Err(rollback_error) = self.speaker.revoke(lease) {
                         warn!(
                             zone = %service_zone,
                             lease = ?lease,
@@ -444,7 +479,7 @@ impl<M: AudioMediator> AudioBindingController<M> {
                     })?;
             }
             self.speaker
-                .set_grant(lease, false)
+                .revoke(lease)
                 .map_err(|error| {
                     debug!(
                         zone = %service_zone,
@@ -556,7 +591,7 @@ impl<M: AudioMediator> AudioBindingController<M> {
             (true, true) => AudioLastSetApplied::HostAndGuest,
             (true, false) => AudioLastSetApplied::HostOnly,
             (false, true) => AudioLastSetApplied::GuestOnly,
-            (false, false) => AudioLastSetApplied::OfflineOnly,
+            (false, false) => AudioLastSetApplied::NotApplied,
         };
         Ok(AudioReconcileResult {
             status: AudioBindingStatus {
@@ -586,20 +621,11 @@ impl<M: AudioMediator> AudioBindingController<M> {
     }
 
     /// Finalize one binding with mute-before-release ordering.
-    pub fn finalize(
-        &mut self,
-        lease: AudioLeaseId,
-    ) -> Result<Option<AudioLeaseId>, AudioControllerError> {
-        self.finalize_inner(lease)
-    }
-
-    /// Finalize a binding whose microphone authority is shared with other
-    /// controllers.
     ///
-    /// The next lease is returned but is not enabled through this binding's
-    /// mediator. The daemon reconciles the promoted binding so the effect is
-    /// applied to the correct target.
-    pub fn finalize_shared(
+    /// The promoted microphone lease is enabled through this binding's
+    /// mediator when the controller owns the microphone authority; shared
+    /// controllers defer the activation to the daemon's reconcile.
+    pub fn finalize(
         &mut self,
         lease: AudioLeaseId,
     ) -> Result<Option<AudioLeaseId>, AudioControllerError> {
@@ -718,7 +744,7 @@ impl<M: AudioMediator> AudioBindingController<M> {
         let Some(next) = next else {
             return Ok(None);
         };
-        if self.activate_promoted
+        if self.handoff == MicrophoneHandoff::Enable
             && let Err(error) = self
                 .mediator
                 .set_channel_grant(AudioChannel::Microphone, AudioGrant::On)
@@ -735,14 +761,9 @@ impl<M: AudioMediator> AudioBindingController<M> {
             }
             return Err(AudioControllerError::Mediator(error));
         }
-        if self.activate_promoted {
+        if self.handoff == MicrophoneHandoff::Enable {
             self.microphone_effect_applied = true;
         }
         Ok(Some(next))
     }
-}
-
-/// Validate an AudioService before controller registration.
-pub fn register_service(service: &crate::AudioServiceSpec) -> Result<(), AudioControllerError> {
-    validate_audio_service(service).map_err(|_| AudioControllerError::Admission)
 }

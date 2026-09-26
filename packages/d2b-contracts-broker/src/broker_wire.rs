@@ -9,8 +9,7 @@
 //! the opaque IDs to look up the typed intent in its own trusted bundle
 //! copy. See `d2b_contracts::types` for the newtype set.
 
-use d2b_contracts::audit_wire::validate_audit_page;
-pub use d2b_contracts::audit_wire::{AuditExportCursor, AuditExportEntry, AuditExportErrorCode};
+use d2b_contracts::audit_wire::{validate_audit_page, AuditExportCursor, AuditExportEntry};
 use d2b_contracts::types::{
     BundleClosureRef, BundleOpId, MediaRef, PathClass, RoleId, ScopeId, SubjectId, TracingSpanId,
     VmId,
@@ -230,7 +229,7 @@ pub const FORWARD_SOCKET_ENV: &str = "D2B_BROKER_FORWARD_SOCKET";
 /// attachments disagree with their declarations, or whose declared set
 /// exceeds the bounded ceiling.
 ///
-/// The code is shared by both legs of the forward carrier,so the broker
+/// The code is shared by both legs of the forward carrier, so the broker
 /// and the rendezvous cannot drift apart on how an fd-leg failure is named.
 pub const FD_LEG: &str = "fd-leg";
 
@@ -239,25 +238,25 @@ pub const FD_LEG: &str = "fd-leg";
 /// The receive-side ancillary buffers on both legs are sized
 /// `cmsg_space!([RawFd; MAX_FRAME_FDS])`, so a frame with more attachments
 /// would be truncated by the transport. A declared set is therefore
-/// capped at this constant before dispatch,and a larger declaration is
+/// capped at this constant before dispatch, and a larger declaration is
 /// refused with [`FD_LEG`], never delivered as a transport truncation.
 pub const MAX_FRAME_FDS: usize = 8;
 
-/// The kernel kind one forwarded descriptor must present.from
+/// The kernel kind one forwarded descriptor must present. From
 ///
-/// The kind is declared per descriptor on the wire,index-aligned with the
-/// fd-index declarations,and validated against the received descriptor's
-/// fstat mode on the receiving leg;a mismatch is the [`FD_LEG`] refusal。
+/// The kind is declared per descriptor on the wire, index-aligned with the
+/// fd-index declarations, and validated against the received descriptor's
+/// fstat mode on the receiving leg; a mismatch is the [`FD_LEG`] refusal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum FdKind {
-    /// A FIFO (pipe) end。
+    /// A FIFO (pipe) end.
     Fifo,
-    /// A socket。
+    /// A socket.
     Socket,
-    /// A character device。
+    /// A character device.
     CharDevice,
-    /// A block device。
+    /// A block device.
     BlockDevice,
     /// Any descriptor kind.
     ///
@@ -268,9 +267,9 @@ pub enum FdKind {
     /// fstat kind - including anon-inodes such as pidfds, whose
     /// fstat mode carries no file type (U10 fd leg).
     Any,
-    /// A regular file。
+    /// A regular file.
     Regular,
-    /// A directory。
+    /// A directory.
     Directory,
 }
 
@@ -303,6 +302,17 @@ pub const DEFAULT_CONTEXT_DEADLINE_MS: u64 = 25_000;
 /// the call with [`STALE_CONTEXT`] rather than serve an unbounded or
 /// oversized handler grant.
 pub const MAX_CONTEXT_DEADLINE_MS: u64 = 60_000;
+
+/// The failure kinds a broker pidfd dispatch reports.
+///
+/// The live handler mints one of these names for every failure of a
+/// pidfd dispatch, and the daemon side reads the same names when it
+/// classifies a failed pidfd leg. Declaring the vocabulary once, here,
+/// keeps the producer and the classifier from drifting apart on the
+/// spelling of a kind neither can derive from the other - a mismatch
+/// would make a handled failure look like an unclassified one.
+pub const PIDFD_DISPATCH_FAILURE_KINDS: [&str; 3] =
+    ["PidfdRace", "PidfdOpenFailed", "ProcStatReadFailed"];
 
 /// The broker-attested context block riding one forwarded request.
 ///
@@ -418,14 +428,12 @@ pub struct ForwardOperationRequest {
     /// rather than a second root record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chain_identities: Option<Vec<String>>,
-    /// The positions,in the frame's SCM_RIGHTS attachment list,of the
+    /// The positions, in the frame's SCM_RIGHTS attachment list, of the
     /// descriptors this request carries. Empty when the request carries none.
-
     #[serde(default)]
     pub fd_indexes: Vec<u32>,
-    /// The kernel kind each declared descriptor must present,index-aligned
-    /// with [`Self::fd_indexes`]。
-
+    /// The kernel kind each declared descriptor must present, index-aligned
+    /// with [`Self::fd_indexes`].
     #[serde(default)]
     pub fd_kinds: Vec<FdKind>,
 }
@@ -444,15 +452,13 @@ pub enum ForwardOperationOutcome {
     Result {
         /// The canonical result payload the handler returned.
         result: serde_json::Value,
-        /// The positions,in the frame's SCM_RIGHTS attachment list,of the
+        /// The positions, in the frame's SCM_RIGHTS attachment list, of the
         /// descriptors the answering peer returned. Empty when the response
         /// carries none.
-
         #[serde(default)]
         fd_indexes: Vec<u32>,
-        /// The kernel kind each declared descriptor must present,index-aligned
+        /// The kernel kind each declared descriptor must present, index-aligned
         /// with the fd-index declarations.
-
         #[serde(default)]
         fd_kinds: Vec<FdKind>,
     },
@@ -860,26 +866,30 @@ impl BrokerProfile {
     }
 
     /// Closed Host operation catalog.
-    pub const fn host_operations() -> &'static [&'static str] {
+    pub const fn host_operations() -> &'static [BrokerOperationName] {
         HOST_OPERATION_CATALOG
     }
 
     /// Closed Guest operation catalog.
-    pub const fn guest_operations() -> &'static [&'static str] {
+    pub const fn guest_operations() -> &'static [BrokerOperationName] {
         GUEST_OPERATION_CATALOG
     }
 
     /// Return the operation catalog for this profile.
-    pub const fn operations(self) -> &'static [&'static str] {
+    pub const fn operations(self) -> &'static [BrokerOperationName] {
         match self {
             Self::Host => Self::host_operations(),
             Self::Guest => Self::guest_operations(),
         }
     }
 
-    /// Check the stable operation name against the profile catalog.
+    /// Check the stable operation name against the profile catalog. The
+    /// admission keeps the string spelling, so the wire boundary is
+    /// unchanged by the typed catalogs.
     pub fn allows_operation(self, operation: &str) -> bool {
-        self.operations().contains(&operation)
+        self.operations()
+            .iter()
+            .any(|item| item.as_str() == operation)
     }
 
     /// Check the request against the closed profile catalog. The typed
@@ -1685,6 +1695,46 @@ pub struct ObserveRunnerResponse {
     pub start_time_ticks: u64,
     pub cgroup_verified: bool,
     pub executable_verified: bool,
+}
+
+/// Take the Provider-controller bootstrap escrow one live runner retained
+/// at launch.
+///
+/// A daemon adopting a still-running ProviderController after its own
+/// restart sends this for the runner it identified: the broker's
+/// spawn-process kernel retained the controller's bootstrap endpoint, and
+/// the controller's bootstrap sends have been landing in it, so the
+/// daemon's bootstrap wait consumes them from here and the session
+/// acceptor can establish the controller session. The take is one-time
+/// and keyed by the same runner identity every generic Process leg uses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TakeControllerBootstrapRequest {
+    pub vm_id: VmId,
+    pub role_id: RoleId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_ref: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_uid: Option<ResourceUid>,
+    /// Immutable Zone identity for typed Process adoption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_uid: Option<ResourceUid>,
+    /// Broker-independent commitment to the private runtime scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_scope: Option<[u8; 32]>,
+}
+
+/// Response to [`TakeControllerBootstrapRequest`].
+///
+/// `taken` is `false` when the registry holds no escrow for the named
+/// identity: an absent escrow is an absent result, never a refusal. When
+/// it is `true`, the escrow itself is the sole SCM_RIGHTS attachment on
+/// the same frame.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TakeControllerBootstrapResponse {
+    /// Whether this take claimed the retained escrow.
+    pub taken: bool,
 }
 
 /// Audio channel selected by a broker-owned PipeWire effect.
@@ -2500,6 +2550,15 @@ impl RunnerLaunchArgs {
     pub const MAX_TOTAL_BYTES: usize = 16 * 1024;
 
     /// Validate and construct one bounded argument vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RunnerLaunchArgsError::Empty`] when the vector carries no
+    /// arguments, [`RunnerLaunchArgsError::TooMany`] when it exceeds
+    /// [`RunnerLaunchArgs::MAX_ARGS`], and the per-argument variants
+    /// (`EmptyArgument`, `ArgumentWithNul`, `ArgumentTooLong`) or
+    /// [`RunnerLaunchArgsError::TotalTooLong`] when an argument or the
+    /// combined size exceeds the launch bounds.
     pub fn new(args: Vec<String>) -> Result<Self, RunnerLaunchArgsError> {
         if args.is_empty() {
             return Err(RunnerLaunchArgsError::Empty);
@@ -2810,7 +2869,7 @@ pub struct SpawnRunnerResponse {
 /// Canonical opaque digest carried by the broker audit join context.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(transparent)]
-pub struct CanonicalAuditDigest(pub String);
+pub struct CanonicalAuditDigest(String);
 
 impl CanonicalAuditDigest {
     /// Parse the exact lower-case SHA-256 wire spelling.
@@ -2871,10 +2930,6 @@ pub struct BrokerRequestEnvelope {
     pub request: BrokerRequest,
     #[serde(default)]
     pub caller_role: BrokerCallerRole,
-    /// Test-only peer uid override; ignored by the production
-    /// broker (which always uses `SO_PEERCRED`).
-    #[serde(default)]
-    pub test_peer_uid: Option<u32>,
     /// Explicit canonical join identities for broker/resource durability.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audit_join: Option<AuditJoinContext>,
@@ -3183,6 +3238,40 @@ mod tests {
             let parsed: BrokerCallerRole = serde_json::from_str(&json).unwrap();
             assert_eq!(parsed, role);
         }
+    }
+
+    #[test]
+    fn broker_request_envelope_refuses_a_test_only_peer_uid_member() {
+        // The test-only peer-uid override is no longer a member of
+        // the wire contract. The harness frames a `--test-mode` broker
+        // unwraps it from; every other broker refuses it here.
+        let env = BrokerRequestEnvelope {
+            request: BrokerRequest::EnvelopeInvoke(EnvelopeInvokeRequest {
+                operation: "signal-pidfd".to_owned(),
+                zone: "zone-a".to_owned(),
+                payload: serde_json::json!({ "signal": 15 }),
+                chain_root_invocation_id: None,
+                chain_identities: None,
+                fd_indexes: vec![0],
+                fd_kinds: vec![FdKind::Any],
+            }),
+            caller_role: BrokerCallerRole::AdminUid { uid: 1000 },
+            audit_join: None,
+        };
+        let encoded = serde_json::to_value(&env).expect("encodes");
+        assert!(
+            encoded.get("testPeerUid").is_none(),
+            "the production envelope emits no test seam: {encoded}"
+        );
+        let mut frame = encoded.as_object().expect("envelope frame").clone();
+        frame.insert("testPeerUid".to_owned(), serde_json::json!(1000));
+        let error =
+            serde_json::from_value::<BrokerRequestEnvelope>(serde_json::Value::Object(frame))
+                .expect_err("the production envelope must refuse the test-only member");
+        assert!(
+            error.to_string().contains("unknown field `testPeerUid`"),
+            "unexpected refusal: {error}"
+        );
     }
 
     #[test]
@@ -4113,6 +4202,83 @@ mod tests {
         assert_eq!(request.domain, UnitDomain::User);
     }
 
+    fn pidfd_test_unit() -> UnitRequest {
+        UnitRequest {
+            vm_id: VmId::new("corp-vm"),
+            role_id: RoleId::new("audio"),
+            resource_ref: None,
+            resource_uid: None,
+            role: RunnerRole::Audio,
+            bundle_runner_intent_ref: BundleOpId::new("runner:corp-vm:audio"),
+            bundle_content_identity: "sha256:bundle".to_owned(),
+            provider_identity: [1; 32],
+            template_identity: [2; 32],
+            generation: 3,
+            domain: UnitDomain::System,
+            execution_ref: None,
+            user_ref: None,
+            guest_execution: None,
+            sandbox_plan: None,
+            tracing_span_id: None,
+        }
+    }
+
+    fn pidfd_test_identity() -> UnitIdentity {
+        UnitIdentity {
+            invocation_id: [3; 16],
+            cgroup_identity: [4; 32],
+            main_pid: 4242,
+            start_time_ticks: 987_654_321,
+            provider_identity: [1; 32],
+            template_identity: [2; 32],
+            generation: 3,
+            bundle_content_identity: "sha256:bundle".to_owned(),
+            guest_execution: None,
+        }
+    }
+
+    /// Adds one member no unit request declares to an encoded request frame.
+    fn with_unknown_member(value: serde_json::Value) -> serde_json::Value {
+        let mut frame = value.as_object().expect("request frame object").clone();
+        frame.insert("unknownMember".to_owned(), serde_json::json!(1));
+        serde_json::Value::Object(frame)
+    }
+
+    #[test]
+    fn flattened_unit_requests_refuse_unknown_members() {
+        // The container's `deny_unknown_fields` is the only guard these two
+        // flattened requests have: a flattened type's own
+        // `deny_unknown_fields` is the one serde ignores, so an unknown
+        // member is refused here only while the container keeps its own
+        // (`UnitRequest`'s is inert through the flatten).
+        let pidfd = OpenUnitPidfdRequest {
+            unit: pidfd_test_unit(),
+            expected: pidfd_test_identity(),
+        };
+        let encoded = serde_json::to_value(&pidfd).expect("OpenUnitPidfdRequest encodes");
+        assert_eq!(
+            serde_json::from_value::<OpenUnitPidfdRequest>(encoded.clone())
+                .expect("the encoded request decodes"),
+            pidfd
+        );
+        serde_json::from_value::<OpenUnitPidfdRequest>(with_unknown_member(encoded))
+            .expect_err("an unknown member must be refused");
+
+        let stop = StopUnitRequest {
+            unit: pidfd_test_unit(),
+            expected: pidfd_test_identity(),
+            class: UnitStopClass::Drain,
+        };
+        let encoded = serde_json::to_value(&stop).expect("StopUnitRequest encodes");
+        assert_eq!(
+            serde_json::from_value::<StopUnitRequest>(encoded.clone())
+                .expect("the encoded request decodes"),
+            stop
+        );
+        serde_json::from_value::<StopUnitRequest>(with_unknown_member(encoded))
+            .expect_err("an unknown member must be refused");
+    }
+
     #[test]
     fn signal_runner_response_round_trips() {
         // U10: the typed response is the envelope result now.
@@ -4217,7 +4383,6 @@ mod tests {
                 fd_kinds: vec![],
             }),
             caller_role: BrokerCallerRole::AdminUid { uid: 1000 },
-            test_peer_uid: None,
             audit_join: None,
         };
         let frame = encode_frame(&root).expect("encodes");

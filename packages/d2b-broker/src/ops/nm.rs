@@ -15,6 +15,7 @@
 use crate::ops::exec_reconcile::ReconcileExecutor;
 use crate::sys::path_safe;
 use d2b_core::bundle_resolver::ResolvedNmUnmanagedIntent;
+use d2b_core::host::NmReloadBehavior;
 use d2b_core::host_w3::NmUnmanagedEntry;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -288,11 +289,13 @@ fn rollback(path: &Path, prior: Option<&str>) -> io::Result<()> {
     }
 }
 
-/// Runtime entry-point for `ApplyNmUnmanaged`.
+/// Runtime entry-point for `ApplyNmUnmanaged`:apply an intent through the
+/// live executor path.
 ///
-/// The dispatcher now lands on `ops::nm` even though the live path is
-/// still a thin wrapper. That preserves a stable integration point for
-/// future coexistence/reload-verification work.
+/// The intent's reload behavior is already resolved to the closed
+/// [`NmReloadBehavior`] set by the time it reaches here, so NetworkManager
+/// is reloaded after a successful write exactly when the intent declares
+/// `atomic-reload`.
 pub async fn apply_with_reload(
     executor: &dyn ReconcileExecutor,
     intent: &ResolvedNmUnmanagedIntent,
@@ -300,6 +303,8 @@ pub async fn apply_with_reload(
     crate::live_handlers::live_apply_nm_unmanaged(executor, intent).await
 }
 
+/// Remove one NetworkManager unmanaged drop-in the intent names and run the
+/// `systemctl` reload when the resolved behavior calls for it.
 pub async fn remove_with_reload(
     intent: &ResolvedNmUnmanagedIntent,
 ) -> Result<(), crate::live_handlers::LiveHandlerError> {
@@ -325,7 +330,6 @@ async fn remove_with_reload_using<F>(
 where
     F: for<'a> FnMut(&'a [&'a str]) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>,
 {
-    crate::live_handlers::validate_nm_reload_behavior(&intent.reload_behavior)?;
     path_safe::refuse_world_writable_parent(&intent.file_path)
         .map_err(|err| io_to_live_handler(&intent.file_path, err))?;
     path_safe::refuse_symlink(&intent.file_path)
@@ -342,7 +346,7 @@ where
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(err) => return Err(io_to_live_handler(&intent.file_path, err)),
     }
-    if intent.reload_behavior == "atomic-reload"
+    if matches!(intent.reload_behavior, NmReloadBehavior::AtomicReload)
         && let Err(err) = reload(&["reload", "NetworkManager"]).await
     {
         let _ = rollback(&intent.file_path, prior.as_deref());
@@ -529,7 +533,7 @@ mod tests {
             mode: 0o644,
             owner: "root".to_owned(),
             group: "root".to_owned(),
-            reload_behavior: "atomic-reload".to_owned(),
+            reload_behavior: NmReloadBehavior::AtomicReload,
         };
 
         apply_with_reload_using(&exec, &intent, {
@@ -569,12 +573,12 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    async fn remove_with_reload_refuses_unknown_reload_behavior_before_mutation() {
+    async fn remove_with_reload_removes_without_reloading_for_the_unspecified_behavior() {
         let dir = std::env::current_dir()
             .unwrap()
             .join("target")
             .join(format!(
-                "nm-remove-refused-{}-{}",
+                "nm-remove-unspecified-{}-{}",
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -583,19 +587,25 @@ mod tests {
             ));
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let path = dir.join("00-d2b-unmanaged.conf");
+        let d2b_link = derive_from_env_vm("e", None, DerivedRole::Bridge, None).unwrap();
+        let prior = render_nm_conf(&[NmUnmanagedEntry {
+            if_name: d2b_link,
+            marker_id: "m1".into(),
+        }]);
+        tokio::fs::write(&path, &prior).await.unwrap();
         let intent = ResolvedNmUnmanagedIntent {
             intent_id: "nm-unmanaged:host".to_owned(),
             file_path: path.clone(),
-            contents: String::new(),
+            contents: prior,
             mode: 0o644,
             owner: "root".to_owned(),
             group: "root".to_owned(),
-            reload_behavior: "atomic-reloadd".to_owned(),
+            reload_behavior: NmReloadBehavior::Unspecified,
         };
         let reloaded = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let reload_flag = std::sync::Arc::clone(&reloaded);
 
-        let err = remove_with_reload_using(&intent, move |_| {
+        remove_with_reload_using(&intent, move |_| {
             let reload_flag = std::sync::Arc::clone(&reload_flag);
             Box::pin(async move {
                 reload_flag.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -603,17 +613,13 @@ mod tests {
             })
         })
         .await
-        .expect_err("a typo'd reload behavior must refuse the removal");
+        .expect("the empty no-host-contract sentinel still removes the drop-in");
 
-        assert!(matches!(
-            &err,
-            crate::live_handlers::LiveHandlerError::NmReloadBehaviorRefused(value)
-                if value == "atomic-reloadd"
-        ));
         assert!(
             !reloaded.load(std::sync::atomic::Ordering::Relaxed),
-            "the refusal must precede any mutation"
+            "only the atomic-reload behavior reloads NetworkManager"
         );
+        assert!(!path.exists(), "the drop-in is still removed");
         tokio::fs::remove_dir_all(&dir).await.ok();
     }
 }

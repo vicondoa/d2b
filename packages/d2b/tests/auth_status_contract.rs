@@ -10,8 +10,9 @@
 //!     typed deserialize equivalent to the schema check the bash gate did via
 //!     docs/reference/cli-output/auth-status.schema.json);
 //!   * the per-role allowed/denied subcommand authz surface matches the binary's
-//!     contract (launcher gets `up` but keeps `audit` denied; `none` stays
-//!     read-only; admin gains `audit` and denies nothing);
+//!     contract (launcher gains `list`, does not report the retired v2 verb
+//!     `up` as allowed, and keeps `audit` denied; `none` stays read-only; admin
+//!     gains `audit` and denies nothing);
 //!   * `auth status --human` summarizes the role and the denied `audit` access.
 //!
 //! Unlike the `list` gate, `auth status` is driven entirely by env-file fixtures
@@ -101,8 +102,9 @@ fn auth_status_roles_match_schema_and_authz() {
     let none_fixture = write_fixture(tmp.path(), "auth-none.json", NONE_FIXTURE);
     let admin_fixture = write_fixture(tmp.path(), "auth-admin.json", ADMIN_FIXTURE);
 
-    // Case 1 - launcher: gains launcher-allowed verbs (e.g. `up`) but keeps
-    // `audit` denied.
+    // Case 1 - launcher: gains launcher-allowed verbs (e.g. `list`) but keeps
+    // `audit` denied, and no retired v2 verbs are reported as allowed.
+
     let launcher = parse_json(&run_auth_status(
         &launcher_fixture,
         1000,
@@ -112,8 +114,16 @@ fn auth_status_roles_match_schema_and_authz() {
     assert_eq!(launcher.role, AuthRoleV2::Launcher, "uid 1000 -> launcher");
     assert_eq!(launcher.effective_uid, 1000);
     assert!(
-        launcher.allowed_subcommands.iter().any(|c| c == "up"),
-        "launcher allows `up`; got {:?}",
+        launcher.allowed_subcommands.iter().any(|c| c == "list"),
+        "launcher allows `list`; got {:?}",
+        launcher.allowed_subcommands
+    );
+    assert!(
+        !launcher
+            .allowed_subcommands
+            .iter()
+            .any(|c| c == "up"),
+        "launcher must not report retired v2 verb `up` as allowed; got {:?}",
         launcher.allowed_subcommands
     );
     assert!(
@@ -132,15 +142,8 @@ fn auth_status_roles_match_schema_and_authz() {
     none_allowed.sort();
     assert_eq!(
         none_allowed,
-        vec![
-            "auth status",
-            "list",
-            "op inspect",
-            "realm inspect",
-            "realm list",
-            "status",
-        ],
-        "none role stays read-only"
+        vec!["auth status", "list", "op inspect", "status"],
+        "none role stays read-only, naming only commands the parser accepts"
     );
 
     // Case 3 - admin: gains `audit`, denies nothing.

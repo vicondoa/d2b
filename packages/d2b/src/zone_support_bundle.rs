@@ -16,103 +16,103 @@ use crate::{
 pub(crate) struct ZoneSupportBundleArgs {}
 
 /// Maximum status snapshots per resource type.
-pub const MAX_SNAPSHOTS_PER_TYPE: usize = 32;
+const MAX_SNAPSHOTS_PER_TYPE: usize = 32;
 /// Maximum total status snapshots.
-pub const MAX_TOTAL_SNAPSHOTS: usize = 512;
+const MAX_TOTAL_SNAPSHOTS: usize = 512;
 /// Maximum structured log entries.
-pub const MAX_LOG_ENTRIES: usize = 2000;
+const MAX_LOG_ENTRIES: usize = 2000;
 
 /// Resource status fields safe for support output.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
-pub struct ResourceStatusSnapshot {
+struct ResourceStatusSnapshot {
     /// Opaque resource UID.
-    pub uid: String,
+    uid: String,
     /// Zone identity.
-    pub zone: String,
+    zone: String,
     /// Generation.
-    pub generation: u64,
+    generation: u64,
     /// Store revision.
-    pub revision: u64,
+    revision: u64,
     /// Last observed timestamp token.
-    pub observed_at: String,
+    observed_at: String,
     /// Closed phase.
-    pub phase: String,
+    phase: String,
     /// Bounded condition codes.
-    pub conditions: Vec<String>,
+    conditions: Vec<String>,
     /// Observed generation.
-    pub observed_generation: u64,
+    observed_generation: u64,
     /// Stable outcome code.
-    pub outcome: Option<String>,
+    outcome: Option<String>,
 }
 
 /// A bounded controller checkpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
-pub struct ControllerSnapshot {
+struct ControllerSnapshot {
     /// Closed handler.
-    pub handler: String,
+    handler: String,
     /// Phase.
-    pub phase: String,
+    phase: String,
     /// Queue depth.
-    pub queue_depth: u32,
+    queue_depth: u32,
 }
 
 /// An audit segment inventory entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
-pub struct AuditSegmentInventory {
+struct AuditSegmentInventory {
     /// Date-derived owned filename.
-    pub filename: String,
+    filename: String,
     /// Segment size.
-    pub bytes: u64,
+    bytes: u64,
     /// Record count.
-    pub records: u64,
+    records: u64,
 }
 
 /// Provider self-metric summary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
-pub struct OtelSummary {
+struct OtelSummary {
     /// Provider phase.
-    pub phase: String,
+    phase: String,
     /// Exported record count.
-    pub exported: u64,
+    exported: u64,
     /// Dropped record count.
-    pub dropped: u64,
+    dropped: u64,
 }
 
 /// One already-redacted structured log entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
-pub struct StructuredLogEntry {
+struct StructuredLogEntry {
     /// Stable event class.
-    pub event: String,
+    event: String,
     /// Stable outcome code.
-    pub outcome: String,
+    outcome: String,
     /// Opaque timestamp token.
-    pub timestamp: String,
+    timestamp: String,
 }
 
 /// Output envelope.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SupportBundle {
+struct SupportBundle {
     /// Complete or partial.
-    pub bundle_completeness: String,
+    bundle_completeness: String,
     /// Doctor section.
-    pub doctor: ZoneDoctorReport,
+    doctor: ZoneDoctorReport,
     /// Bounded resource status snapshots.
-    pub resource_status: Vec<ResourceStatusSnapshot>,
+    resource_status: Vec<ResourceStatusSnapshot>,
     /// Controller snapshots.
-    pub controllers: Vec<ControllerSnapshot>,
+    controllers: Vec<ControllerSnapshot>,
     /// Schema catalog names and versions only.
-    pub schema_catalog: Vec<(String, String)>,
+    schema_catalog: Vec<(String, String)>,
     /// Audit segment inventory.
-    pub audit_segments: Vec<AuditSegmentInventory>,
+    audit_segments: Vec<AuditSegmentInventory>,
     /// Optional OTEL summary.
-    pub telemetry: Option<OtelSummary>,
+    telemetry: Option<OtelSummary>,
     /// Redacted bounded logs.
-    pub logs: Vec<StructuredLogEntry>,
+    logs: Vec<StructuredLogEntry>,
 }
 
 /// Run the admin-only bounded support-bundle service.
@@ -320,7 +320,7 @@ fn contains_quarantine_signal(value: &Value) -> bool {
 
 /// Build a bounded support bundle.
 #[allow(clippy::too_many_arguments)]
-pub fn build_bundle(
+fn build_bundle(
     doctor: ZoneDoctorReport,
     quarantined: bool,
     resource_status: Vec<ResourceStatusSnapshot>,
@@ -392,7 +392,7 @@ pub fn build_bundle(
 }
 
 /// Serialize the bounded bundle as one NDJSON document.
-pub fn render_ndjson(bundle: &SupportBundle) -> Result<String, serde_json::Error> {
+fn render_ndjson(bundle: &SupportBundle) -> Result<String, serde_json::Error> {
     let mut output = serde_json::to_string(bundle)?;
     output.push('\n');
     Ok(output)

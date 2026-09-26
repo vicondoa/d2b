@@ -22,7 +22,7 @@ use std::os::fd::AsRawFd;
 
 use d2b_broker::fd_passing::{recv_fds, send_fds};
 use d2b_broker::ops::pidfd::test_harness::FakePidfdSpawner;
-use d2b_broker::ops::pidfd::{PidfdPayload, PidfdSpawner, assert_cloexec};
+use d2b_broker::ops::pidfd::{PidfdOpError, PidfdPayload, PidfdSpawner, assert_cloexec};
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
 
@@ -87,9 +87,12 @@ fn reconciliation_refuses_start_time_drift() {
     let err = s
         .reconcile_drift(4242, StartTime(1_000_000), StartTime(2_000_000))
         .unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        msg.contains("start-time drifted"),
-        "unexpected error: {msg}"
-    );
+    match err {
+        PidfdOpError::ReconciliationStartTimeMismatch {
+            pid: 4242,
+            expected: 1_000_000,
+            observed: 2_000_000,
+        } => {}
+        other => panic!("expected start-time drift, got {other:?}"),
+    }
 }

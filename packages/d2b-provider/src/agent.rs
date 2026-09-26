@@ -37,6 +37,11 @@ pub struct ProviderAgentRequest {
 
 impl ProviderAgentRequest {
     /// Construct a bounded request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderAgentError::InvalidTimeout`] when the timeout is
+    /// zero or exceeds the agent ceiling.
     pub fn new(
         service: ServiceName,
         method: SpecifiedProviderMethod,
@@ -208,9 +213,21 @@ impl std::error::Error for ProviderAgentError {}
 pub struct ProviderAgent<S> {
     zone: ZoneId,
     provider_axis: ProviderBindingAxis,
-    service: S,
+    service: Arc<S>,
     permits: Arc<Semaphore>,
-    audit: Mutex<VecDeque<ProviderAgentAuditEvent>>,
+    audit: Arc<Mutex<VecDeque<ProviderAgentAuditEvent>>>,
+}
+
+impl<S> Clone for ProviderAgent<S> {
+    fn clone(&self) -> Self {
+        Self {
+            zone: self.zone.clone(),
+            provider_axis: self.provider_axis,
+            service: Arc::clone(&self.service),
+            permits: Arc::clone(&self.permits),
+            audit: Arc::clone(&self.audit),
+        }
+    }
 }
 
 impl<S> ProviderAgent<S> {
@@ -226,9 +243,9 @@ impl<S> ProviderAgent<S> {
         Ok(Self {
             zone,
             provider_axis,
-            service,
+            service: Arc::new(service),
             permits: Arc::new(Semaphore::new(MAX_AGENT_IN_FLIGHT)),
-            audit: Mutex::new(VecDeque::with_capacity(MAX_AGENT_AUDIT_EVENTS)),
+            audit: Arc::new(Mutex::new(VecDeque::with_capacity(MAX_AGENT_AUDIT_EVENTS))),
         })
     }
 
@@ -267,6 +284,15 @@ where
     S: ProviderAgentService,
 {
     /// Dispatch one request with a bounded timeout.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderAgentError::UnsupportedService`] when the request
+    /// names a service other than `d2b.provider.v3`,
+    /// [`ProviderAgentError::DispatchSaturated`] when the in-flight budget
+    /// is exhausted, [`ProviderAgentError::DispatchTimeout`] when the
+    /// request exceeds its timeout, and
+    /// [`ProviderAgentError::HandlerFailed`] when the handler refuses.
     pub async fn dispatch(
         &self,
         request: ProviderAgentRequest,
@@ -280,6 +306,7 @@ where
             .await;
             return Err(ProviderAgentError::UnsupportedService);
         }
+        let method = request.method;
         let permit = self
             .permits
             .clone()
@@ -287,7 +314,7 @@ where
             .map_err(|_| ProviderAgentError::DispatchSaturated)?;
         let result = timeout(
             Duration::from_millis(request.timeout_ms),
-            self.service.dispatch(request.clone()),
+            self.service.dispatch(request),
         )
         .await
         .map_err(|_| ProviderAgentError::DispatchTimeout)?
@@ -299,7 +326,7 @@ where
             } else {
                 ProviderAgentOutcome::Failed
             },
-            request.method,
+            method,
             self.provider_axis,
         ))
         .await;
@@ -308,6 +335,13 @@ where
 
     /// Serve requests until the authenticated session closes or its channel
     /// is dropped.  A session close is a clean termination, not a retry loop.
+    ///
+    /// Each request is dispatched on its own task; the dispatch semaphore
+    /// ([`MAX_AGENT_IN_FLIGHT`]) caps how many run concurrently, so a slow
+    /// handler near the timeout ceiling no longer stalls the session queue.
+    /// Per-session response ordering is not a contract: responses are sent as
+    /// each dispatch completes, and a later request may finish before an
+    /// earlier one.
     pub async fn serve(
         &self,
         mut requests: mpsc::Receiver<ProviderAgentMessage>,
@@ -318,10 +352,12 @@ where
                 ProviderAgentMessage::Request(request) => request,
                 ProviderAgentMessage::SessionClosed => return Ok(()),
             };
-            let result = self.dispatch(request).await;
-            if responses.send(result).await.is_err() {
-                return Err(ProviderAgentError::SessionClosed);
-            }
+            let agent = self.clone();
+            let response_tx = responses.clone();
+            tokio::spawn(async move {
+                let result = agent.dispatch(request).await;
+                let _ = response_tx.send(result).await;
+            });
         }
         Ok(())
     }
@@ -382,6 +418,68 @@ mod tests {
             .unwrap_err(),
             ProviderAgentError::InvalidTimeout
         );
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn slow_dispatch_does_not_stall_later_requests() {
+        struct Slow;
+
+        impl ProviderAgentService for Slow {
+            fn dispatch(
+                &self,
+                request: ProviderAgentRequest,
+            ) -> impl Future<Output = Result<ProviderAgentResponse, ProviderAgentError>> + Send
+            {
+                let slow = request.payload().get("slow").is_some();
+                async move {
+                    if slow {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                    }
+                    Ok(ProviderAgentResponse::new(request.payload.clone()))
+                }
+            }
+        }
+
+        let agent = ProviderAgent::new(
+            ZoneId::parse("dev").unwrap(),
+            ProviderBindingAxis::Provider,
+            Slow,
+        )
+        .unwrap();
+        let (request_tx, request_rx) = mpsc::channel(4);
+        let (response_tx, mut response_rx) = mpsc::channel(4);
+        let slow_request = ProviderAgentRequest::new(
+            ServiceName::parse("d2b.provider.v3").unwrap(),
+            SpecifiedProviderMethod::AssessUpdate,
+            CanonicalJsonObject::parse(br#"{"slow":true}"#).unwrap(),
+            1_000,
+        )
+        .unwrap();
+        let fast_request = ProviderAgentRequest::new(
+            ServiceName::parse("d2b.provider.v3").unwrap(),
+            SpecifiedProviderMethod::AssessUpdate,
+            CanonicalJsonObject::parse(br#"{"ok":true}"#).unwrap(),
+            1_000,
+        )
+        .unwrap();
+        request_tx
+            .send(ProviderAgentMessage::Request(slow_request))
+            .await
+            .unwrap();
+        request_tx
+            .send(ProviderAgentMessage::Request(fast_request))
+            .await
+            .unwrap();
+        drop(request_tx);
+        agent.serve(request_rx, response_tx).await.unwrap();
+        // The fast request completes while the slow one is still sleeping:
+        // per-session ordering is not a contract, but the queue is not
+        // stalled behind the slow handler.
+        let first = response_rx.recv().await.unwrap().unwrap();
+        assert!(first.payload().get("slow").is_none(), "fast request should complete first");
+        let second = response_rx.recv().await.unwrap().unwrap();
+        assert!(second.payload().get("slow").is_some());
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]

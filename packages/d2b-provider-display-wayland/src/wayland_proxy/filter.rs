@@ -77,8 +77,9 @@ use wl_proxy::{
 
 use crate::wayland_proxy::{
     bridge::{
-        BridgeConfig, BridgeConnectionState, BridgeHandoff, BridgeReconnectMachine,
-        BridgeTransferKind, BridgeTransferMetadata, LocalTransferFd,
+        BridgeConfig, BridgeConnectionState, BridgeHandoff, BridgeInboundFrame,
+        BridgeReconnectMachine, BridgeTransferKind, BridgeTransferMetadata, LocalTransferFd,
+        decode_bridge_frame,
     },
     clipboard::{
         ClipboardGlobalDisposition, ClipboardMimePolicy, ClipboardRoute, MimeDecision,
@@ -618,11 +619,6 @@ impl VirtualClipboardState {
                 self.enqueue_bridge_handoff(local_fd, metadata);
             }
             crate::wayland_proxy::bridge::HandoffStatus::Failed(error) => {
-                let status = crate::wayland_proxy::bridge::HandoffStatus::Failed(error);
-                let error = match status {
-                    crate::wayland_proxy::bridge::HandoffStatus::Failed(error) => error,
-                    _ => unreachable!(),
-                };
                 let _ = local_fd.close_after_handoff(
                     crate::wayland_proxy::bridge::HandoffStatus::Failed(error),
                 );
@@ -766,8 +762,8 @@ impl VirtualClipboardState {
             .map(|stream| (stream, self.pending_bridge_poll_flags()))
     }
 
-    // Non-blocking read (WouldBlock handled** at a poll-driven sync bridge
-    // boundary driven by the CLI loop;no async form fits this surface.
+    // Non-blocking read (WouldBlock handled) at a poll-driven sync bridge
+    // boundary driven by the CLI loop; no async form fits this surface.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn drain_bridge_messages(clipboard: &Rc<RefCell<Self>>) {
         let mut refresh = false;
@@ -806,21 +802,8 @@ impl VirtualClipboardState {
                 }
             }
             state.bridge_read_buffer.extend_from_slice(&read_bytes);
-            while let Some(newline) = state
-                .bridge_read_buffer
-                .iter()
-                .position(|byte| *byte == b'\n')
-            {
-                let frame = state
-                    .bridge_read_buffer
-                    .drain(..=newline)
-                    .collect::<Vec<_>>();
-                if frame
-                    .windows(br#""type":"refresh_selection""#.len())
-                    .any(|window| window == br#""type":"refresh_selection""#)
-                {
-                    refresh = true;
-                }
+            if state.drain_buffered_bridge_frames() > 0 {
+                refresh = true;
             }
             if state.bridge_read_buffer.len() > 4096 {
                 state.bridge_read_buffer.clear();
@@ -832,6 +815,45 @@ impl VirtualClipboardState {
         if refresh {
             broadcast_selection(clipboard);
         }
+    }
+
+    /// Decodes every complete newline-delimited frame already buffered and
+    /// returns how many of them asked for a selection refresh.
+    ///
+    /// A frame that does not decode as a [`BridgeInboundFrame`] - bad JSON, a
+    /// truncated write, or a `type` tag this side does not know - is logged
+    /// through the rate limiter and dropped. One unreadable frame must never
+    /// disable the refresh frames around it and must never tear the bridge
+    /// down, so the failure stays visible in diagnostics instead of being
+    /// silently skipped. Bytes after the last newline stay buffered for the
+    /// next read.
+    fn drain_buffered_bridge_frames(&mut self) -> usize {
+        let mut refreshes = 0;
+        while let Some(newline) = self
+            .bridge_read_buffer
+            .iter()
+            .position(|byte| *byte == b'\n')
+        {
+            let decoded = decode_bridge_frame(&self.bridge_read_buffer[..newline]);
+            self.bridge_read_buffer.drain(..=newline);
+            match decoded {
+                Ok(BridgeInboundFrame::RefreshSelection) => refreshes += 1,
+                Err(error) => {
+                    let identity_label = self.identity_label.clone();
+                    let error = bounded_error_detail(error.to_string());
+                    self.diag.borrow_mut().warn(
+                        "clipboard-bridge",
+                        "frame-decode-failed",
+                        || {
+                            format!(
+                                "[d2b-wlproxy] target={identity_label} event=clipboard-bridge reason=frame-decode-failed error={error}"
+                            )
+                        },
+                    );
+                }
+            }
+        }
+        refreshes
     }
 
     fn mark_bridge_disconnected(&mut self) {
@@ -1250,80 +1272,73 @@ impl WlRegistryHandler for FilterRegistryHandler {
 
         // Install per-interface handlers before forwarding, so we can
         // intercept the object's lifecycle from the first message.
-        match id.try_downcast::<XdgWmBase>() {
-            Some(wm_base) => {
-                wm_base.set_handler(FilterXdgWmBaseHandler {
-                    policy: self.policy.clone(),
+        if let Some(wm_base) = id.try_downcast::<XdgWmBase>() {
+            wm_base.set_handler(FilterXdgWmBaseHandler {
+                policy: self.policy.clone(),
+                decoration: self.decoration.clone(),
+                positioners: Rc::new(RefCell::new(HashMap::new())),
+            });
+        } else if let Some(eglstream_display) = id.try_downcast::<WlEglstreamDisplay>() {
+            eglstream_display.set_handler(FilterEglstreamDisplayHandler {
+                identity_label: self.policy.identity_label.clone(),
+                diag: self.diag.clone(),
+                decoration: self.decoration.clone(),
+            });
+        } else if let Some(compositor) = id.try_downcast::<WlCompositor>() {
+            compositor.set_handler(FilterCompositorHandler {
+                decoration: self.decoration.clone(),
+            });
+            slf.send_bind(name, compositor);
+            return;
+        } else {
+            if let Some(shm) = id.try_downcast::<WlShm>() {
+                shm.set_handler(FilterShmHandler {
                     decoration: self.decoration.clone(),
-                    positioners: Rc::new(RefCell::new(HashMap::new())),
                 });
+                slf.send_bind(name, shm);
+                return;
             }
-            _ => match id.try_downcast::<WlEglstreamDisplay>() {
-                Some(eglstream_display) => {
-                    eglstream_display.set_handler(FilterEglstreamDisplayHandler {
-                        identity_label: self.policy.identity_label.clone(),
-                        diag: self.diag.clone(),
-                        decoration: self.decoration.clone(),
+            if let Some(subcompositor) = id.try_downcast::<WlSubcompositor>() {
+                if self.decoration.is_some() {
+                    subcompositor.set_handler(FilterSubcompositorHandler);
+                }
+                slf.send_bind(name, subcompositor);
+                return;
+            }
+            if let Some(seat) = id.try_downcast::<WlSeat>() {
+                if let Some(decoration) = &self.decoration {
+                    seat.set_handler(FilterSeatHandler {
+                        decoration: decoration.clone(),
                     });
                 }
-                _ => {
-                    if let Some(compositor) = id.try_downcast::<WlCompositor>() {
-                        compositor.set_handler(FilterCompositorHandler {
-                            decoration: self.decoration.clone(),
-                        });
-                        slf.send_bind(name, compositor);
-                        return;
-                    }
-                    if let Some(shm) = id.try_downcast::<WlShm>() {
-                        shm.set_handler(FilterShmHandler {
-                            decoration: self.decoration.clone(),
-                        });
-                        slf.send_bind(name, shm);
-                        return;
-                    }
-                    if let Some(subcompositor) = id.try_downcast::<WlSubcompositor>() {
-                        if self.decoration.is_some() {
-                            subcompositor.set_handler(FilterSubcompositorHandler);
-                        }
-                        slf.send_bind(name, subcompositor);
-                        return;
-                    }
-                    if let Some(seat) = id.try_downcast::<WlSeat>() {
-                        if let Some(decoration) = &self.decoration {
-                            seat.set_handler(FilterSeatHandler {
-                                decoration: decoration.clone(),
-                            });
-                        }
-                        slf.send_bind(name, seat);
-                        return;
-                    }
-                    if let Some(viewporter) = id.try_downcast::<WpViewporter>()
-                        && let Some(decoration) = &self.decoration
-                    {
-                        viewporter.set_handler(FilterViewporterHandler {
-                            decoration: decoration.clone(),
-                        });
-                    }
-                    if let Some(dmabuf) = id.try_downcast::<ZwpLinuxDmabufV1>()
-                        && (!self.policy.dmabuf_filters.is_empty() || self.decoration.is_some())
-                    {
-                        dmabuf.set_handler(DmabufHandler::new(
-                            self.policy.dmabuf_filters.clone(),
-                            self.diag.clone(),
-                            self.decoration.clone(),
-                        ));
-                    }
-                    if let Some(drm) = id.try_downcast::<WlDrm>() {
-                        if let Some(decoration) = &self.decoration {
-                            drm.set_handler(FilterDrmHandler {
-                                decoration: decoration.clone(),
-                            });
-                        }
-                        slf.send_bind(name, drm);
-                        return;
-                    }
+                slf.send_bind(name, seat);
+                return;
+            }
+            if let Some(viewporter) = id.try_downcast::<WpViewporter>()
+                && let Some(decoration) = &self.decoration
+            {
+                viewporter.set_handler(FilterViewporterHandler {
+                    decoration: decoration.clone(),
+                });
+            }
+            if let Some(dmabuf) = id.try_downcast::<ZwpLinuxDmabufV1>()
+                && (!self.policy.dmabuf_filters.is_empty() || self.decoration.is_some())
+            {
+                dmabuf.set_handler(DmabufHandler::new(
+                    self.policy.dmabuf_filters.clone(),
+                    self.diag.clone(),
+                    self.decoration.clone(),
+                ));
+            }
+            if let Some(drm) = id.try_downcast::<WlDrm>() {
+                if let Some(decoration) = &self.decoration {
+                    drm.set_handler(FilterDrmHandler {
+                        decoration: decoration.clone(),
+                    });
                 }
-            },
+                slf.send_bind(name, drm);
+                return;
+            }
         }
 
         slf.send_bind(name, id);
@@ -2798,7 +2813,7 @@ fn bind_matches_advertised_cap(
 }
 
 // SOCK_NONBLOCK connect with EINPROGRESS/EAGAIN tolerated; readiness is
-    // driven by the CLI poll loop;no async form fits this path.
+// driven by the CLI poll loop; no async form fits this path.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn connect_bridge_nonblocking(path: &PathBuf) -> std::io::Result<UnixStream> {
     use nix::sys::socket::{AddressFamily, SockFlag, SockType, UnixAddr, connect, socket};
@@ -2911,6 +2926,94 @@ mod tests {
 
     fn policy() -> Rc<FilterPolicy> {
         Rc::new(FilterPolicy::build(PolicyInput::new(local_identity())))
+    }
+
+    fn bridge_diag() -> Rc<RefCell<DiagRateLimiter>> {
+        Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())))
+    }
+
+    fn bridge_state(diag: Rc<RefCell<DiagRateLimiter>>) -> VirtualClipboardState {
+        VirtualClipboardState::new(local_identity(), diag, disabled_bridge_config())
+    }
+
+    #[test]
+    fn buffered_refresh_frame_is_decoded_and_consumed() {
+        let mut clipboard = bridge_state(bridge_diag());
+        clipboard
+            .bridge_read_buffer
+            .extend_from_slice(br#"{"type":"refresh_selection"}"#);
+        clipboard.bridge_read_buffer.push(b'\n');
+
+        assert_eq!(clipboard.drain_buffered_bridge_frames(), 1);
+        assert!(clipboard.bridge_read_buffer.is_empty());
+    }
+
+    #[test]
+    fn refresh_detection_survives_whitespace_key_order_and_extra_fields() {
+        for frame in [
+            br#"{"type": "refresh_selection"}"#.as_slice(),
+            br#"{ "type" : "refresh_selection" }"#.as_slice(),
+            br#"{"source_id":7,"type":"refresh_selection"}"#.as_slice(),
+            br#"{"type":"refresh_selection","source_id":7}"#.as_slice(),
+        ] {
+            let mut clipboard = bridge_state(bridge_diag());
+            clipboard.bridge_read_buffer.extend_from_slice(frame);
+            clipboard.bridge_read_buffer.push(b'\n');
+
+            assert_eq!(
+                clipboard.drain_buffered_bridge_frames(),
+                1,
+                "{} must decode as a refresh request",
+                String::from_utf8_lossy(frame)
+            );
+        }
+    }
+
+    #[test]
+    fn incomplete_bridge_frame_stays_buffered_until_its_newline_arrives() {
+        let mut clipboard = bridge_state(bridge_diag());
+        clipboard
+            .bridge_read_buffer
+            .extend_from_slice(br#"{"type":"refresh_selec"#);
+
+        assert_eq!(clipboard.drain_buffered_bridge_frames(), 0);
+        assert_eq!(
+            clipboard.bridge_read_buffer.as_slice(),
+            br#"{"type":"refresh_selec"#
+        );
+
+        clipboard.bridge_read_buffer.extend_from_slice(b"tion\"}\n");
+        assert_eq!(clipboard.drain_buffered_bridge_frames(), 1);
+        assert!(clipboard.bridge_read_buffer.is_empty());
+    }
+
+    #[test]
+    fn unreadable_bridge_frames_are_skipped_without_losing_later_refresh() {
+        let mut clipboard = bridge_state(bridge_diag());
+        clipboard.bridge_read_buffer.extend_from_slice(
+            b"{not-json}\n{\"type\":\"host_selection_changed\"}\n\
+              {\"type\":\"refresh_selection\"}\n",
+        );
+
+        assert_eq!(clipboard.drain_buffered_bridge_frames(), 1);
+        assert!(clipboard.bridge_read_buffer.is_empty());
+    }
+
+    #[test]
+    fn unreadable_bridge_frames_are_diagnosed_through_the_rate_limiter() {
+        let diag = bridge_diag();
+        let mut clipboard = bridge_state(diag.clone());
+        let malformed = b"{not-json}\n";
+        for _ in 0..6 {
+            clipboard.bridge_read_buffer.extend_from_slice(malformed);
+            assert_eq!(clipboard.drain_buffered_bridge_frames(), 0);
+        }
+
+        assert_eq!(
+            diag.borrow().suppressed_total_for_tests(),
+            1,
+            "decode failures are logged, so the sixth is rate-limited instead of dropped silently"
+        );
     }
 
     fn clipboard() -> Rc<RefCell<VirtualClipboardState>> {
@@ -3254,6 +3357,39 @@ mod tests {
     }
 
     #[test]
+    fn filtered_globals_preserve_original_global_names() {
+        let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
+        let mut handler = FilterRegistryHandler::new(policy(), diag, clipboard(), None);
+
+        let (synthetic, decision) = handler.prepare_global(7, ObjectInterface::WlCompositor, 6);
+
+        // The host's global keeps its original registry name; the synthetic
+        // clipboard global is advertised alongside it at the reserved name.
+        assert_eq!(
+            decision,
+            IncomingGlobalDecision::Advertise(GlobalAdvertisement {
+                name: 7,
+                interface: ObjectInterface::WlCompositor,
+                version: 6,
+            })
+        );
+        assert_eq!(
+            synthetic,
+            Some(GlobalAdvertisement {
+                name: u32::MAX,
+                interface: ObjectInterface::WlDataDeviceManager,
+                version: 3,
+            })
+        );
+        let advertised = handler
+            .advertised_globals
+            .get(&7)
+            .expect("the original name stays advertised");
+        assert_eq!(advertised.interface, ObjectInterface::WlCompositor);
+        assert!(!advertised.synthetic_clipboard);
+    }
+
+    #[test]
     fn registry_handler_records_bind_denials_in_shared_limiter() {
         let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
         let handler = FilterRegistryHandler::new(policy(), diag.clone(), clipboard(), None);
@@ -3273,6 +3409,36 @@ mod tests {
 
         let suppressed_after_flush = diag.borrow().suppressed_total_for_tests();
         assert_eq!(suppressed_after_flush, 0);
+    }
+
+    #[test]
+    fn standard_clipboard_global_is_advertised_as_synthetic() {
+        let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
+        let mut handler = FilterRegistryHandler::new(policy(), diag, clipboard(), None);
+
+        // The host's wl_data_device_manager is virtualized locally: the
+        // handler hides the host global and advertises the synthetic
+        // clipboard global in its place (the decision prepare_global makes
+        // for the real WlRegistry send path).
+        let (synthetic, decision) =
+            handler.prepare_global(11, ObjectInterface::WlDataDeviceManager, 3);
+
+        assert_eq!(decision, IncomingGlobalDecision::Hide);
+        assert_eq!(
+            synthetic,
+            Some(GlobalAdvertisement {
+                name: u32::MAX,
+                interface: ObjectInterface::WlDataDeviceManager,
+                version: 3,
+            })
+        );
+        let advertised = handler
+            .advertised_globals
+            .get(&u32::MAX)
+            .expect("the synthetic clipboard global is advertised");
+        assert!(advertised.synthetic_clipboard);
+        assert_eq!(advertised.interface, ObjectInterface::WlDataDeviceManager);
+        assert!(handler.hidden_globals.contains(&11));
     }
 
     #[test]

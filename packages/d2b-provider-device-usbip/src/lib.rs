@@ -21,7 +21,7 @@ mod lifecycle;
 mod process;
 mod production;
 pub mod reconcile_state;
-pub mod state_machine;
+mod state_machine;
 pub mod vocabulary;
 mod workers;
 
@@ -43,7 +43,6 @@ pub use driver::{
     UsbipComponent, UsbipDriverArgs, UsbipDriverEffects, declared_dependency_refs,
     usbip_descriptors,
 };
-pub use effects_service::USBIP_EFFECTS_SERVICE;
 pub use firewall::{
     FirewallConfirmation, FirewallConfirmationKind, FirewallDigest, FirewallGenerationFence,
     FirewallObservation, FirewallProjectionAction, FirewallProjectionIntent, FirewallToken,

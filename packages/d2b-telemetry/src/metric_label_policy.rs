@@ -11,6 +11,12 @@ pub use d2b_contracts_provider::v3::telemetry_policy::{
 };
 
 /// Validate resource attributes with key-specific identity handling.
+///
+/// # Errors
+///
+/// Returns `MetricPolicyError::DescriptorMalformed` when an attribute
+/// is not allowlisted or its value is empty, oversized, or
+/// non-graphic.
 pub fn validate_resource_attributes(
     attributes: &BTreeMap<String, String>,
 ) -> Result<(), MetricPolicyError> {

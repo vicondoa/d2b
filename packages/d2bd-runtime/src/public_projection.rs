@@ -1,6 +1,7 @@
 use std::{collections::HashSet, fs, path::Path};
 
 use d2b_contracts_broker::broker_wire::RunnerRole;
+use d2b_contracts_control::public_wire::{QemuMediaRunnerState, VmAutostartMode};
 use d2b_core::processes::{ProcessNode, ProcessRole, VmProcessDag};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -114,7 +115,7 @@ pub fn public_is_qemu_media(manifest_entry: &Value) -> bool {
 pub fn public_autostart_posture(manifest_entry: &Value) -> Option<Value> {
     public_is_qemu_media(manifest_entry).then(|| {
         json!({
-            "mode": "manual-only",
+            "mode": VmAutostartMode::ManualOnly,
             "reason": "qemu-media VMs are intentionally skipped by daemon autostart; start them explicitly with `d2b vm start <vm> --apply`"
         })
     })
@@ -298,6 +299,19 @@ fn public_pidfd_role_prefix_state(pidfd_table: &PidfdTable, vm: &str, prefix: &s
     public_pidfd_role_state_matching(pidfd_table, vm, |candidate| candidate.starts_with(prefix))
 }
 
+/// Liveness of the qemu-media runner role as the public media row reports it.
+///
+/// The pidfd table is the authority for both this projection and the
+/// per-service state map, so the typed state and the `services.qemuMedia`
+/// string cannot disagree.
+pub fn public_qemu_media_runner_state(pidfd_table: &PidfdTable, vm: &str) -> QemuMediaRunnerState {
+    if public_pidfd_role_running(pidfd_table, vm, RunnerRole::QemuMedia.as_str()) {
+        QemuMediaRunnerState::Running
+    } else {
+        QemuMediaRunnerState::Stopped
+    }
+}
+
 fn public_pidfd_role_state_matching<F>(
     pidfd_table: &PidfdTable,
     vm: &str,
@@ -306,15 +320,30 @@ fn public_pidfd_role_state_matching<F>(
 where
     F: Fn(&str) -> bool,
 {
-    let running = pidfd_table.list_for_vm(vm).into_iter().any(|registration| {
-        role_matches(&registration.role)
-            && pidfd_table.still_alive_same_start_time(vm, &registration.role)
-    });
-    if running {
+    if public_pidfd_role_running_matching(pidfd_table, vm, role_matches) {
         "running".to_owned()
     } else {
         "stopped".to_owned()
     }
+}
+
+/// Whether the pidfd table holds a live registration whose role matches.
+fn public_pidfd_role_running(pidfd_table: &PidfdTable, vm: &str, role: &str) -> bool {
+    public_pidfd_role_running_matching(pidfd_table, vm, |candidate| candidate == role)
+}
+
+fn public_pidfd_role_running_matching<F>(
+    pidfd_table: &PidfdTable,
+    vm: &str,
+    role_matches: F,
+) -> bool
+where
+    F: Fn(&str) -> bool,
+{
+    pidfd_table.list_for_vm(vm).into_iter().any(|registration| {
+        role_matches(&registration.role)
+            && pidfd_table.still_alive_same_start_time(vm, &registration.role)
+    })
 }
 
 pub fn qemu_media_qmp_socket(node: &ProcessNode) -> Option<String> {

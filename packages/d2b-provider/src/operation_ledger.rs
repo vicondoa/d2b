@@ -176,6 +176,11 @@ impl OperationLedger {
     }
 
     /// Construct a ledger with a test or owner-local bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperationLedgerError::CapacityExceeded`] when the
+    /// capacity is zero or exceeds the frozen maximum.
     pub fn with_capacity(capacity: usize) -> Result<Self, OperationLedgerError> {
         if capacity == 0 || capacity > MAX_OPERATION_LEDGER_ROWS {
             return Err(OperationLedgerError::CapacityExceeded);
@@ -192,6 +197,13 @@ impl OperationLedger {
     /// Rejoining with a newer session generation updates only the reconnect
     /// binding. Resource identity, desired generation, operation ID, and
     /// durable state remain unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperationLedgerError::InvalidSessionGeneration`] when the
+    /// session generation is zero, [`OperationLedgerError::StaleSessionGeneration`]
+    /// when it is older than the row's latest, and
+    /// [`OperationLedgerError::CapacityExceeded`] when the ledger is full.
     pub fn admit(
         &mut self,
         resource_uid: ResourceUid,

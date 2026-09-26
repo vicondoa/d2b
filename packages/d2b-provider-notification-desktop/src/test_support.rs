@@ -7,7 +7,8 @@
 //! tests in `d2bd` reach it through the same public surface.
 
 use crate::{
-    NotificationLifecyclePlan, SourceProcessEffectPort, SourceProcessEffectReceipt, SourceReconcileResult,
+    NotificationLifecyclePlan, ProviderError, SourceProcessEffectPort,
+    SourceProcessEffectReceipt, SourceReconcileResult,
 };
 
 /// Scripted source-process effect port: records every applied plan and
@@ -22,7 +23,7 @@ impl SourceProcessEffectPort for RecordingEffects {
         &mut self,
         plan: &SourceReconcileResult,
         _lifecycle: &NotificationLifecyclePlan,
-    ) -> Result<SourceProcessEffectReceipt, &'static str> {
+    ) -> Result<SourceProcessEffectReceipt, ProviderError> {
         self.plans.push(plan.clone());
         Ok(SourceProcessEffectReceipt::complete(plan))
     }

@@ -435,7 +435,7 @@ struct RestartBudget {
 
 impl RestartBudget {
     fn count(&self) -> u32 {
-        self.count.load(Ordering::SeqCst)
+        self.count.load(Ordering::Relaxed)
     }
 
     fn allows(&self, spec: &ProcessSpec) -> bool {
@@ -448,26 +448,26 @@ impl RestartBudget {
     /// policy backoff: the exit-driven path schedules its own backoff in the
     /// pass that observed the exit.
     fn consume_restart(&self) {
-        self.count.fetch_add(1, Ordering::SeqCst);
+        self.count.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record one consumed restart; the next reconcile pass schedules the
     /// policy backoff exactly once.
     fn record_restart(&self) {
         self.consume_restart();
-        self.restart_scheduled.store(true, Ordering::SeqCst);
+        self.restart_scheduled.store(true, Ordering::Relaxed);
     }
 
     fn take_restart_scheduled(&self) -> bool {
-        self.restart_scheduled.swap(false, Ordering::SeqCst)
+        self.restart_scheduled.swap(false, Ordering::Relaxed)
     }
 
     fn mark_exhausted(&self) {
-        self.exhausted.store(true, Ordering::SeqCst);
+        self.exhausted.store(true, Ordering::Relaxed);
     }
 
     fn is_exhausted(&self) -> bool {
-        self.exhausted.load(Ordering::SeqCst)
+        self.exhausted.load(Ordering::Relaxed)
     }
 }
 
@@ -677,9 +677,9 @@ struct EphemeralRuntime {
     started: AtomicBool,
     /// When the process was launched or adopted: the clock for the bounded
     /// runtime deadline.
-    started_at: parking_lot::Mutex<Option<tokio::time::Instant>>,
+    started_at: tokio::sync::Mutex<Option<tokio::time::Instant>>,
     /// The terminal outcome, once observed: the clock for the retention TTL.
-    completed: parking_lot::Mutex<Option<EphemeralCompletion>>,
+    completed: tokio::sync::Mutex<Option<EphemeralCompletion>>,
 }
 
 /// One one-shot terminal outcome: the TTL class and when it was reached.
@@ -692,25 +692,25 @@ struct EphemeralCompletion {
 
 impl EphemeralRuntime {
     fn started(&self) -> bool {
-        self.started.load(Ordering::SeqCst)
+        self.started.load(Ordering::Relaxed)
     }
 
-    fn mark_started(&self) {
-        let mut started_at = self.started_at.lock();
+    async fn mark_started(&self) {
+        let mut started_at = self.started_at.lock().await;
         if started_at.is_none() {
             *started_at = Some(tokio::time::Instant::now());
         }
-        self.started.store(true, Ordering::SeqCst);
+        self.started.store(true, Ordering::Relaxed);
     }
 
-    fn started_at(&self) -> Option<tokio::time::Instant> {
-        *self.started_at.lock()
+    async fn started_at(&self) -> Option<tokio::time::Instant> {
+        *self.started_at.lock().await
     }
 
     /// Record the one-shot terminal state once; a second observation keeps
     /// the first (the TTL clock must not restart).
-    fn finish(&self, failed: bool, code: &'static str) -> EphemeralCompletion {
-        let mut completed = self.completed.lock();
+    async fn finish(&self, failed: bool, code: &'static str) -> EphemeralCompletion {
+        let mut completed = self.completed.lock().await;
         *completed.get_or_insert(EphemeralCompletion {
             failed,
             code,
@@ -718,24 +718,24 @@ impl EphemeralRuntime {
         })
     }
 
-    fn completed(&self) -> Option<EphemeralCompletion> {
-        *self.completed.lock()
+    async fn completed(&self) -> Option<EphemeralCompletion> {
+        *self.completed.lock().await
     }
 
     /// Test-only: backdate the runtime-deadline clock.
     #[cfg(test)]
-    fn backdate_started(&self, elapsed: Duration) {
-        let mut started_at = self.started_at.lock();
+    async fn backdate_started(&self, elapsed: Duration) {
+        let mut started_at = self.started_at.lock().await;
         if let Some(at) = started_at.as_mut() {
             *at -= elapsed;
         }
-        self.started.store(true, Ordering::SeqCst);
+        self.started.store(true, Ordering::Relaxed);
     }
 
     /// Test-only: backdate the retention TTL clock.
     #[cfg(test)]
-    fn backdate_completed(&self, elapsed: Duration) {
-        if let Some(completion) = self.completed.lock().as_mut() {
+    async fn backdate_completed(&self, elapsed: Duration) {
+        if let Some(completion) = self.completed.lock().await.as_mut() {
             completion.at -= elapsed;
         }
     }
@@ -758,18 +758,18 @@ struct DurableRuntime {
 
 impl DurableRuntime {
     fn watching(&self) -> bool {
-        self.watching.load(Ordering::SeqCst)
+        self.watching.load(Ordering::Relaxed)
     }
 
     fn mark_watching(&self) {
-        self.watching.store(true, Ordering::SeqCst);
+        self.watching.store(true, Ordering::Relaxed);
     }
 
     /// The observed process is gone and the pass that saw the exit hands the
     /// relaunch back to the adoption path, so the next pass launches instead
     /// of probing an identity the provider has already released.
     fn mark_exited(&self) {
-        self.watching.store(false, Ordering::SeqCst);
+        self.watching.store(false, Ordering::Relaxed);
     }
 }
 
@@ -1015,18 +1015,25 @@ impl ProcessDriver {
         let declared_target = match ctx.owner_key().cloned() {
             Some(owner) if owner.type_name == "VolumeBinding" => match ctx.get(&owner).await {
                 Ok(Some(row)) => {
-                    let binding = serde_json::from_slice::<ResourceSpec>(&row.spec)
-                        .ok()
-                        .and_then(|envelope| {
-                            serde_json::from_slice::<
-                                d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec,
-                            >(&envelope.base().to_canonical_bytes())
-                            .ok()
-                        });
-                    if let Some(binding) = binding.as_ref() {
-                        worker_launch = self.serving_worker_launch(ctx, binding, op).await;
-                    }
-                    binding.map(|binding| binding.execution_ref().clone())
+                    let binding = match serde_json::from_slice::<ResourceSpec>(&row.spec) {
+                        Ok(envelope) => serde_json::from_slice::<
+                            d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec,
+                        >(&envelope.base().to_canonical_bytes())
+                        .map_err(|error| {
+                            self.error(ProcessDriverErrorKind::SpecInvalid, op).with_detail(
+                                FailureDetail::at("spec/decode").with_note(error.to_string()),
+                            )
+                        })?,
+                        Err(error) => {
+                            return Err(self
+                                .error(ProcessDriverErrorKind::SpecInvalid, op)
+                                .with_detail(
+                                    FailureDetail::at("spec/decode").with_note(error.to_string()),
+                                ))
+                        }
+                    };
+                    worker_launch = self.serving_worker_launch(ctx, &binding, op).await?;
+                    Some(binding.execution_ref().clone())
                 }
                 _ => None,
             },
@@ -1110,35 +1117,54 @@ impl ProcessDriver {
         ctx: &mut ResourceContext,
         binding: &d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec,
         op: DriverOp,
-    ) -> Option<ServingWorkerLaunch> {
-        let (_, spec) = self.decoded_spec(ctx, op).ok()?;
+    ) -> Result<Option<ServingWorkerLaunch>, ProcessDriverError> {
+        let (_, spec) = self.decoded_spec(ctx, op)?;
         if spec.execution().template().as_str() != d2b_provider_volume_virtiofs::WORKER_TEMPLATE {
-            return None;
+            return Ok(None);
         }
         let volume_key = ResourceKey::new(
             self.zone.as_str(),
             "Volume",
             binding.volume_ref().name().as_str(),
         );
-        let row = ctx.get(&volume_key).await.ok().flatten()?;
-        let volume = serde_json::from_slice::<ResourceSpec>(&row.spec)
-            .ok()
-            .and_then(|envelope| {
-                serde_json::from_slice::<d2b_contracts_resource::v3::volume::VolumeSpec>(
-                    &envelope.base().to_canonical_bytes(),
+        let Some(row) = ctx.get(&volume_key).await.ok().flatten() else {
+            return Ok(None);
+        };
+        let volume = match serde_json::from_slice::<ResourceSpec>(&row.spec) {
+            Ok(envelope) => serde_json::from_slice::<
+                d2b_contracts_resource::v3::volume::VolumeSpec,
+            >(&envelope.base().to_canonical_bytes())
+            .map_err(|error| {
+                self.error(ProcessDriverErrorKind::SpecInvalid, op).with_detail(
+                    FailureDetail::at("spec/decode").with_note(error.to_string()),
                 )
-                .ok()
-            })?;
-        let view = volume.views().get(binding.view().as_str())?;
-        let attachment = volume
+            })?,
+            Err(error) => {
+                return Err(self
+                    .error(ProcessDriverErrorKind::SpecInvalid, op)
+                    .with_detail(
+                        FailureDetail::at("spec/decode").with_note(error.to_string()),
+                    ))
+            }
+        };
+        let Some(view) = volume.views().get(binding.view().as_str()) else {
+            return Ok(None);
+        };
+        let Some(attachment) = volume
             .attachments()
             .iter()
-            .find(|attachment| attachment.execution_ref() == binding.execution_ref())?;
+            .find(|attachment| attachment.execution_ref() == binding.execution_ref())
+        else {
+            return Ok(None);
+        };
         let settings = attachment.settings();
         let source = volume.source();
         let root = match source.settings().kind() {
             d2b_contracts_resource::v3::volume::SourceKind::LocalPath => {
-                let policy = source.settings().source_policy_id()?.as_str().to_owned();
+                let Some(policy) = source.settings().source_policy_id() else {
+                    return Ok(None);
+                };
+                let policy = policy.as_str().to_owned();
                 Some(ServingWorkerRoot::StoragePath(
                     if policy == "state-root" || policy == "default-state" {
                         "path:state-root".to_owned()
@@ -1157,7 +1183,7 @@ impl ProcessDriver {
             }
             _ => None,
         };
-        Some(ServingWorkerLaunch {
+        Ok(Some(ServingWorkerLaunch {
             volume_ref: binding.volume_ref().clone(),
             view: binding.view().clone(),
             guest_ref: binding.execution_ref().clone(),
@@ -1171,7 +1197,7 @@ impl ProcessDriver {
             socket_group: settings
                 .socket_group()
                 .map(|group| group.as_str().to_owned()),
-        })
+        }))
     }
 
     async fn stop_and_finalize(
@@ -1325,7 +1351,7 @@ impl ProcessDriver {
     ) -> Result<RecoveryOutcome, ProcessDriverError> {
         match self.effects.adopt_ephemeral(identity, spec).await {
             Ok(ProviderAdoption::Adopted(_)) => {
-                self.ephemeral.mark_started();
+                self.ephemeral.mark_started().await;
                 ctx.set_status(ProcessDriverStatus::Ready { adopted: true });
                 Ok(RecoveryOutcome::Adopted)
             }
@@ -1577,7 +1603,7 @@ impl ProcessDriver {
         identity: &ProcessResourceIdentity,
         spec: &EphemeralProcessSpec,
     ) -> Result<ReconcileOutcome, ProcessDriverError> {
-        if let Some(completion) = self.ephemeral.completed() {
+        if let Some(completion) = self.ephemeral.completed().await {
             return self.ephemeral_retention(ctx, spec, completion).await;
         }
 
@@ -1585,7 +1611,7 @@ impl ProcessDriver {
         // this actor started outlived its bounded run, so it stops exactly and
         // the terminal outcome is `Failed`.
         if self.ephemeral.started()
-            && let Some(started_at) = self.ephemeral.started_at()
+            && let Some(started_at) = self.ephemeral.started_at().await
             && started_at.elapsed() >= Duration::from_millis(spec.runtime_deadline().as_millis())
         {
             if self.effects.has_active(
@@ -1603,7 +1629,7 @@ impl ProcessDriver {
                     .await
                     .map_err(|error| map_provider_error(error, DriverOp::Reconcile))?;
             }
-            let completion = self.ephemeral.finish(true, "runtime-deadline");
+            let completion = self.ephemeral.finish(true, "runtime-deadline").await;
             Self::publish_ephemeral_outcome(ctx, completion);
             ctx.set_status(ProcessDriverStatus::Failed {
                 code: "runtime-deadline",
@@ -1627,7 +1653,7 @@ impl ProcessDriver {
                     Ok(ReconcileOutcome::Satisfied)
                 }
                 Ok(ProviderLiveness::Exited) => {
-                    let completion = self.ephemeral.finish(false, "process-exited");
+                    let completion = self.ephemeral.finish(false, "process-exited").await;
                     Self::publish_ephemeral_outcome(ctx, completion);
                     ctx.set_status(ProcessDriverStatus::Succeeded {
                         code: "process-exited",
@@ -1635,7 +1661,7 @@ impl ProcessDriver {
                     self.ephemeral_retention(ctx, spec, completion).await
                 }
                 Ok(ProviderLiveness::Unknown) => {
-                    let completion = self.ephemeral.finish(true, "identity-ambiguous");
+                    let completion = self.ephemeral.finish(true, "identity-ambiguous").await;
                     Self::publish_ephemeral_outcome(ctx, completion);
                     ctx.set_status(ProcessDriverStatus::Failed {
                         code: "identity-ambiguous",
@@ -1652,7 +1678,7 @@ impl ProcessDriver {
         // or a fail-closed refusal.
         match self.effects.adopt_ephemeral(identity, spec).await {
             Ok(ProviderAdoption::Adopted(_)) => {
-                self.ephemeral.mark_started();
+                self.ephemeral.mark_started().await;
                 ctx.set_status(ProcessDriverStatus::Ready { adopted: true });
                 let _ = ctx.requeue_after(PROCESS_RESYNC);
                 Ok(ReconcileOutcome::Satisfied)
@@ -1798,7 +1824,7 @@ impl ProcessDriver {
                 .await
             {
                 Ok(_) => {
-                    ephemeral.mark_started();
+                    ephemeral.mark_started().await;
                     EffectResult::Completed
                 }
                 Err(error) => {
@@ -1985,7 +2011,7 @@ impl ResourceDriver for ProcessDriver {
         let identity = self
             .identity(
                 ctx,
-                &envelope.provider_ref.clone().expect("checked"),
+                envelope.provider_ref.as_ref().expect("checked"),
                 DriverOp::Recover,
             )
             .await?;
@@ -2053,7 +2079,7 @@ impl ResourceDriver for ProcessDriver {
         let identity = self
             .identity(
                 ctx,
-                &envelope.provider_ref.clone().expect("checked"),
+                envelope.provider_ref.as_ref().expect("checked"),
                 DriverOp::Reconcile,
             )
             .await?;
@@ -2102,7 +2128,7 @@ impl ResourceDriver for ProcessDriver {
         let identity = match self
             .identity(
                 ctx,
-                &envelope.provider_ref.clone().expect("checked"),
+                envelope.provider_ref.as_ref().expect("checked"),
                 DriverOp::Delete,
             )
             .await
@@ -2191,7 +2217,6 @@ mod tests {
         ResourceKey, ResourceProvenance, ResourceTypeName, StoredDesiredResource,
     };
     use d2b_resource_runtime::spec_store::EnsureOutcome;
-    use d2b_resource_runtime::target::TargetHandle;
     use tokio::sync::mpsc;
 
     use super::{
@@ -2330,32 +2355,32 @@ mod tests {
             _parent: &ResourceKey,
             _child: ChildEnsure,
         ) -> Result<EnsureOutcome, ResourceError> {
-            Err(ResourceError::ManagerRpc("dead".into()))
+            Err(ResourceError::ManagerUnavailable("dead".into()))
         }
 
         async fn get(
             &self,
             _key: &ResourceKey,
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            Err(ResourceError::ManagerRpc("dead".into()))
+            Err(ResourceError::ManagerUnavailable("dead".into()))
         }
 
         async fn view(
             &self,
             _key: &ResourceKey,
         ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
-            Err(ResourceError::ManagerRpc("dead".into()))
+            Err(ResourceError::ManagerUnavailable("dead".into()))
         }
 
         async fn delete(&self, _key: &ResourceKey) -> Result<(), ResourceError> {
-            Err(ResourceError::ManagerRpc("dead".into()))
+            Err(ResourceError::ManagerUnavailable("dead".into()))
         }
 
         async fn list_owned(
             &self,
             _owner_uid: [u8; 16],
         ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            Err(ResourceError::ManagerRpc("dead".into()))
+            Err(ResourceError::ManagerUnavailable("dead".into()))
         }
 
         async fn register_watch(
@@ -2363,14 +2388,14 @@ mod tests {
             _subscriber: &ResourceKey,
             _registration: WatchRegistration,
         ) -> Result<d2b_resource_runtime::context::WatchId, ResourceError> {
-            Err(ResourceError::ManagerRpc("dead".into()))
+            Err(ResourceError::ManagerUnavailable("dead".into()))
         }
 
         async fn cancel_watch(
             &self,
             _watch: d2b_resource_runtime::context::WatchId,
         ) -> Result<(), ResourceError> {
-            Err(ResourceError::ManagerRpc("dead".into()))
+            Err(ResourceError::ManagerUnavailable("dead".into()))
         }
     }
 
@@ -2382,6 +2407,7 @@ mod tests {
         deleted: parking_lot::Mutex<Vec<ResourceKey>>,
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl OwnershipManager {
         /// An owner-scoped manager with no owned rows: the retention delete
         /// path's double.
@@ -2410,13 +2436,14 @@ mod tests {
     }
 
     #[async_trait::async_trait]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl ManagerEndpoint for OwnershipManager {
         async fn ensure_child(
             &self,
             _parent: &ResourceKey,
             _child: ChildEnsure,
         ) -> Result<EnsureOutcome, ResourceError> {
-            Err(ResourceError::ManagerRpc("unexpected ensure_child".into()))
+            Err(ResourceError::ManagerRejected { reason: "unexpected ensure_child".into() })
         }
 
         async fn get(
@@ -2430,7 +2457,7 @@ mod tests {
             &self,
             _key: &ResourceKey,
         ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
-            Err(ResourceError::ManagerRpc("unexpected view".into()))
+            Err(ResourceError::ManagerRejected { reason: "unexpected view".into() })
         }
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
@@ -2451,9 +2478,9 @@ mod tests {
             _subscriber: &ResourceKey,
             _registration: WatchRegistration,
         ) -> Result<d2b_resource_runtime::context::WatchId, ResourceError> {
-            Err(ResourceError::ManagerRpc(
-                "unexpected register_watch".into(),
-            ))
+            Err(ResourceError::ManagerRejected {
+                reason: "unexpected register_watch".into(),
+            })
         }
 
         async fn cancel_watch(
@@ -2492,7 +2519,6 @@ mod tests {
         let (requeue, requeue_rx) = RecordingRequeue::new();
         let ctx = ResourceContext::new(
             row.clone(),
-            TargetHandle::Host,
             process_spec_decoder(),
             manager,
             Arc::new(requeue.clone()),
@@ -2567,17 +2593,17 @@ mod tests {
         }
 
         /// Test-only: backdate the one-shot runtime clock past its deadline.
-        fn backdate_runtime(&self, elapsed: Duration) {
-            self.typed.ephemeral.backdate_started(elapsed);
+        async fn backdate_runtime(&self, elapsed: Duration) {
+            self.typed.ephemeral.backdate_started(elapsed).await;
         }
 
         /// Test-only: backdate the one-shot retention clock.
-        fn backdate_completion(&self, elapsed: Duration) {
-            self.typed.ephemeral.backdate_completed(elapsed);
+        async fn backdate_completion(&self, elapsed: Duration) {
+            self.typed.ephemeral.backdate_completed(elapsed).await;
         }
 
-        fn ephemeral_completed(&self) -> bool {
-            self.typed.ephemeral.completed().is_some()
+        async fn ephemeral_completed(&self) -> bool {
+            self.typed.ephemeral.completed().await.is_some()
         }
     }
 
@@ -2928,7 +2954,7 @@ mod tests {
                 guest_ref: &ResourceRef,
             ) -> Option<ResourceUid> {
                 self.consulted
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 assert_eq!(zone.as_str(), "work");
                 assert_eq!(guest_ref.name().as_str(), "acceptance-guest");
                 Some(self.uid.clone())
@@ -2949,7 +2975,7 @@ mod tests {
             Some(guest_uid.clone())
         );
         assert_eq!(
-            source.consulted.load(std::sync::atomic::Ordering::SeqCst),
+            source.consulted.load(std::sync::atomic::Ordering::Relaxed),
             1
         );
 
@@ -2964,7 +2990,7 @@ mod tests {
             None
         );
         assert_eq!(
-            source.consulted.load(std::sync::atomic::Ordering::SeqCst),
+            source.consulted.load(std::sync::atomic::Ordering::Relaxed),
             1,
             "a linked owner uid never consults the Guest plane"
         );
@@ -2976,7 +3002,7 @@ mod tests {
             None
         );
         assert_eq!(
-            source.consulted.load(std::sync::atomic::Ordering::SeqCst),
+            source.consulted.load(std::sync::atomic::Ordering::Relaxed),
             1,
             "a non-Guest owner never consults the Guest plane"
         );
@@ -3176,7 +3202,9 @@ mod tests {
         );
 
         // TTL elapsed: the driver asks the manager to retire its own row.
-        driver.backdate_completion(Duration::from_secs(3600));
+        driver
+            .backdate_completion(Duration::from_secs(3600))
+            .await;
         assert_eq!(
             driver.reconcile(&mut f.ctx).await.expect("reconcile"),
             ReconcileOutcome::Satisfied
@@ -3201,7 +3229,7 @@ mod tests {
         yield_until_effects_settled().await;
         f.effects.recv().await.expect("launch completion");
 
-        driver.backdate_runtime(Duration::from_secs(300));
+        driver.backdate_runtime(Duration::from_secs(300)).await;
         assert_eq!(
             driver.reconcile(&mut f.ctx).await.expect("reconcile"),
             ReconcileOutcome::Satisfied
@@ -3260,7 +3288,7 @@ mod tests {
         yield_until_effects_settled().await;
         f.effects.recv().await.expect("launch completion");
 
-        driver.backdate_runtime(Duration::from_secs(300));
+        driver.backdate_runtime(Duration::from_secs(300)).await;
         assert_eq!(
             driver.reconcile(&mut f.ctx).await.expect("reconcile"),
             ReconcileOutcome::Satisfied
@@ -3276,11 +3304,13 @@ mod tests {
             "no cleanup timer under incident hold"
         );
         assert!(
-            driver.ephemeral_completed(),
+            driver.ephemeral_completed().await,
             "the terminal state is recorded"
         );
 
-        driver.backdate_completion(Duration::from_secs(365 * 24 * 3600));
+        driver
+            .backdate_completion(Duration::from_secs(365 * 24 * 3600))
+            .await;
         assert_eq!(
             driver.reconcile(&mut f.ctx).await.expect("reconcile"),
             ReconcileOutcome::Satisfied

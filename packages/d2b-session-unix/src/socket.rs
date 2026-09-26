@@ -173,6 +173,15 @@ impl fmt::Debug for SentPacket {
 }
 
 impl SentPacket {
+    /// Consume this sent packet, releasing everything it held.
+    ///
+    /// The body is intentionally empty: acknowledging a packet means
+    /// dropping it. Consuming the packet releases the credit
+    /// reservations made when the packet was built back to their
+    /// scopes (see [`CreditBundle`]) and drops the retained attachment
+    /// file descriptors. Every sent packet must be acknowledged once
+    /// its burst has been handed to the socket, so the credits it
+    /// reserved become available again.
     pub fn acknowledge(self) {}
 
     pub fn credits_mut(&mut self) -> &mut CreditBundle {
@@ -187,6 +196,10 @@ pub struct SendBurst {
     pub drained_to_would_block: bool,
 }
 
+/// An owned SOCK_SEQPACKET socket over the async readiness surface.
+///
+/// Packet-burst sends and receives are cancellation-safe:partial bursts
+/// are retained across an await.
 pub struct SeqpacketSocket {
     io: AsyncFd<OwnedFd>,
     received_any: AtomicBool,
@@ -199,6 +212,12 @@ impl fmt::Debug for SeqpacketSocket {
 }
 
 impl SeqpacketSocket {
+    /// Take ownership of one validated seqpacket socket.
+    ///
+    /// # Errors
+    ///
+    /// Returns `UnixSessionError` when the descriptor is not a
+    /// seqpacket socket or cannot be registered on the async surface.
     pub fn from_owned(fd: OwnedFd) -> Result<Self, UnixSessionError> {
         validate_socket(&fd, SocketType::SEQPACKET)?;
         Ok(Self {
@@ -207,6 +226,14 @@ impl SeqpacketSocket {
         })
     }
 
+    /// Adopt a parent-prearmed seqpacket socket after verifying its
+    /// prearment contract. 
+    ///
+    /// # Errors
+    ///
+    /// Returns `UnixSessionError` when the descriptor fails the prearmed
+    /// contract (socket type, async registration, or `passcred`
+    /// not prearmed).
     pub fn from_parent_prearmed(fd: OwnedFd) -> Result<Self, UnixSessionError> {
         verify_parent_prearmed(&fd)?;
         Self::from_owned(fd)
@@ -219,6 +246,11 @@ impl SeqpacketSocket {
     /// the controller can receive it across `execve`. This function validates
     /// that well-known descriptor without closing it, rearms close-on-exec,
     /// and then takes ownership before any session use.
+    ///
+    /// # Errors
+    ///
+    /// Returns `UnixSessionError` when the inherited descriptor cannot
+    /// be duplicated or fails the prearmed contract.
     pub fn from_inherited_fd(raw_fd: RawFd) -> Result<Self, UnixSessionError> {
         let fd = duplicate_inherited_fd(raw_fd)?;
         let socket = Self::from_parent_prearmed(fd)?;
@@ -253,7 +285,7 @@ impl SeqpacketSocket {
         let payload_capacity = usize::try_from(limits.protected_ciphertext_bytes)
             .map_err(|_| UnixSessionError::PayloadLimit)?;
         let mut ready = self.io.readable().await.map_err(io_error)?;
-        let mut packets = Vec::new();
+        let mut packets = Vec::with_capacity(fairness_budget);
         while packets.len() < fairness_budget {
             match ready.try_io(|inner| recv_one(inner.get_ref(), payload_capacity, capacity.bytes))
             {
@@ -303,7 +335,7 @@ impl SeqpacketSocket {
         }
         let mut ready = self.io.writable().await.map_err(io_error)?;
         let mut sent = 0;
-        let mut sent_packets = Vec::new();
+        let mut sent_packets = Vec::with_capacity(fairness_budget);
         while sent < fairness_budget {
             let Some(packet) = queue.front() else {
                 return Ok(SendBurst {

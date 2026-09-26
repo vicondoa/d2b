@@ -17,7 +17,7 @@ use std::{
 
 use tokio::sync::Mutex;
 
-use d2b_contracts_broker::broker_wire::BrokerCallerRole;
+use d2b_contracts_broker::broker_wire::{BrokerCallerRole, DEFAULT_CONTEXT_DEADLINE_MS};
 use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_contracts_resource::v3::{
     ControllerGeneration, ResourceGeneration, ResourceRef, ResourceSpec, ResourceUid,
@@ -37,7 +37,7 @@ use d2b_provider_credential::{
 };
 use d2b_provider_process::{
     CommittedProviderIdentitySource, DeviceWorkerFamily, DeviceWorkerLaunch, ExecutionMode,
-    GpuWorkerParams, LaunchRow, ProcessFamilySpec, ProcessProviderRuntime,
+    GpuWorkerParams, LaunchRow, LaunchedSnapshot, ProcessFamilySpec, ProcessProviderRuntime,
     ProcessResourceContext, ProcessResourceIdentity, ProviderAdoption, ProviderLaunch,
     ProviderLiveness, ServingWorkerLaunch, ServingWorkerRoot, SwtpmFlushParams, SwtpmWorkerParams,
     VideoWorkerParams, device_worker_family, device_worker_vm, execution_target_allowed,
@@ -330,7 +330,7 @@ fn resource_identity_fields(
             requested,
         });
     }
-    let mut fields = Vec::new();
+    let mut fields = Vec::with_capacity(12);
     required(
         &mut fields,
         "zone",
@@ -749,14 +749,14 @@ struct PidfdTableLaunchedObserver {
 }
 
 impl d2b_provider_supervisor::LaunchedObserver for PidfdTableLaunchedObserver {
-    fn launched(
-        &self,
-        vm: &str,
-        role: &str,
-        pid: i32,
-        start_time_ticks: u64,
-        pidfd: std::os::fd::OwnedFd,
-    ) {
+    fn launched(&self, snapshot: LaunchedSnapshot) {
+        let LaunchedSnapshot {
+            vm,
+            role,
+            pid,
+            start_time_ticks,
+            pidfd,
+        } = snapshot;
         // A broker-confirmed spawn proves a live process now owns this
         // (vm, role). If the slot still holds a STALE entry from a failed
         // prior launch - the launch-failure cleanup stops the child but
@@ -775,19 +775,19 @@ impl d2b_provider_supervisor::LaunchedObserver for PidfdTableLaunchedObserver {
         // spawn for one broker runner is impossible (the broker's
         // duplicate-runner guard), and replacing a live entry would orphan
         // its pidfd.
-        if self.pidfd_table.contains(vm, role)
-            && !self.pidfd_table.still_alive_same_start_time(vm, role)
+        if self.pidfd_table.contains(&vm, &role)
+            && !self.pidfd_table.still_alive_same_start_time(&vm, &role)
         {
             tracing::warn!(
                 vm,
                 role,
                 "pidfd-table: dropping stale entry before relaunched runner registration"
             );
-            self.pidfd_table.deregister(vm, role);
+            self.pidfd_table.deregister(&vm, &role);
         }
         match self.pidfd_table.register(
-            vm.to_owned(),
-            role.to_owned(),
+            vm.clone(),
+            role.clone(),
             d2bd_runtime::supervisor::pidfd_table::PidfdEntry {
                 pidfd,
                 pid,
@@ -858,6 +858,29 @@ impl std::fmt::Debug for ProductionProcessProviders {
     }
 }
 
+/// The io budget the daemon's Process clients poll the broker under.
+///
+/// It is the Process family's own declared per-call deadline: every
+/// Process-family row (`SpawnRunner`, and the `spawn_process` kernel it
+/// forwards to) declares `DeadlineTier::Standard`, the carrier mints that
+/// budget for the call, and both execution legs serve it as their handler
+/// deadline. A client poll shorter than the budget it wraps abandons a call
+/// the broker is still entitled to serve, and an abandoned spawn is not
+/// inert: the broker has already created the child and holds its runner
+/// registration, so `reserve_runner_id_for_spawn` refuses every relaunch as
+/// a duplicate and the Process wedges with no recovery.
+///
+/// Measured 2026-09-25 (`runtime-cloud-hypervisor-guest-preflight`, gate
+/// head `dc995602c`): a flat 10s poll abandoned one volume-local controller
+/// spawn at t=16.9s; the controller child the broker had created then looped
+/// its session handshake every 5.5s for 145s, the next ten relaunches were
+/// refused (`handler-refused`), and the fixture's 180s wait expired with the
+/// row still `Pending` at t=202s. Every green run of the same check reports
+/// zero `handler-refused` lines and establishes all three controller
+/// sessions by t=10s; its `reply timeout`s are all on `observe` legs, which
+/// register no runner and are simply re-probed.
+const BROKER_IO_TIMEOUT: Duration = Duration::from_millis(DEFAULT_CONTEXT_DEADLINE_MS);
+
 impl ProductionProcessProviders {
     /// Construct both fixed process Providers over the authenticated broker.
     pub fn new(
@@ -895,13 +918,13 @@ impl ProductionProcessProviders {
         let daemon_uid = caller_uid(&caller_role);
         let resolver = BundleBackedLaunchResolver::new(bundle.clone()).with_observation_socket(
             broker_socket.clone(),
-            Duration::from_secs(10),
+            BROKER_IO_TIMEOUT,
             caller_role.clone(),
         );
         let mut minijail_backend = BrokerProcessBackend::with_socket_profile_and_role(
             resolver.clone(),
             broker_socket.clone(),
-            Duration::from_secs(10),
+            BROKER_IO_TIMEOUT,
             mode.broker_profile(),
             caller_role.clone(),
         );
@@ -910,13 +933,13 @@ impl ProductionProcessProviders {
         // readiness probe runs, so the table registration rides the backend's
         // launch-success notification - not the driver's post-launch path,
         // which runs after the probe.
-        minijail_backend.set_launched_observer(std::sync::Arc::new(PidfdTableLaunchedObserver {
+        minijail_backend.set_launched_observer(Box::new(PidfdTableLaunchedObserver {
             pidfd_table: pidfd_table.clone(),
         }));
         let systemd_owner = BrokerSystemdEffectOwner::with_socket_and_role(
             resolver,
             broker_socket,
-            Duration::from_secs(10),
+            BROKER_IO_TIMEOUT,
             caller_role,
         );
         let fixed_effect = FixedEffectAdapter::for_mode(mode, fixed_socket, daemon_uid);
@@ -1085,7 +1108,7 @@ impl ProductionProcessProviders {
     /// Return every VM that has a process DAG in the trusted bundle.
     pub fn vm_ids(&self) -> Vec<String> {
         self.bundle
-            .processes
+            .processes()
             .vms
             .iter()
             .map(|dag| dag.vm.clone())
@@ -3222,7 +3245,7 @@ pub(crate) async fn resolve_device_worker_launch(
             // artifact, or a headless site, leaves the slot unbound and
             // the launch refuses with its own code instead of naming a
             // path no trusted artifact names.
-            let wayland_sock = gpu_worker_wayland_sock(self.bundle().site.as_ref())?;
+            let wayland_sock = gpu_worker_wayland_sock(self.bundle().site())?;
             // The typed parameters travel as the canonical JSON of the
             // Provider's own `GpuParams`; the argv seat decodes them back.
             let params = serde_json::to_value(d2b_provider_device_gpu::GpuParams {
@@ -3433,7 +3456,17 @@ async fn serving_worker_launch_args(
             .await
             .map_err(|_| "provider-ticket:serving-socket-dir-create".to_owned())?;
         use std::os::unix::fs::PermissionsExt as _;
-        let _ = tokio::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).await;
+        if let Err(error) = tokio::fs::set_permissions(
+            parent,
+            std::fs::Permissions::from_mode(0o700),
+        ).await {
+            tracing::warn!(
+                zone = %zone,
+                socket_dir = %parent.display(),
+                error = %error,
+                "failed to enforce 0700 on the serving worker socket directory"
+            );
+        }
     }
     let cache = match launch.cache {
         AttachmentCache::Auto => "auto",
@@ -4054,9 +4087,9 @@ fn resource_ticket(
     let ticket = ticket
         .with_runtime_identity(zone_uid, launch.owner_ref().cloned(), runtime_scope)
         .map_err(|error| format!("provider-ticket:{}", error.code()))?;
-    let ticket = match context.owner_uid.clone() {
+    let ticket = match context.owner_uid.as_ref() {
         Some(owner_uid) if ticket.owner_uid().is_none() => ticket
-            .with_owner_uid(owner_uid)
+            .with_owner_uid(owner_uid.clone())
             .map_err(|error| format!("provider-ticket:{}", error.code()))?,
         _ => ticket,
     };
@@ -4145,7 +4178,7 @@ fn compiled_resource_digests(
             ManagedProvider::Minijail => "system-minijail",
             ManagedProvider::Systemd => "system-systemd",
         },
-        bundle.bundle.bundle_hash.as_deref().unwrap_or("bundle"),
+        bundle.bundle().bundle_hash.as_deref().unwrap_or("bundle"),
     );
     CompiledDigests {
         sandbox: digest(&format!("{context}:sandbox"), spec_bytes),
@@ -4284,7 +4317,7 @@ fn compiled_digests(
             ManagedProvider::Minijail => "system-minijail",
             ManagedProvider::Systemd => "system-systemd",
         },
-        bundle.bundle.bundle_hash.as_deref().unwrap_or("bundle")
+        bundle.bundle().bundle_hash.as_deref().unwrap_or("bundle")
     );
     CompiledDigests {
         sandbox: digest(&format!("{context}:sandbox"), &node_bytes),
@@ -4301,10 +4334,10 @@ fn stable_generation(bundle: &BundleResolver) -> u64 {
     let mut hasher = Sha256::new();
     hasher.update(
         bundle
-            .bundle
+            .bundle()
             .bundle_hash
             .as_deref()
-            .unwrap_or(bundle.bundle.generation.generator.as_str()),
+            .unwrap_or(bundle.bundle().generation.generator.as_str()),
     );
     let bytes: [u8; 32] = hasher.finalize().into();
     let generation = u64::from_le_bytes(bytes[..8].try_into().expect("digest prefix"));
@@ -6025,6 +6058,7 @@ mod tests {
 
     #[test]
     fn launched_observer_replaces_stale_pidfd_table_entry_on_relaunch() {
+        use d2b_provider_process::LaunchedSnapshot;
         use d2b_provider_supervisor::LaunchedObserver;
         use d2bd_runtime::supervisor::pidfd_table::PidfdTable;
 
@@ -6055,13 +6089,13 @@ mod tests {
         };
         // The relaunch: a fresh broker-confirmed spawn for the same slot.
         let live_pid = std::process::id() as i32;
-        observer.launched(
-            "host-system",
-            "controller-stale",
-            live_pid,
-            2,
-            std::fs::File::open("/dev/null").expect("null").into(),
-        );
+        observer.launched(LaunchedSnapshot {
+            vm: "host-system".to_owned(),
+            role: "controller-stale".to_owned(),
+            pid: live_pid,
+            start_time_ticks: 2,
+            pidfd: std::fs::File::open("/dev/null").expect("null").into(),
+        });
         let registration = table
             .list_for_vm("host-system")
             .into_iter()
@@ -6076,6 +6110,7 @@ mod tests {
 
     #[test]
     fn launched_observer_keeps_a_live_duplicate_slot() {
+        use d2b_provider_process::LaunchedSnapshot;
         use d2b_provider_supervisor::LaunchedObserver;
         use d2bd_runtime::supervisor::pidfd_table::PidfdTable;
 
@@ -6110,13 +6145,13 @@ mod tests {
         let observer = PidfdTableLaunchedObserver {
             pidfd_table: Arc::clone(&table),
         };
-        observer.launched(
-            "host-system",
-            "controller-live",
-            live_pid,
+        observer.launched(LaunchedSnapshot {
+            vm: "host-system".to_owned(),
+            role: "controller-live".to_owned(),
+            pid: live_pid,
             start_time_ticks,
-            std::fs::File::open("/dev/null").expect("null").into(),
-        );
+            pidfd: std::fs::File::open("/dev/null").expect("null").into(),
+        });
         let registration = table
             .list_for_vm("host-system")
             .into_iter()

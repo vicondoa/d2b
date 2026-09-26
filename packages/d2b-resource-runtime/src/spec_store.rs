@@ -58,6 +58,7 @@ pub struct ResourceKey {
 }
 
 impl ResourceKey {
+    /// Build a key from its three owned components.
     pub fn new(zone: impl Into<String>, type_name: impl Into<String>, name: impl Into<String>) -> Self {
         Self { zone: zone.into(), type_name: type_name.into(), name: name.into() }
     }
@@ -72,20 +73,25 @@ pub enum ResourceProvenance {
 }
 
 impl ResourceProvenance {
+    /// The database spelling this provenance persists as.
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Nix => "nix",
-            Self::Api => "api",
-            Self::Resource => "resource",
+            Self::Nix =>"nix",
+            Self::Api =>"api",
+            Self::Resource =>"resource",
         }
     }
+}
 
-    fn from_str(value: &str) -> Option<Self> {
+impl std::str::FromStr for ResourceProvenance {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
-            "nix" => Some(Self::Nix),
-            "api" => Some(Self::Api),
-            "resource" => Some(Self::Resource),
-            _ => None,
+            "nix" => Ok(Self::Nix),
+            "api" => Ok(Self::Api),
+            "resource" => Ok(Self::Resource),
+            _ => Err(()),
         }
     }
 }
@@ -168,6 +174,11 @@ pub enum SpecStoreError {
     ResourceDeleting { zone: String, type_name: String, name: String },
     #[error("resource {zone}/{type_name}/{name} not found")]
     NotFound { zone: String, type_name: String, name: String },
+    /// A stored row whose uid column is not the 16-byte identity this store
+    /// writes. The row is corrupt: admitting it with a zero identity would
+    /// collide with every other zero-uid row, so the call fails instead.
+    #[error("corrupt stored row {zone}/{type_name}/{name}: uid column is not 16 bytes")]
+    CorruptRow { zone: String, type_name: String, name: String },
     #[error("spec store io: {0}")]
     Io(#[from] std::io::Error),
     #[error("spec store sqlite: {0}")]
@@ -314,14 +325,14 @@ fn ensure_transactional_inner(
         existing_provenance,
     )) = existing
     else {
-        let stored = insert_new(tx, &row)?;
+        let stored = insert_new(tx, row)?;
         insert_audit(
             tx,
             AuditWrite {
                 ts: now(),
                 subject: "resource.ensure",
-                provenance: row.provenance.as_str(),
-                key: Some(&row.key),
+                provenance: stored.provenance.as_str(),
+                key: Some(&stored.key),
                 operation: "ensure.create",
                 generation_before: None,
                 generation_after: Some(stored.generation as i64),
@@ -519,42 +530,74 @@ fn now() -> i64 {
 
 fn insert_new(
     tx: &rusqlite::Transaction<'_>,
-    row: &StoredDesiredResource,
+    row: StoredDesiredResource,
 ) -> Result<StoredDesiredResource, SpecStoreError> {
+    let StoredDesiredResource {
+        key,
+        uid,
+        owner_uid,
+        provenance,
+        spec,
+        metadata,
+        ..
+    } = row;
     let created_at = now();
     tx.execute(
         "INSERT INTO resources (zone, type, name, uid, generation, owner_uid, provenance, \
          deleting, spec, metadata, created_at) \
          VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, 0, ?7, ?8, ?9)",
         params![
-            row.key.zone,
-            row.key.type_name,
-            row.key.name,
-            row.uid.as_slice(),
-            row.owner_uid.map(|u| u.to_vec()),
-            row.provenance.as_str(),
-            row.spec,
-            row.metadata,
+            key.zone,
+            key.type_name,
+            key.name,
+            uid.as_slice(),
+            owner_uid.map(|u| u.to_vec()),
+            provenance.as_str(),
+            spec,
+            metadata,
             created_at,
         ],
     )?;
-    Ok(StoredDesiredResource { generation: 1, deleting: false, created_at, ..row.clone() })
+    Ok(StoredDesiredResource {
+        generation: 1,
+        deleting: false,
+        created_at,
+        key,
+        uid,
+        owner_uid,
+        provenance,
+        spec,
+        metadata,
+    })
 }
 
-fn row_from(
-    r: &rusqlite::Row<'_>,
-) -> rusqlite::Result<StoredDesiredResource> {
+fn row_from(r: &rusqlite::Row<'_>) -> Result<StoredDesiredResource, SpecStoreError> {
+    let zone: String = r.get(0)?;
+    let type_name: String = r.get(1)?;
+    let name: String = r.get(2)?;
+    let corrupt = || SpecStoreError::CorruptRow {
+        zone: zone.clone(),
+        type_name: type_name.clone(),
+        name: name.clone(),
+    };
+    let uid: [u8; 16] = r
+        .get::<_, Vec<u8>>(3)?
+        .try_into()
+        .map_err(|_| corrupt())?;
+    let owner_uid: Option<[u8; 16]> = r
+        .get::<_, Option<Vec<u8>>>(5)?
+        .map(|v| v.try_into().map_err(|_| corrupt()))
+        .transpose()?;
     Ok(StoredDesiredResource {
         key: ResourceKey {
-            zone: r.get(0)?,
-            type_name: r.get(1)?,
-            name: r.get(2)?,
+            zone,
+            type_name,
+            name,
         },
-        uid: r.get::<_, Vec<u8>>(3)?.try_into().unwrap_or([0; 16]),
+        uid,
         generation: r.get::<_, i64>(4)? as u64,
-        owner_uid: r.get::<_, Option<Vec<u8>>>(5)?.map(|v| v.try_into().unwrap_or([0; 16])),
-        provenance: ResourceProvenance::from_str(&r.get::<_, String>(6)?)
-            .unwrap_or(ResourceProvenance::Api),
+        owner_uid,
+        provenance: r.get::<_, String>(6)?.parse().unwrap_or(ResourceProvenance::Api),
         deleting: r.get::<_, i64>(7)? != 0,
         spec: r.get(8)?,
         metadata: r.get(9)?,
@@ -566,15 +609,16 @@ fn load_row(
     conn: &Connection,
     key: &ResourceKey,
 ) -> Result<Option<StoredDesiredResource>, SpecStoreError> {
-    Ok(conn
-        .query_row(
-            "SELECT zone, type, name, uid, generation, owner_uid, provenance, deleting, \
-             spec, metadata, created_at FROM resources \
-             WHERE zone = ?1 AND type = ?2 AND name = ?3",
-            params![key.zone, key.type_name, key.name],
-            row_from,
-        )
-        .optional()?)
+    let mut stmt = conn.prepare(
+        "SELECT zone, type, name, uid, generation, owner_uid, provenance, deleting, \
+         spec, metadata, created_at FROM resources \
+         WHERE zone = ?1 AND type = ?2 AND name = ?3",
+    )?;
+    let mut rows = stmt.query(params![key.zone, key.type_name, key.name])?;
+    match rows.next()? {
+        Some(row) => Ok(Some(row_from(row)?)),
+        None => Ok(None),
+    }
 }
 
 fn get(conn: &Connection, key: &ResourceKey) -> Result<StoredDesiredResource, SpecStoreError> {
@@ -593,14 +637,16 @@ fn list(conn: &Connection, selector: &SpecSelector) -> Result<Vec<StoredDesiredR
            AND (?2 IS NULL OR type = ?2) \
            AND (?3 IS NULL OR owner_uid = ?3) \
          ORDER BY zone, type, name";
-    let zone = selector.zone.clone();
-    let type_name = selector.type_name.clone();
+    let zone = selector.zone.as_deref();
+    let type_name = selector.type_name.as_deref();
     let owner = selector.owner_uid.map(|u| u.to_vec());
     let mut stmt = conn.prepare(sql)?;
-    let rows = stmt
-        .query_map(params![zone, type_name, owner], row_from)?
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows)
+    let mut rows = stmt.query(params![zone, type_name, owner])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(row_from(row)?);
+    }
+    Ok(out)
 }
 
 /// Set the terminal deleting mark (R10). Fails with
@@ -758,6 +804,7 @@ impl SpecStore {
         Ok(Self { path, sender: Some(sender), join: Some(join) })
     }
 
+    /// The database file path this store opened.
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -907,6 +954,47 @@ mod tests {
         assert!(!got.deleting);
         let history = store.history(10).await.unwrap();
         assert!(history.iter().any(|rec| rec.operation == "ensure.create"));
+    }
+
+    /// A stored row whose uid column is not the 16-byte identity the store
+    /// writes is corrupt: reads fail with the typed error instead of
+    /// admitting a zero identity that collides with every other zero-uid
+    /// row.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn a_corrupt_uid_column_fails_reads_with_a_typed_error() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("specs.db");
+        {
+            let store = SpecStore::open(&path).unwrap();
+            store.ensure(row("data", b"spec-v1")).await.unwrap();
+        }
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute(
+            "UPDATE resources SET uid = ?1 WHERE name = 'data'",
+            [vec![1u8, 2, 3]],
+        )
+        .unwrap();
+        drop(conn);
+
+        let store = SpecStore::open(&path).unwrap();
+        let error = store
+            .get(ResourceKey::new("host", "Volume", "data"))
+            .await
+            .expect_err("a corrupt uid column is not a zero identity");
+        assert!(matches!(
+            error,
+            SpecStoreError::CorruptRow {
+                zone,
+                type_name,
+                name,
+            } if zone == "host" && type_name == "Volume" && name == "data"
+        ));
+        let error = store
+            .list(SpecSelector::default())
+            .await
+            .expect_err("list surfaces the same corrupt row");
+        assert!(matches!(error, SpecStoreError::CorruptRow { .. }));
     }
 
     /// Durability boundary (AE1): ensure returns only after the commit. The

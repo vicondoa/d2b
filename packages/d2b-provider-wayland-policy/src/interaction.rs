@@ -121,19 +121,21 @@ pub enum InteractionFinalize {
 }
 
 /// Closed failure surface for interaction Provider adapters.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InteractionEffectError {
     /// The Provider path is not currently available and should retry.
     Unavailable,
     /// Fresh resource or assignment evidence failed closed.
     InvalidResource,
+    /// A wire spec or envelope failed to parse; carries the serde reason.
+    InvalidSpec(String),
 }
 
 impl core::fmt::Display for InteractionEffectError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(match self {
             Self::Unavailable => "interaction-effect-unavailable",
-            Self::InvalidResource => "interaction-resource-invalid",
+            Self::InvalidResource | Self::InvalidSpec(_) => "interaction-resource-invalid",
         })
     }
 }
@@ -240,7 +242,7 @@ impl InteractionSpecEnvelope {
     /// Decode one Layer 2 base spec.
     pub fn base_spec<T: DeserializeOwned>(&self) -> Result<T, InteractionEffectError> {
         serde_json::from_value(self.base.clone())
-            .map_err(|_| InteractionEffectError::InvalidResource)
+            .map_err(|error| InteractionEffectError::InvalidSpec(error.to_string()))
     }
 
     /// Decode one typed spec that carries `providerRef` itself (the audio
@@ -259,7 +261,8 @@ impl InteractionSpecEnvelope {
                 Value::String(provider_ref.to_owned()),
             );
         }
-        serde_json::from_value(spec).map_err(|_| InteractionEffectError::InvalidResource)
+        serde_json::from_value(spec)
+            .map_err(|error| InteractionEffectError::InvalidSpec(error.to_string()))
     }
 }
 
@@ -425,7 +428,7 @@ pub trait InteractionType: Clone + Send + Sync + 'static {
 #[derive(Clone)]
 pub struct InteractionDriverArgs<T: InteractionType> {
     /// The driver's Zone.
-    pub zone: String,
+    pub zone: ZoneId,
     /// The controller generation every effect call binds.
     pub controller_generation: ControllerGeneration,
     /// The Provider effect port the daemon implements.
@@ -472,6 +475,14 @@ impl<T: InteractionType> ResourceDriverFactory for InteractionDriverFactory<T> {
     }
 }
 
+/// Classify one family-engine refusal onto the structured failure surface.
+fn classify_interaction_error(error: &InteractionDriverError) -> DriverFailure {
+    match error.kind.class() {
+        FailureClass::Retryable => DriverFailure::retryable(error.op),
+        FailureClass::Terminal => DriverFailure::terminal(error.op),
+    }
+}
+
 /// One desired interaction resource.
 pub struct InteractionDriver<T: InteractionType> {
     zone: ZoneId,
@@ -484,10 +495,12 @@ pub struct InteractionDriver<T: InteractionType> {
 
 impl<T: InteractionType> InteractionDriver<T> {
     /// Build the driver for its declared type.
+    ///
+    /// The zone arrives as a validated [`ZoneId`] from the daemon
+    /// construction boundary, so construction is infallible.
     pub fn new(args: InteractionDriverArgs<T>) -> Self {
-        let zone = ZoneId::parse(args.zone).expect("driver zone was validated at construction");
         Self {
-            zone,
+            zone: args.zone,
             controller_generation: args.controller_generation,
             effects: args.effects,
             behavior: args.behavior,
@@ -612,7 +625,7 @@ impl<T: InteractionType> InteractionDriver<T> {
             .children()
             .await
             .map_err(|_| self.error(InteractionDriverErrorKind::ChildMutation, op))?;
-        Ok(owned
+        owned
             .iter()
             .filter(|row| {
                 !row.deleting
@@ -620,16 +633,19 @@ impl<T: InteractionType> InteractionDriver<T> {
                         child.type_name.as_str() == row.key.type_name && child.name == row.key.name
                     })
             })
-            .map(|row| InteractionChild {
-                resource_ref: key_ref(&row.key),
-                generation: row.generation,
+            .map(|row| {
+                Ok(InteractionChild {
+                    resource_ref: key_ref(&row.key)
+                        .map_err(|_| self.error(InteractionDriverErrorKind::SpecInvalid, op))?,
+                    generation: row.generation,
+                })
             })
-            .collect())
+            .collect::<Result<Vec<_>, InteractionDriverError>>()
     }
 
     fn effect_error(&self, error: InteractionEffectError, op: DriverOp) -> InteractionDriverError {
         match error {
-            InteractionEffectError::InvalidResource => {
+            InteractionEffectError::InvalidResource | InteractionEffectError::InvalidSpec(_) => {
                 self.error(InteractionDriverErrorKind::SpecInvalid, op)
             }
             InteractionEffectError::Unavailable => {
@@ -689,10 +705,7 @@ impl<T: InteractionType> ResourceDriver for InteractionDriver<T> {
     type Error = InteractionDriverError;
 
     fn classify_error(&self, error: &InteractionDriverError) -> DriverFailure {
-        match error.kind.class() {
-            FailureClass::Retryable => DriverFailure::retryable(error.op),
-            FailureClass::Terminal => DriverFailure::terminal(error.op),
-        }
+        classify_interaction_error(error)
     }
 
     /// Structural validation: the stored spec decodes, names a Provider this
@@ -833,9 +846,15 @@ impl<T: InteractionType> ResourceDriver for InteractionDriver<T> {
 }
 
 /// The resource reference of one manager key.
-pub fn key_ref(key: &ResourceKey) -> ResourceRef {
-    ResourceRef::parse(&format!("{}/{}", key.type_name, key.name))
-        .expect("manager keys carry canonical resource references")
+///
+/// # Errors
+///
+/// Returns the `SpecInvalid` refusal when the key does not carry a
+/// canonical resource reference.
+pub fn key_ref(key: &ResourceKey) -> Result<ResourceRef, InteractionDriverError> {
+    ResourceRef::parse(&format!("{}/{}", key.type_name, key.name)).map_err(|_| {
+        InteractionDriverError::new(InteractionDriverErrorKind::SpecInvalid, DriverOp::Validate)
+    })
 }
 
 /// Convert one durable 16-byte uid to its canonical identity (the manager
@@ -863,19 +882,21 @@ fn teardown_rank(resource_type: &str) -> u8 {
 /// annotation the display status reads) are carried.
 pub fn owned_child_ensure(intent: &OwnedChildIntent) -> Result<ChildEnsure, InteractionEffectError> {
     let invalid = || InteractionEffectError::InvalidResource;
-    let value: Value = serde_json::from_slice(intent.canonical_resource()).map_err(|_| invalid())?;
+    let value: Value = serde_json::from_slice(intent.canonical_resource())
+        .map_err(|error| InteractionEffectError::InvalidSpec(error.to_string()))?;
     let spec = value.get("spec").cloned().ok_or_else(invalid)?;
     let metadata = value.get("metadata").cloned().unwrap_or_else(|| json!({}));
     Ok(ChildEnsure {
         type_name: ResourceTypeName::new(intent.target().resource_type().as_str()),
         name: intent.target().name().as_str().to_owned(),
-        spec: serde_json::to_vec(&spec).map_err(|_| invalid())?,
+        spec: serde_json::to_vec(&spec)
+            .map_err(|error| InteractionEffectError::InvalidSpec(error.to_string()))?,
         metadata: serde_json::to_vec(&json!({
             "ownerRef": metadata.get("ownerRef").cloned().unwrap_or(Value::Null),
             "labels": metadata.get("labels").cloned().unwrap_or_else(|| json!({})),
             "annotations": metadata.get("annotations").cloned().unwrap_or_else(|| json!({})),
         }))
-        .map_err(|_| invalid())?,
+        .map_err(|error| InteractionEffectError::InvalidSpec(error.to_string()))?,
     })
 }
 
@@ -888,7 +909,8 @@ pub fn binding_child_ensure(
 ) -> Result<ChildEnsure, InteractionEffectError> {
     let invalid = || InteractionEffectError::InvalidResource;
     let payload = materialize_child_create_payload(intent, zone).map_err(|_| invalid())?;
-    let value = serde_json::from_slice::<Value>(&payload).map_err(|_| invalid())?;
+    let value = serde_json::from_slice::<Value>(&payload)
+        .map_err(|error| InteractionEffectError::InvalidSpec(error.to_string()))?;
     let spec = value.get("spec").cloned().ok_or_else(invalid)?;
     let metadata = json!({
         "ownerRef": intent.owner_ref().to_canonical_string(),
@@ -898,7 +920,9 @@ pub fn binding_child_ensure(
     Ok(ChildEnsure {
         type_name: ResourceTypeName::new(intent.kind().resource_type()),
         name: intent.resource_ref().name().as_str().to_owned(),
-        spec: serde_json::to_vec(&spec).map_err(|_| invalid())?,
-        metadata: serde_json::to_vec(&metadata).map_err(|_| invalid())?,
+        spec: serde_json::to_vec(&spec)
+            .map_err(|error| InteractionEffectError::InvalidSpec(error.to_string()))?,
+        metadata: serde_json::to_vec(&metadata)
+            .map_err(|error| InteractionEffectError::InvalidSpec(error.to_string()))?,
     })
 }

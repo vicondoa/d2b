@@ -117,11 +117,7 @@ impl UserDriverError {
 
 impl core::fmt::Display for UserDriverError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_str(match self.kind {
-            UserDriverErrorKind::SpecInvalid => "system-core-spec-invalid",
-            UserDriverErrorKind::UserDiscovery => "system-core-user-discovery-failed",
-            UserDriverErrorKind::DrainPending => "system-core-drain-pending",
-        })
+        formatter.write_str(self.kind.failure_kind().code())
     }
 }
 
@@ -443,20 +439,15 @@ mod tests {
     use d2b_resource_runtime::context::{
         ChildEnsure, ManagerEndpoint, ResourceContext, WatchId, WatchRegistration,
     };
-    use d2b_resource_runtime::driver::{
-        DynResourceDriver, RecoveryOutcome, ReconcileOutcome,
-    };
+    use d2b_resource_runtime::driver::{DynResourceDriver, RecoveryOutcome, ReconcileOutcome};
     use d2b_resource_runtime::error::{FailureClass, ResourceError};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
     use d2b_resource_runtime::provider::ProviderDirectory;
     use d2b_resource_runtime::spec_store::EnsureOutcome;
-    use d2b_resource_runtime::target::TargetHandle;
 
     use crate::test_support::{RecordingEffects, ScriptedProbe, recording_facets};
 
-    use super::{
-        USER_REDISCOVER, UserDriver, UserDriverStatus, user_descriptor, user_spec_decoder,
-    };
+    use super::{USER_REDISCOVER, UserDriver, UserDriverStatus, user_descriptor, user_spec_decoder};
 
     // -- fakes ---------------------------------------------------------------
 
@@ -464,21 +455,21 @@ mod tests {
     /// any unexpected manager call fails the test loudly through the recorded
     /// call list.
     struct RecordingManager {
-        calls: parking_lot::Mutex<Vec<&'static str>>,
-        owned: parking_lot::Mutex<Vec<StoredDesiredResource>>,
+        calls: tokio::sync::Mutex<Vec<&'static str>>,
+        owned: tokio::sync::Mutex<Vec<StoredDesiredResource>>,
     }
 
     impl RecordingManager {
         fn new() -> Arc<Self> {
             Arc::new(Self {
-                calls: parking_lot::Mutex::new(Vec::new()),
-                owned: parking_lot::Mutex::new(Vec::new()),
+                calls: tokio::sync::Mutex::new(Vec::new()),
+                owned: tokio::sync::Mutex::new(Vec::new()),
             })
         }
 
         /// Seed one owned child row (the finalize gate's input).
         fn seed_owned(&self, key: ResourceKey) {
-            self.owned.lock().push(StoredDesiredResource {
+            self.owned.try_lock().expect("uncontended test mutex").push(StoredDesiredResource {
                 key,
                 uid: [0x77; 16],
                 generation: 1,
@@ -492,7 +483,7 @@ mod tests {
         }
 
         fn call_order(&self) -> Vec<&'static str> {
-            self.calls.lock().clone()
+            self.calls.try_lock().expect("uncontended test mutex").clone()
         }
     }
 
@@ -503,15 +494,15 @@ mod tests {
             _parent: &ResourceKey,
             _child: ChildEnsure,
         ) -> Result<EnsureOutcome, ResourceError> {
-            self.calls.lock().push("ensure-child"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            Err(ResourceError::ManagerRpc("unexpected ensure_child".into()))
+            self.calls.lock().await.push("ensure-child");
+            Err(ResourceError::ManagerRejected { reason: "unexpected ensure_child".into() })
         }
 
         async fn get(
             &self,
             _key: &ResourceKey,
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            self.calls.lock().push("get"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.calls.lock().await.push("get");
             Ok(None)
         }
 
@@ -519,18 +510,18 @@ mod tests {
             &self,
             _key: &ResourceKey,
         ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
-            self.calls.lock().push("view"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            Err(ResourceError::ManagerRpc("unexpected view".into()))
+            self.calls.lock().await.push("view");
+            Err(ResourceError::ManagerRejected { reason: "unexpected view".into() })
         }
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-            self.calls.lock().push("delete"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            let mut owned = self.owned.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.calls.lock().await.push("delete");
+            let mut owned = self.owned.lock().await;
             if owned.iter().any(|row| row.key == *key) {
                 owned.retain(|row| row.key != *key);
                 Ok(())
             } else {
-                Err(ResourceError::ManagerRpc("unexpected delete".into()))
+                Err(ResourceError::ManagerRejected { reason: "unexpected delete".into() })
             }
         }
 
@@ -538,8 +529,8 @@ mod tests {
             &self,
             _owner_uid: [u8; 16],
         ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            self.calls.lock().push("list-owned");
-            Ok(self.owned.lock().clone())
+            self.calls.lock().await.push("list-owned");
+            Ok(self.owned.lock().await.clone())
         }
 
         async fn register_watch(
@@ -547,12 +538,12 @@ mod tests {
             _subscriber: &ResourceKey,
             _registration: WatchRegistration,
         ) -> Result<WatchId, ResourceError> {
-            self.calls.lock().push("register-watch"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.calls.lock().await.push("register-watch");
             Ok(WatchId(1))
         }
 
         async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
-            self.calls.lock().push("cancel-watch"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.calls.lock().await.push("cancel-watch");
             Ok(())
         }
     }
@@ -591,7 +582,6 @@ mod tests {
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
         ResourceContext::new(
             row,
-            TargetHandle::Host,
             user_spec_decoder(),
             manager,
             Arc::new(requeue),
@@ -760,6 +750,20 @@ mod tests {
                 vec![USER_REDISCOVER.as_millis() as u64],
                 "exactly one re-check, on the discovery cadence"
             );
+
+            // The cached status is current-generation but not realized, so
+            // the next pass re-discovers instead of short-circuiting into a
+            // claim - for every unrealized phase, not just Pending.
+            effects.set_phase(ResourcePhase::Ready);
+            assert_eq!(
+                driver.reconcile(&mut ctx).await.expect("second reconcile"),
+                ReconcileOutcome::Satisfied
+            );
+            assert_eq!(
+                effects.call_order(),
+                vec!["observe-user".to_owned(), "observe-user".to_owned()],
+                "{phase:?} cached unrealized discovery is re-observed"
+            );
         }
     }
 
@@ -802,7 +806,7 @@ mod tests {
     #[tokio::test]
     async fn reconcile_maps_a_discovery_failure_to_a_retryable_failure() {
         let (mut ctx, effects, _manager, _requeue, mut driver) = user_fixture().await;
-        effects.fail.store(true, Ordering::SeqCst);
+        effects.fail.store(true, Ordering::Relaxed);
         let failure = driver.reconcile(&mut ctx).await.expect_err("retryable");
         assert_eq!(failure.class(), FailureClass::Retryable);
         assert!(ctx.status::<UserDriverStatus>().is_none());

@@ -380,6 +380,15 @@ impl fmt::Debug for VerifiedGuestSetupDescriptor {
 
 impl GuestSetupDescriptor {
     /// Construct a descriptor and compute its canonical semantic digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GuestSetupDescriptorError::SchemaVersionMismatch`] when the
+    /// schema version is unsupported, [`GuestSetupDescriptorError::CanonicalJson`]
+    /// when the digest cannot be encoded, [`GuestSetupDescriptorError::InvalidField`]
+    /// when a field fails bounded validation, and
+    /// [`GuestSetupDescriptorError::DigestMismatch`] when the computed digest
+    /// does not match.
     pub fn new(
         provider_ref: ResourceRef,
         provider_generation: ResourceGeneration,
@@ -420,6 +429,12 @@ impl GuestSetupDescriptor {
     }
 
     /// Parse exactly canonical descriptor bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GuestSetupDescriptorError::NonCanonical`] when the bytes are
+    /// not canonical JSON, and [`GuestSetupDescriptorError::InvalidEncoding`]
+    /// when the canonical bytes do not decode against the closed wire schema.
     pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, GuestSetupDescriptorError> {
         let value = CanonicalJsonValue::parse(bytes)?;
         if value.to_canonical_bytes() != bytes {
@@ -429,6 +444,13 @@ impl GuestSetupDescriptor {
     }
 
     /// Render the exact canonical descriptor envelope bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GuestSetupDescriptorError::InvalidField`] or
+    /// [`GuestSetupDescriptorError::DigestMismatch`] when integrity
+    /// validation fails, and [`GuestSetupDescriptorError::CanonicalJson`]
+    /// when canonical encoding fails.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, GuestSetupDescriptorError> {
         self.validate_integrity()?;
         Ok(CanonicalJsonValue::parse(
@@ -438,6 +460,12 @@ impl GuestSetupDescriptor {
     }
 
     /// Validate the closed fields and self-consistent semantic digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GuestSetupDescriptorError::InvalidField`] when a field fails
+    /// bounded validation, and [`GuestSetupDescriptorError::DigestMismatch`]
+    /// when the computed digest does not match the stored digest.
     pub fn validate_integrity(&self) -> Result<(), GuestSetupDescriptorError> {
         self.validate_fields()?;
         if self.computed_digest()? != self.descriptor_digest.as_str() {
@@ -448,6 +476,13 @@ impl GuestSetupDescriptor {
 
     /// Verify the catalog-bound signature and return the only child-planning
     /// descriptor type.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GuestSetupDescriptorError::InvalidField`] or
+    /// [`GuestSetupDescriptorError::DigestMismatch`] when integrity
+    /// validation fails, and [`GuestSetupDescriptorError::SignatureInvalid`]
+    /// when the signature envelope is absent or does not verify.
     pub fn verify_with(
         &self,
         verifier: &impl GuestSetupDescriptorVerifier,

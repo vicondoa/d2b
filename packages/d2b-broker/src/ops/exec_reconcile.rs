@@ -389,6 +389,15 @@ impl SystemLiveExec {
     }
 }
 
+fn require_absolute(path: &Path, what: &str) -> Result<(), ReconcileExecError> {
+    if !path.to_str().map(|s| s.starts_with('/')).unwrap_or(false) {
+        return Err(ReconcileExecError::InvalidInput {
+            detail: format!("{what} must be absolute: {path:?}"),
+        });
+    }
+    Ok(())
+}
+
 impl ReconcileExecutor for SystemReconcileExecutor {
     fn apply_nft_script<'a>(
         &'a self,
@@ -396,18 +405,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         script: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
         Box::pin(async move {
-            if !nft_binary
-                .to_str()
-                .map(|s| s.starts_with('/'))
-                .unwrap_or(false)
-            {
-                return Err(ReconcileExecError::InvalidInput {
-                    detail: format!(
-                        "nft binary path must be absolute, got {:?}",
-                        nft_binary.display().to_string()
-                    ),
-                });
-            }
+            require_absolute(nft_binary, "nft binary path")?;
             if script.is_empty() {
                 return Err(ReconcileExecError::InvalidInput {
                     detail: "nft script is empty".to_owned(),
@@ -504,11 +502,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         mode: u32,
     ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
         Box::pin(async move {
-            if !path.to_str().map(|s| s.starts_with('/')).unwrap_or(false) {
-                return Err(ReconcileExecError::InvalidInput {
-                    detail: format!("path must be absolute: {:?}", path.display().to_string()),
-                });
-            }
+            require_absolute(path, "path")?;
             let parent = path
                 .parent()
                 .ok_or_else(|| ReconcileExecError::InvalidInput {
@@ -548,11 +542,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         owner_gid: u32,
     ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
         Box::pin(async move {
-            if !path.to_str().map(|s| s.starts_with('/')).unwrap_or(false) {
-                return Err(ReconcileExecError::InvalidInput {
-                    detail: format!("path must be absolute: {:?}", path.display().to_string()),
-                });
-            }
+            require_absolute(path, "path")?;
             let parent = path
                 .parent()
                 .ok_or_else(|| ReconcileExecError::InvalidInput {
@@ -595,11 +585,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         value: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
         Box::pin(async move {
-            if !path.to_str().map(|s| s.starts_with('/')).unwrap_or(false) {
-                return Err(ReconcileExecError::InvalidInput {
-                    detail: format!("path must be absolute: {:?}", path.display().to_string()),
-                });
-            }
+            require_absolute(path, "path")?;
             if value.contains('\n') {
                 return Err(ReconcileExecError::InvalidInput {
                     detail: format!("path value contains newline: {value:?}"),
@@ -619,11 +605,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         path: &'a Path,
     ) -> Pin<Box<dyn Future<Output = Result<String, ReconcileExecError>> + Send + 'a>> {
         Box::pin(async move {
-            if !path.to_str().map(|s| s.starts_with('/')).unwrap_or(false) {
-                return Err(ReconcileExecError::InvalidInput {
-                    detail: format!("path must be absolute: {:?}", path.display().to_string()),
-                });
-            }
+            require_absolute(path, "path")?;
             crate::sys::path_safe::read_to_string_nofollow(path).map_err(|e| {
                 ReconcileExecError::Io {
                     path: path.display().to_string(),
@@ -640,18 +622,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         route_spec: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
         Box::pin(async move {
-            if !ip_binary
-                .to_str()
-                .map(|s| s.starts_with('/'))
-                .unwrap_or(false)
-            {
-                return Err(ReconcileExecError::InvalidInput {
-                    detail: format!(
-                        "ip binary path must be absolute, got {:?}",
-                        ip_binary.display().to_string()
-                    ),
-                });
-            }
+            require_absolute(ip_binary, "ip binary path")?;
             if route_spec.is_empty() {
                 return Err(ReconcileExecError::InvalidInput {
                     detail: "route spec is empty".to_owned(),
@@ -695,18 +666,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         bus_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
         Box::pin(async move {
-            if !usbip_binary
-                .to_str()
-                .map(|s| s.starts_with('/'))
-                .unwrap_or(false)
-            {
-                return Err(ReconcileExecError::InvalidInput {
-                    detail: format!(
-                        "usbip binary path must be absolute, got {:?}",
-                        usbip_binary.display().to_string()
-                    ),
-                });
-            }
+            require_absolute(usbip_binary, "usbip binary path")?;
             if bus_id.is_empty() {
                 return Err(ReconcileExecError::InvalidInput {
                     detail: "usbip bus_id is empty".to_owned(),
@@ -811,14 +771,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         comment: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<GeneratedSshKey, ReconcileExecError>> + Send + 'a>> {
         Box::pin(async move {
-            if !key_path.is_absolute() {
-                return Err(ReconcileExecError::InvalidInput {
-                    detail: format!(
-                        "ssh-keygen path must be absolute, got {:?}",
-                        key_path.display().to_string()
-                    ),
-                });
-            }
+            require_absolute(key_path, "ssh-keygen path")?;
             if comment.contains('\n') {
                 return Err(ReconcileExecError::InvalidInput {
                     detail: "ssh-keygen comment must be single-line".to_owned(),
@@ -999,6 +952,7 @@ async fn run_usbip_driver_isolated(
 ) -> Result<(), ReconcileExecError> {
     let deadline = tokio::time::Instant::now() + USBIP_DRIVER_HELPER_TIMEOUT;
     let mut last_error = None;
+    let mut last_failure = None;
 
     for attempt in 0..USBIP_DRIVER_MAX_ATTEMPTS {
         let attempt_started = tokio::time::Instant::now();
@@ -1019,41 +973,44 @@ async fn run_usbip_driver_isolated(
                 );
                 return Ok(());
             }
-            Err(error)
-                if usbip_unbind_error_is_transient(&error)
-                    && attempt + 1 < USBIP_DRIVER_MAX_ATTEMPTS =>
-            {
-                tracing::debug!(
-                    usbip_subcommand = subcommand.as_str(),
-                    attempt = attempt + 1,
-                    elapsed_ms,
-                    deadline_remaining_ms = remaining_ms,
-                    error = ?error,
-                    "usbip driver helper retrying transient failure"
-                );
-                last_error = Some(error);
-                let delay = usbip_unbind_retry_delay(bus_id, attempt);
-                let now = tokio::time::Instant::now();
-                if now + delay >= deadline {
-                    break;
-                }
-                tokio::time::sleep(delay).await;
-            }
             Err(error) => {
-                tracing::debug!(
-                    usbip_subcommand = subcommand.as_str(),
-                    attempt = attempt + 1,
-                    elapsed_ms,
-                    deadline_remaining_ms = remaining_ms,
-                    "usbip driver helper failed"
-                );
-                return Err(error);
+                let failure = UsbipUnbindFailure::classify(&error);
+                if failure.transient && attempt + 1 < USBIP_DRIVER_MAX_ATTEMPTS {
+                    tracing::debug!(
+                        usbip_subcommand = subcommand.as_str(),
+                        attempt = attempt + 1,
+                        elapsed_ms,
+                        deadline_remaining_ms = remaining_ms,
+                        failure_kind = ?failure.kind,
+                        error = ?error,
+                        "usbip driver helper retrying transient failure"
+                    );
+                    last_error = Some(error);
+                    last_failure = Some(failure);
+                    let delay = usbip_unbind_retry_delay(bus_id, attempt);
+                    let now = tokio::time::Instant::now();
+                    if now + delay >= deadline {
+                        break;
+                    }
+                    tokio::time::sleep(delay).await;
+                } else {
+                    tracing::debug!(
+                        usbip_subcommand = subcommand.as_str(),
+                        attempt = attempt + 1,
+                        elapsed_ms,
+                        deadline_remaining_ms = remaining_ms,
+                        failure_kind = ?failure.kind,
+                        "usbip driver helper failed"
+                    );
+                    return Err(error);
+                }
             }
         }
     }
     tracing::debug!(
         usbip_subcommand = subcommand.as_str(),
         attempts = USBIP_DRIVER_MAX_ATTEMPTS,
+        failure_kind = ?last_failure.as_ref().map(|failure| failure.kind),
         "usbip driver helper retry budget exhausted"
     );
     Err(last_error.unwrap_or_else(|| ReconcileExecError::TimedOut {
@@ -1235,31 +1192,70 @@ fn usbip_stream_shutdown_error_is_ignorable(error: &io::Error) -> bool {
     )
 }
 
-fn usbip_unbind_error_is_transient(error: &ReconcileExecError) -> bool {
-    match error {
-        ReconcileExecError::NonZeroExit { stderr, .. } => {
-            let stderr = stderr.to_ascii_lowercase();
-            stderr.contains("ebusy")
-                || stderr.contains("busy")
-                || stderr.contains("eagain")
-                || stderr.contains("temporarily unavailable")
-                || stderr.contains("interrupted")
-                || stderr.contains("eintr")
-        }
-        ReconcileExecError::Io { detail, .. } => {
-            let detail = detail.to_ascii_lowercase();
-            detail.contains("ebusy")
-                || detail.contains("busy")
-                || detail.contains("eagain")
-                || detail.contains("temporarily unavailable")
-                || detail.contains("interrupted")
-                || detail.contains("eintr")
-        }
-        ReconcileExecError::BinaryMissing { detail, .. } => {
-            let detail = detail.to_ascii_lowercase();
-            detail.contains("text file busy") || detail.contains("etxtbsy")
-        }
-        _ => false,
+/// Stable classification of a usbip driver-helper failure, decided once
+/// from the raw error text so retries and the final verdict never
+/// re-scan strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UsbipUnbindFailureKind {
+    /// Device or driver busy (EBUSY / EAGAIN): retryable.
+    Busy,
+    /// Interrupted operation (EINTR): retryable.
+    Interrupted,
+    /// Helper binary busy (ETXTBSY): retryable.
+    TextFileBusy,
+    /// Any other failure: fatal.
+    Fatal,
+}
+
+/// One classified usbip driver-helper failure: the typed kind, the
+/// retry verdict, and the raw detail text for reporting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UsbipUnbindFailure {
+    kind: UsbipUnbindFailureKind,
+    transient: bool,
+    detail: String,
+}
+
+impl UsbipUnbindFailure {
+    /// Classify a driver-helper error once, case-folded, at the point
+    /// the failure is observed.
+    fn classify(error: &ReconcileExecError) -> Self {
+        let (detail, kind) = match error {
+            ReconcileExecError::NonZeroExit { stderr, .. }
+            | ReconcileExecError::Io { detail: stderr, .. } => {
+                let stderr = stderr.to_ascii_lowercase();
+                let kind = if stderr.contains("ebusy")
+                    || stderr.contains("busy")
+                    || stderr.contains("eagain")
+                    || stderr.contains("temporarily unavailable")
+                {
+                    UsbipUnbindFailureKind::Busy
+                } else if stderr.contains("interrupted") || stderr.contains("eintr") {
+                    UsbipUnbindFailureKind::Interrupted
+                } else {
+                    UsbipUnbindFailureKind::Fatal
+                };
+                (stderr, kind)
+            }
+            ReconcileExecError::BinaryMissing { detail, .. } => {
+                let detail = detail.to_ascii_lowercase();
+                let kind = if detail.contains("text file busy") || detail.contains("etxtbsy") {
+                    UsbipUnbindFailureKind::TextFileBusy
+                } else {
+                    UsbipUnbindFailureKind::Fatal
+                };
+                (detail, kind)
+            }
+            _ => {
+                return Self {
+                    kind: UsbipUnbindFailureKind::Fatal,
+                    transient: false,
+                    detail: String::new(),
+                }
+            }
+        };
+        let transient = kind != UsbipUnbindFailureKind::Fatal;
+        Self { kind, transient, detail }
     }
 }
 
@@ -1670,8 +1666,13 @@ mod fake {
     }
 }
 
-#[cfg(any(test, feature = "fake-backends"))]
-pub use fake::{FakeReconcileExecutor, ReconcileOp};
+// `exec_reconcile` is a `pub(crate)` arm (see `ops::mod`), so every reader
+// of this re-export is an in-crate `#[cfg(test)]` module: the five `ops/*`
+// test modules that import the pair by path, `live_handlers`, and the one
+// below. A `feature = "fake-backends"` library build compiles the re-export
+// with no reader at all, which `-D warnings` rejects as an unused import.
+#[cfg(test)]
+pub(crate) use fake::{FakeReconcileExecutor, ReconcileOp};
 
 #[cfg(test)]
 mod tests {
@@ -1973,32 +1974,37 @@ mod tests {
 
     #[test]
     fn usbip_unbind_retry_classifier_and_delay_are_bounded_with_jitter() {
-        assert!(usbip_unbind_error_is_transient(
-            &ReconcileExecError::NonZeroExit {
-                which: "usbip unbind".to_owned(),
-                exit_code: 1,
-                stderr: "write: Device or resource busy (EBUSY)".to_owned(),
-            }
-        ));
-        assert!(usbip_unbind_error_is_transient(
-            &ReconcileExecError::BinaryMissing {
-                which: "usbip".to_owned(),
-                detail: "Text file busy (os error 26)".to_owned(),
-            }
-        ));
-        assert!(!usbip_unbind_error_is_transient(
-            &ReconcileExecError::BinaryMissing {
-                which: "usbip".to_owned(),
-                detail: "No such file or directory (os error 2)".to_owned(),
-            }
-        ));
-        assert!(!usbip_unbind_error_is_transient(
-            &ReconcileExecError::NonZeroExit {
-                which: "usbip unbind".to_owned(),
-                exit_code: 1,
-                stderr: "device is not bound to usbip-host driver".to_owned(),
-            }
-        ));
+        let busy = UsbipUnbindFailure::classify(&ReconcileExecError::NonZeroExit {
+            which: "usbip unbind".to_owned(),
+            exit_code: 1,
+            stderr: "write: Device or resource busy (EBUSY)".to_owned(),
+        });
+        assert!(busy.transient);
+        assert_eq!(busy.kind, UsbipUnbindFailureKind::Busy);
+        assert!(busy.detail.contains("ebusy"));
+
+        let text_file_busy = UsbipUnbindFailure::classify(&ReconcileExecError::BinaryMissing {
+            which: "usbip".to_owned(),
+            detail: "Text file busy (os error 26)".to_owned(),
+        });
+        assert!(text_file_busy.transient);
+        assert_eq!(text_file_busy.kind, UsbipUnbindFailureKind::TextFileBusy);
+
+        let missing = UsbipUnbindFailure::classify(&ReconcileExecError::BinaryMissing {
+            which: "usbip".to_owned(),
+            detail: "No such file or directory (os error 2)".to_owned(),
+        });
+        assert!(!missing.transient);
+        assert_eq!(missing.kind, UsbipUnbindFailureKind::Fatal);
+
+        let unbound = UsbipUnbindFailure::classify(&ReconcileExecError::NonZeroExit {
+            which: "usbip unbind".to_owned(),
+            exit_code: 1,
+            stderr: "device is not bound to usbip-host driver".to_owned(),
+        });
+        assert!(!unbound.transient);
+        assert_eq!(unbound.kind, UsbipUnbindFailureKind::Fatal);
+
         let first = usbip_unbind_retry_delay("1-2", 0);
         let second = usbip_unbind_retry_delay("1-3", 0);
         assert_ne!(first, second, "busid-derived jitter should vary delay");

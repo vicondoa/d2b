@@ -4,9 +4,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::clipd_host::policy::{AttributionQuality, ReasonCode};
 
+// Upper bound on the MIME value stored in one audit record, so a hostile
+// or exotic MIME string cannot inflate the audit payload or the rendered
+// audit line.
 const MAX_AUDIT_MIME_BYTES: usize = 64;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AuditEvent {
     pub request_id: String,
     pub source_realm: String,

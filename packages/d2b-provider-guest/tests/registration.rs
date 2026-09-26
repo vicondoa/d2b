@@ -2,7 +2,7 @@
 //! plane registers, and the registry serves this type's decoder and factory
 //! from it.
 
-use d2b_contracts_resource::v3::ControllerGeneration;
+use d2b_contracts_resource::v3::{ControllerGeneration, ZoneId};
 use d2b_provider_guest::driver::GUEST_TYPE_NAME;
 use d2b_provider_guest::{GuestDriverArgs, guest_descriptor};
 use d2b_provider_guest::test_support::ScriptedFacets;
@@ -12,7 +12,7 @@ use d2b_resource_types::{AllowedSources, ChildCustody, WellKnownType};
 
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
     guest_descriptor(GuestDriverArgs {
-        zone: "work".to_owned(),
+        zone: ZoneId::parse("work").expect("zone"),
         controller_generation: ControllerGeneration::new(1).expect("generation"),
         // The facet set the declaration's factory builds its effects from;
         // the registration boundary never runs an effect.

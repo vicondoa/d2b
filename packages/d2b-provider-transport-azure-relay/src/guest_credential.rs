@@ -25,7 +25,6 @@ use base64::Engine;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -128,10 +127,7 @@ pub struct CredentialEnvelopeMeta {
 /// A loaded gateway credential envelope. `Debug` redacts all secret material.
 #[derive(Clone)]
 pub struct GatewayCredential {
-    listen_key_name: String,
-    listen_key: String,
-    send_key_name: String,
-    send_key: String,
+    material: GatewayCredentialMaterial,
     generation: u64,
     not_after: Option<u64>,
 }
@@ -139,22 +135,13 @@ pub struct GatewayCredential {
 impl core::fmt::Debug for GatewayCredential {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("GatewayCredential")
-            .field("listen_key_name", &self.listen_key_name)
+            .field("listen_key_name", &self.material.listen_key_name)
             .field("listen_key", &"<redacted>")
-            .field("send_key_name", &self.send_key_name)
+            .field("send_key_name", &self.material.send_key_name)
             .field("send_key", &"<redacted>")
             .field("generation", &self.generation)
             .field("not_after", &self.not_after)
             .finish()
-    }
-}
-
-impl Drop for GatewayCredential {
-    fn drop(&mut self) {
-        self.listen_key_name.zeroize();
-        self.listen_key.zeroize();
-        self.send_key_name.zeroize();
-        self.send_key.zeroize();
     }
 }
 
@@ -242,13 +229,19 @@ impl GatewayCredential {
         self.not_after
     }
 
+    /// Parse the plaintext material shape the enrollment flow admits.
+    ///
+    /// The nested shape is fixed, so it is described by types: the wire
+    /// structs decide presence, string typing, and unknown keys, and the
+    /// validation pass below decides the values.
     fn parse_material_json(raw: &str) -> Result<GatewayCredentialMaterial, CredentialError> {
-        let v: Value = serde_json::from_str(raw).map_err(|_| CredentialError::Malformed)?;
+        let file: CredentialMaterialFile =
+            serde_json::from_str(raw).map_err(|_| CredentialError::Malformed)?;
         let material = GatewayCredentialMaterial {
-            listen_key_name: required_str(&v, &["relayListen", "keyName"])?,
-            listen_key: required_str(&v, &["relayListen", "key"])?,
-            send_key_name: required_str(&v, &["relaySend", "keyName"])?,
-            send_key: required_str(&v, &["relaySend", "key"])?,
+            listen_key_name: file.relay_listen.key_name,
+            listen_key: file.relay_listen.key,
+            send_key_name: file.relay_send.key_name,
+            send_key: file.relay_send.key,
         };
         if [
             &material.listen_key_name,
@@ -269,10 +262,7 @@ impl GatewayCredential {
         meta: CredentialEnvelopeMeta,
     ) -> Result<Self, CredentialError> {
         Ok(Self {
-            listen_key_name: material.listen_key_name.clone(),
-            listen_key: material.listen_key.clone(),
-            send_key_name: material.send_key_name.clone(),
-            send_key: material.send_key.clone(),
+            material,
             generation: meta.generation,
             not_after: meta.not_after,
         })
@@ -294,7 +284,7 @@ struct ActiveRelayLease {
 pub struct GatewayGuestCredentialPort {
     credential: Arc<GatewayCredential>,
     active: Arc<Mutex<HashMap<u64, ActiveRelayLease>>>,
-    now_unix_ms: Arc<dyn Fn() -> u64 + Send + Sync>,
+    now_unix_ms: Arc<dyn Fn() -> Result<u64, RelayCredentialError> + Send + Sync>,
 }
 
 impl GatewayGuestCredentialPort {
@@ -306,7 +296,7 @@ impl GatewayGuestCredentialPort {
     /// Build a Guest-local port with an injected clock for deterministic tests.
     pub fn with_clock(
         credential: Arc<GatewayCredential>,
-        now_unix_ms: Arc<dyn Fn() -> u64 + Send + Sync>,
+        now_unix_ms: Arc<dyn Fn() -> Result<u64, RelayCredentialError> + Send + Sync>,
     ) -> Self {
         Self {
             credential,
@@ -341,7 +331,7 @@ impl GatewayGuestCredentialPort {
     /// sealed envelope has been opened; credential bytes never leave this
     /// port.
     pub fn safe_observation_digest(&self) -> [u8; 32] {
-        Sha256::digest(self.credential.send_key.as_bytes()).into()
+        Sha256::digest(self.credential.material.send_key.as_bytes()).into()
     }
 
     /// Return the number of currently revocable leases.
@@ -359,11 +349,11 @@ impl GatewayGuestCredentialPort {
     ) -> Result<RelayCredentialMaterial, RelayCredentialError> {
         let (key_name, key) = match role {
             RelayCredentialRole::Listen => (
-                &self.credential.listen_key_name,
-                &self.credential.listen_key,
+                &self.credential.material.listen_key_name,
+                &self.credential.material.listen_key,
             ),
             RelayCredentialRole::Send => {
-                (&self.credential.send_key_name, &self.credential.send_key)
+                (&self.credential.material.send_key_name, &self.credential.material.send_key)
             }
         };
         Ok(RelayCredentialMaterial::SasRule {
@@ -409,7 +399,7 @@ impl RelayCredentialPort for GatewayGuestCredentialPort {
             );
             return Err(RelayCredentialError::Unavailable);
         }
-        let now = (self.now_unix_ms)();
+        let now = (self.now_unix_ms)()?;
         let requested_ttl = u64::from(deadline_ms).min(MAX_RELAY_LEASE_TTL_MS);
         let mut expires_at = now.saturating_add(requested_ttl).saturating_add(1_000);
         if let Some(not_after) = self
@@ -508,6 +498,24 @@ impl ScopedCredentialClient for GatewayGuestCredentialPort {
     ) -> Result<(), RelayCredentialError> {
         RelayCredentialPort::revoke(self, lease).await
     }
+}
+
+/// Plaintext credential material shape the enrollment flow admits.
+///
+/// `Debug` is deliberately not derived: both branches carry Relay keys.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CredentialMaterialFile {
+    relay_listen: RelayRoleMaterial,
+    relay_send: RelayRoleMaterial,
+}
+
+/// One Relay role's rule name and key, as the envelope names them.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RelayRoleMaterial {
+    key_name: String,
+    key: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -614,7 +622,7 @@ fn read_policy_file(
     {
         return Err(CredentialError::BadOwner(meta.uid()));
     }
-    let mut bytes = Zeroizing::new(Vec::new());
+    let mut bytes = Zeroizing::new(Vec::with_capacity(meta.len() as usize));
     file.read_to_end(&mut bytes)
         .map_err(|_| CredentialError::Unreadable)?;
     Ok(bytes)
@@ -651,22 +659,11 @@ fn decode_fixed<const N: usize>(encoded: &str) -> Result<[u8; N], CredentialErro
         .map_err(|_| CredentialError::Malformed)
 }
 
-fn required_str(v: &Value, path: &[&str]) -> Result<String, CredentialError> {
-    let mut cur = v;
-    for key in path {
-        cur = cur.get(*key).ok_or(CredentialError::Malformed)?;
-    }
-    cur.as_str()
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .ok_or(CredentialError::Malformed)
-}
-
-fn system_now_unix_ms() -> u64 {
+fn system_now_unix_ms() -> Result<u64, RelayCredentialError> {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
+        .map_err(|_| RelayCredentialError::Clock)
 }
 
 fn valid_material_text(value: &str) -> bool {
@@ -794,6 +791,76 @@ mod tests {
             send_key_name: "gateway-send".to_owned(),
             send_key: "send-secret".to_owned(),
         }
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn material_file(dir: &Path, contents: &str) -> PathBuf {
+        let path = dir.join("credential.json");
+        fs::write(&path, contents).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        path
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[test]
+    fn rejects_malformed_material_shapes() {
+        let dir = tempfile::tempdir().unwrap();
+        for (label, contents) in [
+            (
+                "missing listen key",
+                r#"{"relayListen":{"keyName":"gateway-listen"},"relaySend":{"keyName":"gateway-send","key":"send-secret"}}"#,
+            ),
+            (
+                "missing send branch",
+                r#"{"relayListen":{"keyName":"gateway-listen","key":"listen-secret"}}"#,
+            ),
+            (
+                "wrong key type",
+                r#"{"relayListen":{"keyName":5,"key":"listen-secret"},"relaySend":{"keyName":"gateway-send","key":"send-secret"}}"#,
+            ),
+            (
+                "non-object listen branch",
+                r#"{"relayListen":"gateway-listen","relaySend":{"keyName":"gateway-send","key":"send-secret"}}"#,
+            ),
+            (
+                "unknown top-level key",
+                r#"{"relayListen":{"keyName":"gateway-listen","key":"listen-secret"},"relaySend":{"keyName":"gateway-send","key":"send-secret"},"relayOther":{"keyName":"x","key":"y"}}"#,
+            ),
+            (
+                "unknown nested key",
+                r#"{"relayListen":{"keyName":"gateway-listen","key":"listen-secret","audience":"azure-relay-listen"},"relaySend":{"keyName":"gateway-send","key":"send-secret"}}"#,
+            ),
+            (
+                "empty key name",
+                r#"{"relayListen":{"keyName":"","key":"listen-secret"},"relaySend":{"keyName":"gateway-send","key":"send-secret"}}"#,
+            ),
+            (
+                "control character in key",
+                r#"{"relayListen":{"keyName":"gateway-listen","key":"listen\u0000secret"},"relaySend":{"keyName":"gateway-send","key":"send-secret"}}"#,
+            ),
+            (
+                "duplicate role key",
+                r#"{"relayListen":{"keyName":"gateway-listen","key":"listen-secret","key":"listen-secret-two"},"relaySend":{"keyName":"gateway-send","key":"send-secret"}}"#,
+            ),
+        ] {
+            let path = material_file(dir.path(), contents);
+            assert_eq!(
+                GatewayCredential::load(&path, &CredentialFilePolicy::default()).unwrap_err(),
+                CredentialError::Malformed,
+                "{label} must stay refused"
+            );
+        }
+
+        let oversized = format!(
+            r#"{{"relayListen":{{"keyName":"gateway-listen","key":"{}"}},"relaySend":{{"keyName":"gateway-send","key":"send-secret"}}}}"#,
+            "k".repeat(16 * 1024 + 1)
+        );
+        let path = material_file(dir.path(), &oversized);
+        assert_eq!(
+            GatewayCredential::load(&path, &CredentialFilePolicy::default()).unwrap_err(),
+            CredentialError::Malformed,
+            "an over-long key must stay refused"
+        );
     }
 
     #[test]
@@ -928,7 +995,7 @@ mod tests {
             )
             .unwrap(),
         );
-        let port = GatewayGuestCredentialPort::with_clock(credential, Arc::new(|| 1_000_000));
+        let port = GatewayGuestCredentialPort::with_clock(credential, Arc::new(|| Ok(1_000_000)));
         assert!(matches!(
             port.acquire(RelayCredentialRole::Send, 1_000).await,
             Err(RelayCredentialError::BindingRequired)
@@ -964,7 +1031,7 @@ mod tests {
             )
             .unwrap(),
         );
-        let port = GatewayGuestCredentialPort::with_clock(credential, Arc::new(|| 1_000_000));
+        let port = GatewayGuestCredentialPort::with_clock(credential, Arc::new(|| Ok(1_000_000)));
         let binding = RelayCredentialBinding::new("link-drop", "session-drop", 1).unwrap();
         let lease = port
             .acquire_bound(RelayCredentialRole::Listen, &binding, 1_000)
@@ -1029,7 +1096,7 @@ mod tests {
             )
             .unwrap(),
         );
-        let port = GatewayGuestCredentialPort::with_clock(credential, Arc::new(|| 10_000));
+        let port = GatewayGuestCredentialPort::with_clock(credential, Arc::new(|| Ok(10_000)));
         let binding = RelayCredentialBinding::new("link", "session", 1).unwrap();
         assert!(matches!(
             port.acquire_bound(RelayCredentialRole::Listen, &binding, 1_000)

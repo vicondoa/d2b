@@ -1,8 +1,8 @@
 //! Signed swtpm settings.
 
-use core::fmt;
 use serde::{Deserialize, Serialize};
 
+use crate::swtpm_argv::SwtpmArgvError;
 use crate::{MAX_SWTPM_LOG_LEVEL, MIN_SWTPM_LOG_LEVEL};
 
 /// Device-tpm desired settings. There is no path, artifact, or flush-toggle
@@ -25,9 +25,16 @@ impl Default for SwtpmSettings {
 
 impl SwtpmSettings {
     /// Validate settings received from the signed Provider schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SwtpmArgvError::LogLevelOutOfRange`] when the log level is
+    /// outside the frozen bound.
     pub const fn validate(self) -> Result<Self, SwtpmArgvError> {
         if self.log_level < MIN_SWTPM_LOG_LEVEL || self.log_level > MAX_SWTPM_LOG_LEVEL {
-            Err(SwtpmArgvError::LogLevelOutOfRange)
+            Err(SwtpmArgvError::LogLevelOutOfRange {
+                level: self.log_level,
+            })
         } else {
             Ok(self)
         }
@@ -37,20 +44,3 @@ impl SwtpmSettings {
 fn default_log_level() -> u8 {
     20
 }
-
-/// Closed argv-generation failures.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SwtpmArgvError {
-    /// The log level is outside the signed Provider schema range.
-    LogLevelOutOfRange,
-}
-
-impl fmt::Display for SwtpmArgvError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::LogLevelOutOfRange => "swtpm-log-level-out-of-range",
-        })
-    }
-}
-
-impl std::error::Error for SwtpmArgvError {}

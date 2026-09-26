@@ -4,6 +4,10 @@
 //! real CLI binary, redirect the validator/evidence directories into a
 //! per-test scratch tree, and assert the same readiness-wave, evidence-write,
 //! and exit-code contract as the retired shell gate.
+//!
+//! The missing-mutation-flag envelope cases also pin the sibling mutating
+//! host verbs (`host prepare` / `host destroy` / `host reconcile`), which
+//! share `--apply-or-dry-run-required` with `host validate`.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -100,7 +104,7 @@ fn repo_root() -> PathBuf {
 fn wave_catalog_section() -> String {
     let source = include_str!("../src/host_validate.rs");
     let start = source
-        .find("pub const WAVE_CATALOG")
+        .find("pub(crate) const WAVE_CATALOG")
         .expect("WAVE_CATALOG declaration is present");
     let tail = &source[start..];
     let end = tail
@@ -239,6 +243,52 @@ fn host_validate_without_apply_or_dry_run_exits_78_usage_envelope() {
     let envelope = stdout_json(&out);
     assert_eq!(envelope["code"], "--apply-or-dry-run-required");
     assert_eq!(envelope["exitCode"], 78);
+}
+
+#[test]
+fn host_mutating_verbs_without_apply_or_dry_run_exit_78_usage_envelope() {
+    let sandbox = Sandbox::new();
+    for (verb, args) in [
+        ("host prepare", &["host", "prepare", "--json"][..]),
+        ("host destroy", &["host", "destroy", "--json"][..]),
+        ("host reconcile", &["host", "reconcile", "--json"][..]),
+    ] {
+        let out = sandbox.run(&sandbox.scripts_full, args);
+
+        assert_eq!(
+            out.status.code(),
+            Some(78),
+            "{verb} without a mode should exit 78; stderr:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let envelope = stdout_json(&out);
+        assert_eq!(envelope["code"], "--apply-or-dry-run-required", "{verb}");
+        assert_eq!(envelope["exitCode"], 78, "{verb}");
+        assert_eq!(
+            envelope["kind"],
+            format!("{verb} requires either --dry-run or --apply"),
+            "{verb} should name the offending verb"
+        );
+    }
+}
+
+#[test]
+fn host_reconcile_without_network_keeps_its_own_refusal() {
+    let sandbox = Sandbox::new();
+    let out = sandbox.run(
+        &sandbox.scripts_full,
+        &["host", "reconcile", "--dry-run", "--json"],
+    );
+
+    assert_eq!(
+        out.status.code(),
+        Some(78),
+        "missing --network should exit 78; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let envelope = stdout_json(&out);
+    assert_eq!(envelope["errorClass"], "ref-invalid");
+    assert_eq!(envelope["message"], "host reconcile requires --network");
 }
 
 #[test]

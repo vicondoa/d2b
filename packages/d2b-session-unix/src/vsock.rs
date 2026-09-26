@@ -19,6 +19,10 @@ pub const fn guest_control_transport_descriptor() -> TransportDescriptor {
     }
 }
 
+/// A length-prefixed framed transport over one vsock stream.
+///
+/// Partial sends and receives are resumable across cancellation:the
+/// in-flight header and body buffers persist between calls.
 pub struct FramedVsockTransport<S> {
     stream: S,
     descriptor: TransportDescriptor,

@@ -3,13 +3,14 @@
 //! These were historically enforced by the `tests/static-invariant-*.sh` bash
 //! gates as `jq` filters over synthetic positive/negative fixtures (plus, for
 //! two of them, a grep over the real rendered `vms.json`). They are re-homed
-//! here as typed validators so the *real* rendered artifacts are checked (a
-//! strictly stronger guarantee than the synthetic-fixture grep), with the
-//! original positive/negative cases preserved as unit tests.
+//! here as typed validators, with the original positive/negative gate cases
+//! preserved as in-module unit tests (see the `tests` module below).
 //!
 //! Validators are pure and return the list of offending locations (empty ==
 //! invariant holds), so callers (contract tests, and potentially the broker)
 //! can assert and report precisely.
+
+use std::borrow::Cow;
 
 use serde_json::Value;
 
@@ -159,7 +160,7 @@ pub fn world_readable_field_leaks(manifest: &Value) -> Vec<String> {
     let mut leaks = Vec::new();
     for (path, _) in scalar_paths(manifest) {
         let Some(last) = path.last() else { continue };
-        if PUBLIC_MANIFEST_FIELDS.iter().any(|f| f == last) {
+        if PUBLIC_MANIFEST_FIELDS.contains(&last.as_str()) {
             continue;
         }
         let dotted = path.join(".");
@@ -198,8 +199,8 @@ pub fn path_bearing_key_violations(manifest: &Value) -> Vec<String> {
             continue;
         }
         let rendered = match value {
-            Value::String(s) => s.clone(),
-            other => other.to_string(),
+            Value::String(s) => Cow::Borrowed(s.as_str()),
+            other => Cow::Owned(other.to_string()),
         };
         if rendered.contains('/') {
             violations.push(format!("{}={}", path.join("."), rendered));
@@ -216,7 +217,7 @@ pub fn path_bearing_key_violations(manifest: &Value) -> Vec<String> {
 pub fn is_broad_cap_violation(caps: &[String], adr_carve_out: Option<&str>) -> bool {
     let requests_broad = caps
         .iter()
-        .any(|cap| BROAD_CAPABILITIES.iter().any(|broad| broad == cap));
+        .any(|cap| BROAD_CAPABILITIES.contains(&cap.as_str()));
     if !requests_broad {
         return false;
     }
@@ -245,6 +246,39 @@ pub fn undeclared_writable_paths<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    /// Negative fixture from `tests/static-invariant-world-readable-leak.sh`:
+    /// a non-allowlisted field must be reported by dotted path, so the owning
+    /// object segment is part of the reported location.
+    #[test]
+    fn world_readable_leak_rejects_non_allowlisted_field() {
+        let manifest = json!({
+            "corp-vm": {"name": "corp-vm", "privateKeyPath": "/var/lib/nixling/vms/corp-vm/id_ed25519"}
+        });
+        assert_eq!(
+            world_readable_field_leaks(&manifest),
+            vec!["corp-vm.privateKeyPath".to_owned()]
+        );
+    }
+
+    /// Negative fixture from `tests/static-invariant-opaque-key-ids.sh`:
+    /// path-bearing key suffixes with host-path values must be reported as
+    /// `dotted.path=value`.
+    #[test]
+    fn path_bearing_key_rejects_host_paths() {
+        let manifest = json!({
+            "keys": {"ssh": {"privateKeyPath": "/var/lib/nixling/vms/corp-vm/id_ed25519"}},
+            "secret_path": "/run/secrets/token"
+        });
+        assert_eq!(
+            path_bearing_key_violations(&manifest),
+            vec![
+                "keys.ssh.privateKeyPath=/var/lib/nixling/vms/corp-vm/id_ed25519".to_owned(),
+                "secret_path=/run/secrets/token".to_owned(),
+            ]
+        );
+    }
 
     #[test]
     fn world_readable_field_leaks_reports_only_unallowlisted_scalars_outside_reserved_blocks() {

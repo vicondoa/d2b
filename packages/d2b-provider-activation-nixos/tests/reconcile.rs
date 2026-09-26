@@ -45,7 +45,7 @@ fn compatible_generation_starts_one_typed_runner() {
             &spec(),
             &caller(),
             &[],
-            GenerationObservation::new("gen-7", GenerationPhase::Pending),
+            GenerationObservation::new("gen-7", GenerationPhase::Pending).unwrap(),
         )
         .unwrap();
     assert_eq!(result.runner_requests().len(), 1);
@@ -89,7 +89,7 @@ fn activation_runner_spec_is_closed_and_bounded() {
             &spec(),
             &caller(),
             &[],
-            GenerationObservation::new("gen-7", GenerationPhase::Pending),
+            GenerationObservation::new("gen-7", GenerationPhase::Pending).unwrap(),
         )
         .unwrap();
     let runner =
@@ -134,7 +134,7 @@ fn unauthorized_or_foreign_callers_refuse_before_runner_creation() {
         &spec(),
         &foreign,
         &[],
-        GenerationObservation::new("gen-7", GenerationPhase::Pending),
+        GenerationObservation::new("gen-7", GenerationPhase::Pending).unwrap(),
     );
     assert!(result.is_err());
 }
@@ -146,7 +146,7 @@ fn runner_failure_preserves_the_source_generation_and_audits_one_code() {
         .apply_runner_result(
             &spec(),
             ActivationOutcomeCode::HelperFailed,
-            GenerationObservation::new("gen-6", GenerationPhase::Ready),
+            GenerationObservation::new("gen-6", GenerationPhase::Ready).unwrap(),
         )
         .unwrap();
     assert!(failed.source_generation_preserved());
@@ -159,7 +159,7 @@ fn adopted_outcome_is_rejected_for_switch_mode() {
     let result = controller.apply_runner_result(
         &spec(),
         ActivationOutcomeCode::Adopted,
-        GenerationObservation::new("gen-6", GenerationPhase::Ready),
+        GenerationObservation::new("gen-6", GenerationPhase::Ready).unwrap(),
     );
     assert_eq!(
         result.unwrap_err(),
@@ -214,7 +214,7 @@ fn adopt_mode_accepts_adoption_without_starting_a_runner() {
             &adopt,
             &caller(),
             &[],
-            GenerationObservation::new("gen-7", GenerationPhase::Pending),
+            GenerationObservation::new("gen-7", GenerationPhase::Pending).unwrap(),
         )
         .unwrap();
     assert!(pending.runner_requests().is_empty());
@@ -223,7 +223,7 @@ fn adopt_mode_accepts_adoption_without_starting_a_runner() {
         .apply_runner_result(
             &adopt,
             ActivationOutcomeCode::Adopted,
-            GenerationObservation::new("gen-6", GenerationPhase::Ready),
+            GenerationObservation::new("gen-6", GenerationPhase::Ready).unwrap(),
         )
         .unwrap();
     assert_eq!(result.phase(), ResourcePhase::Ready);
@@ -237,7 +237,7 @@ fn test_mode_succeeds_without_preserving_the_source_generation() {
         .apply_runner_result(
             &spec_with_mode(ActivationMode::Test),
             ActivationOutcomeCode::Succeeded,
-            GenerationObservation::new("gen-6", GenerationPhase::Ready),
+            GenerationObservation::new("gen-6", GenerationPhase::Ready).unwrap(),
         )
         .unwrap();
     assert_eq!(result.phase(), ResourcePhase::Succeeded);
@@ -251,7 +251,7 @@ fn successful_switch_reports_ready_and_replaces_the_source_generation() {
         .apply_runner_result(
             &spec(),
             ActivationOutcomeCode::Succeeded,
-            GenerationObservation::new("gen-6", GenerationPhase::Ready),
+            GenerationObservation::new("gen-6", GenerationPhase::Ready).unwrap(),
         )
         .unwrap();
     assert_eq!(result.phase(), ResourcePhase::Ready);
@@ -265,7 +265,7 @@ fn deleted_generation_is_not_restarted() {
         &spec(),
         &caller(),
         &[],
-        GenerationObservation::new("gen-7", GenerationPhase::Deleted),
+        GenerationObservation::new("gen-7", GenerationPhase::Deleted).unwrap(),
     );
     assert_eq!(
         result.unwrap_err(),
@@ -280,7 +280,7 @@ fn malformed_generation_observation_cannot_start_a_zero_generation_runner() {
         &spec(),
         &caller(),
         &[],
-        GenerationObservation::new("generation", GenerationPhase::Pending),
+        GenerationObservation::new("generation", GenerationPhase::Pending).unwrap(),
     );
 
     assert_eq!(
@@ -295,7 +295,7 @@ fn stale_deleted_source_cannot_project_a_successful_activation() {
     let result = controller.apply_runner_result(
         &spec(),
         ActivationOutcomeCode::Succeeded,
-        GenerationObservation::new("gen-6", GenerationPhase::Deleted),
+        GenerationObservation::new("gen-6", GenerationPhase::Deleted).unwrap(),
     );
 
     assert_eq!(
@@ -319,7 +319,7 @@ fn prior_generation_reference_must_be_present_in_observations() {
         &spec,
         &caller(),
         &[],
-        GenerationObservation::new("gen-7", GenerationPhase::Pending),
+        GenerationObservation::new("gen-7", GenerationPhase::Pending).unwrap(),
     );
     assert_eq!(
         result.unwrap_err(),
@@ -329,8 +329,8 @@ fn prior_generation_reference_must_be_present_in_observations() {
         .reconcile(
             &spec,
             &caller(),
-            &[GenerationObservation::new("gen-6", GenerationPhase::Ready)],
-            GenerationObservation::new("gen-7", GenerationPhase::Pending),
+            &[GenerationObservation::new("gen-6", GenerationPhase::Ready).unwrap()],
+            GenerationObservation::new("gen-7", GenerationPhase::Pending).unwrap(),
         )
         .unwrap();
     assert_eq!(result.runner_requests().len(), 1);
@@ -436,17 +436,18 @@ fn activation_verification_requires_all_trust_and_digest_fences() {
         vec![0; 64],
     ));
 
-    for (trust, expected_error) in cases.into_iter().zip([
+    for (i, (trust, expected_error)) in cases.into_iter().zip([
         d2b_provider_activation_nixos::ActivationVerificationError::TrustEpochMismatch,
         d2b_provider_activation_nixos::ActivationVerificationError::RevocationRefMismatch,
         d2b_provider_activation_nixos::ActivationVerificationError::TrustDenied,
         d2b_provider_activation_nixos::ActivationVerificationError::TrustDenied,
         d2b_provider_activation_nixos::ActivationVerificationError::PublisherRootMismatch,
         d2b_provider_activation_nixos::ActivationVerificationError::SignatureIdMismatch,
-    ]) {
+    ]).enumerate() {
         assert_eq!(
             trust.verify(&expected, &artifact, &catalog_digest),
-            Err(expected_error)
+            Err(expected_error),
+            "case {i}: expected {expected_error:?}",
         );
     }
 }

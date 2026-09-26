@@ -1,17 +1,27 @@
 use std::io;
+use std::io::IoSliceMut;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
 use std::path::Path;
 use std::time::Duration;
 
+use nix::errno::Errno;
 use nix::sys::socket::{
     AddressFamily, Backlog, MsgFlags, SockFlag, SockType, UnixAddr, accept4, bind, connect, listen,
-    recv, send, socket,
+    recv, recvmsg, send, socket,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::io::unix::AsyncFd;
 
+/// The maximum JSON frame body size, excluding the 4-byte length
+/// prefix: frames declaring a larger body are refused.
 pub const MAX_FRAME_SIZE: usize = 1024 * 1024;
 
+/// Connect a `SOCK_SEQPACKET` Unix socket to `path`, returning the
+/// connected CLOEXEC fd.
+///
+/// # Errors
+///
+/// Returns the socket error when the socket cannot be created or connected.
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn connect_seqpacket(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
     let fd = socket(
@@ -26,6 +36,12 @@ pub fn connect_seqpacket(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
     Ok(fd)
 }
 
+/// Bind-and-listen a `SOCK_SEQPACKET` Unix socket at `path`, returning
+/// the listening CLOEXEC fd with a backlog of 64.
+///
+/// # Errors
+///
+/// Returns the socket error when create, bind, or listen fails.
 pub fn bind_seqpacket(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
     let fd = socket(
         AddressFamily::Unix,
@@ -40,6 +56,15 @@ pub fn bind_seqpacket(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
     Ok(fd)
 }
 
+/// Serialise `value` as JSON and send it as one frame on `fd`:a 4-byte
+/// little-endian length prefix followed by the body, refusing bodies over
+/// [`MAX_FRAME_SIZE`]. Byte-equivalent to
+/// [`send_json_frame_with_fds`] when no descriptors are attached.
+///
+/// # Errors
+///
+/// Returns [`io::ErrorKind::InvalidData`] for serialisation or cap
+/// violations, and socket / short-write errors for the send itself.
 pub fn send_json_frame<T: Serialize>(fd: RawFd, value: &T) -> io::Result<()> {
     send_json_frame_with_fds(fd, value, &[])
 }
@@ -81,14 +106,93 @@ pub fn send_json_frame_with_fds<T: Serialize>(
     crate::fd_passing::send_fds(fd, &frame, fds)
 }
 
+/// Receive one JSON frame from `fd`:a 4-byte little-endian length
+/// prefix followed by the body, capped at [`MAX_FRAME_SIZE`]; returns
+/// `None` when the peer closed the socket empty.
+///
+/// The 4-byte length prefix is peeked with `MSG_PEEK` first, so the body
+/// buffer is allocated to the declared frame size instead of the
+/// [`MAX_FRAME_SIZE`] ceiling on every receive. A socket type without
+/// `MSG_PEEK` support falls back to the fixed ceiling allocation.
+///
+/// # Errors
+///
+/// Returns [`io::ErrorKind::UnexpectedEof`] for short frames and
+/// [`io::ErrorKind::InvalidData`] for length-prefix mismatches and decode
+/// failures.
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn recv_json_frame<T: DeserializeOwned>(fd: RawFd) -> io::Result<Option<T>> {
+    // Peek the 4-byte length prefix so the body buffer can be allocated to
+    // the declared frame size instead of the 1 MiB ceiling. `MSG_PEEK` does
+    // not consume the frame, and a `SOCK_SEQPACKET` receive is atomic, so
+    // the peeked length is exactly the length the receive below gets.
+    let mut prefix = [0_u8; 4];
+    let peeked = {
+        let mut iov = [IoSliceMut::new(&mut prefix)];
+        match recvmsg::<()>(fd, &mut iov, None, MsgFlags::MSG_PEEK) {
+            Ok(message) => message.bytes,
+            // A socket type without `MSG_PEEK` support keeps the fixed
+            // ceiling allocation; the receive itself is unchanged. (`ENOTSUP`
+            // and `EOPNOTSUPP` are the same errno on Linux.)
+            Err(Errno::EINVAL | Errno::ENOTSUP) => {
+                return recv_json_frame_fixed(fd);
+            }
+            Err(err) => return Err(io_error(err)),
+        }
+    };
+    if peeked == 0 {
+        // The peer closed the socket empty; a queued zero-length packet is
+        // reported as closed exactly like the fixed path reports it.
+        return Ok(None);
+    }
+    if peeked < 4 {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "frame shorter than 4-byte length prefix",
+        ));
+    }
+    let declared = u32::from_le_bytes(prefix) as usize;
+    if declared > MAX_FRAME_SIZE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "declared frame length exceeds 1 MiB maximum",
+        ));
+    }
+
+    let mut buffer = vec![0_u8; declared + 4];
+    let (bytes, truncated) = {
+        // The receive borrows the iov (and through it the buffer) for the
+        // lifetime of the returned message, so the message's fields are
+        // copied out inside this scope and the buffer borrow ends here.
+        let mut iov = [IoSliceMut::new(&mut buffer)];
+        let message = recvmsg::<()>(fd, &mut iov, None, MsgFlags::empty()).map_err(io_error)?;
+        (message.bytes, message.flags.contains(MsgFlags::MSG_TRUNC))
+    };
+    if bytes == 0 {
+        return Ok(None);
+    }
+    if bytes < 4 {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "frame shorter than 4-byte length prefix",
+        ));
+    }
+    // An exact-size buffer truncates a packet larger than its declared
+    // prefix+body; refuse it the way the fixed path refuses a length
+    // mismatch, instead of decoding a truncated frame.
+    decode_frame(&buffer[..bytes], declared, truncated)
+}
+
+/// The fixed-ceiling receive used when the socket type does not support
+/// `MSG_PEEK`: one `MAX_FRAME_SIZE + 4` allocation per frame, the original
+/// receive path unchanged.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+fn recv_json_frame_fixed<T: DeserializeOwned>(fd: RawFd) -> io::Result<Option<T>> {
     let mut buffer = vec![0_u8; MAX_FRAME_SIZE + 4];
     let read = recv(fd, &mut buffer, MsgFlags::empty()).map_err(io_error)?;
     if read == 0 {
         return Ok(None);
     }
-
     if read < 4 {
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
@@ -96,34 +200,117 @@ pub fn recv_json_frame<T: DeserializeOwned>(fd: RawFd) -> io::Result<Option<T>> 
         ));
     }
     let declared = u32::from_le_bytes(buffer[..4].try_into().expect("prefix length")) as usize;
+    decode_frame(&buffer[..read], declared, false)
+}
+
+/// Validate a received frame against its declared length and decode it.
+///
+/// `truncated` reports a packet cut short by an undersized receive buffer
+/// (`MSG_TRUNC`), which the fixed ceiling path cannot produce but the
+/// exact-size path can.
+fn decode_frame<T: DeserializeOwned>(
+    frame: &[u8],
+    declared: usize,
+    truncated: bool,
+) -> io::Result<Option<T>> {
     if declared > MAX_FRAME_SIZE {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "declared frame length exceeds 1 MiB maximum",
         ));
     }
-    if declared != read - 4 {
+    if truncated || declared != frame.len() - 4 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "frame length prefix does not match seqpacket payload size",
         ));
     }
-    serde_json::from_slice(&buffer[4..read])
+    serde_json::from_slice(&frame[4..])
         .map(Some)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
 /// Receive one JSON frame and its close-on-exec SCM_RIGHTS attachments.
 ///
+/// The 4-byte length prefix is peeked with `MSG_PEEK` first, so the payload
+/// buffer is allocated to the declared frame size instead of the
+/// [`MAX_FRAME_SIZE`] ceiling. The peek passes no control buffer, so no
+/// descriptor is installed and the frame's SCM_RIGHTS attachment is still
+/// delivered by the receive below. A socket type without `MSG_PEEK` support
+/// falls back to the fixed ceiling allocation.
+///
 /// Request-side fd ownership is explicit: successful receipt transfers every
 /// descriptor into an [`std::os::fd::OwnedFd`], while malformed frames and
 /// decode failures close all descriptors before returning.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn recv_json_frame_with_fds<T: DeserializeOwned>(
+    fd: RawFd,
+) -> io::Result<Option<(T, Vec<std::os::fd::OwnedFd>)>> {
+    // Peek the 4-byte length prefix so the payload buffer can be allocated
+    // to the declared frame size instead of the 1 MiB ceiling. `MSG_PEEK`
+    // does not consume the frame, and a `SOCK_SEQPACKET` receive is atomic,
+    // so the peeked length is exactly the length the receive below gets.
+    let mut prefix = [0_u8; 4];
+    let peeked = {
+        let mut iov = [IoSliceMut::new(&mut prefix)];
+        match recvmsg::<()>(fd, &mut iov, None, MsgFlags::MSG_PEEK) {
+            Ok(message) => message.bytes,
+            // A socket type without `MSG_PEEK` support keeps the fixed
+            // ceiling allocation; the receive itself is unchanged. (`ENOTSUP`
+            // and `EOPNOTSUPP` are the same errno on Linux.)
+            Err(Errno::EINVAL | Errno::ENOTSUP) => {
+                return recv_json_frame_with_fds_fixed(fd);
+            }
+            Err(err) => return Err(io_error(err)),
+        }
+    };
+    // A zero-length peek is either a closed socket or a zero-length packet,
+    // which may still carry SCM_RIGHTS: the receive below disambiguates the
+    // two exactly like the fixed path, so the zero-length packet needs no
+    // payload buffer.
+    let payload_capacity = if peeked == 0 {
+        0
+    } else {
+        if peeked < 4 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "frame shorter than 4-byte length prefix",
+            ));
+        }
+        let declared = u32::from_le_bytes(prefix) as usize;
+        if declared > MAX_FRAME_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid SCM_RIGHTS frame length",
+            ));
+        }
+        declared + 4
+    };
+    let (buffer, raw_fds) =
+        crate::fd_passing::recv_fds_with_capacity_allow_empty(fd, payload_capacity)
+            .map_err(fd_passing_error)?;
+    decode_fds_frame(buffer, raw_fds)
+}
+
+/// The fixed-ceiling receive used when the socket type does not support
+/// `MSG_PEEK`: one `MAX_FRAME_SIZE + 4` allocation per frame, the original
+/// receive path unchanged.
+fn recv_json_frame_with_fds_fixed<T: DeserializeOwned>(
     fd: RawFd,
 ) -> io::Result<Option<(T, Vec<std::os::fd::OwnedFd>)>> {
     let (buffer, raw_fds) =
         crate::fd_passing::recv_fds_with_capacity_allow_empty(fd, MAX_FRAME_SIZE + 4)
             .map_err(fd_passing_error)?;
+    decode_fds_frame(buffer, raw_fds)
+}
+
+/// Validate a received SCM_RIGHTS frame against its declared length, close
+/// every descriptor on a malformed frame or decode failure, and decode the
+/// body.
+fn decode_fds_frame<T: DeserializeOwned>(
+    buffer: Vec<u8>,
+    raw_fds: Vec<RawFd>,
+) -> io::Result<Option<(T, Vec<std::os::fd::OwnedFd>)>> {
     if buffer.is_empty() {
         if raw_fds.is_empty() {
             return Ok(None);

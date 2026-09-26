@@ -14,6 +14,7 @@
 //! and the hosted service - reconciles the same controller state.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use d2b_contracts_resource::v3::{ResourceEnvelope, ResourceRef, StoredResource, ZoneId};
@@ -33,10 +34,12 @@ use crate::vocabulary::{AUDIO_BINDING_TYPE, AUDIO_SERVICE_TYPE};
 const GUEST_TYPE: &str = "Guest";
 
 /// Stable errors for the daemon-owned audio resource path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AudioResourceRuntimeError {
     /// A resource body was malformed or used an unexpected provider.
     InvalidResource,
+    /// A wire spec or envelope failed to parse; carries the serde reason.
+    InvalidSpec(String),
     /// A binding referred to a different or missing Zone resource.
     InvalidRelationship,
     /// A controller finalizer or effect failed.
@@ -46,7 +49,7 @@ pub(crate) enum AudioResourceRuntimeError {
 impl core::fmt::Display for AudioResourceRuntimeError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(match self {
-            Self::InvalidResource => "audio-resource-invalid",
+            Self::InvalidResource | Self::InvalidSpec(_) => "audio-resource-invalid",
             Self::InvalidRelationship => "audio-resource-relationship-invalid",
             Self::Controller(error) => match error {
                 AudioControllerError::Admission => "audio-controller-admission-failed",
@@ -114,7 +117,7 @@ pub(crate) fn audio_binding_status_value(status: AudioBindingStatus) -> serde_js
             AudioLastSetApplied::HostAndGuest => "HostAndGuest",
             AudioLastSetApplied::HostOnly => "HostOnly",
             AudioLastSetApplied::GuestOnly => "GuestOnly",
-            AudioLastSetApplied::OfflineOnly => "OfflineOnly",
+            AudioLastSetApplied::NotApplied => "NotApplied",
         },
     })
 }
@@ -261,7 +264,7 @@ impl AudioResourceRuntime {
         let promoted = if let Some(old) = self.bindings.get_mut(&key) {
             if let Some(controller) = old.controller.as_mut() {
                 controller
-                    .finalize_shared(old.lease)
+                    .finalize(old.lease)
                     .map_err(AudioResourceRuntimeError::Controller)?
             } else {
                 None
@@ -298,7 +301,9 @@ impl AudioResourceRuntime {
                 let microphone = self
                     .service_microphones
                     .entry(spec.service_ref.to_canonical_string())
-                    .or_insert_with(|| shared_microphone_arbiter(64))
+                    .or_insert_with(|| {
+                        shared_microphone_arbiter(NonZeroUsize::new(64).expect("fixed bound"))
+                    })
                     .clone();
                 let mut controller =
                     AudioBindingController::with_shared_microphone(mediator, microphone);
@@ -354,7 +359,7 @@ impl AudioResourceRuntime {
         let promoted = if let Some(record) = self.bindings.get_mut(&key) {
             if let Some(controller) = record.controller.as_mut() {
                 controller
-                    .finalize_shared(record.lease)
+                    .finalize(record.lease)
                     .map_err(AudioResourceRuntimeError::Controller)?
             } else {
                 None
@@ -472,7 +477,7 @@ fn unavailable_status(
             },
         },
         enforcement_posture: AudioEnforcementPosture::None,
-        last_set_applied: AudioLastSetApplied::OfflineOnly,
+        last_set_applied: AudioLastSetApplied::NotApplied,
     }
 }
 
@@ -503,7 +508,7 @@ fn is_audio_resource(
         return Err(AudioResourceRuntimeError::InvalidResource);
     }
     let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
-        .map_err(|_| AudioResourceRuntimeError::InvalidResource)?;
+        .map_err(|error| AudioResourceRuntimeError::InvalidSpec(error.to_string()))?;
     Ok(envelope
         .spec()
         .provider_ref()
@@ -514,9 +519,9 @@ fn decode_spec<T: DeserializeOwned>(
     resource: &StoredResource,
 ) -> Result<T, AudioResourceRuntimeError> {
     let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
-        .map_err(|_| AudioResourceRuntimeError::InvalidResource)?;
+        .map_err(|error| AudioResourceRuntimeError::InvalidSpec(error.to_string()))?;
     let mut spec = serde_json::to_value(envelope.spec().base())
-        .map_err(|_| AudioResourceRuntimeError::InvalidResource)?;
+        .map_err(|error| AudioResourceRuntimeError::InvalidSpec(error.to_string()))?;
     if let Some(provider_ref) = envelope.spec().provider_ref() {
         let object = spec
             .as_object_mut()
@@ -526,7 +531,8 @@ fn decode_spec<T: DeserializeOwned>(
             serde_json::Value::String(provider_ref.to_canonical_string()),
         );
     }
-    serde_json::from_value(spec).map_err(|_| AudioResourceRuntimeError::InvalidResource)
+    serde_json::from_value(spec)
+        .map_err(|error| AudioResourceRuntimeError::InvalidSpec(error.to_string()))
 }
 
 /// The `status.resource` projection for one AudioBinding (old

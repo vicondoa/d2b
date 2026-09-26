@@ -50,11 +50,57 @@ pub trait ShellBackend: Send + Sync {
 }
 
 pub struct EstablishedShell {
-    pub backend: Arc<dyn ShellBackend>,
+    backend: Arc<dyn ShellBackend>,
     pub attach: public_wire::ShellAttachResult,
     pub target: String,
     pub operation_digest: Option<String>,
     pub initial_control_sequence: u64,
+}
+
+impl EstablishedShell {
+    pub fn new(
+        backend: Arc<dyn ShellBackend>,
+        attach: public_wire::ShellAttachResult,
+        target: String,
+        operation_digest: Option<String>,
+        initial_control_sequence: u64,
+    ) -> Self {
+        Self {
+            backend,
+            attach,
+            target,
+            operation_digest,
+            initial_control_sequence,
+        }
+    }
+
+    /// Delegate a terminal operation to the attached backend.
+    pub fn handle_op(
+        &self,
+        runtime: &tokio::runtime::Handle,
+        control_sequence: &mut u64,
+        op: ShellTerminalOp,
+    ) -> Result<Option<ShellTerminalResponse>, TypedError> {
+        self.backend.handle_op(runtime, control_sequence, op)
+    }
+
+    /// Close the attached terminal stream.
+    pub fn close_attachment(
+        &self,
+        runtime: &tokio::runtime::Handle,
+        control_sequence: &mut u64,
+    ) -> Result<public_wire::ShellDetachResult, TypedError> {
+        self.backend.close_attachment(runtime, control_sequence)
+    }
+
+    /// Cancel the attached terminal stream when its owner disappears.
+    pub fn cancel_attachment(
+        &self,
+        runtime: &tokio::runtime::Handle,
+        control_sequence: &mut u64,
+    ) -> Result<public_wire::ShellDetachResult, TypedError> {
+        self.backend.cancel_attachment(runtime, control_sequence)
+    }
 }
 
 /// Persistent-shell backend over a ComponentSession named stream.
@@ -289,11 +335,11 @@ impl fmt::Debug for EstablishedShell {
 }
 
 pub fn best_effort_close(
-    backend: &dyn ShellBackend,
+    shell: &EstablishedShell,
     runtime: &tokio::runtime::Handle,
     control_sequence: &mut u64,
 ) -> daemon_audit::ShellAuditResult {
-    match backend.close_attachment(runtime, control_sequence) {
+    match shell.close_attachment(runtime, control_sequence) {
         Ok(_) => daemon_audit::ShellAuditResult::Closed,
         Err(TypedError::ComponentSessionShellFailed {
             kind: crate::typed_error::ComponentSessionShellErrorKind::Timeout,
@@ -303,11 +349,11 @@ pub fn best_effort_close(
 }
 
 pub fn best_effort_cancel(
-    backend: &dyn ShellBackend,
+    shell: &EstablishedShell,
     runtime: &tokio::runtime::Handle,
     control_sequence: &mut u64,
 ) -> daemon_audit::ShellAuditResult {
-    match backend.cancel_attachment(runtime, control_sequence) {
+    match shell.cancel_attachment(runtime, control_sequence) {
         Ok(_) => daemon_audit::ShellAuditResult::Closed,
         Err(TypedError::ComponentSessionShellFailed {
             kind: crate::typed_error::ComponentSessionShellErrorKind::Timeout,

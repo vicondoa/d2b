@@ -1,0 +1,4 @@
+### Changed
+
+- The config-nixos RPC boundary now decodes each request into its typed form once and validates the typed value, removing a redundant JSON parse and the admission-time base64 decode of Stage payloads (up to ~683 KiB); Stage document bounds are still enforced when the staging store applies the document, and the backend hop keeps re-checking the original payload.
+- Closed JSON admission is now covered by integration tests: a sync response with a forged digest or byte count fails with `config-document-encoding-failed`, an over-bound base64 payload with `config-request-invalid`, and unknown keys or wrong field types in a request payload with `config-request-invalid`.

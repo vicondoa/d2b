@@ -20,6 +20,7 @@ pub(crate) const GENERATED_ARTIFACT: &str =
 /// One provider crate's service-catalog declaration.
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DeclarationFile {
     /// The provider identity this crate publishes.
     #[serde(rename = "provider")]
@@ -256,4 +257,21 @@ fn render(registry: &CatalogRegistry) -> Result<String, String> {
 fn generated_artifact_path(repo_root: &Path) -> PathBuf {
 
     repo_root.join(GENERATED_ARTIFACT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A typo'd declaration key is refused at the boundary instead of being
+    /// silently ignored (the daemon's fixed-UID row would otherwise vanish).
+    #[test]
+    fn an_unknown_declaration_key_is_refused() {
+        let error = serde_json::from_str::<DeclarationFile>(
+            r#"{"provider":"system-core","providerRef":"Provider/system-core","providerUid":"fixed","providerUidTypo":"fixed"}"#,
+        )
+        .err()
+        .expect("an unknown declaration key is refused");
+        assert!(error.to_string().contains("providerUidTypo"), "{error}");
+    }
 }

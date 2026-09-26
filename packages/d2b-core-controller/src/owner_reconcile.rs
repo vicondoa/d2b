@@ -575,11 +575,6 @@ impl OwnerReconcilePlan {
         &self.creation_order
     }
 
-    /// Alias for callers that name the operation a create order.
-    pub fn create_order(&self) -> &[ResourceRef] {
-        self.creation_order()
-    }
-
     /// Borrow deterministic dependent-first deletion order.
     pub fn deletion_order(&self) -> &[ResourceRef] {
         &self.deletion_order
@@ -593,12 +588,6 @@ impl OwnerReconcilePlan {
     /// Borrow the bounded UID-free create batch, when creates are pending.
     pub const fn create_batch(&self) -> Option<&OwnerChildBatch> {
         self.create_batch.as_ref()
-    }
-
-    /// Alias for callers that refer to the related-resource operation as a
-    /// CommitBatch.
-    pub const fn batch(&self) -> Option<&OwnerChildBatch> {
-        self.create_batch()
     }
 
     /// Borrow the teardown projection for this plan.
@@ -693,11 +682,6 @@ impl OwnerChildBatch {
         &self.refs
     }
 
-    /// Borrow the batch addresses under Resource API terminology.
-    pub fn resource_refs(&self) -> &[ResourceRef] {
-        &self.refs
-    }
-
     /// Return whether the batch has no children.
     pub const fn is_empty(&self) -> bool {
         self.children.is_empty()
@@ -747,11 +731,6 @@ impl OwnerChildIdentity {
 
     /// Borrow the returned child ResourceRef.
     pub const fn target(&self) -> &ResourceRef {
-        &self.target
-    }
-
-    /// Borrow the returned child ResourceRef under its API name.
-    pub const fn resource_ref(&self) -> &ResourceRef {
         &self.target
     }
 
@@ -934,16 +913,6 @@ impl TeardownPlan {
         &self.order
     }
 
-    /// Borrow the order under its ResourceRef terminology.
-    pub fn refs(&self) -> &[ResourceRef] {
-        &self.order
-    }
-
-    /// Borrow the resources in child-first order.
-    pub fn resources(&self) -> &[ResourceRef] {
-        &self.order
-    }
-
     /// Return the number of resources in the plan.
     pub const fn len(&self) -> usize {
         self.order.len()
@@ -1072,7 +1041,6 @@ impl OwnerIndex {
         let observed = self
             .children
             .get(owner)
-            .cloned()
             .ok_or(OwnerReconcileError::OwnerNotRelisted)?;
         let mut mutations = Vec::new();
         let mut create_children = Vec::new();
@@ -1103,7 +1071,7 @@ impl OwnerIndex {
                 Some(_) => {}
             }
         }
-        for (target, actual) in &observed {
+        for (target, actual) in observed {
             if !desired_by_ref.contains_key(target) && !actual.deletion_requested {
                 mutations.push(OwnerMutation::RequestDeletion {
                     target: target.clone(),
@@ -1128,7 +1096,7 @@ impl OwnerIndex {
             self.limits.max_depth,
         )?;
         let deletion_order = ordered_observed_refs(
-            &observed,
+            observed,
             desired_by_ref.keys(),
             self.limits.max_work_items,
             self.limits.max_depth,
@@ -1145,7 +1113,7 @@ impl OwnerIndex {
             .collect::<BTreeMap<_, _>>();
         mutations.sort_by_key(|mutation| {
             let (target, deleting, kind) =
-                mutation_sort_parts(mutation, &desired_by_ref, &observed);
+                mutation_sort_parts(mutation, &desired_by_ref, observed);
             let position = if deleting {
                 deletion_positions
                     .get(target)

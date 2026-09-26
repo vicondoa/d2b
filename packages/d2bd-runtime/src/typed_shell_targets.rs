@@ -8,11 +8,28 @@ struct CachedTypedShellSessionTarget {
     target: String,
 }
 
+/// Key identifying one typed-shell session target by peer uid and shell
+/// name.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TypedShellTargetKey {
+    /// The peer uid that owns the session.
+    pub uid: u32,
+    /// The shell name.
+    pub name: String,
+}
+
+impl TypedShellTargetKey {
+    /// Build a key from a peer uid and shell name.
+    pub fn new(uid: u32, name: String) -> Self {
+        Self { uid, name }
+    }
+}
+
 #[derive(Default)]
 pub struct TypedShellSessionTargetCache {
-    entries: std::collections::BTreeMap<(u32, String), CachedTypedShellSessionTarget>,
-    recency: std::collections::VecDeque<(u32, String)>,
-    create_reservations: std::collections::BTreeSet<(u32, String)>,
+    entries: std::collections::BTreeMap<TypedShellTargetKey, CachedTypedShellSessionTarget>,
+    recency: std::collections::VecDeque<TypedShellTargetKey>,
+    create_reservations: std::collections::BTreeSet<TypedShellTargetKey>,
 }
 
 impl std::fmt::Debug for TypedShellSessionTargetCache {
@@ -25,7 +42,7 @@ impl std::fmt::Debug for TypedShellSessionTargetCache {
 }
 
 impl TypedShellSessionTargetCache {
-    pub fn remember(&mut self, key: (u32, String), target: String) {
+    pub fn remember(&mut self, key: TypedShellTargetKey, target: String) {
         if self.entries.contains_key(&key) {
             self.entries
                 .insert(key.clone(), CachedTypedShellSessionTarget { target });
@@ -47,13 +64,13 @@ impl TypedShellSessionTargetCache {
         self.touch(&key);
     }
 
-    pub fn cached(&mut self, key: &(u32, String)) -> Option<String> {
+    pub fn cached(&mut self, key: &TypedShellTargetKey) -> Option<String> {
         let target = self.entries.get(key)?.target.clone();
         self.touch(key);
         Some(target)
     }
 
-    pub fn forget(&mut self, key: &(u32, String)) {
+    pub fn forget(&mut self, key: &TypedShellTargetKey) {
         self.entries.remove(key);
         self.recency.retain(|candidate| candidate != key);
     }
@@ -80,7 +97,7 @@ impl TypedShellSessionTargetCache {
     /// where it panics (see the `lock_sync` seat in authority_persistence).
     pub fn reserve(
         cache: &Arc<Mutex<Self>>,
-        key: (u32, String),
+        key: TypedShellTargetKey,
     ) -> Option<TypedShellSessionCreateReservation> {
         let mut guard = cache.try_lock().ok()?;
         if !guard.create_reservations.insert(key.clone()) {
@@ -92,7 +109,7 @@ impl TypedShellSessionTargetCache {
         })
     }
 
-    fn touch(&mut self, key: &(u32, String)) {
+    fn touch(&mut self, key: &TypedShellTargetKey) {
         self.recency.retain(|candidate| candidate != key);
         self.recency.push_back(key.clone());
     }
@@ -100,11 +117,11 @@ impl TypedShellSessionTargetCache {
 
 pub struct TypedShellSessionCreateReservation {
     cache: Arc<Mutex<TypedShellSessionTargetCache>>,
-    key: (u32, String),
+    key: TypedShellTargetKey,
 }
 
 impl TypedShellSessionCreateReservation {
-    pub fn new(cache: Arc<Mutex<TypedShellSessionTargetCache>>, key: (u32, String)) -> Self {
+    pub fn new(cache: Arc<Mutex<TypedShellSessionTargetCache>>, key: TypedShellTargetKey) -> Self {
         Self { cache, key }
     }
 }
@@ -147,21 +164,36 @@ mod tests {
     #[test]
     fn reserve_admits_one_create_seat_per_uid_name_and_drop_releases() {
         let cache = new_cache();
-        let first = TypedShellSessionTargetCache::reserve(&cache, (7, "primary".to_owned()))
-            .expect("first seat");
+        let first = TypedShellSessionTargetCache::reserve(
+            &cache,
+            TypedShellTargetKey::new(7, "primary".to_owned()),
+        )
+        .expect("first seat");
         assert!(
-            TypedShellSessionTargetCache::reserve(&cache, (7, "primary".to_owned())).is_none(),
+            TypedShellSessionTargetCache::reserve(
+                &cache,
+                TypedShellTargetKey::new(7, "primary".to_owned())
+            )
+            .is_none(),
             "duplicate uid/name must conflict"
         );
-        let _other_uid =
-            TypedShellSessionTargetCache::reserve(&cache, (8, "primary".to_owned()))
-                .expect("different uid admitted");
-        let _other_name =
-            TypedShellSessionTargetCache::reserve(&cache, (7, "secondary".to_owned()))
-                .expect("different name admitted");
+        let _other_uid = TypedShellSessionTargetCache::reserve(
+            &cache,
+            TypedShellTargetKey::new(8, "primary".to_owned()),
+        )
+        .expect("different uid admitted");
+        let _other_name = TypedShellSessionTargetCache::reserve(
+            &cache,
+            TypedShellTargetKey::new(7, "secondary".to_owned()),
+        )
+        .expect("different name admitted");
         drop(first);
         assert!(
-            TypedShellSessionTargetCache::reserve(&cache, (7, "primary".to_owned())).is_some(),
+            TypedShellSessionTargetCache::reserve(
+                &cache,
+                TypedShellTargetKey::new(7, "primary".to_owned())
+            )
+            .is_some(),
             "drop must release the seat"
         );
     }
@@ -172,11 +204,18 @@ mod tests {
         // `blocking_lock` panics on a runtime worker thread; the drop
         // release must reach the cache through the spin seat instead.
         let cache = new_cache();
-        let seat = TypedShellSessionTargetCache::reserve(&cache, (7, "primary".to_owned()))
-            .expect("seat");
+        let seat = TypedShellSessionTargetCache::reserve(
+            &cache,
+            TypedShellTargetKey::new(7, "primary".to_owned()),
+        )
+        .expect("seat");
         drop(seat);
         assert!(
-            TypedShellSessionTargetCache::reserve(&cache, (7, "primary".to_owned())).is_some(),
+            TypedShellSessionTargetCache::reserve(
+                &cache,
+                TypedShellTargetKey::new(7, "primary".to_owned())
+            )
+            .is_some(),
             "release inside a runtime must not panic or leak the seat"
         );
     }
@@ -186,14 +225,23 @@ mod tests {
         let cache = new_cache();
         let mut guard = cache.blocking_lock();
         assert!(guard.is_empty());
-        guard.remember((7, "primary".to_owned()), "tools.host.d2b".to_owned());
+        guard.remember(
+            TypedShellTargetKey::new(7, "primary".to_owned()),
+            "tools.host.d2b".to_owned(),
+        );
         assert_eq!(
-            guard.cached(&(7, "primary".to_owned())).as_deref(),
+            guard
+                .cached(&TypedShellTargetKey::new(7, "primary".to_owned()))
+                .as_deref(),
             Some("tools.host.d2b")
         );
         assert_eq!(guard.len(), 1);
-        guard.forget(&(7, "primary".to_owned()));
-        assert!(guard.cached(&(7, "primary".to_owned())).is_none());
+        guard.forget(&TypedShellTargetKey::new(7, "primary".to_owned()));
+        assert!(
+            guard
+                .cached(&TypedShellTargetKey::new(7, "primary".to_owned()))
+                .is_none()
+        );
         assert!(guard.is_empty());
     }
 }

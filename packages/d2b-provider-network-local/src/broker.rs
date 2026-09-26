@@ -843,50 +843,68 @@ impl<B: NetworkBroker> NetworkEffectPort for BrokerNetworkEffectPort<B> {
 /// fence is daemon-supplied too.
 pub trait NetworkIntentSource: Send + Sync + 'static {
     /// Resolve one trusted Network bridge intent.
+    ///
+    /// Returns `Ok(None)` when the reference does not name a trusted intent
+    /// and `Err` when the trusted Network spec fails to parse.
     fn resolve_bridge_intent(
         &self,
         intent_ref: &str,
         provenance: &NetworkProvenance,
-    ) -> Option<ResolvedBridgeIntent>;
+    ) -> Result<Option<ResolvedBridgeIntent>, d2b_contracts::error::Error>;
 
     /// Resolve one trusted Network firewall projection intent.
+    ///
+    /// Returns `Ok(None)` when the reference does not name a trusted intent
+    /// and `Err` when the trusted Network spec fails to parse.
     fn resolve_projection_intent(
         &self,
         intent_ref: &str,
         provenance: &NetworkProvenance,
-    ) -> Option<ResolvedNftablesProjectionIntent>;
+    ) -> Result<Option<ResolvedNftablesProjectionIntent>, d2b_contracts::error::Error>;
 
     /// Resolve one trusted Network ownership marker intent.
+    ///
+    /// Returns `Ok(None)` when the reference does not name a trusted intent
+    /// and `Err` when the trusted Network spec fails to parse.
     fn resolve_marker_intent(
         &self,
         intent_ref: &str,
         provenance: &NetworkProvenance,
-    ) -> Option<ResolvedOwnershipMarkerIntent>;
+    ) -> Result<Option<ResolvedOwnershipMarkerIntent>, d2b_contracts::error::Error>;
 
     /// Find one trusted NetworkManager unmanaged intent.
     fn find_nm_unmanaged_intent(&self, intent_ref: &str) -> Option<ResolvedNmUnmanagedIntent>;
 
     /// Resolve one trusted Network route intent.
+    ///
+    /// Returns `Ok(None)` when the reference does not name a trusted intent
+    /// and `Err` when the trusted Network spec fails to parse.
     fn resolve_route_intent(
         &self,
         intent_ref: &str,
         provenance: &NetworkProvenance,
-    ) -> Option<ResolvedRouteIntent>;
+    ) -> Result<Option<ResolvedRouteIntent>, d2b_contracts::error::Error>;
 
     /// Resolve one trusted Network sysctl intent.
+    ///
+    /// Returns `Ok(None)` when the reference does not name a trusted intent
+    /// and `Err` when the trusted Network spec fails to parse.
     fn resolve_sysctl_intent(
         &self,
         intent_ref: &str,
         provenance: &NetworkProvenance,
-    ) -> Option<ResolvedSysctlIntent>;
+    ) -> Result<Option<ResolvedSysctlIntent>, d2b_contracts::error::Error>;
 
     /// Resolve one trusted hosts-file intent: a Network-hosts intent when
     /// `provenance` is supplied, a plain hosts intent otherwise.
+    ///
+    /// Returns `Ok(None)` when the reference does not name a trusted intent
+    /// and `Err` when the trusted Network spec fails to parse.
     fn resolve_hosts_intent(
         &self,
         intent_ref: &str,
         provenance: Option<&NetworkProvenance>,
-    ) -> Option<ResolvedHostsIntent>;
+    ) -> Result<Option<ResolvedHostsIntent>, d2b_contracts::error::Error>;
 
     /// The installed bundle generation identity (KTD8).
     fn installed_generation_identity(&self) -> Option<ResourceBundleGenerationId>;
@@ -918,7 +936,7 @@ impl NetworkIntentSource for ResolverNetworkIntentSource {
         &self,
         intent_ref: &str,
         provenance: &NetworkProvenance,
-    ) -> Option<ResolvedBridgeIntent> {
+    ) -> Result<Option<ResolvedBridgeIntent>, d2b_contracts::error::Error> {
         self.resolver
             .resolve_network_bridge_intent(intent_ref, provenance)
     }
@@ -927,7 +945,7 @@ impl NetworkIntentSource for ResolverNetworkIntentSource {
         &self,
         intent_ref: &str,
         provenance: &NetworkProvenance,
-    ) -> Option<ResolvedNftablesProjectionIntent> {
+    ) -> Result<Option<ResolvedNftablesProjectionIntent>, d2b_contracts::error::Error> {
         self.resolver
             .resolve_network_projection_intent(intent_ref, provenance)
     }
@@ -936,7 +954,7 @@ impl NetworkIntentSource for ResolverNetworkIntentSource {
         &self,
         intent_ref: &str,
         provenance: &NetworkProvenance,
-    ) -> Option<ResolvedOwnershipMarkerIntent> {
+    ) -> Result<Option<ResolvedOwnershipMarkerIntent>, d2b_contracts::error::Error> {
         self.resolver
             .resolve_network_marker_intent(intent_ref, provenance)
     }
@@ -951,7 +969,7 @@ impl NetworkIntentSource for ResolverNetworkIntentSource {
         &self,
         intent_ref: &str,
         provenance: &NetworkProvenance,
-    ) -> Option<ResolvedRouteIntent> {
+    ) -> Result<Option<ResolvedRouteIntent>, d2b_contracts::error::Error> {
         self.resolver
             .resolve_network_route_intent(intent_ref, provenance)
     }
@@ -960,7 +978,7 @@ impl NetworkIntentSource for ResolverNetworkIntentSource {
         &self,
         intent_ref: &str,
         provenance: &NetworkProvenance,
-    ) -> Option<ResolvedSysctlIntent> {
+    ) -> Result<Option<ResolvedSysctlIntent>, d2b_contracts::error::Error> {
         self.resolver
             .resolve_network_sysctl_intent(intent_ref, provenance)
     }
@@ -969,12 +987,12 @@ impl NetworkIntentSource for ResolverNetworkIntentSource {
         &self,
         intent_ref: &str,
         provenance: Option<&NetworkProvenance>,
-    ) -> Option<ResolvedHostsIntent> {
+    ) -> Result<Option<ResolvedHostsIntent>, d2b_contracts::error::Error> {
         match provenance {
             Some(provenance) => self
                 .resolver
                 .resolve_network_hosts_intent(intent_ref, provenance),
-            None => self.resolver.find_hosts_intent(intent_ref).cloned(),
+            None => Ok(self.resolver.find_hosts_intent(intent_ref).cloned()),
         }
     }
 
@@ -1017,8 +1035,10 @@ impl NetworkIntentSource for LoaderNetworkIntentSource {
         &self,
         intent_ref: &str,
         provenance: &NetworkProvenance,
-    ) -> Option<ResolvedBridgeIntent> {
-        let resolver = (self.load)()?;
+    ) -> Result<Option<ResolvedBridgeIntent>, d2b_contracts::error::Error> {
+        let Some(resolver) = (self.load)() else {
+            return Ok(None);
+        };
         resolver
             .resolve_network_bridge_intent(intent_ref, provenance)
     }
@@ -1027,8 +1047,10 @@ impl NetworkIntentSource for LoaderNetworkIntentSource {
         &self,
         intent_ref: &str,
         provenance: &NetworkProvenance,
-    ) -> Option<ResolvedNftablesProjectionIntent> {
-        let resolver = (self.load)()?;
+    ) -> Result<Option<ResolvedNftablesProjectionIntent>, d2b_contracts::error::Error> {
+        let Some(resolver) = (self.load)() else {
+            return Ok(None);
+        };
         resolver
             .resolve_network_projection_intent(intent_ref, provenance)
     }
@@ -1037,8 +1059,10 @@ impl NetworkIntentSource for LoaderNetworkIntentSource {
         &self,
         intent_ref: &str,
         provenance: &NetworkProvenance,
-    ) -> Option<ResolvedOwnershipMarkerIntent> {
-        let resolver = (self.load)()?;
+    ) -> Result<Option<ResolvedOwnershipMarkerIntent>, d2b_contracts::error::Error> {
+        let Some(resolver) = (self.load)() else {
+            return Ok(None);
+        };
         resolver
             .resolve_network_marker_intent(intent_ref, provenance)
     }
@@ -1054,8 +1078,10 @@ impl NetworkIntentSource for LoaderNetworkIntentSource {
         &self,
         intent_ref: &str,
         provenance: &NetworkProvenance,
-    ) -> Option<ResolvedRouteIntent> {
-        let resolver = (self.load)()?;
+    ) -> Result<Option<ResolvedRouteIntent>, d2b_contracts::error::Error> {
+        let Some(resolver) = (self.load)() else {
+            return Ok(None);
+        };
         resolver
             .resolve_network_route_intent(intent_ref, provenance)
     }
@@ -1064,8 +1090,10 @@ impl NetworkIntentSource for LoaderNetworkIntentSource {
         &self,
         intent_ref: &str,
         provenance: &NetworkProvenance,
-    ) -> Option<ResolvedSysctlIntent> {
-        let resolver = (self.load)()?;
+    ) -> Result<Option<ResolvedSysctlIntent>, d2b_contracts::error::Error> {
+        let Some(resolver) = (self.load)() else {
+            return Ok(None);
+        };
         resolver
             .resolve_network_sysctl_intent(intent_ref, provenance)
     }
@@ -1074,12 +1102,14 @@ impl NetworkIntentSource for LoaderNetworkIntentSource {
         &self,
         intent_ref: &str,
         provenance: Option<&NetworkProvenance>,
-    ) -> Option<ResolvedHostsIntent> {
-        let resolver = (self.load)()?;
+    ) -> Result<Option<ResolvedHostsIntent>, d2b_contracts::error::Error> {
+        let Some(resolver) = (self.load)() else {
+            return Ok(None);
+        };
         match provenance {
             Some(provenance) => resolver
                 .resolve_network_hosts_intent(intent_ref, provenance),
-            None => resolver.find_hosts_intent(intent_ref).cloned(),
+            None => Ok(resolver.find_hosts_intent(intent_ref).cloned()),
         }
     }
 
@@ -1198,8 +1228,9 @@ impl NetworkBroker for KernelNetworkBroker {
                 .facets
                 .intents
                 .resolve_bridge_intent(intent_ref.as_str(), &provenance)
+                .map_err(intent_source_error)?
                 .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
-            self.invoke_kernel("create-bridge", &zone, resolved_bridge_payload(&intent))?;
+            self.invoke_kernel("create-bridge", &zone, resolved_bridge_payload(&intent)?)?;
         }
         Ok(())
     }
@@ -1212,8 +1243,9 @@ impl NetworkBroker for KernelNetworkBroker {
                 .facets
                 .intents
                 .resolve_bridge_intent(intent_ref.as_str(), &provenance)
+                .map_err(intent_source_error)?
                 .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
-            self.invoke_kernel("delete-bridge", &zone, resolved_bridge_payload(&intent))?;
+            self.invoke_kernel("delete-bridge", &zone, resolved_bridge_payload(&intent)?)?;
         }
         Ok(())
     }
@@ -1229,11 +1261,13 @@ impl NetworkBroker for KernelNetworkBroker {
             .facets
             .intents
             .resolve_projection_intent(context.projection_intent_ref().as_str(), &provenance)
+            .map_err(intent_source_error)?
             .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
         let marker = self
             .facets
             .intents
             .resolve_marker_intent(&intent.ownership_marker_intent_ref, &provenance)
+            .map_err(intent_source_error)?
             .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
         let installed = self
             .facets
@@ -1290,11 +1324,12 @@ impl NetworkBroker for KernelNetworkBroker {
                 .facets
                 .intents
                 .resolve_route_intent(intent_ref.as_str(), &provenance)
+                .map_err(intent_source_error)?
                 .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
             self.invoke_kernel(
                 "apply-route",
                 &zone,
-                resolved_route_payload(&intent, &provenance, false),
+                resolved_route_payload(&intent, &provenance, false)?,
             )?;
         }
         Ok(())
@@ -1308,11 +1343,12 @@ impl NetworkBroker for KernelNetworkBroker {
                 .facets
                 .intents
                 .resolve_route_intent(intent_ref.as_str(), &provenance)
+                .map_err(intent_source_error)?
                 .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
             self.invoke_kernel(
                 "apply-route",
                 &zone,
-                resolved_route_payload(&intent, &provenance, true),
+                resolved_route_payload(&intent, &provenance, true)?,
             )?;
         }
         Ok(())
@@ -1326,6 +1362,7 @@ impl NetworkBroker for KernelNetworkBroker {
                 .facets
                 .intents
                 .resolve_sysctl_intent(intent_ref.as_str(), &provenance)
+                .map_err(intent_source_error)?
                 .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
             self.invoke_kernel(
                 "apply-sysctl",
@@ -1354,6 +1391,7 @@ impl NetworkBroker for KernelNetworkBroker {
                     .starts_with("network-hosts:")
                     .then_some(&provenance),
             )
+            .map_err(intent_source_error)?
             .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
         self.invoke_kernel(
             "update-hosts-file",
@@ -1418,9 +1456,19 @@ impl NetworkBroker for KernelNetworkBroker {
     }
 }
 
+/// Map a trusted-bundle Network spec parse failure onto the broker's closed
+/// refusal surface, logging the manifest-parse-error reason.
+fn intent_source_error(error: d2b_contracts::error::Error) -> NetworkBrokerError {
+    tracing::warn!(
+        error = %error,
+        "Network broker could not resolve a trusted bundle intent"
+    );
+    NetworkBrokerError::NetworkAdmissionMismatch
+}
+
 /// The resolved bridge intent payload one bridge kernel invocation carries.
-fn resolved_bridge_payload(intent: &ResolvedBridgeIntent) -> serde_json::Value {
-    serde_json::json!({
+fn resolved_bridge_payload(intent: &ResolvedBridgeIntent) -> Result<serde_json::Value, NetworkBrokerError> {
+    Ok(serde_json::json!({
         "intentId": intent.intent_id,
         "scopeLabel": intent.scope_label,
         "bridgeIfname": intent.bridge_ifname.as_str(),
@@ -1429,9 +1477,9 @@ fn resolved_bridge_payload(intent: &ResolvedBridgeIntent) -> serde_json::Value {
         "multicastSnoopingDisabled": intent.multicast_snooping_disabled,
         "ipv6Suppressed": intent.ipv6_suppressed,
         "ipv4Address": intent.ipv4_address.as_ref().map(|cidr| cidr.as_str()),
-        "provenance": intent.provenance.as_ref().map(serde_json::to_value).transpose().ok().flatten(),
+        "provenance": intent.provenance.as_ref().map(serde_json::to_value).transpose().map_err(|_| NetworkBrokerError::Rejected)?,
         "ownershipMarker": intent.ownership_marker,
-    })
+    }))
 }
 
 /// The resolved route intent payload one apply-route kernel invocation
@@ -1440,8 +1488,8 @@ fn resolved_route_payload(
     intent: &ResolvedRouteIntent,
     provenance: &NetworkProvenance,
     destroy: bool,
-) -> serde_json::Value {
-    serde_json::json!({
+) -> Result<serde_json::Value, NetworkBrokerError> {
+    Ok(serde_json::json!({
         "intentId": intent.intent_id,
         "routeSpec": intent.route_spec,
         "destination": intent.destination,
@@ -1450,10 +1498,10 @@ fn resolved_route_payload(
         "table": intent.table,
         "owned": intent.owned,
         "routeName": intent.route_name,
-        "provenance": serde_json::to_value(provenance).ok(),
+        "provenance": serde_json::to_value(provenance).map_err(|_| NetworkBrokerError::Rejected)?,
         "ownershipMarker": intent.ownership_marker,
         "destroy": destroy,
-    })
+    }))
 }
 
 /// Map one kernel refusal onto the provider's closed retry/block states,
@@ -1571,17 +1619,30 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct RecordingBroker {
-        events: Arc<parking_lot::Mutex<Vec<&'static str>>>,
+        events: Arc<std::sync::Mutex<Vec<&'static str>>>,
     }
 
     impl RecordingBroker {
 
+        /// Take the recorder lock, failing loudly on poisoning.
+        ///
+        /// This fake's recording happens from the synchronous
+        /// [`NetworkBroker`] trait methods, so the log cannot be an awaited
+        /// async lock; this is its one acquisition site and it carries the
+        /// recorded exception.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn recorder(&self) -> std::sync::MutexGuard<'_, Vec<&'static str>> {
+            self.events
+                .lock()
+                .expect("a test-support recorder lock is never poisoned")
+        }
+
         fn record(&self, event: &'static str) {
-            self.events.lock().push(event);
+            self.recorder().push(event);
         }
 
         fn events(&self) -> Vec<&'static str> {
-            self.events.lock().clone()
+            self.recorder().clone()
         }
     }
 

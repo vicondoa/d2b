@@ -37,6 +37,7 @@ use crate::ops::spawn_runner::{
 };
 use d2b_contracts_resource::v3::{ActivationRunnerInput, MAX_ACTIVATION_RUNNER_INPUT_BYTES};
 use d2b_core::bundle_resolver::HostRuntime;
+use d2b_core::host::NmReloadBehavior;
 use d2b_core::sandbox_profile::CgroupPlacement;
 use rustix::fs::{CWD, Mode, OFlags, ResolveFlags};
 
@@ -87,10 +88,6 @@ pub enum LiveHandlerError {
     /// NetworkManager reload failure after writing the unmanaged config
     /// snippet.
     NmReload(String),
-    /// The NetworkManager unmanaged intent declared a reload behavior the
-    /// contract does not admit. Carries the rejected value so the refusal
-    /// names exactly what a hand-declared bundle got wrong.
-    NmReloadBehaviorRefused(String),
     /// The declared owner/group of the NetworkManager unmanaged file could
     /// not be resolved or enforced. Carries the failing principal or the
     /// enforcement detail.
@@ -135,10 +132,6 @@ impl std::fmt::Display for LiveHandlerError {
             Self::KeysRotate(detail) => write!(f, "keys rotate: {detail}"),
             Self::HostKey(detail) => write!(f, "host key: {detail}"),
             Self::NmReload(detail) => write!(f, "networkmanager reload: {detail}"),
-            Self::NmReloadBehaviorRefused(value) => write!(
-                f,
-                "NetworkManager reload behavior {value:?} is not supported; expected \"atomic-reload\" or \"none\""
-            ),
             Self::NmFileOwnership(detail) => {
                 write!(f, "NetworkManager unmanaged file ownership: {detail}")
             }
@@ -152,6 +145,40 @@ impl std::fmt::Display for LiveHandlerError {
 }
 
 impl std::error::Error for LiveHandlerError {}
+
+impl LiveHandlerError {
+    /// The pidfd dispatch failure kind this error reports, when it is one
+    /// of the pidfd handler failures.
+    ///
+    /// The names are the shared vocabulary in
+    /// [`d2b_contracts_broker::broker_wire::PIDFD_DISPATCH_FAILURE_KINDS`],
+    /// which is what a pidfd dispatch labels a failure with and what a
+    /// caller classifying that failure reads: mapping the variants through
+    /// the shared constant keeps the two spellings one constant, never two
+    /// literals that can drift.
+    pub fn pidfd_dispatch_failure(&self) -> Option<&'static str> {
+        let [pidfd_race, pidfd_open_failed, proc_stat_read_failed] =
+            d2b_contracts_broker::broker_wire::PIDFD_DISPATCH_FAILURE_KINDS;
+        match self {
+            Self::PidfdRace { .. } => Some(pidfd_race),
+            Self::PidfdOpenFailed { .. } => Some(pidfd_open_failed),
+            Self::ProcStatReadFailed { .. } => Some(proc_stat_read_failed),
+            Self::SpawnPreflight(_)
+            | Self::SpawnFailed { .. }
+            | Self::ReconcileExec(_)
+            | Self::UsbipLock(_)
+            | Self::HostInstall(_)
+            | Self::Activation(_)
+            | Self::Gc(_)
+            | Self::KeysRotate(_)
+            | Self::HostKey(_)
+            | Self::NmReload(_)
+            | Self::NmFileOwnership(_)
+            | Self::NmOwnershipConflict
+            | Self::SwtpmDirHardening { .. } => None,
+        }
+    }
+}
 
 /// Result of [`live_open_pidfd`].
 #[derive(Debug)]
@@ -279,24 +306,6 @@ impl NmReloadMethod {
     }
 }
 
-/// The closed reload-behavior set the NetworkManager unmanaged contract
-/// admits. `"atomic-reload"` selects the reload branch; `"none"` and the
-/// empty no-host-contract sentinel select the write-only path. Any other
-/// value is a hand-declared bundle defect: refusing it here (before any
-/// mutation) keeps a typo from silently skipping the NetworkManager reload
-/// while the apply acks success.
-///
-/// Shared with the remove path in `ops/nm.rs`; both arms branch on the
-/// same value, so both must apply the same contract check.
-pub(crate) fn validate_nm_reload_behavior(
-    reload_behavior: &str,
-) -> Result<(), LiveHandlerError> {
-    if matches!(reload_behavior, "atomic-reload" | "none" | "") {
-        return Ok(());
-    }
-    Err(LiveHandlerError::NmReloadBehaviorRefused(reload_behavior.to_owned()))
-}
-
 /// Resolve the declared owner/group names of the NetworkManager unmanaged
 /// drop-in to uid/gid. The declaration is part of the bundle contract and
 /// is enforced on the written file; an unresolvable principal refuses the
@@ -359,7 +368,6 @@ pub(crate) async fn live_apply_nm_unmanaged_with_reload<F>(
 where
     F: AsyncFnMut(&[&str]) -> Result<(), String>,
 {
-    validate_nm_reload_behavior(&intent.reload_behavior)?;
     let existing = match crate::sys::path_safe::read_to_string_nofollow(&intent.file_path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
@@ -378,7 +386,7 @@ where
         )
         .await
         .map_err(LiveHandlerError::ReconcileExec)?;
-    if intent.reload_behavior == "atomic-reload" {
+    if matches!(intent.reload_behavior, NmReloadBehavior::AtomicReload) {
         reload(&["reload", "NetworkManager"])
             .await
             .map_err(LiveHandlerError::NmReload)?;
@@ -401,7 +409,6 @@ where
     D: AsyncFnMut() -> Result<(), String>,
     F: AsyncFnMut(&[&str]) -> Result<(), String>,
 {
-    validate_nm_reload_behavior(&intent.reload_behavior)?;
     let existing = match crate::sys::path_safe::read_to_string_nofollow(&intent.file_path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
@@ -420,7 +427,7 @@ where
         )
         .await
         .map_err(LiveHandlerError::ReconcileExec)?;
-    if intent.reload_behavior != "atomic-reload" {
+    if !matches!(intent.reload_behavior, NmReloadBehavior::AtomicReload) {
         return Ok(None);
     }
     match dbus_reload().await {
@@ -461,10 +468,9 @@ pub async fn live_usbip_bind(
     bus_id: &str,
     lock_path: &Path,
     vm_name: &str,
-    daemon_uid: u32,
     daemon_gid: u32,
 ) -> Result<(), LiveHandlerError> {
-    crate::ops::usbip_lock::acquire_lock(lock_path, vm_name, daemon_uid, daemon_gid)
+    crate::ops::usbip_lock::acquire_lock(lock_path, vm_name, daemon_gid)
         .map_err(|e| LiveHandlerError::UsbipLock(e.to_string()))?;
     match crate::ops::usbip_host::inspect_usbip_driver_binding(sysfs_root, bus_id)
         .await
@@ -1745,7 +1751,7 @@ fn spawn_obs_vsock_acl_retry(uid: u32, socket: PathBuf) {
     });
 }
 
-fn refresh_obs_vsock_acl(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerError> {
+async fn refresh_obs_vsock_acl(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerError> {
     if !matches!(
         plan.seccomp_policy_ref.as_deref(),
         Some("w1-vsock-relay" | "w1-otel-host-bridge")
@@ -1756,15 +1762,33 @@ fn refresh_obs_vsock_acl(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerError>
         return Ok(());
     };
     let uid = plan.uid;
-    match grant_obs_vsock_acl_once(uid, &socket) {
-        Ok(true) => Ok(()),
-        Ok(false) => {
+    // The initial attempt is a setfacl shellout, which has no async form;
+    // it runs on the broker's bounded dispatch pool like every other
+    // kernel-path step - the same pool the retry path uses - so a socket
+    // that is not there yet holds no worker and no thread. A handler
+    // driven outside a serving broker (tests) has no pool to defer to and
+    // runs the attempt inline, exactly as before.
+    let attempt = match crate::runtime::broker_background() {
+        Some(background) => {
+            let socket = socket.clone();
+            background
+                .dispatches
+                .run(move || grant_obs_vsock_acl_once(uid, &socket))
+                .await
+        }
+        None => Ok(grant_obs_vsock_acl_once(uid, &socket)),
+    };
+    match attempt {
+        Ok(Ok(true)) => Ok(()),
+        Ok(Ok(false)) => {
             spawn_obs_vsock_acl_retry(uid, socket);
             Ok(())
         }
-        Err(detail) => Err(LiveHandlerError::SpawnFailed {
+        Ok(Err(detail)) => Err(LiveHandlerError::SpawnFailed {
             detail: format!("refresh obs-vsock ACL for runner uid {uid}: {detail}"),
         }),
+        // The pool is gone, so the broker is shutting down.
+        Err(_) => Ok(()),
     }
 }
 
@@ -2098,7 +2122,7 @@ async fn refresh_spawn_runner_acls(
             }
         })?;
     }
-    refresh_obs_vsock_acl(plan)?;
+    refresh_obs_vsock_acl(plan).await?;
     refresh_component_session_vsock_acl(plan)?;
 
     Ok(())
@@ -2426,7 +2450,7 @@ impl DeviceWorkerSocketGrant {
     /// `<runtime_root>/vms/<guest>`.
     fn for_guest(runtime_root: &Path, guest: &str) -> Result<Self, String> {
         let directory = crate::ops::device_worker::guest_socket_directory(runtime_root, guest)
-            .map_err(str::to_owned)?;
+            .map_err(|e| e.to_string())?;
         Ok(Self {
             runtime_root: runtime_root.to_path_buf(),
             directory,
@@ -2529,14 +2553,15 @@ async fn retry_acl_grant(
             Ok(Err(err)) => {
                 tracing::debug!(
                     error = %err,
-                    "{label} ACL refresh not ready yet",
+                    label = %label,
+                    "ACL refresh not ready yet",
                 );
             }
             // The pool is gone, so the broker is shutting down.
             Err(_) => return,
         }
         if tokio::time::Instant::now() >= deadline {
-            tracing::warn!("{label} ACL refresh timed out");
+            tracing::warn!(label = %label, "ACL refresh timed out");
             return;
         }
         tokio::time::sleep(interval).await;
@@ -3273,7 +3298,7 @@ mod tests {
             mode: 0o644,
             owner: "root".to_owned(),
             group: "root".to_owned(),
-            reload_behavior: "atomic-reload".to_owned(),
+            reload_behavior: NmReloadBehavior::AtomicReload,
         }
     }
 
@@ -3544,7 +3569,6 @@ mod tests {
         crate::ops::usbip_lock::acquire_lock(
             &lock_path,
             "corp-vm",
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .expect("seed lock");
@@ -3578,7 +3602,6 @@ mod tests {
         crate::ops::usbip_lock::acquire_lock(
             &lock_path,
             "corp-vm",
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .expect("seed session claim");
@@ -3592,7 +3615,6 @@ mod tests {
             "1-2",
             &lock_path,
             "corp-vm",
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .await
@@ -3631,7 +3653,6 @@ mod tests {
             "1-2",
             &lock_path,
             "corp-vm",
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .await
@@ -3670,7 +3691,6 @@ mod tests {
             "invalid/busid",
             &lock_path,
             "corp-vm",
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .await
@@ -3707,7 +3727,6 @@ mod tests {
             "1-2",
             &lock_path,
             "corp-vm",
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .await
@@ -3746,7 +3765,6 @@ mod tests {
             "1-2",
             &lock_path,
             "corp-vm",
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .await
@@ -3779,7 +3797,6 @@ mod tests {
         crate::ops::usbip_lock::acquire_lock(
             &lock_path,
             "corp-vm",
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .expect("seed lock");
@@ -3832,7 +3849,6 @@ mod tests {
         crate::ops::usbip_lock::acquire_lock(
             &lock_path,
             "corp-vm",
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .expect("seed lock");
@@ -3998,33 +4014,6 @@ mod tests {
             Err(LiveHandlerError::NmOwnershipConflict)
         ));
         assert!(exec.take_log().is_empty());
-    }
-
-    #[tokio::test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    async fn live_apply_nm_unmanaged_refuses_unknown_reload_behavior_before_mutation() {
-        let exec = FakeReconcileExecutor::new();
-        let root = TestDir::new("nm-unmanaged-reload-refused");
-        let mut intent = sample_nm_unmanaged_intent(&root);
-        intent.reload_behavior = "atomic-reloadd".to_owned();
-
-        let err = live_apply_nm_unmanaged_with_reloaders(
-            &exec,
-            &intent,
-            async || Ok(()),
-            async |_| Ok(()),
-        )
-        .await
-        .expect_err("a typo'd reload behavior must refuse the apply");
-
-        assert!(matches!(
-            &err,
-            LiveHandlerError::NmReloadBehaviorRefused(value) if value == "atomic-reloadd"
-        ));
-        assert!(
-            exec.take_log().is_empty(),
-            "the reload-behavior refusal must precede any file mutation"
-        );
     }
 
     #[tokio::test]
@@ -5658,6 +5647,41 @@ mod tests {
         assert!(
             calls.load(std::sync::atomic::Ordering::SeqCst) >= 2,
             "the retry must keep attempting until the deadline"
+        );
+    }
+
+    /// The pidfd handler failures report the shared vocabulary's kinds, one
+    /// per variant and in its order: this is the producer half of the
+    /// contract a caller classifying a failed pidfd dispatch reads, so a
+    /// reordered or respelled kind here is a silent misclassification
+    /// there.
+    #[test]
+    fn pidfd_handler_failures_report_the_shared_kinds() {
+        let race = LiveHandlerError::PidfdRace {
+            pid: 1,
+            expected_start_time_ticks: 2,
+            observed_start_time_ticks: Some(3),
+        };
+        let open_failed = LiveHandlerError::PidfdOpenFailed {
+            pid: 1,
+            detail: "ESRCH".to_owned(),
+        };
+        let read_failed = LiveHandlerError::ProcStatReadFailed {
+            pid: 1,
+            detail: "EIO".to_owned(),
+        };
+        assert_eq!(
+            [
+                race.pidfd_dispatch_failure(),
+                open_failed.pidfd_dispatch_failure(),
+                read_failed.pidfd_dispatch_failure(),
+            ],
+            d2b_contracts_broker::broker_wire::PIDFD_DISPATCH_FAILURE_KINDS.map(Some),
+        );
+        // A non-pidfd failure is never labelled as a pidfd dispatch failure.
+        assert_eq!(
+            LiveHandlerError::NmOwnershipConflict.pidfd_dispatch_failure(),
+            None
         );
     }
 }

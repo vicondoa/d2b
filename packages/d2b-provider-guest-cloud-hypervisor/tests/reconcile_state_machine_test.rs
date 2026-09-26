@@ -330,7 +330,6 @@ impl CloudHypervisorResourceApi for FakeApi {
     async fn assess_update(
         &self,
         _: &GuestSnapshot,
-        _: &[OwnedChildSnapshot],
     ) -> Result<Option<UpgradeReason>, CloudHypervisorResourceApiError> {
         Ok(self.state.lock().await.upgrade_reason)
     }

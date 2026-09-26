@@ -104,7 +104,7 @@ impl fmt::Debug for ContentProvenance {
 
 /// One complete declared file in a content projection.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, try_from = "RawContentFile")]
 pub struct ContentFile {
     path: String,
     owner: ResourceRef,
@@ -114,8 +114,43 @@ pub struct ContentFile {
     digest: String,
 }
 
+/// Wire mirror for [`ContentFile`]; decode routes through the validating
+/// constructor so a derived path can never admit an unvalidated file.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawContentFile {
+    path: String,
+    owner: ResourceRef,
+    group: ResourceRef,
+    mode: String,
+    bytes: Vec<u8>,
+    digest: String,
+}
+
+impl TryFrom<RawContentFile> for ContentFile {
+    type Error = VolumeLocalError;
+
+    fn try_from(raw: RawContentFile) -> Result<Self, Self::Error> {
+        Self::with_digest(
+            raw.path,
+            raw.owner,
+            raw.group,
+            raw.mode,
+            raw.bytes,
+            raw.digest,
+        )
+    }
+}
+
 impl ContentFile {
     /// Construct a file and derive its canonical SHA-256 digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VolumeLocalError::InvalidSpec`] when the path is not a
+    /// valid anchored relative path, the owner or group is not a `User`
+    /// reference, the mode is not a valid octal string, or the size
+    /// exceeds the content ceiling.
     pub fn new(
         path: impl Into<String>,
         owner: ResourceRef,
@@ -201,7 +236,7 @@ impl fmt::Debug for ContentFile {
 
 /// A complete, typed Volume content declaration.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, try_from = "RawContentProjection")]
 pub struct ContentProjection {
     volume_uid: ResourceUid,
     provenance: ContentProvenance,
@@ -210,8 +245,43 @@ pub struct ContentProjection {
     content_digest: String,
 }
 
+/// Wire mirror for [`ContentProjection`]; decode routes through validation
+/// so a derived path can never admit an unvalidated projection.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawContentProjection {
+    volume_uid: ResourceUid,
+    provenance: ContentProvenance,
+    ownership_marker: String,
+    files: Vec<ContentFile>,
+    content_digest: String,
+}
+
+impl TryFrom<RawContentProjection> for ContentProjection {
+    type Error = VolumeLocalError;
+
+    fn try_from(raw: RawContentProjection) -> Result<Self, Self::Error> {
+        let projection = Self {
+            volume_uid: raw.volume_uid,
+            provenance: raw.provenance,
+            ownership_marker: raw.ownership_marker,
+            files: raw.files,
+            content_digest: raw.content_digest,
+        };
+        projection.validate()?;
+        Ok(projection)
+    }
+}
+
 impl ContentProjection {
     /// Construct and validate a complete content declaration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VolumeLocalError::InvalidSpec`] when the ownership marker
+    /// is unbounded, the file set is empty or over the ceiling, a file
+    /// fails its own validation, two files share a path, the total byte
+    /// size exceeds the ceiling, or the content digest does not match.
     pub fn new(
         volume_uid: ResourceUid,
         provenance: ContentProvenance,
@@ -235,6 +305,12 @@ impl ContentProjection {
     }
 
     /// Parse and validate a serialized content projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VolumeLocalError::InvalidSpec`] when the value does not
+    /// deserialize as a content projection or the projection fails
+    /// validation.
     pub fn from_value(value: &serde_json::Value) -> Result<Self, VolumeLocalError> {
         let projection: Self =
             serde_json::from_value(value.clone()).map_err(|_| VolumeLocalError::InvalidSpec)?;
@@ -361,7 +437,7 @@ impl ObservedContentFile {
 }
 
 /// Durable evidence that every projected file was materialized and read back.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ContentMaterializationEvidence {
     volume_uid: ResourceUid,
@@ -373,7 +449,7 @@ pub struct ContentMaterializationEvidence {
 }
 
 /// Readback evidence for one projected file without retaining its bytes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ContentFileEvidence {
     path: String,
@@ -534,7 +610,11 @@ pub const NETWORK_CONFIG_FILE_MODE: &str = "0640";
 
 /// Four exact Network configuration files submitted to `volume-local`.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(
+    rename_all = "camelCase",
+    deny_unknown_fields,
+    try_from = "RawNetworkConfigContentProjection"
+)]
 pub struct NetworkConfigContentProjection {
     volume_uid: ResourceUid,
     network_ref: ResourceRef,
@@ -548,6 +628,48 @@ pub struct NetworkConfigContentProjection {
     routing: Vec<u8>,
     attachments: Vec<u8>,
     content_digest: String,
+}
+
+/// Wire mirror for [`NetworkConfigContentProjection`]; decode routes through
+/// validation so a derived path can never admit an unvalidated projection.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawNetworkConfigContentProjection {
+    volume_uid: ResourceUid,
+    network_ref: ResourceRef,
+    provenance: NetworkProvenance,
+    ownership_marker: String,
+    file_owner: ResourceRef,
+    file_group: ResourceRef,
+    file_mode: String,
+    dnsmasq: Vec<u8>,
+    nftables: Vec<u8>,
+    routing: Vec<u8>,
+    attachments: Vec<u8>,
+    content_digest: String,
+}
+
+impl TryFrom<RawNetworkConfigContentProjection> for NetworkConfigContentProjection {
+    type Error = VolumeLocalError;
+
+    fn try_from(raw: RawNetworkConfigContentProjection) -> Result<Self, Self::Error> {
+        let projection = Self {
+            volume_uid: raw.volume_uid,
+            network_ref: raw.network_ref,
+            provenance: raw.provenance,
+            ownership_marker: raw.ownership_marker,
+            file_owner: raw.file_owner,
+            file_group: raw.file_group,
+            file_mode: raw.file_mode,
+            dnsmasq: raw.dnsmasq,
+            nftables: raw.nftables,
+            routing: raw.routing,
+            attachments: raw.attachments,
+            content_digest: raw.content_digest,
+        };
+        projection.validate()?;
+        Ok(projection)
+    }
 }
 
 impl NetworkConfigContentProjection {
@@ -687,7 +809,7 @@ impl fmt::Debug for NetworkConfigContentProjection {
 }
 
 /// Status evidence returned after the Network projection is read back.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NetworkConfigMaterializationEvidence {
     volume_uid: ResourceUid,

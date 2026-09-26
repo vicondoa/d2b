@@ -4,6 +4,7 @@ use std::fmt;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use d2b_contracts_resource::v3::ResourceRef;
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -43,6 +44,12 @@ pub struct GuestSessionEvidence {
 
 impl GuestSessionEvidence {
     /// Construct evidence after binding the Guest and reconnect generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::SessionMismatch`] when the reference does not
+    /// name a Guest, the name is empty, the reconnect generation is zero, or
+    /// the boot identity is empty or longer than 128 bytes.
     pub fn new(
         guest_ref: ResourceRef,
         boot_identity: impl Into<String>,
@@ -103,6 +110,12 @@ pub struct GuestConfigDocument {
 
 impl GuestConfigDocument {
     /// Validate and retain one bounded non-empty UTF-8 Nix document.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::EmptyDocument`] for empty bytes,
+    /// [`ConfigError::DocumentTooLarge`] above the fixed byte bound, and
+    /// [`ConfigError::InvalidUtf8`] when the bytes are not UTF-8.
     pub fn new(bytes: impl Into<Vec<u8>>) -> Result<Self, ConfigError> {
         let bytes = bytes.into();
         if bytes.is_empty() {
@@ -120,6 +133,11 @@ impl GuestConfigDocument {
     /// Borrow the validated document bytes.
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    /// Consume the validated document bytes.
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
     }
 
     /// Return the document size.
@@ -261,6 +279,15 @@ pub struct ConfigService;
 
 impl ConfigService {
     /// Read one Guest document through current authenticated session evidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::Unauthorized`] when the caller cannot read,
+    /// [`ConfigError::SessionMismatch`] when the caller is not the Guest, the
+    /// request does not match the evidence, or the evidence is stale, and the
+    /// document bounds errors ([`ConfigError::EmptyDocument`],
+    /// [`ConfigError::DocumentTooLarge`], [`ConfigError::InvalidUtf8`]) when
+    /// the bytes fail validation.
     pub fn read_guest_config(
         &self,
         caller: ConfigCaller,
@@ -288,6 +315,18 @@ impl ConfigService {
     }
 
     /// Validate a typed operation payload against the closed service.
+    ///
+    /// The provider RPC boundary decodes the typed request once and calls the
+    /// per-operation typed validators directly; this Value-based entry serves
+    /// the daemon operator route, which decodes the payload after admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::InvalidRequest`] when the payload does not
+    /// decode or names a wrong Guest or identifier, [`ConfigError::InvalidView`]
+    /// for a malformed diff view, and [`ConfigError::InvalidDestination`] for
+    /// a malformed approval destination. Stage document bounds are enforced
+    /// when the staging store decodes the document on apply.
     pub fn validate_operation(
         &self,
         operation: ConfigOperation,
@@ -295,44 +334,112 @@ impl ConfigService {
     ) -> Result<(), ConfigError> {
         match operation {
             ConfigOperation::ReadGuestConfig => {
-                let request = serde_json::from_value::<ConfigSyncRequest>(payload.clone())
+                let request = ConfigSyncRequest::deserialize(payload)
                     .map_err(|_| ConfigError::InvalidRequest)?;
-                validate_guest_ref(&request.guest_ref)?;
-                validate_identifier(&request.identifier)
+                self.validate_read_guest_config(&request)
             }
             ConfigOperation::Stage => {
-                let request = serde_json::from_value::<ConfigStageRequest>(payload.clone())
+                let request = ConfigStageRequest::deserialize(payload)
                     .map_err(|_| ConfigError::InvalidRequest)?;
-                validate_guest_ref(&request.guest_ref)?;
-                validate_identifier(&request.identifier)?;
-                request.document().map(|_| ())
+                self.validate_stage(&request)
             }
             ConfigOperation::Diff => {
-                let request = serde_json::from_value::<ConfigDiffRequest>(payload.clone())
+                let request = ConfigDiffRequest::deserialize(payload)
                     .map_err(|_| ConfigError::InvalidRequest)?;
-                validate_guest_ref(&request.guest_ref)?;
-                validate_identifier(&request.identifier)?;
-                validate_view_identifier(&request.against)
+                self.validate_diff(&request)
             }
             ConfigOperation::Approve => {
-                let request = serde_json::from_value::<ConfigApproveRequest>(payload.clone())
+                let request = ConfigApproveRequest::deserialize(payload)
                     .map_err(|_| ConfigError::InvalidRequest)?;
-                validate_guest_ref(&request.guest_ref)?;
-                validate_identifier(&request.identifier)?;
-                validate_destination(&request.destination)
+                self.validate_approve(&request)
             }
             ConfigOperation::Reject => {
-                let request = serde_json::from_value::<ConfigRejectRequest>(payload.clone())
+                let request = ConfigRejectRequest::deserialize(payload)
                     .map_err(|_| ConfigError::InvalidRequest)?;
-                validate_guest_ref(&request.guest_ref)?;
-                validate_identifier(&request.identifier)
+                self.validate_reject(&request)
             }
             ConfigOperation::Status => {
-                let request = serde_json::from_value::<ConfigStatusRequest>(payload.clone())
+                let request = ConfigStatusRequest::deserialize(payload)
                     .map_err(|_| ConfigError::InvalidRequest)?;
-                validate_guest_ref(&request.guest_ref)?;
-                validate_identifier(&request.identifier)
+                self.validate_status(&request)
             }
         }
     }
+
+    /// Validate a typed ReadGuestConfig request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::InvalidRequest`] when the request names a wrong
+    /// Guest or identifier.
+    pub(crate) fn validate_read_guest_config(
+        &self,
+        request: &ConfigSyncRequest,
+    ) -> Result<(), ConfigError> {
+        validate_closed(&request.guest_ref, &request.identifier)
+    }
+
+    /// Validate a typed Stage request without decoding the document at
+    /// admission; the staging store decodes and bounds-checks it on apply.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::InvalidRequest`] when the request names a wrong
+    /// Guest or identifier.
+    pub(crate) fn validate_stage(&self, request: &ConfigStageRequest) -> Result<(), ConfigError> {
+        validate_closed(&request.guest_ref, &request.identifier)
+    }
+
+    /// Validate a typed Diff request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::InvalidRequest`] when the request names a wrong
+    /// Guest or identifier and [`ConfigError::InvalidView`] for a malformed
+    /// diff view.
+    pub(crate) fn validate_diff(&self, request: &ConfigDiffRequest) -> Result<(), ConfigError> {
+        validate_closed(&request.guest_ref, &request.identifier)?;
+        validate_view_identifier(&request.against)
+    }
+
+    /// Validate a typed Approve request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::InvalidRequest`] when the request names a wrong
+    /// Guest or identifier and [`ConfigError::InvalidDestination`] for a
+    /// malformed approval destination.
+    pub(crate) fn validate_approve(
+        &self,
+        request: &ConfigApproveRequest,
+    ) -> Result<(), ConfigError> {
+        validate_closed(&request.guest_ref, &request.identifier)?;
+        validate_destination(&request.destination)
+    }
+
+    /// Validate a typed Reject request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::InvalidRequest`] when the request names a wrong
+    /// Guest or identifier.
+    pub(crate) fn validate_reject(&self, request: &ConfigRejectRequest) -> Result<(), ConfigError> {
+        validate_closed(&request.guest_ref, &request.identifier)
+    }
+
+    /// Validate a typed Status request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::InvalidRequest`] when the request names a wrong
+    /// Guest or identifier.
+    pub(crate) fn validate_status(&self, request: &ConfigStatusRequest) -> Result<(), ConfigError> {
+        validate_closed(&request.guest_ref, &request.identifier)
+    }
+}
+
+/// Validate the closed Guest/identifier pair shared by every operation.
+fn validate_closed(guest_ref: &ResourceRef, identifier: &str) -> Result<(), ConfigError> {
+    validate_guest_ref(guest_ref)?;
+    validate_identifier(identifier)
 }

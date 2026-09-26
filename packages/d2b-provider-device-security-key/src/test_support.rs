@@ -29,6 +29,7 @@ pub struct RecordingEffects {
 impl RecordingEffects {
     /// The driver-effect calls so far, in invocation order.
     pub fn call_order(&self) -> Vec<&'static str> {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         self.calls.lock().clone()
     }
 }
@@ -40,7 +41,9 @@ impl SecurityKeyDriverEffects for RecordingEffects {
         component: SecurityKeyComponent,
         _request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         self.reconciled.lock().push(component); // async-gate-allow: test-support recorder lock
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         self.calls.lock().push("reconcile_security_key"); // async-gate-allow: test-support recorder lock
         Ok(SharedProviderEffectOutcome::phase(
             SharedProviderEffectPhase::Ready,
@@ -52,6 +55,7 @@ impl SecurityKeyDriverEffects for RecordingEffects {
         _component: SecurityKeyComponent,
         _request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         self.calls.lock().push("finalize"); // async-gate-allow: test-support recorder lock
         Ok(SharedProviderFinalize::Complete)
     }
@@ -75,6 +79,7 @@ impl SecurityKeyRuntime for RecordingRuntime {
         component: SecurityKeyComponent,
         _request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         self.reconciled.lock().push(component); // async-gate-allow: test-support recorder lock
         Ok(SharedProviderEffectOutcome::phase(
             SharedProviderEffectPhase::Ready,
@@ -86,6 +91,7 @@ impl SecurityKeyRuntime for RecordingRuntime {
         component: SecurityKeyComponent,
         _request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         self.finalized.lock().push(component); // async-gate-allow: test-support recorder lock
         Ok(SharedProviderFinalize::Complete)
     }

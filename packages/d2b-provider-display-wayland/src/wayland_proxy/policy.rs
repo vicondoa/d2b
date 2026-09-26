@@ -159,6 +159,7 @@ pub struct PolicyInput {
 
 impl PolicyInput {
     /// Construct policy input for one authenticated identity with secure defaults.
+    #[cfg(test)]
     pub fn new(identity: ProxyIdentity) -> Self {
         Self {
             identity,
@@ -183,7 +184,7 @@ pub struct FilterPolicy {
     pub identity: ProxyIdentity,
     /// Bounded display label derived from the authenticated identity.
     pub identity_label: String,
-    pub dmabuf_filters: std::sync::Arc<crate::wayland_proxy::dmabuf::DmabufFilterList>,
+    pub dmabuf_filters: std::rc::Rc<crate::wayland_proxy::dmabuf::DmabufFilterList>,
     pub log_filtered_globals: bool,
     /// Runtime advisories emitted by the filter process at startup.
     pub warnings: Vec<PolicyWarning>,
@@ -313,7 +314,7 @@ impl FilterPolicy {
             title_prefix,
             identity,
             identity_label: target_label,
-            dmabuf_filters: std::sync::Arc::new(
+            dmabuf_filters: std::rc::Rc::new(
                 crate::wayland_proxy::dmabuf::DmabufFilterList::new(
                     &input.dmabuf_allow,
                     &input.dmabuf_deny,
@@ -334,6 +335,7 @@ impl FilterPolicy {
     }
 
     /// Returns true if the policy allows this interface.
+    #[cfg(test)]
     pub fn is_allowed(&self, interface: &str) -> bool {
         self.lookup(interface).0 == GlobalAction::Allow
     }
@@ -417,144 +419,151 @@ fn sanitize_rewritten_label(value: &str) -> String {
 fn default_classified_entries() -> HashMap<String, PolicyEntry> {
     let mut m = HashMap::new();
 
-    macro_rules! entry {
-        ($iface:expr_2021, $action:ident, $class:ident) => {
-            m.insert(
-                $iface.to_owned(),
-                PolicyEntry {
-                    action: GlobalAction::$action,
-                    max_version: None,
-                    classification: Classification::$class,
-                },
-            );
-        };
-        ($iface:expr_2021, $action:ident, $class:ident, max=$v:expr_2021) => {
-            m.insert(
-                $iface.to_owned(),
-                PolicyEntry {
-                    action: GlobalAction::$action,
-                    max_version: Some($v),
-                    classification: Classification::$class,
-                },
-            );
-        };
+    /// Insert one classified policy entry into the table.
+    fn entry(
+        m: &mut HashMap<String, PolicyEntry>,
+        iface: &str,
+        action: GlobalAction,
+        class: Classification,
+        max: Option<u32>,
+    ) {
+        m.insert(
+            iface.to_owned(),
+            PolicyEntry {
+                action,
+                max_version: max,
+                classification: class,
+            },
+        );
     }
 
     // --- baseline-app (required, enabled) ---
-    entry!("wl_compositor", Allow, RequiredBaseline);
-    entry!("wl_shm", Allow, RequiredBaseline);
-    entry!("wl_seat", Allow, RequiredBaseline);
-    entry!("xdg_wm_base", Allow, RequiredBaseline);
-    entry!("wl_output", Allow, RequiredBaseline);
-    entry!("wl_subcompositor", Allow, RequiredBaseline);
-    entry!("wl_data_device_manager", Deny, ClipboardBoundary);
+    entry(&mut m, "wl_compositor", GlobalAction::Allow, Classification::RequiredBaseline, None);
+    entry(&mut m, "wl_shm", GlobalAction::Allow, Classification::RequiredBaseline, None);
+    entry(&mut m, "wl_seat", GlobalAction::Allow, Classification::RequiredBaseline, None);
+    entry(&mut m, "xdg_wm_base", GlobalAction::Allow, Classification::RequiredBaseline, None);
+    entry(&mut m, "wl_output", GlobalAction::Allow, Classification::RequiredBaseline, None);
+    entry(&mut m, "wl_subcompositor", GlobalAction::Allow, Classification::RequiredBaseline, None);
+    entry(&mut m, "wl_data_device_manager", GlobalAction::Deny, Classification::ClipboardBoundary, None);
 
     // --- accelerated-rendering (enabled, warn if denied) ---
-    entry!("zwp_linux_dmabuf_v1", Allow, AcceleratedRendering);
-    entry!(
+    entry(&mut m, "zwp_linux_dmabuf_v1", GlobalAction::Allow, Classification::AcceleratedRendering, None);
+    entry(
+        &mut m,
         "wp_linux_drm_syncobj_manager_v1",
-        Allow,
-        AcceleratedRendering
+        GlobalAction::Allow,
+        Classification::AcceleratedRendering,
+        None,
     );
-    entry!("wl_eglstream_display", Allow, AcceleratedRendering);
-    entry!("wl_eglstream_controller", Allow, AcceleratedRendering);
-    entry!("wp_single_pixel_buffer_v1", Allow, AppDefault);
+    entry(&mut m, "wl_eglstream_display", GlobalAction::Allow, Classification::AcceleratedRendering, None);
+    entry(&mut m, "wl_eglstream_controller", GlobalAction::Allow, Classification::AcceleratedRendering, None);
+    entry(&mut m, "wp_single_pixel_buffer_v1", GlobalAction::Allow, Classification::AppDefault, None);
 
     // --- presentation-and-scaling (enabled, app default) ---
-    entry!("wp_presentation", Allow, AppDefault);
-    entry!("wp_fractional_scale_manager_v1", Allow, AppDefault);
-    entry!("wp_viewporter", Allow, AppDefault);
-    entry!("zxdg_decoration_manager_v1", Allow, AppDefault);
-    entry!("xdg_activation_v1", Allow, AppDefault);
-    entry!("wp_content_type_manager_v1", Allow, AppDefault);
-    entry!("wp_cursor_shape_manager_v1", Allow, AppDefault);
-    entry!("wp_commit_timing_manager_v1", Allow, AppDefault);
-    entry!("wp_fifo_manager_v1", Allow, AppDefault);
-    entry!("wp_alpha_modifier_v1", Allow, AppDefault);
-    entry!("wp_tearing_control_manager_v1", Allow, AppDefault);
-    entry!("xdg_output_unstable_v1", Allow, AppDefault);
-    entry!("xdg_system_bell_v1", Allow, AppDefault);
-    entry!("zxdg_output_manager_v1", Allow, AppDefault);
-    entry!("ext_idle_notifier_v1", Allow, AppDefault);
-    entry!("zwp_idle_inhibit_manager_v1", Allow, AppDefault);
-    entry!("wp_color_manager_v1", Allow, AppDefault);
-    entry!("xdg_dialog_v1", Allow, AppDefault);
-    entry!("xdg_wm_dialog_v1", Allow, AppDefault);
-    entry!("xdg_toplevel_icon_manager_v1", Allow, AppDefault);
-    entry!("xdg_toplevel_drag_manager_v1", Deny, ClipboardBoundary);
-    entry!("xdg_activation_token_v1", Allow, AppDefault);
-    entry!("xdg_toplevel_tag_manager_v1", Allow, AppDefault);
+    entry(&mut m, "wp_presentation", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "wp_fractional_scale_manager_v1", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "wp_viewporter", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "zxdg_decoration_manager_v1", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "xdg_activation_v1", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "wp_content_type_manager_v1", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "wp_cursor_shape_manager_v1", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "wp_commit_timing_manager_v1", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "wp_fifo_manager_v1", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "wp_alpha_modifier_v1", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "wp_tearing_control_manager_v1", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "xdg_output_unstable_v1", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "xdg_system_bell_v1", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "zxdg_output_manager_v1", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "ext_idle_notifier_v1", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "zwp_idle_inhibit_manager_v1", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "wp_color_manager_v1", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "xdg_dialog_v1", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "xdg_wm_dialog_v1", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "xdg_toplevel_icon_manager_v1", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "xdg_toplevel_drag_manager_v1", GlobalAction::Deny, Classification::ClipboardBoundary, None);
+    entry(&mut m, "xdg_activation_token_v1", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "xdg_toplevel_tag_manager_v1", GlobalAction::Allow, Classification::AppDefault, None);
 
     // Input protocols - standard app-level input
-    entry!("zwp_relative_pointer_manager_v1", Allow, AppDefault);
-    entry!("zwp_pointer_constraints_v1", Allow, AppDefault);
-    entry!("zwp_pointer_gestures_v1", Allow, AppDefault);
-    entry!("zwp_tablet_manager_v2", Allow, AppDefault);
-    entry!("zwp_text_input_manager_v3", Deny, AppDefault);
-    entry!("zwp_input_timestamps_manager_v1", Allow, AppDefault);
-    entry!(
+    entry(&mut m, "zwp_relative_pointer_manager_v1", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "zwp_pointer_constraints_v1", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "zwp_pointer_gestures_v1", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "zwp_tablet_manager_v2", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(&mut m, "zwp_text_input_manager_v3", GlobalAction::Deny, Classification::AppDefault, None);
+    entry(&mut m, "zwp_input_timestamps_manager_v1", GlobalAction::Allow, Classification::AppDefault, None);
+    entry(
+        &mut m,
         "zwp_keyboard_shortcuts_inhibit_manager_v1",
-        Allow,
-        AppDefault
+        GlobalAction::Allow,
+        Classification::AppDefault,
+        None,
     );
-    entry!("wp_pointer_warp_v1", Allow, AppDefault);
+    entry(&mut m, "wp_pointer_warp_v1", GlobalAction::Allow, Classification::AppDefault, None);
 
     // wl_drm is legacy but still used by some Mesa paths
-    entry!("wl_drm", Allow, AppDefault);
+    entry(&mut m, "wl_drm", GlobalAction::Allow, Classification::AppDefault, None);
 
     // --- screen-capture (disabled by default, high-risk) ---
-    entry!("zwlr_screencopy_manager_v1", Deny, HighRisk);
-    entry!("ext_image_copy_capture_manager_v1", Deny, HighRisk);
-    entry!("ext_image_capture_source_v1", Deny, HighRisk);
-    entry!("ext_output_image_capture_source_manager_v1", Deny, HighRisk);
-    entry!(
+    entry(&mut m, "zwlr_screencopy_manager_v1", GlobalAction::Deny, Classification::HighRisk, None);
+    entry(&mut m, "ext_image_copy_capture_manager_v1", GlobalAction::Deny, Classification::HighRisk, None);
+    entry(&mut m, "ext_image_capture_source_v1", GlobalAction::Deny, Classification::HighRisk, None);
+    entry(&mut m, "ext_output_image_capture_source_manager_v1", GlobalAction::Deny, Classification::HighRisk, None);
+    entry(
+        &mut m,
         "ext_foreign_toplevel_image_capture_source_manager_v1",
-        Deny,
-        HighRisk
+        GlobalAction::Deny,
+        Classification::HighRisk,
+        None,
     );
 
     // --- virtual-input (disabled by default, high-risk) ---
-    entry!("zwp_virtual_keyboard_manager_v1", Deny, HighRisk);
-    entry!("zwlr_virtual_pointer_manager_v1", Deny, HighRisk);
+    entry(&mut m, "zwp_virtual_keyboard_manager_v1", GlobalAction::Deny, Classification::HighRisk, None);
+    entry(&mut m, "zwlr_virtual_pointer_manager_v1", GlobalAction::Deny, Classification::HighRisk, None);
 
     // --- clipboard-control (disabled by default, architecture-enforced boundary) ---
-    entry!("ext_data_control_manager_v1", Deny, ClipboardBoundary);
-    entry!("zwlr_data_control_manager_v1", Deny, ClipboardBoundary);
-    entry!(
+    entry(&mut m, "ext_data_control_manager_v1", GlobalAction::Deny, Classification::ClipboardBoundary, None);
+    entry(&mut m, "zwlr_data_control_manager_v1", GlobalAction::Deny, Classification::ClipboardBoundary, None);
+    entry(
+        &mut m,
         "zwp_primary_selection_device_manager_v1",
-        Deny,
-        ClipboardBoundary
+        GlobalAction::Deny,
+        Classification::ClipboardBoundary,
+        None,
     );
-    entry!(
+    entry(
+        &mut m,
         "wp_primary_selection_device_manager_v1",
-        Deny,
-        ClipboardBoundary
+        GlobalAction::Deny,
+        Classification::ClipboardBoundary,
+        None,
     );
-    entry!("wp_primary_selection_unstable_v1", Deny, ClipboardBoundary);
-    entry!(
+    entry(&mut m, "wp_primary_selection_unstable_v1", GlobalAction::Deny, Classification::ClipboardBoundary, None);
+    entry(
+        &mut m,
         "gtk_primary_selection_device_manager",
-        Deny,
-        ClipboardBoundary
+        GlobalAction::Deny,
+        Classification::ClipboardBoundary,
+        None,
     );
 
     // --- desktop-shell (disabled by default, high-risk) ---
-    entry!("zwlr_layer_shell_v1", Deny, HighRisk);
+    entry(&mut m, "zwlr_layer_shell_v1", GlobalAction::Deny, Classification::HighRisk, None);
 
     // --- session-control (disabled by default, high-risk) ---
-    entry!("ext_session_lock_manager_v1", Deny, HighRisk);
-    entry!("zwlr_input_inhibit_manager_v1", Deny, HighRisk);
-    entry!("zwlr_output_manager_v1", Deny, HighRisk);
-    entry!("zwlr_output_power_manager_v1", Deny, HighRisk);
-    entry!("zwlr_gamma_control_manager_v1", Deny, HighRisk);
-    entry!("ext_workspace_manager_v1", Deny, HighRisk);
-    entry!("zwlr_foreign_toplevel_manager_v1", Deny, HighRisk);
-    entry!("ext_foreign_toplevel_list_v1", Deny, HighRisk);
+    entry(&mut m, "ext_session_lock_manager_v1", GlobalAction::Deny, Classification::HighRisk, None);
+    entry(&mut m, "zwlr_input_inhibit_manager_v1", GlobalAction::Deny, Classification::HighRisk, None);
+    entry(&mut m, "zwlr_output_manager_v1", GlobalAction::Deny, Classification::HighRisk, None);
+    entry(&mut m, "zwlr_output_power_manager_v1", GlobalAction::Deny, Classification::HighRisk, None);
+    entry(&mut m, "zwlr_gamma_control_manager_v1", GlobalAction::Deny, Classification::HighRisk, None);
+    entry(&mut m, "ext_workspace_manager_v1", GlobalAction::Deny, Classification::HighRisk, None);
+    entry(&mut m, "zwlr_foreign_toplevel_manager_v1", GlobalAction::Deny, Classification::HighRisk, None);
+    entry(&mut m, "ext_foreign_toplevel_list_v1", GlobalAction::Deny, Classification::HighRisk, None);
 
     // --- security-context (disabled by default) ---
-    entry!("wp_security_context_manager_v1", Deny, OffDefault);
+    entry(&mut m, "wp_security_context_manager_v1", GlobalAction::Deny, Classification::OffDefault, None);
 
     // Legacy wl_shell - disabled
-    entry!("wl_shell", Deny, OffDefault);
+    entry(&mut m, "wl_shell", GlobalAction::Deny, Classification::OffDefault, None);
 
     m
 }

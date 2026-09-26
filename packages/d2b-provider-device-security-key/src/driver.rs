@@ -170,7 +170,7 @@ pub trait SecurityKeyDriverEffects: Send + Sync + 'static {
 /// driver factory for one zone.
 pub struct SecurityKeyDriverArgs {
     /// The zone the driver serves.
-    pub zone: String,
+    pub zone: ZoneId,
     /// The controller generation every effect call binds (KTD7).
     pub controller_generation: ControllerGeneration,
     /// The daemon-supplied facet set the family's own effects
@@ -199,7 +199,8 @@ impl SharedProviderFamily for SecurityKeyFamily {
         component: SecurityKeyComponent,
         spec: &Value,
     ) -> Result<Option<Vec<ChildEnsure>>, SharedProviderDeclarationError> {
-        let owner = key_ref(ctx.key());
+        let owner =
+            key_ref(ctx.key()).map_err(|_| SharedProviderDeclarationError::SpecInvalid)?;
         match component {
             SecurityKeyComponent::Service => {
                 let settings = spec
@@ -377,36 +378,29 @@ pub fn declared_dependency_refs(
     spec: &Value,
     _metadata: &Value,
 ) -> Vec<ResourceRef> {
-    let mut refs = Vec::new();
-    let mut push = |reference: Option<ResourceRef>| {
-        if let Some(reference) = reference {
-            refs.push(reference);
-        }
-    };
     match component {
-        SecurityKeyComponent::Service => {
-            push(
-                spec.pointer("/spec/provider/settings/deviceRef")
-                    .and_then(Value::as_str)
-                    .and_then(|value| ResourceRef::parse(value).ok()),
-            );
-            push(
-                spec.pointer("/spec/provider/settings/relayEndpointRef")
-                    .and_then(Value::as_str)
-                    .and_then(|value| ResourceRef::parse(value).ok()),
-            );
-        }
-        SecurityKeyComponent::Binding => {
-            push(spec_ref(spec, "/spec/serviceRef").ok());
-            push(
-                spec.pointer("/spec/target/guestRef")
-                    .or_else(|| spec.pointer("/spec/guestRef"))
-                    .and_then(Value::as_str)
-                    .and_then(|value| ResourceRef::parse(value).ok()),
-            );
-        }
+        SecurityKeyComponent::Service => [
+            spec.pointer("/spec/provider/settings/deviceRef")
+                .and_then(Value::as_str)
+                .and_then(|value| ResourceRef::parse(value).ok()),
+            spec.pointer("/spec/provider/settings/relayEndpointRef")
+                .and_then(Value::as_str)
+                .and_then(|value| ResourceRef::parse(value).ok()),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+        SecurityKeyComponent::Binding => [
+            spec_ref(spec, "/spec/serviceRef").ok(),
+            spec.pointer("/spec/target/guestRef")
+                .or_else(|| spec.pointer("/spec/guestRef"))
+                .and_then(Value::as_str)
+                .and_then(|value| ResourceRef::parse(value).ok()),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
     }
-    refs
 }
 
 /// One reference field of a stored spec.
@@ -546,12 +540,13 @@ mod tests {
 
     use super::{
         PROVIDER_REF, SECURITY_KEY_BINDING_RESOURCE_TYPE, SECURITY_KEY_REGISTRATIONS,
-        SECURITY_KEY_SERVICE_RESOURCE_TYPE, SecurityKeyDriverArgs, security_key_descriptors,
+        SECURITY_KEY_SERVICE_RESOURCE_TYPE, SecurityKeyDriverArgs, ZoneId,
+        security_key_descriptors,
     };
 
     fn descriptors() -> [d2b_resource_types::DriverDescriptor; 2] {
         security_key_descriptors(SecurityKeyDriverArgs {
-            zone: "dev".to_owned(),
+            zone: ZoneId::parse("dev").expect("valid test zone"),
             controller_generation: d2b_contracts_resource::v3::ControllerGeneration::new(1)
                 .expect("generation"),
             facets: crate::test_support::recording_facets(Arc::new(
@@ -665,7 +660,7 @@ mod tests {
             d2b_contracts_resource::v3::BoundedToken::parse(purpose).is_ok(),
             "relay endpoint purpose must be a closed BoundedToken"
         );
-        serde_json::from_value::<d2b_provider_endpoint::EndpointSpec>(value.clone())
+        serde_json::from_value::<d2b_provider_endpoint::endpoint::EndpointSpec>(value.clone())
             .expect("the relay Endpoint child decodes as the closed EndpointSpec");
     }
 }

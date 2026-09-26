@@ -56,9 +56,20 @@ pub trait NamedStreamPort: Send + Sync + 'static {
     type Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static;
 
     /// Open one named stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NamedStreamError::Capacity`] when the stream table is
+    /// full and [`NamedStreamError::Disconnected`] when the session is no
+    /// longer available.
     async fn open_named_stream(&self) -> Result<(NamedStreamId, Self::Stream), NamedStreamError>;
 
     /// Close one named stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NamedStreamError::Disconnected`] when the session is no
+    /// longer available.
     async fn close_named_stream(&self, stream: NamedStreamId) -> Result<(), NamedStreamError>;
 }
 
@@ -170,6 +181,8 @@ pub async fn run_bridge<L, R>(
     mut right: R,
     mut stop: watch::Receiver<bool>,
     stats: Arc<BridgeStats>,
+    endpoint_id: &crate::service::OpaqueEndpointId,
+    binding_id: &crate::service::OpaqueBindingId,
 ) -> (L, R, BridgeExit)
 where
     L: AsyncRead + AsyncWrite + Unpin,
@@ -185,6 +198,8 @@ where
                 Err(_) => {
                     tracing::debug!(
                         provider = "transport-vsock",
+                        endpoint = %endpoint_id,
+                        binding = %binding_id,
                         "bridge copy failed with an IO error"
                     );
                     BridgeExit::IoError

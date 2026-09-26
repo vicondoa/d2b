@@ -4,7 +4,7 @@ use d2b_contracts_resource::v3::{
 };
 use d2b_provider_guest_cloud_hypervisor::identity::derive_private_runtime_scope;
 use d2b_provider_guest_cloud_hypervisor::{
-    BootstrapHandoff, DescriptorSignature, GuestChildBatch, GuestSeedContract,
+    BootstrapHandoff, ChildRole, DescriptorSignature, GuestChildBatch, GuestSeedContract,
     GuestSetupDescriptor, GuestSetupDescriptorVerifier, SignatureAlgorithm,
 };
 
@@ -62,7 +62,7 @@ fn private_descriptor_and_runtime_scope_debug_are_redacted() {
     let scope = derive_private_runtime_scope(
         &zone_uid,
         &guest_uid,
-        "vmm",
+        ChildRole::VmmProcess,
         ResourceGeneration::new(2).unwrap(),
     )
     .unwrap();
@@ -87,21 +87,22 @@ fn runtime_scope_changes_for_zone_and_guest_reincarnation() {
         d2b_contracts_resource::v3::ResourceUid::parse("523e4567-e89b-42d3-a456-426614174000")
             .unwrap();
     let generation = ResourceGeneration::new(1).unwrap();
-    let first = derive_private_runtime_scope(&zone_a, &guest_a, "vmm", generation).unwrap();
+    let first = derive_private_runtime_scope(&zone_a, &guest_a, ChildRole::VmmProcess, generation)
+        .unwrap();
     assert_ne!(
         first,
-        derive_private_runtime_scope(&zone_b, &guest_a, "vmm", generation).unwrap()
+        derive_private_runtime_scope(&zone_b, &guest_a, ChildRole::VmmProcess, generation).unwrap()
     );
     assert_ne!(
         first,
-        derive_private_runtime_scope(&zone_a, &guest_b, "vmm", generation).unwrap()
+        derive_private_runtime_scope(&zone_a, &guest_b, ChildRole::VmmProcess, generation).unwrap()
     );
     assert_ne!(
         first,
         derive_private_runtime_scope(
             &zone_a,
             &guest_a,
-            "vmm",
+            ChildRole::VmmProcess,
             ResourceGeneration::new(2).unwrap()
         )
         .unwrap()

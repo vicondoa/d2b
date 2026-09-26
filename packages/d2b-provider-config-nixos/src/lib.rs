@@ -19,7 +19,7 @@ pub use service::{
     ConfigApproveRequest, ConfigApproveResponse, ConfigDiffRequest, ConfigDiffResponse,
     ConfigRejectRequest, ConfigRejectResponse, ConfigStageRequest, ConfigStageResponse,
     ConfigStagingStore, ConfigStatusRequest, ConfigStatusResponse, ConfigSyncRequest,
-    ConfigSyncResponse, GUEST_CONFIG_IDENTIFIER, MAX_CONFIG_BYTES, decode_document,
+    ConfigSyncResponse, GUEST_CONFIG_IDENTIFIER, MAX_CONFIG_BYTES,
 };
 pub use ttrpc::{
     ConfigNixosClient, ConfigServiceBackend, GuestConfigReader, create_ttrpc_services,

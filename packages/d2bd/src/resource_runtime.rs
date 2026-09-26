@@ -35,10 +35,11 @@ use d2b_contracts_resource::v3::identity::{
     AuthenticatedSubjectContext, EvidenceClass, ReconnectGeneration,
 };
 use d2b_contracts_resource::v3::{
-    CanonicalJsonValue, ControllerGeneration, DesiredLifecycle,
+    CanonicalJsonValue, ControllerGeneration, DEFAULT_REQUEST_DEADLINE_MS, DesiredLifecycle,
     PlacementTargetKind, ResourceBundleGenerationId, ResourceEnvelope, ResourceGeneration,
-    ResourceErrorKind, ResourcePhase, ResourceRef, ResourceTypeName, ResourceUid,
+    ResourceErrorKind, ResourcePhase, ResourceRef, ResourceTypeName, ResourceUid, StateDigest,
     ZoneId, ZoneRevision,
+    host::HOST_RESOURCE_TYPE,
     process::ProcessSpec,
     volume::VolumeSpec,
 };
@@ -60,13 +61,15 @@ use d2b_core_controller::main::{
     CoreProcess, RecoverySnapshot, RuntimeReadiness as CoreRuntimeReadiness, StartupStage,
 };
 use d2b_core_controller::migration::LegacyTpmMigrationDecision;
-use d2b_provider_zone::zone_status::{
+use d2b_provider_zone::{
     SystemCoreStatusEmitter, ZoneRuntimeMetadata, ZoneStatusInput,
 };
+use d2b_provider_system_core::HostReconciler;
 use d2b_provider_clipboard_wayland::Policy as ClipboardPolicy;
 use d2b_provider_credential::{
-    AgentReadyFuture, CredentialDependencyFacts, CredentialLeaseFacts, CredentialRuntime,
-    CredentialSession, is_credential_provider_ref,
+    AgentReadyFuture, CredentialDependencyFacts, CredentialLeaseFacts,
+    CredentialResourceRuntimeError, CredentialRuntime, CredentialSession,
+    is_credential_provider_ref,
 };
 use d2b_provider_display_wayland::WaylandSessionSpec;
 use d2b_provider_network_local::{
@@ -178,7 +181,7 @@ fn trusted_provider_resource_types() -> Result<Vec<ResourceTypeName>, ResourceRu
         .filter(|resource_type| resource_type.contains(".d2bus.org."))
     {
         resource_types.insert(
-            ResourceTypeName::parse(resource_type.to_owned())
+            ResourceTypeName::parse(resource_type)
                 .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
         );
     }
@@ -356,9 +359,8 @@ async fn committed_controller_provider_identities(
         if !provider_refs.contains(&row.resource_ref) {
             continue;
         }
-        let expected_ref = row.resource_ref.clone();
-        let (_, uid, generation, _, _) = committed_provider_spec(zone, &row, &expected_ref)?;
-        identities.insert(expected_ref, (uid, generation));
+        let (_, uid, generation, _, _) = committed_provider_spec(zone, &row, &row.resource_ref)?;
+        identities.insert(row.resource_ref, (uid, generation));
     }
     Ok(identities)
 }
@@ -367,22 +369,31 @@ async fn credential_dependency_facts(
     plane: &dyn ControllerPlaneView,
     provider_ref: &ResourceRef,
     execution_ref: &ResourceRef,
-) -> Option<CredentialDependencyFacts> {
-    let provider = credential_dependency_row(plane, provider_ref).await?;
-    let execution = credential_dependency_row(plane, execution_ref).await?;
-    Some(CredentialDependencyFacts {
+) -> Result<Option<CredentialDependencyFacts>, ResourceRuntimeError> {
+    let Some(provider) = credential_dependency_row(plane, provider_ref).await? else {
+        return Ok(None);
+    };
+    let Some(execution) = credential_dependency_row(plane, execution_ref).await? else {
+        return Ok(None);
+    };
+    Ok(Some(CredentialDependencyFacts {
         provider_uid: provider.uid.as_str().to_owned(),
         provider_generation: provider.generation.get(),
         provider_ready: credential_row_ready(&provider),
         execution_ready: credential_row_ready(&execution),
-    })
+    }))
 }
 
+/// One credential dependency row read from its authority (the manager).
+///
+/// A manager RPC failure is an error - never reported as absence
+/// (`bridge_manager_row`'s contract); `Ok(None)` is the honest
+/// not-committed answer.
 async fn credential_dependency_row(
     plane: &dyn ControllerPlaneView,
     target: &ResourceRef,
-) -> Option<StoredResource> {
-    bridge_manager_row(plane, target).await.ok().flatten()
+) -> Result<Option<StoredResource>, ResourceRuntimeError> {
+    bridge_manager_row(plane, target).await
 }
 
 
@@ -1001,6 +1012,22 @@ fn generation_publication_payload_matches(
         && value.get("generationSet") == serde_json::to_value(expected_generation_set).ok().as_ref()
 }
 
+/// The once-only teardown progress of one controller session. The stages
+/// advance monotonically: the ingress is revoked first, then the
+/// assignments, then the transport is closed; a session can never skip or
+/// reorder a step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TeardownStage {
+    /// No teardown step has run yet.
+    Active,
+    /// The controller ingress has been revoked.
+    IngressRevoked,
+    /// The controller assignments have been revoked.
+    AssignmentsRevoked,
+    /// The transport has been closed.
+    TransportClosed,
+}
+
 struct ControllerSession {
     context: crate::process_provider_runtime::ControllerBootstrapContext,
     binding: ControllerSessionBinding,
@@ -1011,9 +1038,7 @@ struct ControllerSession {
     service_task: tokio::task::JoinHandle<Result<(), SessionServerError>>,
     assignments: BTreeMap<ResourceUid, ResourceClientLease>,
     assignment_stream_open: bool,
-    assignments_revoked: bool,
-    transport_closed: bool,
-    ingress_revoked: bool,
+    teardown_stage: TeardownStage,
 }
 
 impl ControllerSession {
@@ -1537,7 +1562,7 @@ fn stored_resource_from_wire(resource: &wire::ResourceEnvelopeBytes) -> Option<S
         generation,
         revision,
         canonical_json: resource.canonical_json.clone(),
-        payload_digest: resource.payload_digest.clone(),
+        payload_digest: StateDigest::parse(resource.payload_digest.clone()).ok()?,
     })
 }
 
@@ -2020,14 +2045,14 @@ impl CloudHypervisorResourceSession {
         guest: &StoredResource,
         origin: StoredRowOrigin,
     ) -> Result<GuestSnapshot, CloudHypervisorResourceApiError> {
-        let envelope = ResourceEnvelope::from_json(&guest.canonical_json).map_err(|_| {
-            tracing::warn!("Cloud Hypervisor Guest snapshot failed: envelope");
+        let envelope = ResourceEnvelope::from_json(&guest.canonical_json).map_err(|error| {
+            tracing::warn!(?error, "Cloud Hypervisor Guest snapshot failed: envelope");
             CloudHypervisorResourceApiError::InvalidResponse
         })?;
         let system_artifact_id =
             serde_json::from_slice::<GuestSpec>(&envelope.spec().base().to_canonical_bytes())
-                .map_err(|_| {
-                    tracing::warn!("Cloud Hypervisor Guest snapshot failed: spec");
+                .map_err(|error| {
+                    tracing::warn!(?error, "Cloud Hypervisor Guest snapshot failed: spec");
                     CloudHypervisorResourceApiError::InvalidResponse
                 })?
                 .system_artifact_id()
@@ -2067,8 +2092,8 @@ impl CloudHypervisorResourceSession {
             ),
             deleting,
         )
-        .map_err(|_| {
-            tracing::warn!("Cloud Hypervisor Guest snapshot failed: construction");
+        .map_err(|error| {
+            tracing::warn!(?error, "Cloud Hypervisor Guest snapshot failed: construction");
             CloudHypervisorResourceApiError::InvalidResponse
         })?
         .with_controller_finalizer_present(guest_controller_finalizer_present(
@@ -2346,22 +2371,6 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                 )?;
                 let payload = replace_public_field(&current_value, "spec", merged_spec)
                     .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
-                let mut operation_payload = format!(
-                    "{}:{}:",
-                    update.expected_uid().as_str(),
-                    update.expected_revision().get(),
-                )
-                .into_bytes();
-                operation_payload.extend_from_slice(&payload);
-                let payload_operation_digest =
-                    d2b_contracts_resource::v3::resource_schema::canonical_digest(
-                        d2b_contracts_resource::v3::resource_schema::RESOURCE_ENVELOPE_DOMAIN_TAG,
-                        &operation_payload,
-                    );
-                let operation_id = format!(
-                    "ch-update-child-{}",
-                    payload_operation_digest.trim_start_matches("sha256:")
-                );
                 let envelope = ResourceEnvelope::from_json(&current.canonical_json)
                     .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
                 let owner_ref = envelope
@@ -2407,7 +2416,6 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                 // an update that did not route to the manager names a row
                 // this plane does not serve: refuse closed rather than write
                 // a pre-v3 row no actor would launch (KTD4).
-                let _ = (&owner_ref, &payload, &operation_id);
                 Err(CloudHypervisorResourceApiError::Conflict)
             }
             CloudHypervisorResourceRequest::UpdateStatus { guest_ref, status } => {
@@ -2415,12 +2423,12 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                     .get_stored(&guest_ref, "cloud-hypervisor-update-status")
                     .await?;
                 let current_value: Value = serde_json::from_slice(&current.canonical_json)
-                    .map_err(|_| {
-                        tracing::warn!("Cloud Hypervisor status update failed: current-resource");
+                    .map_err(|error| {
+                        tracing::warn!(?error, "Cloud Hypervisor status update failed: current-resource");
                         CloudHypervisorResourceApiError::InvalidResponse
                     })?;
-                let mut desired_status = serde_json::to_value(status.status()).map_err(|_| {
-                    tracing::warn!("Cloud Hypervisor status update failed: status-serialization");
+                let mut desired_status = serde_json::to_value(status.status()).map_err(|error| {
+                    tracing::warn!(?error, "Cloud Hypervisor status update failed: status-serialization");
                     CloudHypervisorResourceApiError::InvalidResponse
                 })?;
                 let provider_phase = desired_status
@@ -2459,37 +2467,6 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                 {
                     return Ok(CloudHypervisorResourceResponse::StatusUpdated);
                 }
-                let mut payload_value = current_value;
-                let base_status = payload_value
-                    .get_mut("status")
-                    .and_then(Value::as_object_mut)
-                    .ok_or_else(|| {
-                        tracing::warn!("Cloud Hypervisor status update failed: status-replacement");
-                        CloudHypervisorResourceApiError::InvalidResponse
-                    })?;
-                base_status.insert("resource".to_owned(), desired_status.clone());
-                base_status.insert("phase".to_owned(), public_phase);
-                base_status.insert(
-                    "observedGeneration".to_owned(),
-                    Value::from(current.generation.get()),
-                );
-                let payload_bytes = serde_json::to_vec(&payload_value)
-                    .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
-                let payload = CanonicalJsonValue::parse(&payload_bytes)
-                    .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?
-                    .to_canonical_bytes();
-                let mut operation_payload =
-                    format!("{}:{}:", current.uid.as_str(), current.revision.get()).into_bytes();
-                operation_payload.extend_from_slice(&payload);
-                let payload_operation_digest =
-                    d2b_contracts_resource::v3::resource_schema::canonical_digest(
-                        d2b_contracts_resource::v3::resource_schema::RESOURCE_ENVELOPE_DOMAIN_TAG,
-                        &operation_payload,
-                    );
-                let operation_id = format!(
-                    "ch-update-status-{}",
-                    payload_operation_digest.trim_start_matches("sha256:")
-                );
                 // U12 status decision: `Guest` is a converted type, so its
                 // row has no durable status to write - the row's actor owns
                 // status (R11). The controller's layered status is captured
@@ -2497,17 +2474,11 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                 // the row's `status.resource` projection; a session with no
                 // capture point (an explicit lifecycle relist) acknowledges
                 // the write without persisting it. Converted children never
-                // receive a provider-written status either: the Process and
+                // never receive a provider-written status either: the Process and
                 // Endpoint drivers' `Ready` is the only publication, and
                 // writing one here as well would be a dual-write.
-                let _ = &current;
-                let _ = &payload;
-                let _ = &operation_id;
                 if let Some(sink) = self.status_sink.as_ref() {
-                    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
-                    {
-                        *sink.lock() = Some(desired_status); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-                    }
+                    *sink.lock().await = Some(desired_status);
                 } else {
                     tracing::debug!(
                         zone = %self.zone.as_str(),
@@ -2853,11 +2824,6 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                 if envelope.metadata().owner_ref() != Some(&guest_ref) {
                     return Err(CloudHypervisorResourceApiError::Conflict);
                 }
-                let _operation_id = format!(
-                    "cloud-hypervisor-delete-child-{}-{}",
-                    child.uid().as_str(),
-                    child.revision().get(),
-                );
                 if child_mutation_route(child.target()) == ChildMutationRoute::Manager {
                     // U17: the manager marks a converted child deleting and
                     // cascades; the child's own actor owns the cleanup.
@@ -3002,6 +2968,20 @@ fn merge_cloud_hypervisor_child_spec(
     Ok(Value::Object(merged_spec))
 }
 
+/// The publication stage of one Zone's resource plane. The plane opens on
+/// the bootstrap policy with the controller endpoint and watch still
+/// pending, and moves to `Published` when the committed bundle is
+/// activated; the two stages are the only reachable gate states.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlanePublicationStage {
+    /// The plane is open on the bootstrap policy; the controller endpoint
+    /// is not yet registered and the watch is not yet admitted.
+    BootstrapOnly,
+    /// The committed bundle is activated; the controller endpoint is
+    /// registered and the watch admitted.
+    Published,
+}
+
 /// A production Resource API and core-controller runtime for one Zone.
 pub struct ZoneResourceRuntime {
     zone: ZoneId,
@@ -3038,9 +3018,7 @@ pub struct ZoneResourceRuntime {
     /// manager-served committed policy replaces it at activation; it remains
     /// the reported snapshot while no manager-served projection is installed.
     bootstrap_policy_snapshot: PolicySnapshot,
-    policy_installed: bool,
-    controller_endpoint_registered: bool,
-    watch_admitted: bool,
+    publication_stage: PlanePublicationStage,
     assignments: AssignmentRegistry,
     authority_index: Arc<tokio::sync::Mutex<HostGlobalAuthorityIndex>>,
     /// The process-local Zone authority operation ledger (U14): generation
@@ -3227,9 +3205,7 @@ impl ZoneResourceRuntime {
                 authority_ready: true,
                 core_stage,
             },
-            policy_installed: true,
-            controller_endpoint_registered: false,
-            watch_admitted: false,
+            publication_stage: PlanePublicationStage::BootstrapOnly,
             assignments,
             authority_index,
             authority_ledger,
@@ -3467,9 +3443,7 @@ impl ZoneResourceRuntime {
             .service_task
             .lock()
             .await = Some(zone_service_task);
-        self.policy_installed = true;
-        self.controller_endpoint_registered = true;
-        self.watch_admitted = true;
+        self.publication_stage = PlanePublicationStage::Published;
         self.activate_committed_plane_state().await
     }
 
@@ -4136,7 +4110,7 @@ impl ZoneResourceRuntime {
             || envelope
                 .digest()
                 .map_err(|_| ResourceRuntimeError::RequestInvalid)?
-                != guest.payload_digest
+                != guest.payload_digest.as_str()
         {
             return Err(ResourceRuntimeError::RequestInvalid);
         }
@@ -4165,7 +4139,7 @@ impl ZoneResourceRuntime {
             || provider_envelope
                 .digest()
                 .map_err(|_| ResourceRuntimeError::RequestInvalid)?
-                != provider.payload_digest
+                != provider.payload_digest.as_str()
         {
             return Err(ResourceRuntimeError::RequestInvalid);
         }
@@ -4420,7 +4394,7 @@ impl ZoneResourceRuntime {
             .map_err(|_| ResourceRuntimeError::StoreSealUnavailable)?;
         let backend = d2b_resource_api::manager_backend::ManagerBackend::new(
             plane.client().clone(),
-            Arc::clone(plane.hub()),
+            plane.hub(),
             acceptor,
         );
         let service = Arc::new(
@@ -4507,8 +4481,21 @@ impl ZoneResourceRuntime {
                 let provider_ref = provider_ref.clone();
                 let execution_ref = execution_ref.clone();
                 Box::pin(async move {
-                    let plane = published_plane_view(&planes, &zone)?;
-                    credential_dependency_facts(plane.as_ref(), &provider_ref, &execution_ref).await
+                    let Some(plane) = published_plane_view(&planes, &zone) else {
+                        return Ok(None);
+                    };
+                    credential_dependency_facts(plane.as_ref(), &provider_ref, &execution_ref)
+                        .await
+                        .map_err(|error| {
+                            tracing::debug!(
+                                zone = %zone,
+                                provider = %provider_ref,
+                                execution = %execution_ref,
+                                error = %error,
+                                "credential dependency facts: manager read failed",
+                            );
+                            CredentialResourceRuntimeError::DependencyFacts
+                        })
                 })
             }),
             lease: Arc::new(|_credential_ref: &ResourceRef| Box::pin(async { None })),
@@ -4552,11 +4539,10 @@ impl ZoneResourceRuntime {
             return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
         }
         let plane = self.manager_plane_view()?;
-        let resource = current_committed_resource(
+        let resource = committed_resource(
             plane.as_ref(),
             &self.zone,
             identity.wayland_session_ref(),
-            "interaction-wayland-session-current",
         )
         .await?;
         let spec = committed_wayland_session_spec(&self.zone, &resource)?;
@@ -4622,7 +4608,7 @@ impl ZoneResourceRuntime {
         &self,
         resource_type: &str,
     ) -> Result<Vec<Value>, ResourceRuntimeError> {
-        ResourceTypeName::parse(resource_type.to_owned())
+        ResourceTypeName::parse(resource_type)
             .map_err(|_| ResourceRuntimeError::RequestInvalid)?;
         self.manager_stored_rows(resource_type)
             .await?
@@ -4842,15 +4828,15 @@ impl ZoneResourceRuntime {
             };
             let mut guest_outcome = CloudHypervisorReconcileOutcome::Ready;
             let descriptor = GuestSetupDescriptor::from_canonical_bytes(descriptor_bytes)
-                .map_err(|_| {
-                    tracing::warn!("Cloud Hypervisor reconcile stage failed: descriptor-decode");
+                .map_err(|error| {
+                    tracing::warn!(?error, "Cloud Hypervisor reconcile stage failed: descriptor-decode");
                     ResourceRuntimeError::CapabilityUnavailable
                 })?
                 .verify_with(&CatalogDescriptorVerifier {
                     expected_key: expected_key.clone(),
                 })
-                .map_err(|_| {
-                    tracing::warn!("Cloud Hypervisor reconcile stage failed: descriptor-verify");
+                .map_err(|error| {
+                    tracing::warn!(?error, "Cloud Hypervisor reconcile stage failed: descriptor-verify");
                     ResourceRuntimeError::CapabilityUnavailable
                 })?;
             let (provider_ref, execution_ref, config, graph) =
@@ -5004,8 +4990,8 @@ impl ZoneResourceRuntime {
                 Arc::new(adapter),
             )
             .map(|controller| controller.with_lifecycle_intent(lifecycle_intent))
-            .map_err(|_| {
-                tracing::warn!("Cloud Hypervisor reconcile stage failed: controller-construction");
+            .map_err(|error| {
+                tracing::warn!(?error, "Cloud Hypervisor reconcile stage failed: controller-construction");
                 ResourceRuntimeError::CapabilityUnavailable
             })?;
             controller
@@ -5880,7 +5866,7 @@ impl ZoneResourceRuntime {
         volume_spec: &VolumeSpec,
     ) -> bool {
         d2b_provider_volume_local::desired_binding_intents(
-            spec.volume_ref().clone(),
+            spec.volume_ref(),
             volume_spec,
             false,
         )
@@ -6039,7 +6025,7 @@ impl CredentialRuntime for ProductionCredentialRuntime {
         &self,
         provider_ref: &ResourceRef,
         execution_ref: &ResourceRef,
-    ) -> Option<CredentialDependencyFacts> {
+    ) -> Result<Option<CredentialDependencyFacts>, CredentialResourceRuntimeError> {
         (self.facts)(provider_ref, execution_ref).await
     }
 
@@ -6893,7 +6879,6 @@ impl ControllerSessionCoordinator {
             // registrar, and a dropped one leaves the internal session
             // unrenewable (its renewals refuse `AuthenticationUnavailable`).
             *self.registrar.lock().await = Some(registrar);
-            let setup = setup;
             match setup {
                 Ok((
                     ingress,
@@ -6978,9 +6963,7 @@ impl ControllerSessionCoordinator {
                         service_task,
                         assignments: BTreeMap::new(),
                         assignment_stream_open: false,
-                        assignments_revoked: false,
-                        transport_closed: false,
-                        ingress_revoked: false,
+                        teardown_stage: TeardownStage::Active,
                     });
                     let inserted = {
                         let mut sessions = self.controller_sessions.lock().await;
@@ -7166,7 +7149,11 @@ impl ControllerSessionCoordinator {
     ) -> Result<(), ResourceRuntimeError> {
         match controller_assignment_refresh_action(context, error) {
             ControllerAssignmentRefreshAction::Retryable { .. } => {
-                tracing::warn!("external Provider controller assignment reconciliation will retry");
+                tracing::warn!(
+                    provider = %context.process_provider_ref(),
+                    process = %context.process_ref(),
+                    "external Provider controller assignment reconciliation will retry"
+                );
                 Ok(())
             }
             ControllerAssignmentRefreshAction::Failed { context, error } => {
@@ -7611,7 +7598,7 @@ impl ControllerSessionCoordinator {
             (context, session)
         };
 
-        if !session.ingress_revoked {
+        if session.teardown_stage == TeardownStage::Active {
             if let Err(error) = self
                 .revoke_controller_ingress_in_place(&mut session.ingress)
                 .await
@@ -7622,7 +7609,7 @@ impl ControllerSessionCoordinator {
                 }
                 return Err(error);
             }
-            session.ingress_revoked = true;
+            session.teardown_stage = TeardownStage::IngressRevoked;
         }
 
         self.credential_sessions.remove(
@@ -7630,13 +7617,13 @@ impl ControllerSessionCoordinator {
             session.binding.session_generation(),
         );
 
-        if !session.assignments_revoked {
+        if session.teardown_stage == TeardownStage::IngressRevoked {
             self.revoke_controller_assignments(&session.binding);
             send_controller_assignment_revocations(&session.driver, &session.assignments).await;
-            session.assignments_revoked = true;
+            session.teardown_stage = TeardownStage::AssignmentsRevoked;
         }
 
-        if !session.transport_closed {
+        if session.teardown_stage == TeardownStage::AssignmentsRevoked {
             session.cancel_backend_lease();
             let _ = session
                 .driver
@@ -7647,7 +7634,7 @@ impl ControllerSessionCoordinator {
                 .await;
             session.service_task.abort();
             let _ = (&mut session.service_task).await;
-            session.transport_closed = true;
+            session.teardown_stage = TeardownStage::TransportClosed;
         }
 
         if let Err(error) = self
@@ -8101,20 +8088,14 @@ impl ZoneResourceRuntime {
 
     /// Return the first startup gate that prevents publication.
     pub fn readiness_error(&self) -> Option<ResourceRuntimeError> {
-        if !self.policy_installed {
-            return Some(ResourceRuntimeError::PolicyUnavailable);
-        }
         if !self.readiness.resource_api_ready {
             return Some(ResourceRuntimeError::PolicyUnavailable);
         }
-        if !self.controller_endpoint_registered {
+        if self.publication_stage == PlanePublicationStage::BootstrapOnly {
             return Some(ResourceRuntimeError::ControllerEndpointUnavailable);
         }
         if !self.readiness.local_session_ready {
             return Some(ResourceRuntimeError::AuthenticationUnavailable);
-        }
-        if !self.watch_admitted {
-            return Some(ResourceRuntimeError::WatchUnavailable);
         }
         if !self.readiness.authority_ready
             || self
@@ -8291,7 +8272,10 @@ impl ZoneResourceRuntime {
                         ResourceRef::parse(value).map_err(|_| ResourceRuntimeError::RequestInvalid)
                     })?;
                 let mut meta = public_request_meta(operation_id);
-                meta.deadline_ms = 30_000;
+                // The peer service applies `DEFAULT_REQUEST_DEADLINE_MS` when
+                // the deadline is absent; set it explicitly so this public
+                // get is bounded by the same canonical 30s cap.
+                meta.deadline_ms = DEFAULT_REQUEST_DEADLINE_MS;
                 let response = client
                     .get(wire::GetRequest {
                         meta: protobuf::MessageField::some(meta),
@@ -8387,7 +8371,7 @@ impl ZoneResourceRuntime {
             "Get" => {
                 let target = public_target_ref(request)?;
                 let mut meta = public_request_meta(operation_id);
-                meta.deadline_ms = 30_000;
+                meta.deadline_ms = DEFAULT_REQUEST_DEADLINE_MS;
                 let response = client
                     .get(
                         ttrpc::context::Context::default(),
@@ -8993,7 +8977,7 @@ fn committed_wayland_session_spec(
         || envelope
             .digest()
             .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?
-            != resource.payload_digest
+            != resource.payload_digest.as_str()
     {
         tracing::error!(
             zone = %zone.as_str(),
@@ -9165,22 +9149,6 @@ async fn committed_resource(
     validate_committed_resource(zone, resource_ref, resource)
 }
 
-async fn current_committed_resource(
-    plane: &dyn ControllerPlaneView,
-    zone: &ZoneId,
-    resource_ref: &ResourceRef,
-    _operation_id: &str,
-) -> Result<StoredResource, ResourceRuntimeError> {
-    if !is_supported_committed_resource_ref(resource_ref) {
-        return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
-    }
-    let resource = bridge_manager_row(plane, resource_ref)
-        .await
-        .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?
-        .ok_or(ResourceRuntimeError::InteractionConfigurationUnavailable)?;
-    validate_committed_resource(zone, resource_ref, resource)
-}
-
 fn is_supported_committed_resource_ref(resource_ref: &ResourceRef) -> bool {
     matches!(
         resource_ref.resource_type().as_str(),
@@ -9216,7 +9184,7 @@ fn validate_committed_resource(
         || envelope
             .digest()
             .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?
-            != resource.payload_digest
+            != resource.payload_digest.as_str()
     {
         return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
     }
@@ -9403,7 +9371,7 @@ fn validate_assignment_row(
         || envelope.metadata().revision() != stored.revision
         || envelope.digest().map_err(|_| {
             ControllerAssignmentRefreshError::Failed(ResourceRuntimeError::AuthorizationUnavailable)
-        })? != stored.payload_digest
+        })? != stored.payload_digest.as_str()
     {
         return Err(ControllerAssignmentRefreshError::Failed(
             ResourceRuntimeError::AuthorizationUnavailable,
@@ -9690,7 +9658,7 @@ fn committed_provider_spec(
         || envelope
             .digest()
             .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?
-            != resource.payload_digest
+            != resource.payload_digest.as_str()
     {
         return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
     }
@@ -9708,7 +9676,7 @@ fn committed_provider_spec(
         resource.uid.clone(),
         resource.generation,
         resource.revision,
-        resource.payload_digest.clone(),
+        resource.payload_digest.as_str().to_owned(),
     ))
 }
 
@@ -9908,7 +9876,7 @@ fn manager_plane_seal_identity(
         .map_err(|_| ResourceRuntimeError::StoreSealUnavailable)?;
     let uid = match zone_uid {
         Some(uid) => uid,
-        None => ResourceUid::parse(MANAGER_PLANE_SEAL_UID.to_owned())
+        None => ResourceUid::parse(MANAGER_PLANE_SEAL_UID)
             .map_err(|_| ResourceRuntimeError::StoreSealUnavailable)?,
     };
     Ok(d2b_contracts_resource::v3::StoreSealIdentity::new(
@@ -9928,7 +9896,7 @@ async fn public_create_request(
         .and_then(Value::as_str)
         .ok_or(ResourceRuntimeError::RequestInvalid)
         .and_then(|value| {
-            ResourceTypeName::parse(value.to_owned())
+            ResourceTypeName::parse(value)
                 .map_err(|_| ResourceRuntimeError::RequestInvalid)
         })?;
     let input = request
@@ -10039,8 +10007,54 @@ where
     S: d2b_resource_api::ResourceStoreBackend,
 {
     let target = public_target_ref(request)?;
+    // The operator path is the one whose submission can suppress or override
+    // a reconciler-owned field, and it is refused here, before the row is
+    // read. The provider-session dispatch below keeps its own admission: the
+    // reconciler's own publication is the one status that legitimately
+    // carries the posture fields it derived from the spec.
+    admit_operator_status_fields(&target, request)?;
     let current = public_get_resource(client, runtime, &target, operation_id).await?;
     public_update_status_request_from_current(runtime, request, operation_id, &target, current)
+}
+
+/// Refuse an operator-submitted status that names a reconciler-owned field.
+///
+/// R11/AE6 leaves the public Resource API no status write path, so the
+/// daemon's operator admission is the last layer that sees a submission: both
+/// spellings a request may use (`status`, or the nested
+/// `resource.status`) are read here, and this is the enforcement point for
+/// `ADR-046-telemetry-audit-and-support`, section "Host resource status". The
+/// `system-core` reconciler sets `isolationPosture` and
+/// `isolationPostureMessage` on every user-only Host from the spec alone, and
+/// an operator can neither suppress nor override them: a submitted Host
+/// status naming either field is refused outright, whatever its value would
+/// have been - an explicit `null` is as much a suppression attempt as
+/// `"none"` is - and the refusal names the rule, never the submitted value.
+/// A request that submits no status at all is not this rule's case; it is
+/// refused, unchanged, where the status is read.
+fn admit_operator_status_fields(
+    target: &ResourceRef,
+    request: &Value,
+) -> Result<(), ResourceRuntimeError> {
+    if target.resource_type().as_str() != HOST_RESOURCE_TYPE {
+        return Ok(());
+    }
+    let status = request.get("status").or_else(|| {
+        request
+            .get("resource")
+            .and_then(|value| value.get("status"))
+    });
+    let Some(status) = status else {
+        return Ok(());
+    };
+    HostReconciler::reject_operator_status_fields(status).map_err(|error| {
+        tracing::warn!(
+            resource = %target.to_canonical_string(),
+            error = %error,
+            "status submission refused: reconciler-owned Host status field",
+        );
+        ResourceRuntimeError::HostStatusFieldNotOwned
+    })
 }
 
 fn public_update_status_request_from_current(
@@ -10093,7 +10107,7 @@ fn public_update_finalizers_request(
     let uid = request
         .get("uid")
         .and_then(Value::as_str)
-        .map(|value| ResourceUid::parse(value.to_owned()))
+        .map(ResourceUid::parse)
         .transpose()
         .map_err(|_| ResourceRuntimeError::RequestInvalid)?;
     let expected_revision =
@@ -10135,7 +10149,7 @@ fn public_delete_request_from_current(
     let mut uid = request
         .get("uid")
         .and_then(Value::as_str)
-        .map(|value| ResourceUid::parse(value.to_owned()))
+        .map(ResourceUid::parse)
         .transpose()
         .map_err(|_| ResourceRuntimeError::RequestInvalid)?;
     if uid.is_none() && expected_revision.is_some() {
@@ -10209,7 +10223,7 @@ fn public_uid(resource: &Value) -> Result<ResourceUid, ResourceRuntimeError> {
         .and_then(Value::as_str)
         .ok_or(ResourceRuntimeError::ResponseInvalid)
         .and_then(|value| {
-            ResourceUid::parse(value.to_owned()).map_err(|_| ResourceRuntimeError::ResponseInvalid)
+            ResourceUid::parse(value).map_err(|_| ResourceRuntimeError::ResponseInvalid)
         })
 }
 
@@ -10239,7 +10253,7 @@ where
     S: d2b_resource_api::ResourceStoreBackend,
 {
     let mut meta = public_request_meta(operation_id);
-    meta.deadline_ms = 30_000;
+    meta.deadline_ms = DEFAULT_REQUEST_DEADLINE_MS;
     let response = client
         .get(wire::GetRequest {
             meta: protobuf::MessageField::some(meta),
@@ -10277,7 +10291,7 @@ async fn gateway_get_resource(
     operation_id: &str,
 ) -> Result<Value, ResourceRuntimeError> {
     let mut meta = public_request_meta(operation_id);
-    meta.deadline_ms = 30_000;
+    meta.deadline_ms = DEFAULT_REQUEST_DEADLINE_MS;
     let response = client
         .get(
             ttrpc::context::Context::default(),
@@ -11075,11 +11089,11 @@ fn parse_network_marker(marker: &str) -> Option<(NetworkAdmissionKey, String)> {
     let (network, rest) = rest.split_once(":generation:")?;
     let (generation, rest) = rest.split_once(":attachment:")?;
     let (attachment, bundle) = rest.split_once(":bundle:")?;
-    let zone_uid = ResourceUid::parse(zone.to_owned()).ok()?;
-    let network_uid = ResourceUid::parse(network.to_owned()).ok()?;
+    let zone_uid = ResourceUid::parse(zone).ok()?;
+    let network_uid = ResourceUid::parse(network).ok()?;
     let network_generation = ResourceGeneration::new(generation.parse().ok()?).ok()?;
     let attachment_generation = ResourceGeneration::new(attachment.parse().ok()?).ok()?;
-    let bundle_generation = ResourceBundleGenerationId::parse(bundle.to_owned()).ok()?;
+    let bundle_generation = ResourceBundleGenerationId::parse(bundle).ok()?;
     Some((
         NetworkAdmissionKey::new(
             zone_uid,
@@ -11877,6 +11891,61 @@ mod tests {
         assert!(!row_status_failure_is_retryable(&terminal));
         let ready = json!({ "status": { "phase": "Ready", "resource": {} } });
         assert!(!row_status_failure_is_retryable(&ready));
+    }
+
+    /// `ADR-046-telemetry-audit-and-support`, section "Host resource status":
+    /// the `system-core` reconciler owns the user-only Host posture, so the
+    /// daemon refuses an operator-submitted Host status naming either posture
+    /// field before the row is even read - an explicit `null` included, since
+    /// it is as much a suppression attempt as `"none"` is.
+    #[test]
+    fn an_operator_status_naming_a_host_reconciler_owned_field_is_refused() {
+        let host = ResourceRef::parse("Host/host-system").expect("Host ref");
+        for suppressed in [
+            json!({"phase": "Ready", "isolationPosture": "none"}),
+            json!({"phase": "Ready", "isolationPosture": null}),
+            json!({"isolationPostureMessage": "this host is safe"}),
+        ] {
+            let request = json!({"resourceRef": "Host/host-system", "status": suppressed});
+            assert_eq!(
+                admit_operator_status_fields(&host, &request),
+                Err(ResourceRuntimeError::HostStatusFieldNotOwned),
+                "a submitted Host status must not name a reconciler-owned field: {suppressed}",
+            );
+            // The nested spelling carries the same status.
+            let nested = json!({
+                "resourceRef": "Host/host-system",
+                "resource": {"status": suppressed},
+            });
+            assert_eq!(
+                admit_operator_status_fields(&host, &nested),
+                Err(ResourceRuntimeError::HostStatusFieldNotOwned),
+                "the nested spelling of the same submission is the same status",
+            );
+        }
+        assert_eq!(
+            admit_operator_status_fields(
+                &host,
+                &json!({"resourceRef": "Host/host-system", "status": {"phase": "Ready"}}),
+            ),
+            Ok(()),
+            "a Host status naming no reconciler-owned field is not this rule's to refuse",
+        );
+        assert_eq!(
+            admit_operator_status_fields(&host, &json!({"resourceRef": "Host/host-system"})),
+            Ok(()),
+            "a request that submits no status stays with the status read",
+        );
+        // The rule is scoped to Host rows: another type's status is left to
+        // the layers below, which admit no status write at all (R11/AE6).
+        let zone = ResourceRef::parse("Zone/dev").expect("Zone ref");
+        assert_eq!(
+            admit_operator_status_fields(
+                &zone,
+                &json!({"resourceRef": "Zone/dev", "status": {"isolationPosture": "none"}}),
+            ),
+            Ok(()),
+        );
     }
 
     /// U12: the provider controller's custody gate. A manager-served Guest
@@ -12919,7 +12988,7 @@ mod tests {
         let volume_ref = ResourceRef::parse("Volume/store-view-work-vm")
             .expect("volume ref");
         let intents = d2b_provider_volume_local::desired_binding_intents(
-            volume_ref.clone(),
+            &volume_ref,
             &volume,
             false,
         )
@@ -13033,7 +13102,8 @@ mod tests {
             generation,
             revision: ZoneRevision::new(generation.get()),
             canonical_json: envelope.canonical_bytes().expect("canonical bytes"),
-            payload_digest: envelope.digest().expect("envelope digest"),
+            payload_digest: StateDigest::parse(envelope.digest().expect("envelope digest"))
+                .expect("a canonical envelope digest is a valid state digest"),
         }
     }
 
@@ -13232,7 +13302,11 @@ mod tests {
             generation: ResourceGeneration::new(1).expect("generation"),
             revision: ZoneRevision::new(revision),
             canonical_json: Vec::new(),
-            payload_digest: String::new(),
+            payload_digest: d2b_contracts_resource::v3::StateDigest::parse(format!(
+                "sha256:{}",
+                "0".repeat(64)
+            ))
+            .unwrap(),
         }
     }
 }

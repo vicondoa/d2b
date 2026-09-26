@@ -120,13 +120,14 @@ use crate::provider_lifecycle::{
 };
 use d2b_provider_toolkit::EffectServiceFactory;
 use d2b_provider_device::{
-    DEVICE_EFFECTS_SERVICE, DeviceDriverArgs, device_descriptor,
+    DeviceDriverArgs, device_descriptor, effects_service::DEVICE_EFFECTS_SERVICE,
 };
 use d2b_provider_device_security_key::{
-    SECURITY_KEY_EFFECTS_SERVICE, SecurityKeyDriverArgs, security_key_descriptors,
+    SecurityKeyDriverArgs, security_key_descriptors,
+    effects_service::SECURITY_KEY_EFFECTS_SERVICE,
 };
 use d2b_provider_device_usbip::{
-    USBIP_EFFECTS_SERVICE, UsbipDriverArgs, usbip_descriptors,
+    UsbipDriverArgs, usbip_descriptors, effects_service::USBIP_EFFECTS_SERVICE,
 };
 
 use d2b_provider_network_local::{
@@ -176,7 +177,7 @@ fn interaction_driver_args<T: d2b_provider_wayland_policy::InteractionType>(
     behavior: T,
 ) -> InteractionDriverArgs<T> {
     InteractionDriverArgs {
-        zone: inputs.zone.as_str().to_owned(),
+        zone: inputs.zone.clone(),
         controller_generation: inputs.authority.controller_generation,
         effects: Arc::new(InteractionEffectsService::new(
             inputs.interaction_facets.clone(),
@@ -289,6 +290,7 @@ struct RegistryInner {
 }
 
 impl PlaneResourceRegistry {
+    /// Construct an empty registry (equivalent to `Default`).
     pub fn new() -> Self {
         Self::default()
     }
@@ -1767,6 +1769,8 @@ pub struct ZoneAuthorityInputs {
     pub policy_revision: Option<u64>,
     /// Provider assignment generation for guest execution sessions.
     pub provider_assignment_generation: Option<d2b_contracts_resource::v3::ResourceGeneration>,
+    /// The controller generation for the zone authority's process rows
+    /// (KTD7: from the bundle resolver, never the spec store).
     pub controller_generation: ControllerGeneration,
     pub guest_execution: Option<d2b_process_conformance::GuestExecutionBinding>,
     pub mode: DaemonMode,
@@ -1837,21 +1841,21 @@ pub struct ConstructionInputs {
     /// daemon-built effect port (R2).
 pub user_facets: UserEffectFacets,
     /// The daemon-supplied facet set the VolumeBinding family's effects
-    /// implementation is built from (U6):the serving-socket probe,the
-    /// socket removal,and the guest-mount observation,supplied through the
+    /// implementation is built from (U6):the serving-socket probe, the
+    /// socket removal, and the guest-mount observation, supplied through the
     /// composition root. The family never receives a daemon-built effect
     /// port (R2).
     pub binding_facets: BindingEffectFacets,
     /// The daemon-supplied facet set the Endpoint family's effects
     /// implementation is built from (U6):the host socket surface and the
-    /// two row-evidence probes,supplied through the composition root. The
+    /// two row-evidence probes, supplied through the composition root. The
     /// family never receives a daemon-built effect port (R2).
     pub endpoint_facets: EndpointEffectFacets,
     /// The daemon-supplied facet set the Credential family's effects
     /// implementation is built from (U8):the daemon's Credential runtime
-    /// (the preserved Provider and execution-target reads,the lease-facts
-    /// read,the managed-identity agent probe,and the authenticated
-    /// Provider session handoff registry),supplied through the composition
+    /// (the preserved Provider and execution-target reads, the lease-facts
+    /// read, the managed-identity agent probe, and the authenticated
+    /// Provider session handoff registry), supplied through the composition
     /// root. The family never receives a daemon-built effect port (R2).
     pub credential_facets: CredentialEffectFacets,
     /// The daemon-supplied facet set the Volume family's effects
@@ -1862,14 +1866,14 @@ pub user_facets: UserEffectFacets,
     pub volume_facets: VolumeEffectFacets,
     /// The daemon-supplied facet set the Guest family's effects
     /// implementation is built from (U10):the zone's manager view (live
-    /// rows, committed Provider identities,and the controller-session
-    /// generation)andthe Cloud Hypervisor controller session,supplied
+    /// rows, committed Provider identities, and the controller-session
+    /// generation)andthe Cloud Hypervisor controller session, supplied
     /// through the composition root. The family never receives a
     /// daemon-built effect port (R2).
     pub guest_facets: GuestEffectFacets,
     /// The daemon-supplied facet sets the device families' effects
     /// implementations are built from (U12): each family's driver never
-    /// receives a daemon-built effect port (R2);the family crates serve
+    /// receives a daemon-built effect port (R2); the family crates serve
     /// their own effects over these facets.
     pub usbip_facets: d2b_provider_device_usbip::facets::UsbipEffectFacets,
     pub security_key_facets: d2b_provider_device_security_key::facets::SecurityKeyEffectFacets,
@@ -1934,9 +1938,8 @@ impl ConstructionInputs {
            .parent()
            .map(Path::to_path_buf)
            .unwrap_or_else(|| PathBuf::from("/run/d2b"));
-        let zone_token = BoundedToken::parse(zone.as_str().to_owned()).map_err(|_| {
-            PlaneError::Authority(format!("zone {} is not a bounded token", zone.as_str()))
-        })?;
+        let zone_token = BoundedToken::parse(zone.as_str().to_owned())
+            .map_err(|error| PlaneError::Authority(error.into()))?;
         // Reuse the daemon's shared, already-composed fixed Process
         // Providers; compose and attach once when absent (identical inputs
         // to the old composition path at composition.rs:3653).
@@ -1953,13 +1956,16 @@ impl ConstructionInputs {
                         state.pidfd_table.clone(),
                     ),
                 );
-                let _ = state.provider_runtime.attach_process_providers(Arc::clone(&providers));
+                state
+                    .provider_runtime
+                    .attach_process_providers(Arc::clone(&providers))
+                    .map_err(|error| PlaneError::Authority(error.into()))?;
                 providers
             }
         };
         let registry = Arc::new(PlaneResourceRegistry::new());
         let controller_generation = ControllerGeneration::new(1)
-           .map_err(|error| PlaneError::Authority(error.to_string()))?;
+           .map_err(|error| PlaneError::Authority(error.into()))?;
         let endpoint_socket_runtime_dir = socket_runtime_dir.clone();
         let endpoint_zone_token = zone_token.clone();
         let probe = BindingSocketProbe {
@@ -2242,60 +2248,39 @@ fn registered_service_factories(
     let mut factories = BTreeMap::new();
     for registration in PROVIDER_REGISTRATIONS {
         for &service in registration.services {
-            let factory = if service == PROCESS_EFFECTS_SERVICE.id {
-                Arc::new(ProcessEffectsServiceFactory::new(process_facets.clone()))
-                    as Arc<dyn EffectServiceFactory>
-            } else if service == NETWORK_EFFECTS_SERVICE.id {
-                Arc::new(NetworkEffectsServiceFactory::new(network_facets.clone()))
-                    as Arc<dyn EffectServiceFactory>
-} else if service == HOST_EFFECTS_SERVICE.id {
-                Arc::new(HostEffectsServiceFactory::new(host_facets.clone()))
-as Arc<dyn EffectServiceFactory>
-            } else if service == ACTIVATION_EFFECTS_SERVICE.id {
-                Arc::new(ActivationEffectsServiceFactory::new(activation_facets.clone()))
-            } else if service == USER_EFFECTS_SERVICE.id {
-                Arc::new(UserEffectsServiceFactory::new(user_facets.clone()))
-            } else if service == USBIP_EFFECTS_SERVICE.id {
-                Arc::new(d2b_provider_device_usbip::effects_service::
-                    UsbipEffectsServiceFactory::new(usbip_facets.clone()))
-                    as Arc<dyn EffectServiceFactory>
-            } else if service == SECURITY_KEY_EFFECTS_SERVICE.id {
-                Arc::new(d2b_provider_device_security_key::effects_service::
-                    SecurityKeyEffectsServiceFactory::new(security_key_facets.clone()))
-                    as Arc<dyn EffectServiceFactory>
-            } else if service == DEVICE_EFFECTS_SERVICE.id {
-                Arc::new(d2b_provider_device::effects_service::
-                    DeviceEffectsServiceFactory::new(device_facets.clone()))
-                    as Arc<dyn EffectServiceFactory>
-            } else if service == CREDENTIAL_EFFECTS_SERVICE.id {
-                Arc::new(CredentialEffectsServiceFactory::new(credential_facets.clone()))
-                    as Arc<dyn EffectServiceFactory>
-            } else if service == VOLUME_EFFECTS_SERVICE.id {
-                Arc::new(VolumeEffectsServiceFactory::new(volume_facets.clone()))
-                    as Arc<dyn EffectServiceFactory>
-            } else if service == d2b_provider_wayland_policy::INTERACTION_EFFECTS_SERVICE.id {
-                Arc::new(
+            let Some(factory) = (match service {
+                x if x == PROCESS_EFFECTS_SERVICE.id => Some(Arc::new(ProcessEffectsServiceFactory::new(process_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                x if x == NETWORK_EFFECTS_SERVICE.id => Some(Arc::new(NetworkEffectsServiceFactory::new(network_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                x if x == HOST_EFFECTS_SERVICE.id => Some(Arc::new(HostEffectsServiceFactory::new(host_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                x if x == ACTIVATION_EFFECTS_SERVICE.id => Some(Arc::new(ActivationEffectsServiceFactory::new(activation_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                x if x == USER_EFFECTS_SERVICE.id => Some(Arc::new(UserEffectsServiceFactory::new(user_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                x if x == USBIP_EFFECTS_SERVICE.id => Some(Arc::new(d2b_provider_device_usbip::effects_service::
+                    UsbipEffectsServiceFactory::new(usbip_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                x if x == SECURITY_KEY_EFFECTS_SERVICE.id => Some(Arc::new(d2b_provider_device_security_key::effects_service::
+                    SecurityKeyEffectsServiceFactory::new(security_key_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                x if x == DEVICE_EFFECTS_SERVICE.id => Some(Arc::new(d2b_provider_device::effects_service::
+                    DeviceEffectsServiceFactory::new(device_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                x if x == CREDENTIAL_EFFECTS_SERVICE.id => Some(Arc::new(CredentialEffectsServiceFactory::new(credential_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                x if x == VOLUME_EFFECTS_SERVICE.id => Some(Arc::new(VolumeEffectsServiceFactory::new(volume_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                x if x == d2b_provider_wayland_policy::INTERACTION_EFFECTS_SERVICE.id => Some(Arc::new(
                     d2b_provider_wayland_policy::InteractionEffectsServiceFactory::new(
                         interaction_facets.clone(),
                     ),
-                ) as Arc<dyn EffectServiceFactory>
-            } else if service == PROCESS_SYSTEMD_EFFECTS_SERVICE.id {
-                // U15:the family's service carries no facet set (R2), so
-                // the composition root hosts its factory from crate-owned
-                // constants alone, over the registered service identity - the
-                // family itself is never named here.
+                ) as Arc<dyn EffectServiceFactory>),
+                x if x == PROCESS_SYSTEMD_EFFECTS_SERVICE.id => {
+                    // U15:the family's service carries no facet set (R2), so
+                    // the composition root hosts its factory from crate-owned
+                    // constants alone, over the registered service identity - the
+                    // family itself is never named here.
 
-                Arc::new(SystemdEffectsServiceFactory::new()) as Arc<dyn EffectServiceFactory>
-            } else if service == GUEST_EFFECTS_SERVICE.id {
-                Arc::new(GuestEffectsServiceFactory::new(guest_facets.clone()))
-                    as Arc<dyn EffectServiceFactory>
-            } else if service == BINDING_EFFECTS_SERVICE.id {
-                Arc::new(BindingEffectsServiceFactory::new(binding_facets.clone()))
-                    as Arc<dyn EffectServiceFactory>
-            } else if service == ENDPOINT_EFFECTS_SERVICE.id {
-                Arc::new(EndpointEffectsServiceFactory::new(endpoint_facets.clone()))
-                    as Arc<dyn EffectServiceFactory>
-            } else {
+
+                    Some(Arc::new(SystemdEffectsServiceFactory::new()) as Arc<dyn EffectServiceFactory>)
+                },
+                x if x == GUEST_EFFECTS_SERVICE.id => Some(Arc::new(GuestEffectsServiceFactory::new(guest_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                x if x == BINDING_EFFECTS_SERVICE.id => Some(Arc::new(BindingEffectsServiceFactory::new(binding_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                x if x == ENDPOINT_EFFECTS_SERVICE.id => Some(Arc::new(EndpointEffectsServiceFactory::new(endpoint_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                _ => None,
+            }) else {
                 continue;
             };
             factories.insert(service, factory);
@@ -2647,7 +2632,7 @@ pub enum PlaneError {
     #[error("spec store open failed: {0}")]
     SpecStore(#[from] d2b_resource_runtime::spec_store::SpecStoreError),
     #[error("foundation seed failed: {0}")]
-    FoundationSeed(String),
+    FoundationSeed(#[from] crate::foundation_seed::SeedError),
     #[error("provider registration failed: {0}")]
     ProviderRegistration(
         #[from] d2b_resource_runtime::provider::ProviderDirectoryError,
@@ -2670,15 +2655,15 @@ pub enum PlaneError {
         unexpected: Vec<String>,
     },
     #[error("manager spawn failed: {0}")]
-    ManagerSpawn(String),
+    ManagerSpawn(#[from] ractor::SpawnErr),
     #[error("manager rpc failed: {0}")]
     ManagerRpc(#[from] ResourceError),
     #[error("zone authority inputs invalid: {0}")]
-    Authority(String),
+    Authority(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("target layer refused: {0}")]
-    Target(String),
+    Target(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("bundle invalid: {0}")]
-    Bundle(String),
+    Bundle(#[from] d2b_contracts_zone_session::v3::resource_bundle::ResourceBundleError),
 }
 
 /// The canonical core Host target every non-guest resource realizes on
@@ -2867,7 +2852,7 @@ impl ResourcePlaneV3 {
             // The Network family: the driver builds its effects from the
             // declared facets; no externally built port appears here (R2).
             "network-local" => vec![network_descriptor(NetworkDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
+                zone: inputs.zone.clone(),
                 controller_generation: inputs.authority.controller_generation,
                 facets: inputs.network_facets.clone(),
             })],
@@ -2923,7 +2908,7 @@ impl ResourcePlaneV3 {
             // The Guest family: the descriptor builds its effects from the
             // declared facets; no externally built port appears here (R2).
             "guest" => vec![guest_descriptor(GuestDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
+                zone: inputs.zone.clone(),
                 controller_generation: inputs.authority.controller_generation,
                 facets: inputs.guest_facets.clone(),
             })],
@@ -2933,17 +2918,17 @@ impl ResourcePlaneV3 {
             // two USB and two security-key types through their own
             // declarations.
             "device-usbip" => Vec::from(usbip_descriptors(UsbipDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
+                zone: inputs.zone.clone(),
                 controller_generation: inputs.authority.controller_generation,
                 facets: inputs.usbip_facets.clone(),
             })),
             "device-security-key" => Vec::from(security_key_descriptors(SecurityKeyDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
+                zone: inputs.zone.clone(),
                 controller_generation: inputs.authority.controller_generation,
                 facets: inputs.security_key_facets.clone(),
             })),
             "device" => vec![device_descriptor(DeviceDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
+                zone: inputs.zone.clone(),
                 controller_generation: inputs.authority.controller_generation,
                 facets: inputs.device_facets.clone(),
             })],
@@ -2951,7 +2936,7 @@ impl ResourcePlaneV3 {
             // from the daemon-supplied facet set; no externally built port
             // appears at this construction site (R2).
             "volume-binding" => vec![binding_descriptor(BindingDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
+                zone: inputs.zone.clone(),
                 facets: inputs.binding_facets.clone(),
                 vcpu_count: inputs.authority.vcpu_count,
             })],
@@ -2966,14 +2951,13 @@ impl ResourcePlaneV3 {
             // the daemon-supplied facet set; no externally built port
             // appears at this construction site (R2).
             "credential" => vec![credential_descriptor(CredentialDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
+                zone: inputs.zone.clone(),
                 controller_generation: inputs.authority.controller_generation,
                 facets: inputs.credential_facets.clone(),
             })],
             // The Volume family (U7): the driver builds its effects from the
             // declared facets; no externally built port appears here (R2).
             "volume" => vec![volume_descriptor(VolumeDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
                 facets: inputs.volume_facets.clone(),
             })],
             _ => Vec::new(),
@@ -3005,15 +2989,15 @@ impl ResourcePlaneV3 {
     pub async fn prepare(inputs: ConstructionInputs) -> Result<Self, PlaneError> {
         let readiness = Arc::new(NewPlaneReadinessState::new());
         // Stage 1: durable spec store. The directory create is async
-        // (`tokio::fs`);the SQLite open + migration has no async form and runs
+        // (`tokio::fs`); the SQLite open + migration has no async form and runs
         // once on the daemon's reused bounded loader seat (plan KTD2: zero
-        // new seats;d2bd already drives bundle resolution on the same
+        // new seats; d2bd already drives bundle resolution on the same
         // shipped bounded worker). A saturated seat refuses the plane start
         // with a named Authority error instead of parking the worker.
         let store_path = Self::spec_store_path(&inputs.spec_store_dir);
         if let Some(parent) = store_path.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|error| {
-                PlaneError::Authority(format!("spec store dir create failed: {error}"))
+                PlaneError::Authority(error.into())
             })?;
         }
         let store = Arc::new(
@@ -3021,9 +3005,7 @@ impl ResourcePlaneV3 {
                 SpecStore::open(store_path.clone()).map_err(PlaneError::from)
             })
            .await
-           .map_err(|error| {
-                PlaneError::Authority(format!("spec store open refused: {error:?}"))
-            })??,
+           .map_err(|error| PlaneError::Authority(error.into()))??,
         );
         // The registry caches store-derived rows for the production effects;
         // the store is the authority its socket-target lookups load from on
@@ -3075,10 +3057,7 @@ impl ResourcePlaneV3 {
                 foundation.declarations.clone(),
                 foundation.allocation.clone(),
             );
-            let report = seed
-               .run(&store, &providers)
-               .await
-               .map_err(|error| PlaneError::FoundationSeed(error.to_string()))?;
+            let report = seed.run(&store, &providers).await?;
             tracing::info!(
                 zone = %inputs.zone.as_str(),
                 committed = report.committed.len(),
@@ -3106,7 +3085,7 @@ impl ResourcePlaneV3 {
         let anchor_revision = hub.snapshot_revision();
         let targets = Arc::new(TargetDirectory::new());
         let host_target = TargetRef::host(CORE_HOST_TARGET_NAME)
-           .map_err(|error| PlaneError::Target(error.to_string()))?;
+           .map_err(|error| PlaneError::Target(error.into()))?;
         // Every registered driver's declaration carries its type's decoder,
         // so the registry is the authority: the plane wires no decoder table
         // of its own.
@@ -3126,9 +3105,7 @@ impl ResourcePlaneV3 {
             target_resolver: Arc::new(DeclaredExecutionRef),
             backoff: PLANE_BACKOFF,
         };
-        let (actor, _join) = ractor::Actor::spawn(None, ResourceManager::new(), args)
-           .await
-           .map_err(|error| PlaneError::ManagerSpawn(error.to_string()))?;
+        let (actor, _join) = ractor::Actor::spawn(None, ResourceManager::new(), args).await?;
         readiness.set_manager_started(true);
         readiness.set_spec_store_ready(true);
         // The anchor projection subscription: one long-lived consumer of the
@@ -3224,8 +3201,8 @@ impl ResourcePlaneV3 {
     }
 
     /// The per-Zone target directory (U13).
-    pub fn targets(&self) -> &Arc<TargetDirectory> {
-        &self.targets
+    pub fn targets(&self) -> Arc<TargetDirectory> {
+        Arc::clone(&self.targets)
     }
 
     /// Register one authenticated guest session generation and tell the
@@ -3241,7 +3218,7 @@ impl ResourcePlaneV3 {
         let outcome = self
            .targets
            .connect_guest(guest, session_generation, control)
-           .map_err(|error| PlaneError::Target(error.to_string()))?;
+           .map_err(|error| PlaneError::Target(error.into()))?;
         self.client
            .actor()
            .send_message(ResourceManagerMsg::TargetReconnected {
@@ -3249,7 +3226,7 @@ impl ResourcePlaneV3 {
                 session_generation: outcome.session_generation(),
                 pending_adoption: outcome.pending_adoption().to_vec(),
             })
-           .map_err(|error| PlaneError::Target(error.to_string()))?;
+           .map_err(|error| PlaneError::Target(error.into()))?;
         Ok(())
     }
 
@@ -3264,7 +3241,7 @@ impl ResourcePlaneV3 {
         let outcome = self
            .targets
            .disconnect_guest(guest, session_generation)
-           .map_err(|error| PlaneError::Target(error.to_string()))?;
+           .map_err(|error| PlaneError::Target(error.into()))?;
         self.client
            .actor()
            .send_message(ResourceManagerMsg::TargetUnavailable {
@@ -3272,7 +3249,7 @@ impl ResourcePlaneV3 {
                 session_generation: outcome.session_generation(),
                 affected: outcome.affected().to_vec(),
             })
-           .map_err(|error| PlaneError::Target(error.to_string()))?;
+           .map_err(|error| PlaneError::Target(error.into()))?;
         Ok(())
     }
 
@@ -3292,20 +3269,20 @@ impl ResourcePlaneV3 {
     /// The in-memory watch hub (U8 pairs it with the client in
     /// `ManagerBackend`; ManagerWatch/ManagerWatchStreams hand off the
     /// external WATCH streams, KTD8).
-    pub fn hub(&self) -> &Arc<WatchHub> {
-        &self.hub
+    pub fn hub(&self) -> Arc<WatchHub> {
+        Arc::clone(&self.hub)
     }
 
     /// See [`Self::readiness`]: read by this module's tests.
     #[cfg(test)]
-    pub fn store(&self) -> &Arc<SpecStore> {
+    pub fn store(&self) -> &SpecStore {
         &self.store
     }
 
 
     /// The per-zone registry the production effects resolve per-resource
     /// anchors from.
-    pub fn registry(&self) -> &Arc<PlaneResourceRegistry> {
+    pub fn registry(&self) -> &PlaneResourceRegistry {
         &self.registry
     }
 
@@ -3343,7 +3320,7 @@ pub async fn partition_nix_bundle(
     bundle: &ResourceBundle,
     store: &SpecStore,
 ) -> Result<BundleIngestPlan, PlaneError> {
-    bundle.verify().map_err(|error| PlaneError::Bundle(error.to_string()))?;
+    bundle.verify()?;
     let durable_by_key: HashMap<ResourceKey, StoredDesiredResource> = store
        .list(SpecSelector {
             zone: Some(zone.as_str().to_owned()),
@@ -3430,8 +3407,11 @@ fn bundle_desired(zone: &ZoneId, row: &BundleResource) -> DesiredResource {
 /// What one bundle ingestion did (U10 report).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BundleIngestReport {
+    /// The rows this ingestion applied.
     pub applied: Vec<ResourceKey>,
+    /// The rows this ingestion removed.
     pub removed: Vec<ResourceKey>,
+    /// The rows this ingestion protected from management-plane mutation.
     pub api_protected: Vec<ResourceKey>,
 }
 
@@ -4623,7 +4603,7 @@ HOST_EFFECTS_SERVICE.id,
                         },
                     },
                     "enforcementPosture": "None",
-                    "lastSetApplied": "OfflineOnly",
+                    "lastSetApplied": "NotApplied",
                 }],
             }))
             .expect("canonical payload"),
@@ -4772,9 +4752,9 @@ HOST_EFFECTS_SERVICE.id,
 
     /// U15:the composition root hosts the process-systemd family's
     /// declared effects service from the family's own factory over the
-    /// registered service identity (U3,R5: the registration table
-    /// carries the row;the daemon names no family string, only the
-    /// crate's declared service id),and the hosted service answers
+    /// registered service identity (U3, R5: the registration table
+    /// carries the row; the daemon names no family string, only the
+    /// crate's declared service id), and the hosted service answers
     /// `inspect-process-systemd` through the real invocation capability
     /// object carrying the real envelope payload - hermetic, served from
     /// the crate's own handler table, reaching no daemon state.
@@ -6263,7 +6243,6 @@ HOST_EFFECTS_SERVICE.id,
 
     /// A published Volume notice sets the pending flag and, after the drain,
     /// performs exactly one re-materialization.
-
     #[tokio::test(flavor = "multi_thread")]
     async fn a_volume_notice_sets_the_pending_flag_and_drains_into_one_rematerialization() {
         let rig = anchor_subscription_rig();
@@ -6419,7 +6398,6 @@ HOST_EFFECTS_SERVICE.id,
 
     /// A notice for a type the selector does not cover leaves the pending
     /// flag clear.
-
     #[tokio::test(flavor = "multi_thread")]
     async fn a_notice_for_an_uncovered_type_leaves_the_pending_flag_clear() {
         let rig = anchor_subscription_rig();
@@ -6519,9 +6497,6 @@ HOST_EFFECTS_SERVICE.id,
 
     /// An expired registration causes the same recovery path and does not end
     /// the subscription.
-
-
-
     #[tokio::test(flavor = "multi_thread")]
     async fn an_expired_registration_relists_and_does_not_end_the_subscription() {
         let rig = anchor_subscription_rig_with(WatchHubConfig {
@@ -6583,9 +6558,6 @@ HOST_EFFECTS_SERVICE.id,
 
     /// The registry rebuild after a relist reflects the durable rows,
     /// including a row committed while the subscription was between streams.
-
-
-
     #[tokio::test(flavor = "current_thread")]
     async fn a_relist_rebuild_reflects_durable_rows_including_one_committed_between_streams() {
         let rig = anchor_subscription_rig_with(WatchHubConfig {
@@ -6643,9 +6615,6 @@ HOST_EFFECTS_SERVICE.id,
 
     /// A status-source notice for a Volume row does not set the pending
     /// flag, so only durable changes trigger a re-materialization.
-
-
-
     #[tokio::test(flavor = "multi_thread")]
     async fn a_status_source_notice_does_not_set_the_pending_flag() {
         let rig = anchor_subscription_rig();

@@ -31,27 +31,63 @@ use sha2::{Digest, Sha256};
 
 const DEFAULT_UDEVADM_BINARY: &str = "/run/current-system/sw/bin/udevadm";
 
+/// The fixed `d2bd` group, resolved once: `Group::from_name` is an nss
+/// lookup that can block on the calling thread (LDAP/NSS plugins), so the
+/// registry-index write path must not re-resolve it on every write. The
+/// group is a serve-time constant of the installed package; absence or a
+/// lookup failure is a permanent condition recorded on first resolution.
+static D2BD_GROUP_GID: std::sync::LazyLock<Result<Option<nix::unistd::Gid>, String>> =
+    std::sync::LazyLock::new(|| {
+        Group::from_name("d2bd")
+            .map(|group| group.map(|group| group.gid))
+            .map_err(|err| format!("resolve d2bd group: {err}"))
+    });
+
+/// A refused qemu-media enrollment/open/lifecycle op: validation
+/// failures, bundle-policy refusals, unresolved or unsafe image sources,
+/// sysfs identity readback failures, registry/udev write failures, and
+/// QMP client/transaction failures all keep their own class.
 #[derive(Debug)]
 pub enum MediaOpError {
+    /// The media ref failed [`d2b_host::media::validate_media_ref`].
     InvalidRef(String),
+    /// The USB bus id failed the [`d2b_host::media::BusId`] grammar.
     InvalidBusId(String),
+    /// The bundle declares no policy for the ref.
     MissingBundlePolicy,
+    /// The declared source is not a physical USB device.
     UnsupportedSourceKind,
+    /// The source carries no image path.
     MissingImagePath,
+    /// The image format is not raw.
     UnsupportedImageFormat,
+    /// The resolved image path failed the path-safety walk.
     ImagePathUnsafe(String),
+    /// Sysfs identity readback failed.
     Sysfs(String),
+    /// The USB device exposes no block device.
     NoBlockDevice,
+    /// The USB device exposes multiple block devices.
     AmbiguousBlockDevice(Vec<String>),
+    /// The USB identity has no by-id readback.
     MissingById,
+    /// The media device is in use and cannot be claimed.
     DeviceBusy(String),
+    /// The resolved identity conflicts with an already-enrolled record.
     IdentityMismatch(String),
+    /// The runtime hotplug selector matched no unique media ref.
     AmbiguousRuntimeSelector(Vec<String>),
+    /// A generic I/O failure.
     Io(String),
+    /// A registry read/write failure.
     Registry(String),
+    /// A block-device open failure.
     Open(String),
+    /// The image is busy and cannot be attached.
     ImageBusy(String),
+    /// A QMP scaffold setup failure.
     QmpScaffold(String),
+    /// A QMP client/transaction failure.
     Qmp(String),
 }
 
@@ -164,38 +200,67 @@ impl MediaRegistryRecord {
     }
 }
 
+/// The result of a successful enroll:the broker response plus the count
+/// of USB by-id aliases the enrolled device carries.
 pub struct EnrollOutcome {
+    /// The wire response echoed to the daemon.
     pub response: QemuMediaEnrollResponse,
+    /// How many `/dev/disk/by-id` aliases the enrolled device exposes.
     pub by_id_count: u32,
 }
 
+/// The result of a successful attach/detach:the broker wire response.
 pub struct HotplugOutcome {
+    /// The wire response echoed to the daemon.
     pub response: QemuMediaHotplugResponse,
 }
 
+/// The result of a VM boot media attach:the broker wire response plus
+/// which registry/udev artifacts were (re)written and whether udev was
+/// reloaded.
 pub struct BootOutcome {
+    /// The wire response echoed to the daemon.
     pub response: QemuMediaHotplugResponse,
+    /// Whether the boot wrote a fresh registry record for the media.
     pub registry_record_written: bool,
+    /// Whether the boot rewrote the redacted registry index.
     pub redacted_index_written: bool,
+    /// Whether the boot rewrote the runtime udev rule file.
     pub udev_rule_written: bool,
+    /// Whether udev was reloaded after the rule write.
     pub udev_reloaded: bool,
 }
 
+/// The result of a registry refresh:the broker wire response.
 pub struct RefreshOutcome {
+    /// The wire response echoed to the daemon.
     pub response: QemuMediaRefreshRegistryResponse,
 }
 
+/// Enroll one physical USB media for a VM: validates the ref and bus id,
+/// resolves the bundle source, reads the live sysfs identity, preflights
+/// busy-ness, opens the block device, then writes the registry record,
+/// redacted index, and runtime udev rules and reloads udev.
+///
+/// # Errors
+///
+/// Refuses with [`MediaOpError::InvalidRef`] / [`MediaOpError::InvalidBusId`]
+/// for invalid inputs, the bundle-policy variants (`MissingBundlePolicy`,
+/// `UnsupportedSourceKind`) for undeclared sources, sysfs readback and
+/// busy refusals,`IdentityMismatch` when the same identity is already
+/// enrolled under a different ref, and `Registry` / `Io` for the registry
+/// and udev writes.
 pub async fn enroll(
     resolver: &BundleResolver,
     req: &QemuMediaEnrollRequest,
 ) -> Result<EnrollOutcome, MediaOpError> {
     d2b_host::media::validate_media_ref(req.media_ref.as_str())
         .map_err(|err| MediaOpError::InvalidRef(err.to_string()))?;
-    d2b_host::media::validate_usb_busid(&req.bus_id)
+    let bus_id = d2b_host::media::BusId::try_from(req.bus_id.as_str())
         .map_err(|err| MediaOpError::InvalidBusId(err.to_string()))?;
     let source = resolve_physical_source(resolver, req.vm_id.as_str(), req.media_ref.as_str())?;
     let identity =
-        read_usb_identity(Path::new("/sys"), Path::new("/dev/disk/by-id"), &req.bus_id).await?;
+        read_usb_identity(Path::new("/sys"), Path::new("/dev/disk/by-id"), bus_id.as_str()).await?;
     preflight_identity_not_busy(Path::new("/sys"), &identity).await?;
     let access = access_mode(source);
     let fd = open_block_device(&identity.block_device, access)?;
@@ -217,7 +282,7 @@ pub async fn enroll(
     write_registry_record(resolver, &record).await?;
     let records = read_all_registry_records(resolver)
         .await
-        .unwrap_or_else(|_| vec![record.clone()]);
+        .unwrap_or_else(|_| vec![record]);
     write_redacted_registry_index(resolver, &records).await?;
     let udev_rule_written = write_runtime_udev_rules(resolver, &records).await?;
     let udev_reloaded = reload_udev_rules().await;
@@ -235,6 +300,13 @@ pub async fn enroll(
     })
 }
 
+/// Re-read the enrolled registry and rewrite the redacted index and runtime
+/// udev rule file, and reload udev.
+///
+/// # Errors
+///
+/// Returns [`MediaOpError::Registry`] for registry read failures and `Registry`
+/// / `Io` for the index and udev-rule writes.
 pub async fn refresh_registry(resolver: &BundleResolver) -> Result<RefreshOutcome, MediaOpError> {
     let records = read_all_registry_records(resolver).await?;
     let redacted_index_written =
@@ -251,6 +323,14 @@ pub async fn refresh_registry(resolver: &BundleResolver) -> Result<RefreshOutcom
     })
 }
 
+/// Boot a VM's declared media: resolves the bundle source, opens the
+/// declared image, and runs the attach transaction, gathering which
+/// registry/udev artifacts were refreshed.as side effects.
+///
+/// # Errors
+///
+/// Returns the bundle-policy, image-open, selector, and QMP
+/// transaction refusals as [`MediaOpError`] variants.
 pub async fn boot(
     resolver: &BundleResolver,
     req: &QemuMediaBootRequest,
@@ -267,6 +347,12 @@ pub async fn boot(
     })
 }
 
+/// Send `system_powerdown` to a VM's QMP socket.
+///
+/// # Errors
+///
+/// Returns [`MediaOpError::Qmp`] when the socket cannot be reached or the
+/// command fails.
 pub async fn system_powerdown(
     req: &QemuMediaLifecycleRequest,
 ) -> Result<QemuMediaLifecycleResponse, MediaOpError> {
@@ -278,6 +364,14 @@ pub async fn system_powerdown(
     })
 }
 
+/// Query a VM's QMP status, folding an expected shutdown disconnect into
+/// [`QemuMediaVmStatus::ConnectionLostDuringShutdown`] when
+/// `shutdown_context` is set.
+///
+/// # Errors
+///
+/// Returns [`MediaOpError::Qmp`] when the socket cannot be reached or the
+/// query fails outside the expected shutdown-disconnect case.
 pub async fn query_status(
     req: &QemuMediaQueryStatusRequest,
 ) -> Result<QemuMediaQueryStatusResponse, MediaOpError> {
@@ -319,6 +413,12 @@ async fn qmp_query_status_from_path(
     }
 }
 
+/// Send `quit` to a VM's QMP socket, ending its QMP session.
+///
+/// # Errors
+///
+/// Returns [`MediaOpError::Qmp`] when the socket cannot be reached or the
+/// command fails.
 pub async fn quit(req: &QemuMediaLifecycleRequest) -> Result<QemuMediaLifecycleResponse, MediaOpError> {
     let mut client = QmpClient::connect(&qmp_socket_path(req.vm_id.as_str())).await?;
     qmp_quit(&mut client).await?;
@@ -328,6 +428,13 @@ pub async fn quit(req: &QemuMediaLifecycleRequest) -> Result<QemuMediaLifecycleR
     })
 }
 
+/// Hotplug the resolved runtime media into a running VM via the attach
+/// transaction, without touching the registry.
+///
+/// # Errors
+///
+/// Returns the selector, open, and QMP transaction refusals as
+/// [`MediaOpError`] variants.
 pub async fn attach(
     resolver: &BundleResolver,
     req: &QemuMediaHotplugRequest,
@@ -336,14 +443,21 @@ pub async fn attach(
     run_attach_transaction(req.vm_id.as_str(), opened, false).await
 }
 
+/// Detach a USB media from a running VM, resolving the runtime selector
+/// against the live sysfs identity and the declared bus id.
+///
+/// # Errors
+///
+/// Returns [`MediaOpError::InvalidBusId`] for invalid bus ids, sysfs
+/// readback failures, selector refusals, and QMP transaction failures.
 pub async fn detach(
     resolver: &BundleResolver,
     req: &QemuMediaHotplugRequest,
 ) -> Result<HotplugOutcome, MediaOpError> {
-    d2b_host::media::validate_usb_busid(&req.bus_id)
+    let bus_id = d2b_host::media::BusId::try_from(req.bus_id.as_str())
         .map_err(|err| MediaOpError::InvalidBusId(err.to_string()))?;
     let identity =
-        read_usb_identity(Path::new("/sys"), Path::new("/dev/disk/by-id"), &req.bus_id).await?;
+        read_usb_identity(Path::new("/sys"), Path::new("/dev/disk/by-id"), bus_id.as_str()).await?;
     let mut client = QmpClient::connect(&qmp_socket_path(req.vm_id.as_str())).await?;
     let (record, source) =
         resolve_detach_runtime_selector(resolver, req.vm_id.as_str(), &identity, &mut client)
@@ -389,10 +503,10 @@ async fn open_runtime_selector_source<'a>(
     resolver: &'a BundleResolver,
     req: &QemuMediaHotplugRequest,
 ) -> Result<OpenedMedia<'a>, MediaOpError> {
-    d2b_host::media::validate_usb_busid(&req.bus_id)
+    let bus_id = d2b_host::media::BusId::try_from(req.bus_id.as_str())
         .map_err(|err| MediaOpError::InvalidBusId(err.to_string()))?;
     let identity =
-        read_usb_identity(Path::new("/sys"), Path::new("/dev/disk/by-id"), &req.bus_id).await?;
+        read_usb_identity(Path::new("/sys"), Path::new("/dev/disk/by-id"), bus_id.as_str()).await?;
     let (_record, source) =
         match resolve_runtime_selector(resolver, req.vm_id.as_str(), &identity).await {
             Ok(pair) => pair,
@@ -580,7 +694,7 @@ fn resolve_boot_source<'a>(
     vm: &str,
 ) -> Result<&'a QemuMediaSourceIntent, MediaOpError> {
     resolver
-        .host
+        .host()
         .qemu_media
         .as_ref()
         .and_then(|qemu_media| {
@@ -816,7 +930,7 @@ fn select_unique_declared_physical_source<'a>(
     identity: &UsbPhysicalIdentity,
     attached_refs: Option<&BTreeSet<String>>,
 ) -> Result<&'a QemuMediaSourceIntent, MediaOpError> {
-    let Some(qemu_media) = resolver.host.qemu_media.as_ref() else {
+    let Some(qemu_media) = resolver.host().qemu_media.as_ref() else {
         return Err(MediaOpError::MissingBundlePolicy);
     };
     select_unique_declared_physical_source_from_sources(
@@ -1994,7 +2108,7 @@ async fn image_has_loop_backing(sysfs_root: &Path, image_path: &Path) -> Result<
 
 fn registry_dir(resolver: &BundleResolver) -> Result<PathBuf, MediaOpError> {
     resolver
-        .host
+        .host()
         .qemu_media
         .as_ref()
         .map(|media| PathBuf::from(&media.registry_dir))
@@ -2003,7 +2117,7 @@ fn registry_dir(resolver: &BundleResolver) -> Result<PathBuf, MediaOpError> {
 
 fn rules_path(resolver: &BundleResolver) -> Result<PathBuf, MediaOpError> {
     resolver
-        .host
+        .host()
         .qemu_media
         .as_ref()
         .map(|media| PathBuf::from(&media.runtime_rules_path))
@@ -2123,9 +2237,9 @@ async fn write_redacted_registry_index_at_path(
         .and_then(|name| name.to_str())
         .ok_or_else(|| MediaOpError::Registry("redacted-index-name-invalid".to_owned()))?;
     let owner_gid = if Uid::effective().is_root() {
-        let gid = Group::from_name("d2bd")
-            .map_err(|err| MediaOpError::Registry(format!("resolve d2bd group: {err}")))?
-            .map(|group| group.gid)
+        let gid = D2BD_GROUP_GID
+            .as_ref()
+            .map_err(|detail| MediaOpError::Registry(detail.clone()))?
             .ok_or_else(|| MediaOpError::Registry("d2bd group missing".to_owned()))?;
         Some(gid.as_raw())
     } else {

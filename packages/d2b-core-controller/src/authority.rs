@@ -16,12 +16,9 @@ use std::{
 
 use d2b_contracts_resource::redacted_debug;
 use d2b_contracts_resource::v3::{
-    CanonicalJsonValue, IfName, ResourceGeneration, ResourceRef, ResourceUid, UpdateState,
+    CanonicalJsonValue, ResourceGeneration, ResourceRef, ResourceUid, UpdateState,
     is_canonical_digest,
-    network::{
-        ExternalNicAdmissionError, ExternalNicAuthorityStatus, ExternalNicClaim, MacvtapMode,
-        SharingPolicy, admit_external_nic_claims,
-    },
+    network::{MacvtapMode, SharingPolicy},
     process::PortProtocol,
     resource_schema::canonical_digest,
 };
@@ -30,20 +27,17 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use std::{collections::hash_map::RandomState, hash::BuildHasher};
 
-/// Domain tag for the Core-derived external physical-NIC identity.
-pub const EXTERNAL_PHYSICAL_NIC_IDENTITY_DOMAIN: &str = "external-physical-nic/v1";
-/// Authority class used in the Host-global index.
-pub const EXTERNAL_PHYSICAL_NIC_AUTHORITY_CLASS: &str = "external-physical-nic";
 /// Domain tag for Core-derived physical USB backing identities.
 pub const PHYSICAL_USB_BACKING_IDENTITY_DOMAIN: &str = "physical-usb-backing/v1";
 /// Domain tag for Core-derived USBIP relay endpoint identities.
 pub const USBIP_NETWORK_RELAY_IDENTITY_DOMAIN: &str = "usbip-network-relay/v1";
-#[allow(dead_code)]
-const MAX_RESOLVED_NIC_IDENTITY_BYTES: usize = 256;
+/// The one Provider with optional controller cardinality: telemetry may be
+/// absent from a Zone, so its claim is AtMostOne instead of ExactlyOne.
+const OPTIONAL_PROVIDER_REF: &str = "Provider/observability-otel";
 static NEXT_AUTHORITY_INDEX_NONCE: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(test)]
-fn test_nonce_for_operation(operation_id: &str) -> u64 {
+pub(crate) fn test_nonce_for_operation(operation_id: &str) -> u64 {
     loop {
         let nonce = RandomState::new().hash_one(operation_id);
         if nonce != 0 {
@@ -52,307 +46,14 @@ fn test_nonce_for_operation(operation_id: &str) -> u64 {
     }
 }
 
-/// One stable physical-NIC identity resolved from trusted Host inventory.
-///
-/// This is not an authored interface selector and cannot be serialized into a
-/// resource. Core derives the authority key from these private bytes.
-#[derive(Clone, PartialEq, Eq)]
-pub struct ResolvedExternalNicIdentity(Vec<u8>);
-
-impl ResolvedExternalNicIdentity {
-    /// Record a stable identity returned by the trusted inventory adapter.
-    #[allow(dead_code)]
-    pub(crate) fn from_trusted_inventory(
-        bytes: impl Into<Vec<u8>>,
-    ) -> Result<Self, AuthorityError> {
-        let bytes = bytes.into();
-        if bytes.is_empty() || bytes.len() > MAX_RESOLVED_NIC_IDENTITY_BYTES {
-            return Err(AuthorityError::InvalidTrustedInventoryIdentity);
-        }
-        Ok(Self(bytes))
-    }
-}
-
-redacted_debug!(ResolvedExternalNicIdentity);
-
-/// Trusted Host inventory used to resolve authored interface selectors.
-#[derive(Default)]
-pub struct TrustedExternalNicInventory {
-    entries: BTreeMap<IfName, ResolvedExternalNicIdentity>,
-}
-
-impl TrustedExternalNicInventory {
-    /// Add one resolver-owned inventory row.
-    pub fn insert(
-        &mut self,
-        selector: IfName,
-        identity: ResolvedExternalNicIdentity,
-    ) -> Result<(), AuthorityError> {
-        if self.entries.insert(selector, identity).is_some() {
-            return Err(AuthorityError::DuplicateTrustedInventorySelector);
-        }
-        Ok(())
-    }
-
-    /// Resolve an authored selector without exposing the derived authority key.
-    pub fn resolve(
-        &self,
-        selector: &IfName,
-    ) -> Result<ResolvedExternalNicIdentity, AuthorityError> {
-        self.entries
-            .get(selector)
-            .cloned()
-            .ok_or(AuthorityError::TrustedInventorySelectorNotFound)
-    }
-}
-
 /// Trusted recovery port for one Core-resolved physical-NIC inventory.
 pub trait ExternalNicRecoveryInventory: Send + Sync {
     fn contains_identity(&self, host_uid: &ResourceUid, identity_digest: &str) -> bool;
 }
 
-impl ExternalNicRecoveryInventory for TrustedExternalNicInventory {
-    fn contains_identity(&self, host_uid: &ResourceUid, identity_digest: &str) -> bool {
-        self.entries.values().any(|identity| {
-            ExternalNicAuthorityKey::derive(host_uid.clone(), identity).opaque_digest
-                == identity_digest
-        })
-    }
-}
-
-impl core::fmt::Debug for TrustedExternalNicInventory {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("TrustedExternalNicInventory")
-            .field("entry_count", &self.entries.len())
-            .finish()
-    }
-}
-
-/// Exact resource identity used to adopt or release one authority holder.
-#[derive(Clone, PartialEq, Eq)]
-pub struct ExternalNicOwnerProof {
-    resource_ref: Option<ResourceRef>,
-    resource_uid: ResourceUid,
-    generation: ResourceGeneration,
-}
-
-impl ExternalNicOwnerProof {
-    /// Bind an owner proof to an exact resource identity and generation.
-    #[allow(dead_code)]
-    pub(crate) const fn new(resource_uid: ResourceUid, generation: ResourceGeneration) -> Self {
-        Self {
-            resource_ref: None,
-            resource_uid,
-            generation,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn from_resource_ref(
-        resource_ref: ResourceRef,
-        resource_uid: ResourceUid,
-        generation: ResourceGeneration,
-    ) -> Self {
-        Self {
-            resource_ref: Some(resource_ref),
-            resource_uid,
-            generation,
-        }
-    }
-}
-
-redacted_debug!(ExternalNicOwnerProof);
-
-/// Complete pre-effect request for one external physical-NIC claim.
-pub struct ExternalNicClaimRequest {
-    host_uid: ResourceUid,
-    identity: ResolvedExternalNicIdentity,
-    claim: ExternalNicClaim,
-    owner_proof: ExternalNicOwnerProof,
-    signed_max_holders: usize,
-}
-
-impl ExternalNicClaimRequest {
-    /// Construct a request from a trusted inventory result and signed quota.
-    pub fn new(
-        host_uid: ResourceUid,
-        identity: ResolvedExternalNicIdentity,
-        claim: ExternalNicClaim,
-        owner_proof: ExternalNicOwnerProof,
-        signed_max_holders: usize,
-    ) -> Result<Self, AuthorityError> {
-        if signed_max_holders == 0 || signed_max_holders > u32::MAX as usize {
-            return Err(AuthorityError::InvalidSignedHolderLimit);
-        }
-        Ok(Self {
-            host_uid,
-            identity,
-            claim,
-            owner_proof,
-            signed_max_holders,
-        })
-    }
-
-    /// Return the non-authorizing storage row for this resolved claim.
-    pub fn durable_claim(&self) -> DurableExternalNicClaim {
-        let key = ExternalNicAuthorityKey::derive(self.host_uid.clone(), &self.identity);
-        DurableExternalNicClaim {
-            host_uid: key.host_uid,
-            identity_digest: key.opaque_digest,
-            zone_uid: self.claim.zone_uid().clone(),
-            macvtap_mode: self.claim.macvtap_mode(),
-            sharing_policy: self.claim.sharing_policy(),
-            signed_max_holders: self.signed_max_holders as u32,
-            owner_proof: DurableAuthorityOwnerProof::from_external_owner_proof(&self.owner_proof),
-        }
-    }
-}
-
-redacted_debug!(ExternalNicClaimRequest);
-
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct ExternalNicAuthorityKey {
-    host_uid: ResourceUid,
-    opaque_digest: String,
-}
-
-impl ExternalNicAuthorityKey {
-    fn derive(host_uid: ResourceUid, identity: &ResolvedExternalNicIdentity) -> Self {
-        let mut framed = Vec::with_capacity(8 + identity.0.len());
-        framed.extend_from_slice(&(identity.0.len() as u64).to_be_bytes());
-        framed.extend_from_slice(&identity.0);
-        Self::from_digest(
-            host_uid,
-            canonical_digest(EXTERNAL_PHYSICAL_NIC_IDENTITY_DOMAIN, &framed),
-        )
-    }
-
-    fn from_digest(host_uid: ResourceUid, opaque_digest: String) -> Self {
-        Self {
-            host_uid,
-            opaque_digest,
-        }
-    }
-}
-
-redacted_debug!(ExternalNicAuthorityKey);
-
-#[derive(Clone)]
-struct Holder {
-    token: u128,
-    operation_id: Option<String>,
-    claim: ExternalNicClaim,
-    owner_proof: ExternalNicOwnerProof,
-    signed_max_holders: usize,
-}
-
-struct AuthorityEntry {
-    holders: Vec<Holder>,
-    signed_max_holders: usize,
-}
-
-/// Proof that Core admitted a Host-global claim before an external effect.
-///
-/// The lease is deliberately non-serializable and does not reveal its key or
-/// owner proof.
-pub struct ExternalNicLease {
-    key: ExternalNicAuthorityKey,
-    owner_proof: ExternalNicOwnerProof,
-    claim: ExternalNicClaim,
-    signed_max_holders: usize,
-    token: u128,
-    operation_id: Option<String>,
-}
-
-redacted_debug!(ExternalNicLease);
-
-/// Closed effect result retained beside an admitted lease.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExternalNicEffectOutcome {
-    /// The effect completed and observation confirmed it.
-    Confirmed,
-    /// The effect may be retried while the authority remains held.
-    RetryableFailure,
-    /// The effect failed terminally while the authority remains held for drain.
-    TerminalFailure,
-}
-
-/// Result of gating one host effect on authority admission.
-pub struct ExternalNicEffectGate {
-    lease: ExternalNicLease,
-    outcome: ExternalNicEffectOutcome,
-}
-
-impl ExternalNicEffectGate {
-    /// Consume the gate into its retained authority lease.
-    pub fn into_lease(self) -> ExternalNicLease {
-        self.lease
-    }
-
-    /// Return the closed effect outcome.
-    pub const fn outcome(&self) -> ExternalNicEffectOutcome {
-        self.outcome
-    }
-}
-
-impl core::fmt::Debug for ExternalNicEffectGate {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ExternalNicEffectGate")
-            .field("lease", &self.lease)
-            .field("outcome", &self.outcome)
-            .finish()
-    }
-}
-
-/// Closed result of attempting to close old macvtap and VMM ownership.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExternalNicCloseOutcome {
-    /// Every old holder and FD is confirmed closed.
-    Confirmed,
-    /// Closure is incomplete, so the authority must remain held.
-    RetryableFailure,
-}
-
-/// Restart-adoption result for one exact owner proof.
-#[allow(clippy::large_enum_variant)]
-pub enum ExternalNicAdoption {
-    /// Exactly one recovered owner matched the indexed claim.
-    Adopted(ExternalNicLease),
-    /// No matching indexed and observed owner exists.
-    Missing,
-    /// Recovery found more than one matching owner and effects stay quarantined.
-    QuarantinedAmbiguous,
-}
-
-impl core::fmt::Debug for ExternalNicAdoption {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::Adopted(_) => f.write_str("ExternalNicAdoption::Adopted(<redacted>)"),
-            Self::Missing => f.write_str("ExternalNicAdoption::Missing"),
-            Self::QuarantinedAmbiguous => f.write_str("ExternalNicAdoption::QuarantinedAmbiguous"),
-        }
-    }
-}
-
 /// Closed, identity-free authority failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthorityError {
-    /// Trusted inventory returned an absent or oversized stable identity.
-    InvalidTrustedInventoryIdentity,
-    /// The trusted inventory contains the same selector twice.
-    DuplicateTrustedInventorySelector,
-    /// The authored selector did not resolve in trusted inventory.
-    TrustedInventorySelectorNotFound,
-    /// The signed quota is zero or cannot be represented in bounded status.
-    InvalidSignedHolderLimit,
-    /// Claim compatibility or isolation admission failed.
-    Admission(ExternalNicAdmissionError),
-    /// A lease no longer names an indexed claim.
-    UnknownClaim,
-    /// A lease does not match the indexed owner proof.
-    OwnerProofMismatch,
-    /// Macvtap or VMM ownership was not confirmed closed.
-    AttachmentCloseUnconfirmed,
     /// A Core-derived generic authority key is empty or zero.
     InvalidAuthorityKey,
     /// A generic authority holder limit is outside bounded status range.
@@ -392,14 +93,6 @@ impl AuthorityError {
     /// Return the stable, identity-free error code.
     pub const fn code(self) -> &'static str {
         match self {
-            Self::InvalidTrustedInventoryIdentity => "invalid-trusted-inventory-identity",
-            Self::DuplicateTrustedInventorySelector => "duplicate-trusted-inventory-selector",
-            Self::TrustedInventorySelectorNotFound => "trusted-inventory-selector-not-found",
-            Self::InvalidSignedHolderLimit => "invalid-signed-holder-limit",
-            Self::Admission(reason) => reason.code(),
-            Self::UnknownClaim => "external-physical-nic-claim-missing",
-            Self::OwnerProofMismatch => "external-physical-nic-owner-proof-mismatch",
-            Self::AttachmentCloseUnconfirmed => "external-physical-nic-close-unconfirmed",
             Self::InvalidAuthorityKey => "authority-key-invalid",
             Self::InvalidAuthorityHolderLimit => "authority-holder-limit-invalid",
             Self::InvalidAuthorityRequest => "authority-request-invalid",
@@ -409,7 +102,7 @@ impl AuthorityError {
             Self::AuthorityCapacityExceeded => "authority-capacity-exceeded",
             Self::UnknownAuthority => "authority-missing",
             Self::AuthorityCloseUnconfirmed => "authority-close-unconfirmed",
-            Self::DuplicateConflict => "duplicateConflict",
+            Self::DuplicateConflict => "duplicate-conflict",
             Self::PhysicalUsbBackingConflict => "physical-usb-backing-conflict",
             Self::UsbipNetworkRelayAuthorityConflict => "usbip-network-relay-authority-conflict",
             Self::InvalidVsockCid => "vsock-cid-invalid",
@@ -427,12 +120,6 @@ impl core::fmt::Display for AuthorityError {
 }
 
 impl std::error::Error for AuthorityError {}
-
-impl From<ExternalNicAdmissionError> for AuthorityError {
-    fn from(value: ExternalNicAdmissionError) -> Self {
-        Self::Admission(value)
-    }
-}
 
 fn conflict_for_class(class: AuthorityClass) -> AuthorityError {
     match class {
@@ -641,14 +328,6 @@ impl DurableAuthorityOwnerProof {
         }
     }
 
-    fn from_external_owner_proof(proof: &ExternalNicOwnerProof) -> Self {
-        Self {
-            resource_ref: proof.resource_ref.clone(),
-            resource_uid: proof.resource_uid.clone(),
-            generation: proof.generation,
-        }
-    }
-
     fn into_owner_proof(self) -> AuthorityOwnerProof {
         AuthorityOwnerProof {
             resource_ref: self.resource_ref,
@@ -768,35 +447,6 @@ impl DurableExternalNicClaim {
     #[doc(hidden)]
     pub fn identity_digest(&self) -> &str {
         &self.identity_digest
-    }
-
-    fn into_parts(self) -> Result<(ExternalNicAuthorityKey, Holder, usize), AuthorityError> {
-        if !valid_authority_digest(&self.identity_digest) {
-            return Err(AuthorityError::InvalidAuthorityKey);
-        }
-        let signed_max_holders = usize::try_from(self.signed_max_holders)
-            .map_err(|_| AuthorityError::InvalidSignedHolderLimit)?;
-        if signed_max_holders == 0 {
-            return Err(AuthorityError::InvalidSignedHolderLimit);
-        }
-        if !valid_resource_uid(&self.host_uid)
-            || !valid_resource_uid(&self.zone_uid)
-            || !valid_resource_uid(&self.owner_proof.resource_uid)
-        {
-            return Err(AuthorityError::InvalidAuthorityRequest);
-        }
-        let key = ExternalNicAuthorityKey::from_digest(self.host_uid, self.identity_digest);
-        let holder = Holder {
-            token: 0,
-            operation_id: None,
-            claim: ExternalNicClaim::new(self.zone_uid, self.macvtap_mode, self.sharing_policy),
-            owner_proof: ExternalNicOwnerProof::new(
-                self.owner_proof.resource_uid,
-                self.owner_proof.generation,
-            ),
-            signed_max_holders,
-        };
-        Ok((key, holder, signed_max_holders))
     }
 }
 
@@ -982,7 +632,7 @@ impl AuthorityRequest {
         provider_ref: ResourceRef,
         owner_proof: AuthorityOwnerProof,
     ) -> Result<Self, AuthorityError> {
-        let cardinality = if provider_ref.to_canonical_string() == "Provider/observability-otel" {
+        let cardinality = if provider_ref.to_canonical_string() == OPTIONAL_PROVIDER_REF {
             ProviderCardinality::AtMostOne
         } else {
             ProviderCardinality::ExactlyOne
@@ -1729,7 +1379,6 @@ struct GenericAuthorityEntry {
 /// Core-owned Host-global external physical-NIC authority index.
 pub struct HostGlobalAuthorityIndex {
     authorities: BTreeMap<AuthorityKey, GenericAuthorityEntry>,
-    external_nics: BTreeMap<ExternalNicAuthorityKey, AuthorityEntry>,
     rehydrated: bool,
     unresolved_operations: BTreeSet<String>,
     quarantined_operations: BTreeSet<String>,
@@ -1746,7 +1395,6 @@ impl Default for HostGlobalAuthorityIndex {
     fn default() -> Self {
         Self {
             authorities: BTreeMap::new(),
-            external_nics: BTreeMap::new(),
             rehydrated: false,
             unresolved_operations: BTreeSet::new(),
             quarantined_operations: BTreeSet::new(),
@@ -1767,7 +1415,6 @@ impl HostGlobalAuthorityIndex {
     pub fn new_for_tests_ready() -> Self {
         Self {
             authorities: BTreeMap::new(),
-            external_nics: BTreeMap::new(),
             rehydrated: true,
             unresolved_operations: BTreeSet::new(),
             quarantined_operations: BTreeSet::new(),
@@ -1789,7 +1436,6 @@ impl HostGlobalAuthorityIndex {
     pub fn invalidate_for_restart(&mut self) {
         let epoch = self.runtime_epoch.fetch_add(1, Ordering::AcqRel) + 1;
         self.authorities.clear();
-        self.external_nics.clear();
         self.rehydrated = false;
         self.unresolved_operations.clear();
         self.quarantined_operations.clear();
@@ -1827,9 +1473,6 @@ impl HostGlobalAuthorityIndex {
     ) -> Result<(), AuthorityError> {
         let mut seen = BTreeSet::new();
         let mut generic_keys = BTreeSet::new();
-        let mut nic_claims = BTreeMap::<ExternalNicAuthorityKey, Vec<ExternalNicClaim>>::new();
-        let mut nic_limits = BTreeMap::<ExternalNicAuthorityKey, usize>::new();
-        let mut nic_owners = BTreeMap::<ExternalNicAuthorityKey, BTreeSet<(String, u64)>>::new();
 
         for operation in operations {
             if operation.operation_id.is_empty()
@@ -1869,26 +1512,10 @@ impl HostGlobalAuthorityIndex {
                         return Err(AuthorityError::InvalidAuthorityRequest);
                     }
                 }
-                AuthorityStorageClaim::ExternalNic(claim) => {
-                    let (key, holder, limit) = claim.clone().into_parts()?;
-                    let claims = nic_claims.entry(key.clone()).or_default();
-                    claims.push(holder.claim);
-                    let effective_limit = nic_limits.entry(key).or_insert(limit);
-                    *effective_limit = (*effective_limit).min(limit);
-                    admit_external_nic_claims(claims, *effective_limit)?;
-                    let owner = (
-                        claim.owner_proof.resource_uid.to_canonical_string(),
-                        claim.owner_proof.generation.get(),
-                    );
-                    let owners = nic_owners
-                        .entry(ExternalNicAuthorityKey::from_digest(
-                            claim.host_uid.clone(),
-                            claim.identity_digest.clone(),
-                        ))
-                        .or_default();
-                    if !owners.insert(owner) {
-                        return Err(AuthorityError::InvalidAuthorityRequest);
-                    }
+                // A persisted external physical-NIC operation row has no
+                // controller-side admission path anymore; refuse it fail-closed.
+                AuthorityStorageClaim::ExternalNic(_) => {
+                    return Err(AuthorityError::InvalidAuthorityRequest);
                 }
             }
         }
@@ -1917,46 +1544,11 @@ impl HostGlobalAuthorityIndex {
                     )?;
                     index.unresolved_operations.insert(operation.operation_id);
                 }
-                AuthorityStorageClaim::ExternalNic(claim) => {
-                    if matches!(
-                        operation.state,
-                        AuthorityOperationState::Closed | AuthorityOperationState::Released
-                    ) {
-                        continue;
-                    }
-                    let (key, holder, signed_max_holders) = claim.into_parts()?;
-                    let token = index.issue_token();
-                    let operation_id = Some(operation.operation_id.clone());
-                    let holder = Holder {
-                        token,
-                        operation_id,
-                        ..holder
-                    };
-                    if let Some(entry) = index.external_nics.get_mut(&key) {
-                        let mut claims = entry
-                            .holders
-                            .iter()
-                            .map(|existing| existing.claim.clone())
-                            .collect::<Vec<_>>();
-                        claims.push(holder.claim.clone());
-                        let signed_limit = entry.signed_max_holders.min(signed_max_holders);
-                        admit_external_nic_claims(&claims, signed_limit)?;
-                        entry.signed_max_holders = signed_limit;
-                        entry.holders.push(holder);
-                    } else {
-                        admit_external_nic_claims(
-                            core::slice::from_ref(&holder.claim),
-                            signed_max_holders,
-                        )?;
-                        index.external_nics.insert(
-                            key,
-                            AuthorityEntry {
-                                holders: vec![holder],
-                                signed_max_holders,
-                            },
-                        );
-                    }
-                    index.unresolved_operations.insert(operation.operation_id);
+                // A persisted external physical-NIC operation row has no
+                // controller-side admission path anymore; refuse it fail-closed.
+
+                AuthorityStorageClaim::ExternalNic(_) => {
+                    return Err(AuthorityError::InvalidAuthorityRequest);
                 }
             }
         }
@@ -2070,27 +1662,6 @@ impl HostGlobalAuthorityIndex {
                     }
                 }
             }
-            let nic_keys = self
-                .external_nics
-                .iter()
-                .filter(|(_, entry)| {
-                    entry
-                        .holders
-                        .iter()
-                        .any(|holder| holder.operation_id.as_deref() == Some(operation_id))
-                })
-                .map(|(key, _)| key.clone())
-                .collect::<Vec<_>>();
-            for key in nic_keys {
-                if let Some(entry) = self.external_nics.get_mut(&key) {
-                    entry
-                        .holders
-                        .retain(|holder| holder.operation_id.as_deref() != Some(operation_id));
-                    if entry.holders.is_empty() {
-                        self.external_nics.remove(&key);
-                    }
-                }
-            }
         }
         Ok(())
     }
@@ -2115,9 +1686,6 @@ impl HostGlobalAuthorityIndex {
     }
 
     /// Snapshot generic typed claims for durable store handoff.
-    ///
-    /// External physical-NIC adoption still requires the production inventory
-    /// adapter to provide its corresponding durable proof record.
     pub fn durable_claims(&self) -> Vec<DurableAuthorityClaim> {
         self.authorities
             .iter()
@@ -2131,26 +1699,6 @@ impl HostGlobalAuthorityIndex {
                     provider_cardinality: entry.provider_cardinality,
                     owner_proof: DurableAuthorityOwnerProof::from_owner_proof(&holder.owner_proof),
                     dependent_guest: holder.dependent_guest.clone(),
-                })
-            })
-            .collect()
-    }
-
-    /// Snapshot external-NIC claims for the trusted persistence adapter.
-    pub fn durable_external_nic_claims(&self) -> Vec<DurableExternalNicClaim> {
-        self.external_nics
-            .iter()
-            .flat_map(|(key, entry)| {
-                entry.holders.iter().map(|holder| DurableExternalNicClaim {
-                    host_uid: key.host_uid.clone(),
-                    identity_digest: key.opaque_digest.clone(),
-                    zone_uid: holder.claim.zone_uid().clone(),
-                    macvtap_mode: holder.claim.macvtap_mode(),
-                    sharing_policy: holder.claim.sharing_policy(),
-                    signed_max_holders: entry.signed_max_holders as u32,
-                    owner_proof: DurableAuthorityOwnerProof::from_external_owner_proof(
-                        &holder.owner_proof,
-                    ),
                 })
             })
             .collect()
@@ -2182,12 +1730,11 @@ impl HostGlobalAuthorityIndex {
         let key = request.key.clone();
         let token = self.issue_token();
         if let Some(entry) = self.authorities.get_mut(&key) {
-            if let Some(holder) = entry
+            if entry
                 .holders
                 .iter()
-                .find(|holder| holder.owner_proof == request.owner_proof)
+                .any(|holder| holder.owner_proof == request.owner_proof)
             {
-                let _ = holder;
                 return Err(AuthorityError::DuplicateActiveReservation);
             }
             if entry.arbitration != request.arbitration {
@@ -2411,207 +1958,6 @@ impl HostGlobalAuthorityIndex {
         Ok(drained)
     }
 
-    /// Admit the claim, then and only then invoke one host effect.
-    pub fn admit_before_effect(
-        &mut self,
-        request: ExternalNicClaimRequest,
-        effect: impl FnOnce(&ExternalNicLease) -> ExternalNicEffectOutcome,
-    ) -> Result<ExternalNicEffectGate, AuthorityError> {
-        let lease = self.admit(request)?;
-        let outcome = effect(&lease);
-        Ok(ExternalNicEffectGate { lease, outcome })
-    }
-
-    /// Return the bounded public observation for one resolved authority.
-    pub fn external_nic_status(
-        &self,
-        host_uid: ResourceUid,
-        identity: &ResolvedExternalNicIdentity,
-    ) -> Option<ExternalNicAuthorityStatus> {
-        let key = ExternalNicAuthorityKey::derive(host_uid, identity);
-        let entry = self.external_nics.get(&key)?;
-        let all_multiplexable = entry.holders.iter().all(|holder| {
-            holder.claim.macvtap_mode() == MacvtapMode::Bridge
-                && holder.claim.sharing_policy() == SharingPolicy::Multiplexed
-        });
-        let arbitration = if all_multiplexable {
-            SharingPolicy::Multiplexed
-        } else {
-            SharingPolicy::Exclusive
-        };
-        Some(ExternalNicAuthorityStatus::new(
-            all_multiplexable && entry.holders.len() < entry.signed_max_holders,
-            entry.holders.len() as u32,
-            0,
-            arbitration,
-            UpdateState::Current,
-        ))
-    }
-
-    /// Adopt only one exact recovered owner; duplicate observations quarantine.
-    pub fn adopt(
-        &self,
-        host_uid: ResourceUid,
-        identity: &ResolvedExternalNicIdentity,
-        owner_proof: &ExternalNicOwnerProof,
-        recovered_owner_proofs: &[ExternalNicOwnerProof],
-    ) -> ExternalNicAdoption {
-        let key = ExternalNicAuthorityKey::derive(host_uid, identity);
-        let Some(entry) = self.external_nics.get(&key) else {
-            return ExternalNicAdoption::Missing;
-        };
-        if recovered_owner_proofs
-            .iter()
-            .filter(|proof| *proof == owner_proof)
-            .count()
-            > 1
-        {
-            return ExternalNicAdoption::QuarantinedAmbiguous;
-        }
-        let observed = recovered_owner_proofs
-            .iter()
-            .filter(|proof| *proof == owner_proof)
-            .count()
-            == 1;
-        let indexed = entry
-            .holders
-            .iter()
-            .find(|holder| &holder.owner_proof == owner_proof);
-        if observed && let Some(holder) = indexed {
-            ExternalNicAdoption::Adopted(ExternalNicLease {
-                key,
-                owner_proof: owner_proof.clone(),
-                claim: holder.claim.clone(),
-                signed_max_holders: holder.signed_max_holders,
-                token: holder.token,
-                operation_id: holder.operation_id.clone(),
-            })
-        } else {
-            ExternalNicAdoption::Missing
-        }
-    }
-
-    /// Close the old attachment before releasing its authority claim.
-    pub fn close_then_release(
-        &mut self,
-        lease: &ExternalNicLease,
-        close: impl FnOnce() -> ExternalNicCloseOutcome,
-    ) -> Result<(), AuthorityError> {
-        if close() != ExternalNicCloseOutcome::Confirmed {
-            return Err(AuthorityError::AttachmentCloseUnconfirmed);
-        }
-        self.release(lease)
-    }
-
-    /// Drain and release an old claim before admitting a disruptive replacement.
-    pub fn replace_after_close(
-        &mut self,
-        lease: &ExternalNicLease,
-        replacement: ExternalNicClaimRequest,
-        close: impl FnOnce() -> ExternalNicCloseOutcome,
-    ) -> Result<ExternalNicLease, AuthorityError> {
-        self.close_then_release(lease, close)?;
-        self.admit(replacement)
-    }
-
-    fn admit(
-        &mut self,
-        request: ExternalNicClaimRequest,
-    ) -> Result<ExternalNicLease, AuthorityError> {
-        self.admit_with_operation_id(request, None)
-    }
-
-    fn admit_with_operation_id(
-        &mut self,
-        request: ExternalNicClaimRequest,
-        operation_id: Option<String>,
-    ) -> Result<ExternalNicLease, AuthorityError> {
-        if !self.is_ready_for_readiness() {
-            return Err(AuthorityError::StartupRehydrationRequired);
-        }
-        let key = ExternalNicAuthorityKey::derive(request.host_uid, &request.identity);
-        let lease_claim = request.claim.clone();
-        let lease_owner = request.owner_proof.clone();
-        let lease_limit = request.signed_max_holders;
-        let token = self.issue_token();
-        if let Some(entry) = self.external_nics.get_mut(&key) {
-            if let Some(holder) = entry
-                .holders
-                .iter()
-                .find(|holder| holder.owner_proof == request.owner_proof)
-            {
-                let _ = holder;
-                return Err(AuthorityError::DuplicateActiveReservation);
-            }
-            let signed_limit = entry.signed_max_holders.min(request.signed_max_holders);
-            let mut claims: Vec<ExternalNicClaim> = entry
-                .holders
-                .iter()
-                .map(|holder| holder.claim.clone())
-                .collect();
-            claims.push(request.claim.clone());
-            admit_external_nic_claims(&claims, signed_limit)?;
-            entry.signed_max_holders = signed_limit;
-            entry.holders.push(Holder {
-                token,
-                operation_id: operation_id.clone(),
-                claim: request.claim,
-                owner_proof: request.owner_proof.clone(),
-                signed_max_holders: request.signed_max_holders,
-            });
-        } else {
-            admit_external_nic_claims(
-                core::slice::from_ref(&request.claim),
-                request.signed_max_holders,
-            )?;
-            self.external_nics.insert(
-                key.clone(),
-                AuthorityEntry {
-                    holders: vec![Holder {
-                        token,
-                        operation_id: operation_id.clone(),
-                        claim: request.claim,
-                        owner_proof: request.owner_proof.clone(),
-                        signed_max_holders: request.signed_max_holders,
-                    }],
-                    signed_max_holders: request.signed_max_holders,
-                },
-            );
-        }
-        Ok(ExternalNicLease {
-            key,
-            owner_proof: lease_owner,
-            claim: lease_claim,
-            signed_max_holders: lease_limit,
-            token,
-            operation_id,
-        })
-    }
-
-    fn release(&mut self, lease: &ExternalNicLease) -> Result<(), AuthorityError> {
-        let entry = self
-            .external_nics
-            .get_mut(&lease.key)
-            .ok_or(AuthorityError::UnknownClaim)?;
-        let holder = entry
-            .holders
-            .iter()
-            .position(|holder| {
-                holder.token == lease.token
-                    && holder.owner_proof == lease.owner_proof
-                    && holder.claim == lease.claim
-                    && holder.operation_id.as_ref().is_none_or(|operation_id| {
-                        lease.operation_id.as_ref() == Some(operation_id)
-                    })
-                    && holder.signed_max_holders == lease.signed_max_holders
-            })
-            .ok_or(AuthorityError::OwnerProofMismatch)?;
-        entry.holders.remove(holder);
-        if entry.holders.is_empty() {
-            self.external_nics.remove(&lease.key);
-        }
-        Ok(())
-    }
 }
 
 /// Error returned by an asynchronous authority reservation dispatch.
@@ -2641,133 +1987,6 @@ pub struct AuthorityReservation {
     close_recorded: bool,
 }
 
-/// Durable reservation for an external physical-NIC effect.
-#[must_use = "an external NIC reservation must remain owned until closure"]
-pub struct ExternalNicReservation {
-    index: Arc<tokio::sync::Mutex<HostGlobalAuthorityIndex>>,
-    lease: Option<ExternalNicLease>,
-    outcome: Option<ExternalNicEffectOutcome>,
-    persistence: Arc<dyn crate::authority_persistence::AuthorityPersistence>,
-    capability: crate::authority_persistence::AuthorityOperationCapability,
-    close_recorded: bool,
-}
-
-impl ExternalNicReservation {
-    /// Reserve and durably record one external-NIC claim before dispatch.
-    pub async fn reserve_durable(
-        index: Arc<tokio::sync::Mutex<HostGlobalAuthorityIndex>>,
-        persistence: Arc<dyn crate::authority_persistence::AuthorityPersistence>,
-        operation_id: impl Into<String>,
-        request: ExternalNicClaimRequest,
-    ) -> Result<Self, AuthorityReservationError<AuthorityError>> {
-        let operation_id = operation_id.into();
-        let claim = request.durable_claim();
-        let lease = {
-            let mut guard = index.lock().await;
-            guard
-                .reserve_operation_id(&operation_id)
-                .map_err(AuthorityReservationError::Effect)?;
-            guard
-                .admit_with_operation_id(request, Some(operation_id.clone()))
-                .map_err(AuthorityReservationError::Effect)?
-        };
-        let prepared = match persistence
-            .prepare(&operation_id, &AuthorityStorageClaim::ExternalNic(claim))
-            .await
-        {
-            Ok(prepared) => prepared,
-            Err(error @ crate::authority_persistence::AuthorityPersistenceError::CommitUnknown) => {
-                index.lock().await.quarantine_operation_id(&operation_id);
-                return Err(AuthorityReservationError::Persistence(error));
-            }
-            Err(error) => {
-                let _ = index.lock().await.release(&lease);
-                return Err(AuthorityReservationError::Persistence(error));
-            }
-        };
-        let capability =
-            match crate::authority_persistence::AuthorityOperationCapability::from_prepared(
-                &operation_id,
-                prepared,
-            ) {
-                Ok(capability) => capability,
-                Err(error) => {
-                    let _ = index.lock().await.release(&lease);
-                    return Err(AuthorityReservationError::Persistence(error));
-                }
-            };
-        Ok(Self {
-            index,
-            lease: Some(lease),
-            outcome: None,
-            persistence,
-            capability,
-            close_recorded: false,
-        })
-    }
-
-    /// Dispatch while holding the external-NIC lease.
-    pub async fn dispatch<F, Fut, E>(
-        &mut self,
-        dispatch: F,
-    ) -> Result<ExternalNicEffectOutcome, AuthorityReservationError<E>>
-    where
-        F: FnOnce(&ExternalNicLease) -> Fut,
-        Fut: Future<Output = Result<ExternalNicEffectOutcome, E>>,
-    {
-        let lease = self
-            .lease
-            .as_ref()
-            .ok_or(AuthorityReservationError::Closed)?;
-        let outcome = dispatch(lease)
-            .await
-            .map_err(AuthorityReservationError::Effect)?;
-        self.outcome = Some(outcome);
-        let state = match outcome {
-            ExternalNicEffectOutcome::Confirmed => AuthorityOperationState::EffectConfirmed,
-            ExternalNicEffectOutcome::RetryableFailure => AuthorityOperationState::EffectRetryable,
-            ExternalNicEffectOutcome::TerminalFailure => AuthorityOperationState::EffectTerminal,
-        };
-        self.persistence
-            .record_effect(&self.capability, state)
-            .await
-            .map_err(AuthorityReservationError::Persistence)?;
-        Ok(outcome)
-    }
-
-    /// Close the NIC attachment, then release its durable and in-memory owner.
-    pub async fn close_then_release(
-        &mut self,
-        close: impl FnOnce() -> ExternalNicCloseOutcome,
-    ) -> Result<(), AuthorityError> {
-        let lease = self
-            .lease
-            .as_ref()
-            .ok_or(AuthorityError::ReservationClosed)?;
-        if close() != ExternalNicCloseOutcome::Confirmed {
-            let _ = self
-                .persistence
-                .record_effect(&self.capability, AuthorityOperationState::EffectRetryable)
-                .await;
-            return Err(AuthorityError::AttachmentCloseUnconfirmed);
-        }
-        if !self.close_recorded {
-            self.persistence
-                .record_close(&self.capability)
-                .await
-                .map_err(|_| AuthorityError::AttachmentCloseUnconfirmed)?;
-            self.close_recorded = true;
-        }
-        self.persistence
-            .release(&self.capability)
-            .await
-            .map_err(|_| AuthorityError::AttachmentCloseUnconfirmed)?;
-        self.index.lock().await.release(lease)?;
-        self.lease = None;
-        Ok(())
-    }
-}
-
 impl AuthorityReservation {
     /// Reserve one authority before starting an asynchronous effect.
     pub async fn reserve(
@@ -2794,16 +2013,16 @@ impl AuthorityReservation {
         request: AuthorityRequest,
     ) -> Result<Self, AuthorityReservationError<AuthorityError>> {
         let operation_id = operation_id.into();
+        let claim = AuthorityStorageClaim::Generic(request.durable_claim());
         let lease = {
             let mut guard = index.lock().await;
             guard
                 .reserve_operation_id(&operation_id)
                 .map_err(AuthorityReservationError::Effect)?;
             guard
-                .admit_authority_inner_with_operation(request.clone(), Some(operation_id.clone()))
+                .admit_authority_inner_with_operation(request, Some(operation_id.clone()))
                 .map_err(AuthorityReservationError::Effect)?
         };
-        let claim = AuthorityStorageClaim::Generic(request.durable_claim());
         let prepared = match persistence.prepare(&operation_id, &claim).await {
             Ok(prepared) => prepared,
             Err(error @ crate::authority_persistence::AuthorityPersistenceError::CommitUnknown) => {
@@ -2938,10 +2157,7 @@ impl core::fmt::Debug for AuthorityReservation {
 impl core::fmt::Debug for HostGlobalAuthorityIndex {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("HostGlobalAuthorityIndex")
-            .field(
-                "authority_count",
-                &(self.external_nics.len() + self.authorities.len()),
-            )
+            .field("authority_count", &self.authorities.len())
             .finish()
     }
 }
@@ -2958,39 +2174,12 @@ mod tests {
         ResourceUid::parse(value).unwrap()
     }
 
-    fn identity(value: &[u8]) -> ResolvedExternalNicIdentity {
-        ResolvedExternalNicIdentity::from_trusted_inventory(value).unwrap()
-    }
-
-    fn proof(value: &str, generation: u64) -> ExternalNicOwnerProof {
-        ExternalNicOwnerProof::new(uid(value), ResourceGeneration::new(generation).unwrap())
-    }
-
-    fn authority_proof(value: &str, generation: u64) -> AuthorityOwnerProof {
+fn authority_proof(value: &str, generation: u64) -> AuthorityOwnerProof {
         AuthorityOwnerProof::new(uid(value), ResourceGeneration::new(generation).unwrap())
     }
 
     fn digest(byte: u8) -> AuthorityDigest {
         AuthorityDigest([byte; 32])
-    }
-
-    fn request(
-        host: &ResourceUid,
-        nic: &ResolvedExternalNicIdentity,
-        zone: &ResourceUid,
-        owner: ExternalNicOwnerProof,
-        mode: MacvtapMode,
-        policy: SharingPolicy,
-        limit: usize,
-    ) -> ExternalNicClaimRequest {
-        ExternalNicClaimRequest::new(
-            host.clone(),
-            nic.clone(),
-            ExternalNicClaim::new(zone.clone(), mode, policy),
-            owner,
-            limit,
-        )
-        .unwrap()
     }
 
     #[derive(Default)]
@@ -3063,316 +2252,6 @@ mod tests {
     }
 
     #[test]
-    fn two_selectors_resolving_to_one_nic_share_one_host_global_key() {
-        let mut inventory = TrustedExternalNicInventory::default();
-        let resolved = identity(b"stable-inventory-identity");
-        inventory
-            .insert(IfName::parse("eno1").unwrap(), resolved.clone())
-            .unwrap();
-        inventory
-            .insert(IfName::parse("uplink0").unwrap(), resolved.clone())
-            .unwrap();
-        let first = inventory.resolve(&IfName::parse("eno1").unwrap()).unwrap();
-        let second = inventory
-            .resolve(&IfName::parse("uplink0").unwrap())
-            .unwrap();
-        let host = uid("123e4567-e89b-42d3-a456-426614174000");
-        assert_eq!(
-            ExternalNicAuthorityKey::derive(host.clone(), &first),
-            ExternalNicAuthorityKey::derive(host, &second)
-        );
-    }
-
-    #[test]
-    fn cross_zone_bridge_rejection_is_distinct_and_runs_no_effect() {
-        let host = uid("123e4567-e89b-42d3-a456-426614174000");
-        let work = uid("223e4567-e89b-42d3-a456-426614174001");
-        let personal = uid("323e4567-e89b-42d3-a456-426614174002");
-        let nic = identity(b"one-physical-nic");
-        let mut index = HostGlobalAuthorityIndex::new_for_tests_ready();
-        let first = request(
-            &host,
-            &nic,
-            &work,
-            proof("423e4567-e89b-42d3-a456-426614174003", 1),
-            MacvtapMode::Bridge,
-            SharingPolicy::Multiplexed,
-            8,
-        );
-        index
-            .admit_before_effect(first, |_| ExternalNicEffectOutcome::Confirmed)
-            .unwrap();
-
-        let mut effects = 0;
-        let second = request(
-            &host,
-            &nic,
-            &personal,
-            proof("523e4567-e89b-42d3-a456-426614174004", 1),
-            MacvtapMode::Bridge,
-            SharingPolicy::Exclusive,
-            1,
-        );
-        let error = index
-            .admit_before_effect(second, |_| {
-                effects += 1;
-                ExternalNicEffectOutcome::Confirmed
-            })
-            .unwrap_err();
-        assert_eq!(
-            error,
-            AuthorityError::Admission(ExternalNicAdmissionError::ExternalPhysicalNicCrossZoneL2)
-        );
-        assert_eq!(error.code(), "external-physical-nic-cross-zone-l2");
-        assert_eq!(effects, 0);
-    }
-
-    #[test]
-    fn external_nic_admission_waits_for_the_same_startup_barrier() {
-        let host = uid("623e4567-e89b-42d3-a456-426614174005");
-        let zone = uid("723e4567-e89b-42d3-a456-426614174006");
-        let nic = identity(b"startup-barrier-nic");
-        let mut index = HostGlobalAuthorityIndex::new_unrehydrated();
-        let mut effects = 0;
-        let result = index.admit_before_effect(
-            request(
-                &host,
-                &nic,
-                &zone,
-                proof("823e4567-e89b-42d3-a456-426614174007", 1),
-                MacvtapMode::Bridge,
-                SharingPolicy::Exclusive,
-                1,
-            ),
-            |_| {
-                effects += 1;
-                ExternalNicEffectOutcome::Confirmed
-            },
-        );
-        assert_eq!(
-            result.unwrap_err(),
-            AuthorityError::StartupRehydrationRequired
-        );
-        assert_eq!(effects, 0);
-    }
-
-    #[test]
-    fn same_zone_compatible_bridge_multiplex_obeys_the_signed_limit() {
-        let host = uid("123e4567-e89b-42d3-a456-426614174000");
-        let zone = uid("223e4567-e89b-42d3-a456-426614174001");
-        let nic = identity(b"one-physical-nic");
-        let mut index = HostGlobalAuthorityIndex::new_for_tests_ready();
-        for owner in [
-            "323e4567-e89b-42d3-a456-426614174002",
-            "423e4567-e89b-42d3-a456-426614174003",
-        ] {
-            index
-                .admit_before_effect(
-                    request(
-                        &host,
-                        &nic,
-                        &zone,
-                        proof(owner, 1),
-                        MacvtapMode::Bridge,
-                        SharingPolicy::Multiplexed,
-                        2,
-                    ),
-                    |_| ExternalNicEffectOutcome::Confirmed,
-                )
-                .unwrap();
-        }
-        let status = index.external_nic_status(host, &nic).unwrap();
-        assert_eq!(status.holder_count(), 2);
-        assert_eq!(status.arbitration(), SharingPolicy::Multiplexed);
-        assert!(!status.available());
-    }
-
-    #[test]
-    fn exclusive_mixed_and_non_bridge_claims_report_the_general_conflict() {
-        let host = uid("123e4567-e89b-42d3-a456-426614174000");
-        let zone = uid("223e4567-e89b-42d3-a456-426614174001");
-        for (first_mode, first_policy, next_mode, next_policy) in [
-            (
-                MacvtapMode::Bridge,
-                SharingPolicy::Exclusive,
-                MacvtapMode::Bridge,
-                SharingPolicy::Multiplexed,
-            ),
-            (
-                MacvtapMode::Private,
-                SharingPolicy::Exclusive,
-                MacvtapMode::Private,
-                SharingPolicy::Exclusive,
-            ),
-        ] {
-            let nic = identity(b"one-physical-nic");
-            let mut index = HostGlobalAuthorityIndex::new_for_tests_ready();
-            index
-                .admit_before_effect(
-                    request(
-                        &host,
-                        &nic,
-                        &zone,
-                        proof("323e4567-e89b-42d3-a456-426614174002", 1),
-                        first_mode,
-                        first_policy,
-                        8,
-                    ),
-                    |_| ExternalNicEffectOutcome::Confirmed,
-                )
-                .unwrap();
-            let error = index
-                .admit_before_effect(
-                    request(
-                        &host,
-                        &nic,
-                        &zone,
-                        proof("423e4567-e89b-42d3-a456-426614174003", 1),
-                        next_mode,
-                        next_policy,
-                        8,
-                    ),
-                    |_| ExternalNicEffectOutcome::Confirmed,
-                )
-                .unwrap_err();
-            assert_eq!(
-                error,
-                AuthorityError::Admission(ExternalNicAdmissionError::ExternalPhysicalNicConflict)
-            );
-        }
-
-        let nic = identity(b"cross-zone-exclusive-nic");
-        let mut index = HostGlobalAuthorityIndex::new_for_tests_ready();
-        index
-            .admit_before_effect(
-                request(
-                    &host,
-                    &nic,
-                    &zone,
-                    proof("323e4567-e89b-42d3-a456-426614174002", 1),
-                    MacvtapMode::Passthru,
-                    SharingPolicy::Exclusive,
-                    1,
-                ),
-                |_| ExternalNicEffectOutcome::Confirmed,
-            )
-            .unwrap();
-        let mut effects = 0;
-        let error = index
-            .admit_before_effect(
-                request(
-                    &host,
-                    &nic,
-                    &uid("523e4567-e89b-42d3-a456-426614174004"),
-                    proof("423e4567-e89b-42d3-a456-426614174003", 1),
-                    MacvtapMode::Passthru,
-                    SharingPolicy::Exclusive,
-                    1,
-                ),
-                |_| {
-                    effects += 1;
-                    ExternalNicEffectOutcome::Confirmed
-                },
-            )
-            .unwrap_err();
-        assert_eq!(
-            error,
-            AuthorityError::Admission(ExternalNicAdmissionError::ExternalPhysicalNicConflict)
-        );
-        assert_eq!(effects, 0);
-    }
-
-    #[test]
-    fn restart_adopts_one_exact_owner_and_quarantines_ambiguity() {
-        let host = uid("123e4567-e89b-42d3-a456-426614174000");
-        let zone = uid("223e4567-e89b-42d3-a456-426614174001");
-        let nic = identity(b"one-physical-nic");
-        let owner = proof("323e4567-e89b-42d3-a456-426614174002", 4);
-        let mut index = HostGlobalAuthorityIndex::new_for_tests_ready();
-        index
-            .admit_before_effect(
-                request(
-                    &host,
-                    &nic,
-                    &zone,
-                    owner.clone(),
-                    MacvtapMode::Bridge,
-                    SharingPolicy::Exclusive,
-                    1,
-                ),
-                |_| ExternalNicEffectOutcome::Confirmed,
-            )
-            .unwrap();
-        assert!(matches!(
-            index.adopt(host.clone(), &nic, &owner, core::slice::from_ref(&owner)),
-            ExternalNicAdoption::Adopted(_)
-        ));
-        assert!(matches!(
-            index.adopt(host, &nic, &owner, &[owner.clone(), owner.clone()]),
-            ExternalNicAdoption::QuarantinedAmbiguous
-        ));
-    }
-
-    #[test]
-    fn update_and_delete_release_only_after_attachment_close() {
-        let host = uid("123e4567-e89b-42d3-a456-426614174000");
-        let zone = uid("223e4567-e89b-42d3-a456-426614174001");
-        let nic = identity(b"one-physical-nic");
-        let mut index = HostGlobalAuthorityIndex::new_for_tests_ready();
-        let gate = index
-            .admit_before_effect(
-                request(
-                    &host,
-                    &nic,
-                    &zone,
-                    proof("323e4567-e89b-42d3-a456-426614174002", 1),
-                    MacvtapMode::Bridge,
-                    SharingPolicy::Exclusive,
-                    1,
-                ),
-                |_| ExternalNicEffectOutcome::Confirmed,
-            )
-            .unwrap();
-        let lease = gate.into_lease();
-        assert_eq!(
-            index.close_then_release(&lease, || ExternalNicCloseOutcome::RetryableFailure),
-            Err(AuthorityError::AttachmentCloseUnconfirmed)
-        );
-        assert!(index.external_nic_status(host.clone(), &nic).is_some());
-
-        let adopted = match index.adopt(
-            host.clone(),
-            &nic,
-            &proof("323e4567-e89b-42d3-a456-426614174002", 1),
-            &[proof("323e4567-e89b-42d3-a456-426614174002", 1)],
-        ) {
-            ExternalNicAdoption::Adopted(lease) => lease,
-            other => panic!("expected adoption, got {other:?}"),
-        };
-        let mut closed = false;
-        let replacement = request(
-            &host,
-            &nic,
-            &zone,
-            proof("423e4567-e89b-42d3-a456-426614174003", 2),
-            MacvtapMode::Bridge,
-            SharingPolicy::Exclusive,
-            1,
-        );
-        let replacement_lease = index
-            .replace_after_close(&adopted, replacement, || {
-                closed = true;
-                ExternalNicCloseOutcome::Confirmed
-            })
-            .unwrap();
-        assert!(closed);
-        index
-            .close_then_release(&replacement_lease, || ExternalNicCloseOutcome::Confirmed)
-            .unwrap();
-        assert!(index.external_nic_status(host, &nic).is_none());
-    }
-
-    #[test]
     fn provider_cardinality_is_zone_local_and_effects_are_fail_closed() {
         let mut index = HostGlobalAuthorityIndex::new_for_tests_ready();
         let provider = ResourceRef::parse("Provider/system-core").unwrap();
@@ -3406,7 +2285,7 @@ mod tests {
                 })
                 .unwrap_err()
                 .code(),
-            "duplicateConflict"
+            "duplicate-conflict"
         );
         assert_eq!(effects, 0);
 
@@ -3421,6 +2300,61 @@ mod tests {
             Some(ProviderCardinality::AtMostOne)
         );
         index.admit_authority(other_zone).unwrap();
+    }
+
+    /// The index refuses an admission before any effect runs until the
+    /// startup barrier completes. This is the index's own guard, distinct
+    /// from the process-level stage barrier in `main`: the index is shared
+    /// into the controller admission surface, so a caller outside the
+    /// startup path reaches this refusal too, and a claim on a host
+    /// resource whose pre-restart owner set was never loaded must not
+    /// succeed.
+    #[test]
+    fn admission_waits_for_the_same_startup_barrier_before_any_effect() {
+        let host = uid("623e4567-e89b-42d3-a456-426614174005");
+        let claim = || {
+            AuthorityRequest::gpu_full_device(
+                host.clone(),
+                digest(1),
+                authority_proof("723e4567-e89b-42d3-a456-426614174006", 1),
+            )
+            .unwrap()
+        };
+
+        let mut unrehydrated = HostGlobalAuthorityIndex::new_unrehydrated();
+        assert!(!unrehydrated.is_ready_for_readiness());
+        let mut effects = 0;
+        assert_eq!(
+            unrehydrated
+                .admit_authority_before_effect(claim(), |_| {
+                    effects += 1;
+                    AuthorityEffectOutcome::Confirmed
+                })
+                .unwrap_err(),
+            AuthorityError::StartupRehydrationRequired
+        );
+        assert_eq!(effects, 0);
+        assert_eq!(
+            AuthorityError::StartupRehydrationRequired.code(),
+            "authority-startup-rehydration-required"
+        );
+
+        // A restart relist invalidates an index that has already
+        // admitted claims, and the same barrier refuses again until
+        // rehydration loads the durable owner proofs.
+        let mut live = HostGlobalAuthorityIndex::new_for_tests_ready();
+        live.admit_authority(claim()).unwrap();
+        live.invalidate_for_restart();
+        let mut effects = 0;
+        assert_eq!(
+            live.admit_authority_before_effect(claim(), |_| {
+                effects += 1;
+                AuthorityEffectOutcome::Confirmed
+            })
+            .unwrap_err(),
+            AuthorityError::StartupRehydrationRequired
+        );
+        assert_eq!(effects, 0);
     }
 
     #[test]
@@ -3778,25 +2712,6 @@ mod tests {
     }
 
     #[test]
-    fn diagnostics_never_expose_identity_digest_host_or_owner_values() {
-        let identity_canary = b"private-hardware-identity";
-        let host_canary = "123e4567-e89b-42d3-a456-426614174000";
-        let owner_canary = "223e4567-e89b-42d3-a456-426614174001";
-        let nic = identity(identity_canary);
-        let owner = proof(owner_canary, 1);
-        let key = ExternalNicAuthorityKey::derive(uid(host_canary), &nic);
-        let rendered = format!("{nic:?} {owner:?} {key:?}");
-        for canary in [
-            String::from_utf8(identity_canary.to_vec()).unwrap(),
-            host_canary.to_owned(),
-            owner_canary.to_owned(),
-            key.opaque_digest.clone(),
-        ] {
-            assert!(!rendered.contains(&canary));
-        }
-    }
-
-    #[test]
     fn duplicate_same_owner_reservations_are_rejected_without_aliasing_leases() {
         let host = uid("f93e4567-e89b-42d3-a456-426614174060");
         let owner = authority_proof("a04e4567-e89b-42d3-a456-426614174061", 1);
@@ -3811,37 +2726,6 @@ mod tests {
         );
         index.release_authority(&first).unwrap();
         assert!(index.authority_status(&authority_request).is_none());
-
-        let nic = identity(b"duplicate-nic");
-        let nic_request = request(
-            &uid("d14e4567-e89b-42d3-a456-426614174064"),
-            &nic,
-            &uid("e14e4567-e89b-42d3-a456-426614174065"),
-            proof("f14e4567-e89b-42d3-a456-426614174066", 1),
-            MacvtapMode::Bridge,
-            SharingPolicy::Multiplexed,
-            2,
-        );
-        let lease = index
-            .admit_before_effect(nic_request, |_| ExternalNicEffectOutcome::Confirmed)
-            .unwrap()
-            .into_lease();
-        let duplicate = request(
-            &uid("d14e4567-e89b-42d3-a456-426614174064"),
-            &nic,
-            &uid("e14e4567-e89b-42d3-a456-426614174065"),
-            proof("f14e4567-e89b-42d3-a456-426614174066", 1),
-            MacvtapMode::Bridge,
-            SharingPolicy::Multiplexed,
-            2,
-        );
-        assert_eq!(
-            index.admit(duplicate).unwrap_err(),
-            AuthorityError::DuplicateActiveReservation
-        );
-        index
-            .close_then_release(&lease, || ExternalNicCloseOutcome::Confirmed)
-            .unwrap();
     }
 
     #[test]
@@ -4016,5 +2900,130 @@ mod tests {
             1
         );
         assert!(index.authority_status(&request).is_none());
+    }
+
+    fn operation_row(
+        operation_id: &str,
+        request: &AuthorityRequest,
+    ) -> (AuthorityStorageOperation, PreparedAuthorityOperation) {
+        let claim = AuthorityStorageClaim::Generic(request.durable_claim());
+        let claim_digest = claim_digest(&claim).unwrap();
+        let store_binding_digest = "sha256:".to_owned() + &"1".repeat(64);
+        let operation = AuthorityStorageOperation {
+            operation_id: operation_id.to_owned(),
+            claim,
+            state: AuthorityOperationState::Pending,
+            claim_digest,
+            store_binding_digest: store_binding_digest.clone(),
+        };
+        let prepared = PreparedAuthorityOperation::new(
+            operation_id.to_owned(),
+            store_binding_digest,
+            test_nonce_for_operation(operation_id),
+        )
+        .unwrap();
+        (operation, prepared)
+    }
+
+    #[test]
+    fn recovery_receipt_rejects_tampered_claim_digest() {
+        let request = AuthorityRequest::vsock_cid(
+            uid("a73e4567-e89b-42d3-a456-426614174080"),
+            79,
+            authority_proof("b73e4567-e89b-42d3-a456-426614174081", 1),
+        )
+        .unwrap();
+        let (mut operation, prepared) = operation_row("recovery-tampered-digest", &request);
+        let mut tampered: Vec<char> = operation.claim_digest.chars().collect();
+        tampered[63] = if tampered[63] == '0' { '1' } else { '0' };
+        operation.claim_digest = tampered.into_iter().collect();
+        assert!(matches!(
+            HostGlobalAuthorityIndex::recovery_receipt_from_operations_with_prepared_capabilities(
+                vec![operation],
+                None,
+                BTreeMap::from([("recovery-tampered-digest".to_owned(), prepared)]),
+            ),
+            Err(AuthorityError::InvalidAuthorityRequest)
+        ));
+    }
+
+    #[test]
+    fn recovery_receipt_rejects_prepared_set_missing_active_operation() {
+        let request = AuthorityRequest::vsock_cid(
+            uid("c73e4567-e89b-42d3-a456-426614174082"),
+            81,
+            authority_proof("d73e4567-e89b-42d3-a456-426614174083", 1),
+        )
+        .unwrap();
+        let (operation, _) = operation_row("recovery-missing-prepared", &request);
+        assert!(matches!(
+            HostGlobalAuthorityIndex::recovery_receipt_from_operations_with_prepared_capabilities(
+                vec![operation],
+                None,
+                BTreeMap::new(),
+            ),
+            Err(AuthorityError::InvalidAuthorityRequest)
+        ));
+    }
+
+    #[test]
+    fn recovery_receipt_rejects_duplicate_operation_id() {
+        let host = uid("e73e4567-e89b-42d3-a456-426614174084");
+        let first = AuthorityRequest::vsock_cid(
+            host.clone(),
+            83,
+            authority_proof("f73e4567-e89b-42d3-a456-426614174085", 1),
+        )
+        .unwrap();
+        let second = AuthorityRequest::vsock_cid(
+            host,
+            84,
+            authority_proof("a83e4567-e89b-42d3-a456-426614174086", 1),
+        )
+        .unwrap();
+        let (first_operation, _) = operation_row("recovery-duplicate-id", &first);
+        let (second_operation, _) = operation_row("recovery-duplicate-id", &second);
+        assert!(matches!(
+            HostGlobalAuthorityIndex::recovery_receipt_from_operations_with_prepared_capabilities(
+                vec![first_operation, second_operation],
+                None,
+                BTreeMap::new(),
+            ),
+            Err(AuthorityError::InvalidAuthorityRequest)
+        ));
+    }
+
+    #[test]
+    fn rehydrate_round_trip_admits_recovered_operation_and_reaches_readiness() {
+        let owner = authority_proof("c83e4567-e89b-42d3-a456-426614174088", 1);
+        let request = AuthorityRequest::vsock_cid(
+            uid("b83e4567-e89b-42d3-a456-426614174087"),
+            86,
+            owner.clone(),
+        )
+        .unwrap();
+        let (operation, prepared) = operation_row("recovery-round-trip", &request);
+        let receipt =
+            HostGlobalAuthorityIndex::recovery_receipt_from_operations_with_prepared_capabilities(
+                vec![operation],
+                None,
+                BTreeMap::from([("recovery-round-trip".to_owned(), prepared)]),
+            )
+            .unwrap();
+        let mut index = HostGlobalAuthorityIndex::rehydrate(receipt).unwrap();
+        assert!(index.is_rehydrated());
+        assert_eq!(index.authority_status(&request).unwrap().holder_count(), 1);
+        assert!(matches!(
+            index.adopt_authority(&request, core::slice::from_ref(&owner)),
+            AuthorityAdoption::Adopted(_)
+        ));
+        assert!(!index.is_ready_for_readiness());
+        index
+            .resolve_recovered_operation(
+                "recovery-round-trip",
+                AuthorityRecoveryResolution::ObservedAndAdopted,
+            )
+            .unwrap();
+        assert!(index.is_ready_for_readiness());
     }
 }

@@ -15,7 +15,8 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[cfg(test)]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use d2b_contracts_provider::v3::credential::{
     CREDENTIAL_SERVICE_NAME, CredentialLeaseHandle, CredentialLeaseState, CredentialMetadata,
@@ -26,7 +27,7 @@ use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_toolkit::{
     AuthenticatedSessionRouteBinding, GuestCredentialBackend, GuestCredentialBackendResponse,
     ProviderFd10Spec, ProviderRuntimeError, ProviderSessionMetadata, RouteCredentialAuthorization,
-    credential::{is_absolute_unix_ms, now_unix_ms, ABSOLUTE_UNIX_MS_THRESHOLD},
+    credential::{is_absolute_unix_ms, now_unix_ms, operation_deadline},
     run_from_fd10 as run_provider_from_fd10,
 };
 
@@ -49,6 +50,11 @@ pub const MAX_LOCAL_LEASES: u32 = 256;
 pub const MAX_REFRESH_ATTEMPTS: u16 = 3;
 
 /// Reject ambient SDK credential-chain environment names.
+///
+/// # Errors
+///
+/// Returns `InvalidConfig` when any ambient credential-chain name is
+/// present.
 pub fn reject_ambient_credential_chain(
     keys: impl IntoIterator<Item = impl AsRef<str>>,
 ) -> Result<(), EntraProviderError> {
@@ -57,6 +63,11 @@ pub fn reject_ambient_credential_chain(
 }
 
 /// Reject ambient SDK credential-chain variables in this process.
+///
+/// # Errors
+///
+/// Returns `InvalidConfig` when any ambient credential-chain variable
+/// is present in the process environment.
 pub fn reject_process_environment_credential_chain(
 ) -> Result<(), EntraProviderError> {
     d2b_provider_toolkit::credential::reject_process_environment_credential_chain()
@@ -97,11 +108,6 @@ pub fn run_from_fd10() -> i32 {
         ),
         runtime_provider,
     )
-}
-
-/// Return the supervised controller process status.
-pub fn controller_binary_entrypoint() -> i32 {
-    run_from_fd10()
 }
 
 fn runtime_provider(
@@ -441,13 +447,6 @@ fn entra_inspection(
 pub type EntraFuture<'a, T> =
     Pin<Box<dyn Future<Output = Result<T, EntraClientError>> + Send + 'a>>;
 
-/// Exact-consumer ownership policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EntraCredentialOwner {
-    /// Only the configured consumer may be admitted.
-    ExactConsumer,
-}
-
 /// Closed client state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntraClientState {
@@ -499,6 +498,12 @@ pub struct EntraConfig {
 
 impl EntraConfig {
     /// Validate the inline tenant identifier and lease bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidConfig` when the tenant identifier is not a valid
+    /// Azure reference or the lease bound is outside
+    /// `1..=MAX_LOCAL_LEASES`.
     pub fn new(tenant_id: impl Into<String>, max_leases: u32) -> Result<Self, EntraProviderError> {
         let tenant_id = OpaqueAzureRef::parse(tenant_id.into())
             .map_err(|_| EntraProviderError::InvalidConfig)?;
@@ -571,6 +576,13 @@ pub struct EntraPlacement {
 
 impl EntraPlacement {
     /// Validate user-agent or guest-agent placement inside a Guest.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidPlacement` when the binding is not a user-agent or
+    /// guest-agent binding or the execution reference is not a `Guest`,
+    /// and `InvalidEndpoint` when the identity Guest or login Endpoint
+    /// reference is wrong or the endpoint generation is zero.
     pub fn new(
         binding: PlacementBinding,
         execution_ref: ResourceRef,
@@ -602,6 +614,12 @@ impl EntraPlacement {
     }
 
     /// Validate placement with an authoritative Zone binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidEndpoint` when the zone reference is not a `Zone`,
+    /// and the same `InvalidPlacement` or `InvalidEndpoint` conditions as
+    /// [`EntraPlacement::new`] for the remaining arguments.
     pub fn new_in_zone(
         zone_ref: ResourceRef,
         binding: PlacementBinding,
@@ -626,6 +644,13 @@ impl EntraPlacement {
 
     /// Bind a runtime controller to the exact Guest execution while leaving
     /// Endpoint resolution to the Guest-local typed client.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidEndpoint` when the zone reference is not a `Zone`,
+    /// the binding is not a user-agent or guest-agent binding, the
+    /// execution reference is not a `Guest`, or the endpoint generation
+    /// is zero.
     pub fn new_runtime_in_zone(
         zone_ref: ResourceRef,
         binding: PlacementBinding,
@@ -845,6 +870,12 @@ pub struct EntraCredentialProviderFactory {
 
 impl EntraCredentialProviderFactory {
     /// Validate and construct a factory.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidConsumer` when the consumer reference is not a
+    /// `Provider`, and `InvalidEndpoint` when the placement carries no
+    /// Zone binding.
     pub fn new(
         config: EntraConfig,
         placement: EntraPlacement,
@@ -936,11 +967,6 @@ pub struct EntraCredentialProvider {
 }
 
 impl EntraCredentialProvider {
-    /// Return exact-consumer ownership.
-    pub const fn owner(&self) -> EntraCredentialOwner {
-        EntraCredentialOwner::ExactConsumer
-    }
-
     /// Borrow the exact consumer required at authenticated admission.
     pub const fn consumer_ref(&self) -> &ResourceRef {
         &self.consumer_ref
@@ -1043,6 +1069,12 @@ impl EntraCredentialProvider {
 
     /// Revoke all handles owned by one Credential before finalization clears
     /// its Provider finalizer.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Malformed` when the reference is not a `Credential`, and
+    /// `DeadlineExceeded` when the deadline is not a bounded future
+    /// absolute time.
     pub async fn revoke_owned_handles(
         &self,
         credential_ref: &ResourceRef,
@@ -1067,7 +1099,7 @@ impl EntraCredentialProvider {
                 remaining: 0,
             });
         }
-        let deadline = Self::operation_deadline(deadline_ms)?;
+        let deadline = operation_deadline(deadline_ms)?;
         self.lifecycle
             .lock()
             .await
@@ -1161,66 +1193,6 @@ if primary.is_some() {
         }
     }
 
-    pub(crate) fn operation_deadline(deadline_ms: u64) -> Result<Instant, CredentialServiceError> {
-        Self::time_bound_instant(deadline_ms)
-    }
-
-    pub(crate) fn is_expired_unix_ms(value_ms: u64) -> bool {
-        is_absolute_unix_ms(value_ms) && value_ms <= now_unix_ms()
-    }
-
-    pub(crate) fn time_bound_instant(value_ms: u64) -> Result<Instant, CredentialServiceError> {
-        let now = Instant::now();
-        let now_unix_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure))?
-            .as_millis()
-            .try_into()
-            .map_err(|_| {
-                CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
-            })?;
-        Self::time_bound_instant_at(value_ms, now, now_unix_ms)
-    }
-
-    pub(crate) fn time_bounds_not_after(
-        later_ms: u64,
-        earlier_ms: u64,
-    ) -> Result<bool, CredentialServiceError> {
-        let now = Instant::now();
-        let now_unix_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure))?
-            .as_millis()
-            .try_into()
-            .map_err(|_| {
-                CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
-            })?;
-        let later = Self::time_bound_instant_at(later_ms, now, now_unix_ms)?;
-        let earlier = Self::time_bound_instant_at(earlier_ms, now, now_unix_ms)?;
-        Ok(later <= earlier)
-    }
-
-    fn time_bound_instant_at(
-        value_ms: u64,
-        now: Instant,
-        now_unix_ms: u64,
-    ) -> Result<Instant, CredentialServiceError> {
-        if value_ms >= ABSOLUTE_UNIX_MS_THRESHOLD {
-            let remaining_ms = value_ms.checked_sub(now_unix_ms).ok_or_else(|| {
-                CredentialServiceError::new(CredentialServiceErrorCode::DeadlineExceeded)
-            })?;
-            now.checked_add(Duration::from_millis(remaining_ms))
-                .ok_or_else(|| {
-                    CredentialServiceError::new(CredentialServiceErrorCode::DeadlineExceeded)
-                })
-        } else {
-            now.checked_add(Duration::from_millis(value_ms))
-                .ok_or_else(|| {
-                    CredentialServiceError::new(CredentialServiceErrorCode::DeadlineExceeded)
-                })
-        }
-    }
-
     pub(crate) fn map_client_error(error: EntraClientError) -> CredentialServiceError {
         tracing::warn!(
             provider = crate::PROVIDER_REF,
@@ -1262,7 +1234,7 @@ if primary.is_some() {
                 CredentialServiceErrorCode::InvariantFailure,
             ));
         }
-        if Self::is_expired_unix_ms(grant.expires_at_unix_ms) {
+        if is_absolute_unix_ms(grant.expires_at_unix_ms) && grant.expires_at_unix_ms <= now_unix_ms() {
             return Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::InvariantFailure,
             ));
@@ -1359,14 +1331,56 @@ mod tests {
     }
 
     #[test]
+    fn exact_consumer_guard_is_independent_of_request_fields() {
+        struct StubClient;
+        impl EntraCredentialClient for StubClient {
+            fn state(&self) -> EntraFuture<'_, EntraClientState> {
+                unreachable!("guard test never drives the client")
+            }
+            fn issue_lease(&self, _: &EntraLeaseRequest) -> EntraFuture<'_, EntraLeaseGrant> {
+                unreachable!("guard test never drives the client")
+            }
+            fn inspect_lease(&self, _: &EntraLeaseRef) -> EntraFuture<'_, EntraLeaseInspection> {
+                unreachable!("guard test never drives the client")
+            }
+            fn refresh_lease(&self, _: &EntraLeaseRef) -> EntraFuture<'_, EntraLeaseRenewal> {
+                unreachable!("guard test never drives the client")
+            }
+            fn revoke_lease(&self, _: &EntraLeaseRef) -> EntraFuture<'_, EntraLeaseRevocation> {
+                unreachable!("guard test never drives the client")
+            }
+        }
+        let provider = EntraCredentialProviderFactory::new(
+            EntraConfig::new("tenant-1234", 64).unwrap(),
+            EntraPlacement::new_in_zone(
+                ResourceRef::parse("Zone/work").unwrap(),
+                PlacementBinding::GuestAgent,
+                ResourceRef::parse("Guest/consumer").unwrap(),
+                ResourceRef::parse("Guest/identity").unwrap(),
+                ResourceRef::parse("Endpoint/entra-login").unwrap(),
+                7,
+            )
+            .unwrap(),
+            ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap(),
+            Arc::new(StubClient),
+        )
+        .unwrap()
+        .construct();
+        assert!(provider.authorizes_consumer(
+            &ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap()
+        ));
+        assert!(!provider.authorizes_consumer(&ResourceRef::parse("Provider/other").unwrap()));
+    }
+
+    #[test]
     fn operation_deadline_accepts_absolute_unix_milliseconds() {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        assert!(EntraCredentialProvider::operation_deadline(now + 1_000).is_ok());
+        assert!(operation_deadline(now + 1_000).is_ok());
         assert_eq!(
-            EntraCredentialProvider::operation_deadline(now - 1)
+            operation_deadline(now - 1)
                 .unwrap_err()
                 .code(),
             CredentialServiceErrorCode::DeadlineExceeded

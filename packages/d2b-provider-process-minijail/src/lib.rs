@@ -157,7 +157,7 @@ impl<P: ProcessLaunchEffectPort> MinijailProcessProvider<P> {
             );
             return Err(ProcessConformanceError::ProviderMismatch);
         }
-        if ticket.provider_ref().to_canonical_string() != "Provider/system-minijail" {
+        if ticket.provider_ref().to_canonical_string() != crate::PROVIDER_REF {
             warn!(
                 provider = PROVIDER_NAME,
                 resource = %ticket.process_ref().to_canonical_string(),
@@ -190,7 +190,7 @@ impl<P: ProcessLaunchEffectPort> MinijailProcessProvider<P> {
             return Err(ProcessConformanceError::UserRefRequired);
         }
         if let Some(gate) = self.platform_gate
-            && let Err(error) = launch::validate_launch_ticket(ticket, gate)
+            && let Err(error) = launch::validate_platform_gate(gate)
         {
             warn!(
                 provider = PROVIDER_NAME,
@@ -310,6 +310,16 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
         self.launch_with_inherited_fds(ticket, Vec::new()).await
     }
 
+/// Launch one ticket after validation, returning the verified report.
+    ///
+    /// # Errors
+    ///
+    /// Returns ticket validation failures (`ProviderMismatch`,
+    /// `PlatformGateRejected`), thee effect port's launch and readiness
+    /// failures, `WaitOwnerMismatch` when the launched process is not
+    /// locally owned, `IdentityUnverified` when the launch evidence lacks
+    /// the required identity bindings, and `TerminalEvidenceMismatch`
+    /// when the identity does not match the ticket seal.
     async fn launch_with_inherited_fds(
         &self,
         ticket: &LaunchTicket,
@@ -368,6 +378,14 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
         }
     }
 
+    /// Adopt a running candidate after verifying its identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns ticket validation failures, the effect port's observe
+    /// failures, non-`DeadlineExceeded` readiness failures, and
+    /// pidfd-open failures. A `DeadlineExceeded` readiness probe
+    /// instead quarantines the candidate as identity-ambiguous.
     async fn adopt(
         &self,
         ticket: &LaunchTicket,
@@ -450,6 +468,12 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
         )))
     }
 
+    /// Stop exactly the named identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns `IdentityUnverified` when the identity is zero; otherwise
+    /// the effect port's stop failure propagates.
     async fn stop(
         &self,
         identity: &ProcessIdentityDigest,
@@ -472,6 +496,13 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
         })
     }
 
+    /// Stop the stale candidate when no live adopter is running.
+    ///
+    /// # Errors
+    ///
+    /// Returns `IdentityUnverified` when the candidate identity is zero;
+    /// otherwise thee effect port's pidfd-open or stop failure
+    /// propagates.
     async fn stop_stale(
         &self,
         candidate: &AdoptionCandidate,

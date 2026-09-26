@@ -13,8 +13,6 @@ use d2b_contracts_resource::v3::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::types::validate_token;
-
 /// Process template id.
 pub const PROCESS_TEMPLATE: &str = "qemu-media-runner";
 
@@ -218,6 +216,12 @@ pub struct LaunchTicket {
 
 impl LaunchTicket {
     /// Construct a ticket from already-authorized refs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessSpecError`] when the process spec fails validation,
+    /// when more than four media refs are named, when a media ref is not a
+    /// Volume, or when a media ref is duplicated.
     pub fn new(
         process: ProcessSpec,
         media_refs: impl IntoIterator<Item = ResourceRef>,
@@ -236,7 +240,7 @@ impl LaunchTicket {
         {
             return Err(ProcessSpecError::InvalidReference);
         }
-        let mut attachments = Vec::new();
+        let mut attachments = Vec::with_capacity(media_refs.len() + 3);
         if let Some(device_ref) = process.execution().device_usage().first() {
             attachments.push(AttachmentSlot {
                 slot: "kvm".to_owned(),
@@ -285,7 +289,7 @@ impl LaunchTicket {
         validate_process_spec(&self.process)?;
         let mut slots = std::collections::BTreeSet::new();
         for attachment in &self.attachments {
-            if !validate_token(&attachment.slot) || !slots.insert(&attachment.slot) {
+            if BoundedToken::parse(attachment.slot.as_str()).is_err() || !slots.insert(&attachment.slot) {
                 return Err(ProcessSpecError::DuplicateAttachmentSlot);
             }
             let expected = match attachment.kind {

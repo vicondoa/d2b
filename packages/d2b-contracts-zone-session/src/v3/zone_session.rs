@@ -292,9 +292,24 @@ impl EndpointPurpose {
     /// Lifts a component-session purpose into the Zone taxonomy.
     ///
     /// Total: every component-session purpose has a Zone counterpart at the
-    /// same tag.
+    /// same tag. The exhaustive match makes a new component-session variant a
+    /// compile error here rather than a runtime panic.
     pub fn from_component_session(value: base::EndpointPurpose) -> Self {
-        Self::from_tag(value.tag()).expect("preserved component-session tag")
+        match value {
+            base::EndpointPurpose::LocalLifecycle => Self::LocalLifecycle,
+            base::EndpointPurpose::ResourceService => Self::ResourceService,
+            base::EndpointPurpose::ZoneLink => Self::ZoneLink,
+            base::EndpointPurpose::Bootstrap => Self::Bootstrap,
+            base::EndpointPurpose::ComponentSession => Self::ComponentSession,
+            base::EndpointPurpose::ResourceTransfer => Self::ResourceTransfer,
+            base::EndpointPurpose::ProviderControl => Self::ProviderControl,
+            base::EndpointPurpose::SensitiveCredential => Self::SensitiveCredential,
+            base::EndpointPurpose::UserControl => Self::UserControl,
+            base::EndpointPurpose::ControllerWatch => Self::ControllerWatch,
+            base::EndpointPurpose::NamedStream => Self::NamedStream,
+            base::EndpointPurpose::AuditExport => Self::AuditExport,
+            base::EndpointPurpose::SupportBundle => Self::SupportBundle,
+        }
     }
 
     /// Lowers this purpose into the component-session taxonomy.
@@ -327,9 +342,23 @@ impl ServicePackage {
     /// Lifts a component-session service package into the Zone taxonomy.
     ///
     /// Total: every component-session package has a Zone counterpart at the
-    /// same tag.
+    /// same tag. The exhaustive match makes a new component-session variant a
+    /// compile error here rather than a runtime panic.
     pub fn from_component_session(value: base::ServicePackage) -> Self {
-        Self::from_tag(value.tag()).expect("preserved component-session tag")
+        match value {
+            base::ServicePackage::ResourceV3 => Self::ResourceV3,
+            base::ServicePackage::ControllerV3 => Self::ControllerV3,
+            base::ServicePackage::ProviderV3 => Self::ProviderV3,
+            base::ServicePackage::AuditV3 => Self::AuditV3,
+            base::ServicePackage::SupportV3 => Self::SupportV3,
+            base::ServicePackage::CredentialV3 => Self::CredentialV3,
+            base::ServicePackage::DisplayV3 => Self::DisplayV3,
+            base::ServicePackage::ClipboardV3 => Self::ClipboardV3,
+            base::ServicePackage::ClipboardBridgeV3 => Self::ClipboardBridgeV3,
+            base::ServicePackage::ClipboardPickerCoordV3 => Self::ClipboardPickerCoordV3,
+            base::ServicePackage::NotificationV3 => Self::NotificationV3,
+            base::ServicePackage::ConfigNixosV3 => Self::ConfigNixosV3,
+        }
     }
 
     /// Lowers this service package into the component-session taxonomy.
@@ -361,6 +390,26 @@ pub const ZONE_ENROLLMENT_PROTOCOL: &str = "d2b-zone-enrollment-v1";
 
 /// Largest encoded Zone enrollment control payload one endpoint accepts.
 pub const MAX_ZONE_ENROLLMENT_PAYLOAD_BYTES: usize = 16 * 1024;
+
+// ---------------------------------------------------------------------------
+// ZoneLink cryptoperiod defaults
+// ---------------------------------------------------------------------------
+
+/// Default absolute lifetime of one allocator-issued bootstrap PSK.
+///
+/// The canonical definition shared by the child-local ZoneLink handler and the
+/// bus-side enrollment machine; both re-export this constant rather than
+/// restating it, so a cryptoperiod change cannot silently desynchronize the
+/// two sides.
+pub const BOOTSTRAP_PSK_TTL_MS_DEFAULT: u64 = 300_000;
+
+/// Default maximum lifetime of one enrolled `Noise_KK` session.
+///
+/// The canonical definition shared by the child-local ZoneLink handler and the
+/// bus-side enrollment machine; both re-export this constant rather than
+/// restating it, so a cryptoperiod change cannot silently desynchronize the
+/// two sides.
+pub const KK_SESSION_MAX_LIFETIME_MS_DEFAULT: u64 = 86_400_000;
 
 /// The exact link identity one Zone enrollment control payload names.
 ///

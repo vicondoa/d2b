@@ -162,6 +162,13 @@ impl ZoneEndpointPolicy {
     /// Fail-closed on every appended Zone member and on a purpose offered
     /// under a class it does not permit. The class rule is the contract's own
     /// [`EndpointPurpose::permits_class`]; this module restates none of it.
+    ///
+    /// # Errors
+    /// Returns `ZonePolicyError::PurposeClassRejected` when the purpose class is
+    /// not permitted under the purpose, and `PurposeNotEncodable`,
+    /// `InitiatorRoleNotEncodable`, `ResponderRoleNotEncodable`, or
+    /// `ServiceNotEncodable` when the corresponding member has no
+    /// component-session spelling.
     pub fn lower(&self) -> Result<base::EndpointPolicy, ZonePolicyError> {
         if !self.purpose.permits_class(self.purpose_class) {
             return Err(ZonePolicyError::PurposeClassRejected);
@@ -874,7 +881,7 @@ impl RouteAdmissionIssuer {
     #[allow(dead_code)]
     // Route admission authority state is read/updated in brief non-suspending
     // critical sections behind synchronized admission flows and the sync
-    // ZoneLinkSession guard surface (admit/is_open/revalidate);no async form.
+    // ZoneLinkSession guard surface (admit/is_open/revalidate); no async form.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub(crate) fn issue(
         &self,
@@ -941,6 +948,20 @@ impl RouteAdmissionVerifier {
         if route_admission_digest(&evidence.body) != evidence.seal {
             return Err(RouteAdmissionError::SealMismatch);
         }
+        self.verify_body(&evidence.body)?;
+        Ok(VerifiedRouteAdmission {
+            authority: Arc::clone(&self.authority),
+            body: evidence.body,
+        })
+    }
+
+    /// Re-check the runtime-owned authority state against one borrowed
+    /// admission body, without constructing owned evidence.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    fn verify_body(
+        &self,
+        body: &RouteAdmissionBody,
+    ) -> Result<(), RouteAdmissionError> {
         let state = self
             .authority
             .state
@@ -960,48 +981,48 @@ impl RouteAdmissionVerifier {
             return Err(RouteAdmissionError::SessionNotLive);
         }
         let now = (state.clock)();
-        if evidence.body.expires_at_unix_ms <= evidence.body.issued_at_unix_ms
-            || evidence.body.expires_at_unix_ms - evidence.body.issued_at_unix_ms
+        if body.expires_at_unix_ms <= body.issued_at_unix_ms
+            || body.expires_at_unix_ms - body.issued_at_unix_ms
                 > MAX_ROUTE_ADMISSION_LIFETIME_MS
-            || now < evidence.body.issued_at_unix_ms
-            || now >= evidence.body.expires_at_unix_ms
+            || now < body.issued_at_unix_ms
+            || now >= body.expires_at_unix_ms
         {
             return Err(RouteAdmissionError::Expired);
         }
-        if evidence.body.zone_link_uid != state.zone_link_uid {
+        if body.zone_link_uid != state.zone_link_uid {
             return Err(RouteAdmissionError::ZoneLinkMismatch);
         }
-        if evidence.body.edge != state.edge {
+        if body.edge != state.edge {
             return Err(RouteAdmissionError::EdgeMismatch);
         }
-        if evidence.body.controller_generation != state.controller_generation {
+        if body.controller_generation != state.controller_generation {
             return Err(RouteAdmissionError::ControllerGenerationMismatch);
         }
-        if evidence.body.reconnect_generation != state.session_binding.reconnect_generation() {
+        if body.reconnect_generation != state.session_binding.reconnect_generation() {
             return Err(RouteAdmissionError::ReconnectGenerationMismatch);
         }
-        if evidence.body.source_zone_uid != state.source_zone_uid {
+        if body.source_zone_uid != state.source_zone_uid {
             return Err(RouteAdmissionError::SourceZoneMismatch);
         }
-        if evidence.body.target_zone_uid != state.target_zone_uid {
+        if body.target_zone_uid != state.target_zone_uid {
             return Err(RouteAdmissionError::TargetZoneMismatch);
         }
-        if evidence.body.verb != state.verb {
+        if body.verb != state.verb {
             return Err(RouteAdmissionError::VerbMismatch);
         }
-        if evidence.body.required_capability != state.required_capability {
+        if body.required_capability != state.required_capability {
             return Err(RouteAdmissionError::CapabilityMismatch);
         }
-        if evidence.body.policy_revision != state.policy_revision {
+        if body.policy_revision != state.policy_revision {
             return Err(RouteAdmissionError::PolicyRevisionMismatch);
         }
-        if evidence.body.session_binding != state.session_binding {
+        if body.session_binding != state.session_binding {
+
+
+
             return Err(RouteAdmissionError::SessionBindingMismatch);
         }
-        Ok(VerifiedRouteAdmission {
-            authority: Arc::clone(&self.authority),
-            body: evidence.body,
-        })
+        Ok(())
     }
 
     /// Atomically replace the runtime route policy snapshot.
@@ -1047,13 +1068,7 @@ impl VerifiedRouteAdmission {
         let verifier = RouteAdmissionVerifier {
             authority: Arc::clone(&self.authority),
         };
-        verifier
-            .verify(RouteAdmissionEvidence {
-                authority: Arc::clone(&self.authority),
-                seal: route_admission_digest(&self.body),
-                body: self.body.clone(),
-            })
-            .map(|_| ())
+        verifier.verify_body(&self.body)
     }
 
     pub const fn zone_link_uid(&self) -> &ResourceUid {

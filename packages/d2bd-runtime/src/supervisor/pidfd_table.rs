@@ -20,6 +20,18 @@ static SIGNAL_EPERM_TEST_ROLES: OnceLock<Mutex<std::collections::HashSet<(String
 
 use crate::supervisor::state::parse_proc_stat_starttime;
 
+/// The daemon's runner-pidfd registry: one pidfd entry per `(vm, role)`,
+/// plus the in-flight spawn reservations, the register/snapshot mutation
+/// guard, and the broker-reap buffer.
+///
+/// Every lock here is a blocking seat, and it stays blocking on purpose:
+/// the table is read on tokio runtime workers (the readiness liveness
+/// probe and the startup-adoption pass), where `tokio::sync`'s blocking
+/// seats panic, while the lifecycle and dispatch paths lock it from
+/// dedicated threads. One lock type serves both, so each locking function
+/// carries a recorded `synchronous path` allow instead of trading a park
+/// for a panic; making this table async belongs with its async callers
+/// (the startup-adoption chain in `d2bd`), not with this seat.
 #[derive(Debug)]
 pub struct PidfdTable {
     pub(crate) entries: RwLock<BTreeMap<(String, String), PidfdEntry>>,
@@ -81,11 +93,13 @@ impl BrokerReapLog {
     }
 
     /// Insert (or overwrite) a ChildReaped event keyed by PID.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn insert(&self, notif: d2b_contracts_broker::broker_wire::ChildReapedNotification) {
         self.inner.lock().insert(notif.pid, notif);
     }
 
     /// Remove and return the event for `pid`, if any.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn take(
         &self,
         pid: i32,
@@ -94,6 +108,7 @@ impl BrokerReapLog {
     }
 
     /// Remove and return the event for a `(vm, role)` runner id, if any.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn take_for(
         &self,
         vm: &str,
@@ -113,6 +128,7 @@ impl BrokerReapLog {
     /// readiness liveness probe must only observe so the buffered exit
     /// status remains available to the mutating teardown path
     /// (`wait_terminated` / rollback) that owns deregistration.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn peek_for(
         &self,
         vm: &str,
@@ -235,6 +251,7 @@ impl PidfdTable {
 
     /// Reserve one in-flight spawn so a concurrent starter cannot launch a
     /// second writer against the same VM role.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn try_reserve_spawn(&self, vm: &str, role: &str) -> bool {
         self.spawn_reservations
             .lock()
@@ -242,6 +259,7 @@ impl PidfdTable {
     }
 
     /// Drop an in-flight spawn reservation.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn release_spawn_reservation(&self, vm: &str, role: &str) {
         self.spawn_reservations
             .lock()
@@ -260,6 +278,7 @@ impl PidfdTable {
         let _ = self.broker_reap_log.set(log);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn register(
         &self,
         vm: String,
@@ -276,6 +295,7 @@ impl PidfdTable {
         Ok(())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn deregister(&self, vm: &str, role: &str) -> Option<PidfdEntry> {
         let mut entries = self.entries.write();
         let removed = entries.remove(&(vm.to_owned(), role.to_owned()));
@@ -288,6 +308,7 @@ impl PidfdTable {
     /// Remove an entry only when it still identifies the supplied process.
     /// Rollback paths use this to avoid deleting a newer/live registration
     /// that won a concurrent spawn race.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn deregister_if_matches(
         &self,
         vm: &str,
@@ -315,6 +336,7 @@ impl PidfdTable {
         self.generation.fetch_add(1, Ordering::AcqRel);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn contains(&self, vm: &str, role: &str) -> bool {
         self.entries
             .read()
@@ -333,6 +355,7 @@ impl PidfdTable {
     ///
     /// Returns the number of entries dropped. Snapshot is
     /// re-persisted to disk if any entries were dropped.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn prune_dead_entries(&self) -> Result<usize, PidfdTableError> {
         // Serialize the mutate + snapshot sequence against concurrent
         // register/deregister+snapshot from other VMs (same invariant as
@@ -375,6 +398,7 @@ impl PidfdTable {
         Ok(dropped)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn list_for_vm(&self, vm: &str) -> Vec<PidfdRegistration> {
         self.entries
             .read()
@@ -389,6 +413,7 @@ impl PidfdTable {
             .collect()
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn len(&self) -> usize {
         self.entries.read().len()
     }
@@ -397,6 +422,7 @@ impl PidfdTable {
         self.len() == 0
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn signal(&self, vm: &str, role: &str, sig: libc::c_int) -> Result<(), PidfdTableError> {
         let signal = rustix::process::Signal::from_raw(sig)
             .ok_or(PidfdTableError::InvalidSignal { signal: sig })?;
@@ -546,6 +572,7 @@ impl PidfdTable {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn still_alive_same_start_time(&self, vm: &str, role: &str) -> bool {
         let (pid, start_time_ticks) = {
             let entries = self.entries.read();
@@ -563,6 +590,7 @@ impl PidfdTable {
     /// snapshot" sequence hold this guard across BOTH steps so concurrent
     /// different-VM ops cannot lose an entry on disk (one thread's
     /// snapshot landing between another thread's register and snapshot).
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn mutation_guard(&self) -> parking_lot::MutexGuard<'_, ()> {
         self.mutation_lock.lock()
     }
@@ -574,6 +602,7 @@ impl PidfdTable {
     ///
     /// This OBSERVES only - it never removes the entry. All
     /// deregistration stays in the teardown / rollback path.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn dup_pidfd_for(&self, vm: &str, role: &str) -> Option<(OwnedFd, i32, u64)> {
         let entries = self.entries.read();
         let entry = entries.get(&(vm.to_owned(), role.to_owned()))?;
@@ -587,6 +616,7 @@ impl PidfdTable {
         self.contains(vm, role)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn snapshot(&self) -> Result<(), PidfdTableError> {
         let persisted = {
             let entries = self.entries.read();
@@ -660,6 +690,7 @@ impl PidfdTable {
 }
 
 #[cfg(any(test, feature = "test-support"))]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 pub fn force_signal_eperm_for_tests(vm: &str, role: &str, enabled: bool) {
     let mut roles = SIGNAL_EPERM_TEST_ROLES
         .get_or_init(|| Mutex::new(Default::default()))

@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use d2b_contracts_resource::v3::ControllerGeneration;
+use d2b_contracts_resource::v3::{ControllerGeneration, ZoneId};
 use d2b_provider_device::{
     DEVICE_REGISTRATIONS, DeviceComponent, DeviceDriverArgs, DeviceResourceState,
     device_descriptor,
@@ -47,7 +47,7 @@ impl DeviceRuntime for UnavailableRuntime {
 #[test]
 fn the_device_type_registers_one_driver_over_four_provider_rows() {
     let descriptor = device_descriptor(DeviceDriverArgs {
-        zone: "integration".to_owned(),
+        zone: ZoneId::parse("integration").expect("valid test zone"),
         controller_generation: ControllerGeneration::new(1).expect("generation"),
         facets: DeviceEffectFacets {
             runtime: Arc::new(UnavailableRuntime),

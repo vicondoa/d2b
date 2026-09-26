@@ -457,8 +457,26 @@ pub struct NftChain {
 pub struct NetworkManagerUnmanaged {
     pub file_path: String,
     pub match_criteria: Vec<String>,
-    pub reload_behavior: String,
+    pub reload_behavior: NmReloadBehavior,
     pub ownership: OwnershipRule,
+}
+
+/// The closed reload contract a NetworkManager unmanaged drop-in declares.
+///
+/// `atomic-reload` reloads NetworkManager after the drop-in write, `none`
+/// writes it without reloading, and `unspecified` is the empty-string
+/// sentinel a bundle that declares no host contract carries. Every other
+/// wire value is a hand-declared bundle defect that fails when the artifact
+/// is resolved, so a typo can no longer silently skip the reload while the
+/// apply acks success.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum NmReloadBehavior {
+    AtomicReload,
+    None,
+    /// The empty-string sentinel; a real wire value that round-trips.
+    #[serde(rename = "")]
+    Unspecified,
 }
 
 /// File ownership policy for host materialized files.
@@ -538,7 +556,7 @@ pub enum CapabilityStatus {
 #[cfg(test)]
 mod tests {
     use super::{
-        BridgePortFlags, HostJson, Ipv6SysctlEntry, TapRole, UsbipBusidLock,
+        BridgePortFlags, HostJson, Ipv6SysctlEntry, NmReloadBehavior, TapRole, UsbipBusidLock,
         UsbipLockOwner, UsbipLockScope, VendorProductPair,
     };
 
@@ -617,5 +635,42 @@ mod tests {
         let parsed = serde_json::from_str::<UsbipBusidLock>(&rendered).expect("parse usbip lock");
 
         assert_eq!(parsed, lock);
+    }
+
+    /// The reload contract's wire vocabulary is closed and every value
+    /// round-trips, including the empty no-host-contract sentinel.
+    #[test]
+    fn nm_reload_behavior_round_trips_its_wire_values() {
+        for (wire, behavior) in [
+            ("atomic-reload", NmReloadBehavior::AtomicReload),
+            ("none", NmReloadBehavior::None),
+            ("", NmReloadBehavior::Unspecified),
+        ] {
+            let rendered = serde_json::to_string(&behavior).expect("serialize reload behavior");
+            assert_eq!(rendered, format!("{wire:?}"));
+            let parsed: NmReloadBehavior =
+                serde_json::from_str(&rendered).expect("parse reload behavior");
+            assert_eq!(parsed, behavior);
+        }
+    }
+
+    /// A hand-declared reload-behavior typo fails where the host artifact is
+    /// resolved, never as a string that the apply/remove paths must re-check.
+    #[test]
+    fn host_json_refuses_unknown_nm_reload_behavior() {
+        let host = |reload_behavior: &str| {
+            format!(
+                r##"{{"schemaVersion":"v2","site":{{"allowUnsafeEastWest":false}},"environments":[],"nftables":{{"family":"inet","table":"d2b","chains":[]}},"networkManager":{{"filePath":"/etc/NetworkManager/conf.d/00-d2b.conf","matchCriteria":[],"reloadBehavior":{reload_behavior:?},"ownership":{{"owner":"root","group":"root","mode":"0644","driftPolicy":"replace"}}}},"hostsFile":{{"startMarker":"# begin","endMarker":"# end","rule":"test"}},"kernelModules":[],"fdOwnership":[],"cloudHypervisorCapabilities":[]}}"##
+            )
+        };
+
+        for declared in ["atomic-reload", "none", ""] {
+            serde_json::from_str::<HostJson>(&host(declared))
+                .unwrap_or_else(|err| panic!("{declared:?} is a declared value: {err}"));
+        }
+
+        let err = serde_json::from_str::<HostJson>(&host("atomic-reloadd"))
+            .expect_err("a hand-declared reload behavior typo must fail at resolution");
+        assert!(err.to_string().contains("unknown variant"), "{err}");
     }
 }

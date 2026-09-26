@@ -25,10 +25,12 @@
 //! tests can drive the full coexistence matrix without a live nft
 //! kernel surface.
 
+use crate::media::BusId;
 use d2b_core::host_w3::{CoexistencePolicy, FirewallManager};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256 as Sha256Hasher};
 use std::fmt;
+use std::fmt::Write as _;
 
 /// Hex-encoded SHA-256 digest. Returned by [`hash_inet_d2b_table`]
 /// and consumed by the broker as the `table_hash_before`/`_after`
@@ -43,7 +45,10 @@ impl Sha256 {
         let mut hasher = Sha256Hasher::new();
         hasher.update(bytes);
         let out = hasher.finalize();
-        let hex = out.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let mut hex = String::with_capacity(64);
+        for b in out.iter() {
+            write!(hex, "{b:02x}").expect("writing to a String is infallible");
+        }
         Self(hex)
     }
 
@@ -61,10 +66,10 @@ impl fmt::Display for Sha256 {
 
 /// Errors returned by the s3 nftables surface. Discriminants are
 /// kebab-case to match the broker audit log + the wider
-/// `d2b-core::error` taxonomy. The [`Self::as_kebab_case`] helper
+/// `d2b_contracts::error` taxonomy. The [`Self::as_kebab_case`] helper
 /// is the canonical mapping consumed by
-/// [`d2b_core::error::Error::internal_io`] when an error needs to
-/// surface through the broker wire as a typed [`d2b_core::error`].
+/// [`d2b_contracts::error::Error::internal_io`] when an error needs to
+/// surface through the broker wire as a typed [`d2b_contracts::error`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NftError {
     /// A foreign nft rule sits above the `inet d2b` chains at a
@@ -87,7 +92,7 @@ pub enum NftError {
 
 impl NftError {
     /// Stable kebab-case discriminant for audit logs + the typed-error
-    /// mapping into `d2b-core::error::Error`.
+    /// mapping into `d2b_contracts::error::Error`.
     pub const fn as_kebab_case(&self) -> &'static str {
         match self {
             Self::ForeignNftRuleShadowsD2b { .. } => "foreign-nft-rule-shadows-d2b",
@@ -97,13 +102,13 @@ impl NftError {
         }
     }
 
-    /// Map to a `d2b-core::error::Error` via the
-    /// [`d2b_core::error::Error::internal_io`] constructor. The
+    /// Map to a `d2b_contracts::error::Error` via the
+    /// [`d2b_contracts::error::Error::internal_io`] constructor. The
     /// stable kebab-case discriminant is the opaque reason; the
     /// broker audit log records the structured variant separately so
     /// no operator-visible message loses the typed detail.
-    pub fn to_core_error(&self) -> d2b_core::error::Error {
-        d2b_core::error::Error::internal_io(self.as_kebab_case())
+    pub fn to_core_error(&self) -> d2b_contracts::error::Error {
+        d2b_contracts::error::Error::internal_io(self.as_kebab_case())
     }
 }
 
@@ -226,7 +231,12 @@ pub struct NftRule {
 /// The broker side reads this from the trusted bundle, renders it via
 /// [`NftBatch::render_nft_script`], and feeds the script to
 /// `nft -f -`. Foreign tables and chains are NEVER touched.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// NOTE: intentionally NOT `Deserialize`. The `&'static str` fields
+/// would pin the generated impl to `'de: 'static`, making it
+/// unusable on any runtime input; batches are only ever constructed
+/// or recovered via [`NftBatch::parse`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NftBatch {
     pub table_family: &'static str,
     pub table_name: &'static str,
@@ -242,6 +252,12 @@ impl NftBatch {
     /// Parse the limited d2b-managed `nft -f -` script dialect back
     /// into a structured batch so runtime checks can re-assert ordering
     /// invariants before touching the live table.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseNftScriptError` with a line-anchored detail when
+    /// the script does not match the limited dialect (a chain missing
+    /// its hook or priority declaration, or a malformed rule).
     pub fn parse(script: &str) -> Result<Self, ParseNftScriptError> {
         struct PendingChain {
             name: String,
@@ -499,7 +515,7 @@ impl NftBatch {
         self.add_usbip_carveout_expr(
             ChainHook::Forward,
             bus_id,
-            &format!("meta iifname \"usbip-{bus_id}\" accept", bus_id = bus_id.0),
+            &format!("meta iifname \"usbip-{bus_id}\" accept", bus_id = bus_id.as_str()),
         )
     }
 
@@ -527,7 +543,7 @@ impl NftBatch {
 
         let rule = NftRule {
             expr: expr.to_owned(),
-            comment: format!("{}usbip-carveout-{}", NftBatch::COMMENT_PREFIX, bus_id.0),
+            comment: format!("{}usbip-carveout-{}", NftBatch::COMMENT_PREFIX, bus_id.as_str()),
             specific_carveout: true,
         };
 
@@ -599,24 +615,6 @@ impl NftBatch {
             }
         }
         Ok(())
-    }
-}
-
-/// USBIP busid newtype. The broker re-validates the busid lexical form
-/// against the trusted bundle before passing it down here.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct BusId(pub String);
-
-impl BusId {
-    pub fn new(s: impl Into<String>) -> Self {
-        Self(s.into())
-    }
-}
-
-impl fmt::Display for BusId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
     }
 }
 
@@ -973,8 +971,8 @@ mod tests {
     }
 
     /// 7-row coexistence matrix - these are the L1c canaries
-    /// `nft-coexistence-{firewalld,ufw,docker,libvirt,iptables-nft,
-    /// unknown-manager,no-manager}`.
+    /// `nft-coexistence-{firewalld, ufw, docker, libvirt, iptables-nft,
+    /// unknown-manager, no-manager}`.
     #[test]
     fn coexistence_matrix_all_7_rows() {
         use CoexistencePolicy::*;
@@ -1035,7 +1033,8 @@ mod tests {
 
     #[test]
     fn usbip_carveout_inserted_before_generic() {
-        let batch = add_usbip_firewall_carveout(&BusId::new("1-1.2")).expect("carveout");
+        let bus_id = BusId::new("1-1.2").expect("busid");
+        let batch = add_usbip_firewall_carveout(&bus_id).expect("carveout");
         let forward = batch
             .chains
             .iter()
@@ -1060,7 +1059,8 @@ mod tests {
 
     #[test]
     fn comment_marker_prefix_on_every_managed_rule() {
-        let batch = add_usbip_firewall_carveout(&BusId::new("2-1")).expect("carveout");
+        let bus_id = BusId::new("2-1").expect("busid");
+        let batch = add_usbip_firewall_carveout(&bus_id).expect("carveout");
         let forward = batch
             .chains
             .iter()
@@ -1098,7 +1098,7 @@ mod tests {
         let core = err.to_core_error();
         assert_eq!(
             core.kind(),
-            d2b_core::error::Kind::InternalIo,
+            d2b_contracts::error::Kind::InternalIo,
             "broker maps via InternalIo for now; ADR records the longer-term plan"
         );
     }
@@ -1191,5 +1191,188 @@ mod tests {
             h_clean, h_volatile,
             "handle/index are volatile and must not change the canonical digest"
         );
+    }
+
+    /// Round-trip oracle for [`NftBatch::parse`]: a batch rendered by
+    /// [`NftBatch::render_nft_script`] MUST parse back to an equal
+    /// batch. This is the broker's apply→re-parse invariant.
+    #[test]
+    fn parse_roundtrips_rendered_script() {
+        let mut batch = build_inet_d2b_chains();
+        let bus_id = BusId::new("1-1.2").expect("busid");
+        batch.add_usbip_carveout(&bus_id).expect("carveout");
+        let script = batch.render_nft_script();
+        let parsed = NftBatch::parse(&script).expect("rendered script parses");
+        assert_eq!(parsed, batch);
+    }
+
+    /// The minimal admissible script: an inline-closed empty table.
+    #[test]
+    fn parse_accepts_inline_empty_table() {
+        let batch = NftBatch::parse("table inet d2b {}").expect("inline empty table");
+        assert_eq!(batch.table_family, "inet");
+        assert_eq!(batch.table_name, "d2b");
+        assert!(batch.chains.is_empty());
+    }
+
+    /// Valid script with the `policy` declaration on its own line
+    /// (the dialect also accepts policy inline on the `type` line,
+    /// exercised by [`parse_roundtrips_rendered_script`]), plus rule
+    /// comment parsing and `specific_carveout` inference.
+    #[test]
+    fn parse_accepts_valid_script_with_separate_policy_line() {
+        let script = r#"table inet d2b {
+  chain forward {
+    type filter hook forward priority -5;
+    policy drop;
+    ip saddr 10.0.0.1 accept comment "d2b managed: usbip-carveout-1-1.2"
+    drop comment "d2b managed: default-deny-forward"
+  }
+}
+"#;
+        let batch = NftBatch::parse(script).expect("valid script parses");
+        assert_eq!(batch.table_family, "inet");
+        assert_eq!(batch.table_name, "d2b");
+        assert_eq!(batch.chains.len(), 1);
+        let forward = &batch.chains[0];
+        assert_eq!(forward.name, "forward");
+        assert_eq!(forward.hook, ChainHook::Forward);
+        assert_eq!(forward.priority, priority::FORWARD);
+        assert_eq!(forward.policy, ChainPolicy::Drop);
+        assert_eq!(forward.rules.len(), 2);
+        assert_eq!(forward.rules[0].expr, "ip saddr 10.0.0.1 accept");
+        assert_eq!(
+            forward.rules[0].comment,
+            "d2b managed: usbip-carveout-1-1.2"
+        );
+        assert!(
+            forward.rules[0].specific_carveout,
+            "usbip carve-out comment marks the rule specific"
+        );
+        assert_eq!(forward.rules[1].expr, "drop");
+        assert_eq!(
+            forward.rules[1].comment,
+            "d2b managed: default-deny-forward"
+        );
+        assert!(!forward.rules[1].specific_carveout);
+    }
+
+    /// Table-driven rejection coverage for [`NftBatch::parse`]: every
+    /// reachable `ParseNftScriptError` path surfaces as a
+    /// line-anchored detail. Rows assert the distinctive fragment of
+    /// the error detail so a regression pinpoints the exact dialect
+    /// rule that broke.
+    #[test]
+    fn parse_rejects_malformed_scripts() {
+        struct Case {
+            script: &'static str,
+            expected_fragment: &'static str,
+        }
+        let cases = [
+            Case {
+                script: "",
+                expected_fragment: "missing `table inet d2b` header",
+            },
+            Case {
+                script: "foo",
+                expected_fragment: "expected `table <family> <name> {` header",
+            },
+            Case {
+                script: "table inet d2b\n",
+                expected_fragment: "malformed table header",
+            },
+            Case {
+                script: "table {\n",
+                expected_fragment: "missing nft table family",
+            },
+            Case {
+                script: "table inet {\n",
+                expected_fragment: "missing nft table name",
+            },
+            Case {
+                script: "table inet d2b extra {\n",
+                expected_fragment: "malformed table header",
+            },
+            Case {
+                script: "table ip d2b {\n}\n",
+                expected_fragment: "only `table inet d2b` is supported",
+            },
+            Case {
+                script: "table inet other {\n}\n",
+                expected_fragment: "only `table inet d2b` is supported",
+            },
+            Case {
+                script: "table inet d2b {\nchain forward {\n}\n}\n",
+                expected_fragment: "missing `type filter hook ... priority ...` declaration",
+            },
+            Case {
+                script: "table inet d2b {\nchain forward {\ntype filter hook forward priority -5;\n}\n}\n",
+                expected_fragment: "missing `policy ...;` declaration",
+            },
+            Case {
+                script: "table inet d2b {\nchain forward {\ntype filter hook forward\n}\n}\n",
+                expected_fragment: "unsupported chain header",
+            },
+            Case {
+                script: "table inet d2b {\nchain forward {\ntype filter hook nat priority -5;\n}\n}\n",
+                expected_fragment: "unsupported nft hook `nat`",
+            },
+            Case {
+                script: "table inet d2b {\nchain forward {\ntype filter hook forward priority abc;\n}\n}\n",
+                expected_fragment: "invalid hook priority",
+            },
+            Case {
+                script: "table inet d2b {\nchain forward {\ntype filter hook forward priority -5 policy reject;\n}\n}\n",
+                expected_fragment: "unsupported chain policy `reject`",
+            },
+            Case {
+                script: "table inet d2b {\nchain forward {\ntype filter hook forward priority -5;\npolicy drop accept;\n}\n}\n",
+                expected_fragment: "malformed policy line",
+            },
+            Case {
+                script: "table inet d2b {\nfoo\n}\n",
+                expected_fragment: "expected `chain <name> {` or `}`",
+            },
+            Case {
+                script: "table inet d2b {\nchain forward\n}\n",
+                expected_fragment: "malformed chain header",
+            },
+            Case {
+                script: "table inet d2b {\nchain {\n}\n}\n",
+                expected_fragment: "chain name must not be empty",
+            },
+            Case {
+                script: "table inet d2b {\nchain forward {\ntype filter hook forward priority -5;\naccept\n}\n}\n",
+                expected_fragment: "managed rule missing trailing `comment \"...\"`",
+            },
+            Case {
+                script: "table inet d2b {\nchain forward {\ntype filter hook forward priority -5;\naccept comment \"d2b managed: x\n}\n}\n",
+                expected_fragment: "unterminated nft rule comment",
+            },
+            Case {
+                script: "table inet d2b {\nchain forward {\ntype filter hook forward priority -5;\n",
+                expected_fragment: "unterminated chain `forward` block",
+            },
+            Case {
+                script: "table inet d2b {\nchain forward {\ntype filter hook forward priority -5; policy drop;\n}\n",
+                expected_fragment: "unterminated `table inet d2b` block",
+            },
+            Case {
+                script: "table inet d2b {\n}\nfoo\n",
+                expected_fragment: "unexpected content after table close",
+            },
+        ];
+        for case in cases {
+            let err = NftBatch::parse(case.script)
+                .expect_err("script must fail to parse")
+                .to_string();
+            assert!(
+                err.contains(case.expected_fragment),
+                "script {s:?} error {e:?} missing fragment {f:?}",
+                s = case.script,
+                e = err,
+                f = case.expected_fragment
+            );
+        }
     }
 }

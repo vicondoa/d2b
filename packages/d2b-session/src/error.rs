@@ -28,6 +28,7 @@ pub enum SessionErrorClass {
 }
 
 impl SessionErrorClass {
+    /// Return the stable kebab-case class spelling.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Authentication => "authentication",
@@ -44,14 +45,17 @@ impl SessionErrorClass {
 }
 
 impl SessionError {
+    /// Construct an error from a closed session error code.
     pub const fn new(code: SessionErrorCode) -> Self {
         Self { code }
     }
 
+    /// Return the closed error code.
     pub const fn code(self) -> SessionErrorCode {
         self.code
     }
 
+    /// Return the error class the code belongs to.
     pub const fn class(self) -> SessionErrorClass {
         match self.code {
             SessionErrorCode::AuthenticationFailed

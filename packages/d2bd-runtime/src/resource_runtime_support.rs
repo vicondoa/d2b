@@ -155,27 +155,27 @@ impl NewPlaneReadinessState {
     }
 
     pub fn set_spec_store_ready(&self, value: bool) {
-        self.spec_store_ready.store(value, Ordering::SeqCst);
+        self.spec_store_ready.store(value, Ordering::Relaxed);
     }
 
     pub fn set_manager_started(&self, value: bool) {
-        self.manager_started.store(value, Ordering::SeqCst);
+        self.manager_started.store(value, Ordering::Relaxed);
     }
 
     pub fn set_providers_registered(&self, value: bool) {
-        self.providers_registered.store(value, Ordering::SeqCst);
+        self.providers_registered.store(value, Ordering::Relaxed);
     }
 
     pub fn set_initial_load_complete(&self, value: bool) {
-        self.initial_load_complete.store(value, Ordering::SeqCst);
+        self.initial_load_complete.store(value, Ordering::Relaxed);
     }
 
     pub fn snapshot(&self) -> NewPlaneReadiness {
         NewPlaneReadiness {
-            spec_store_ready: self.spec_store_ready.load(Ordering::SeqCst),
-            manager_started: self.manager_started.load(Ordering::SeqCst),
-            providers_registered: self.providers_registered.load(Ordering::SeqCst),
-            initial_load_complete: self.initial_load_complete.load(Ordering::SeqCst),
+            spec_store_ready: self.spec_store_ready.load(Ordering::Relaxed),
+            manager_started: self.manager_started.load(Ordering::Relaxed),
+            providers_registered: self.providers_registered.load(Ordering::Relaxed),
+            initial_load_complete: self.initial_load_complete.load(Ordering::Relaxed),
         }
     }
 }
@@ -644,43 +644,44 @@ pub fn compile_committed_policy_with_subjects(
                     // grant those subjects would receive. Name each subject and
                     // what the evidence said so a compile that dropped them is
                     // diagnosable from the journal.
-                    let subjects = binding_spec
-                        .subjects()
-                        .iter()
-                        .map(|subject_ref| {
-                            let row = resources
-                                .iter()
-                                .find(|candidate| candidate.resource_ref == *subject_ref);
-                            let observed = row
-                                .and_then(|candidate| {
-                                    ResourceEnvelope::from_json(&candidate.canonical_json).ok()
-                                })
-                                .map(|envelope| {
-                                    format!(
-                                        "phase={:?} observedGeneration={} rowGeneration={}",
-                                        envelope.status().phase(),
-                                        envelope.status().observed_generation().get(),
-                                        row.map(|row| row.generation.get()).unwrap_or_default(),
-                                    )
-                                })
-                                .unwrap_or_else(|| "undecodable".to_owned());
-                            format!(
-                                "{}={} [{}]",
-                                subject_ref.to_canonical_string(),
-                                match subject_evidence.get(subject_ref) {
-                                    Some((_, true)) => "bindable",
-                                    Some((_, false)) => "tombstoned",
-                                    None => "no-row",
-                                },
-                                observed,
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join(",");
                     tracing::warn!(
                         zone = zone.as_str(),
                         resource = resource.resource_ref.to_canonical_string(),
-                        subjects = %subjects,
+                        subjects = tracing::field::display(
+                            binding_spec
+                                .subjects()
+                                .iter()
+                                .map(|subject_ref| {
+                                    let row = resources
+                                        .iter()
+                                        .find(|candidate| candidate.resource_ref == *subject_ref);
+                                    let observed = row
+                                        .and_then(|candidate| {
+                                            ResourceEnvelope::from_json(&candidate.canonical_json).ok()
+                                        })
+                                        .map(|envelope| {
+                                            format!(
+                                                "phase={:?} observedGeneration={} rowGeneration={}",
+                                                envelope.status().phase(),
+                                                envelope.status().observed_generation().get(),
+                                                row.map(|row| row.generation.get()).unwrap_or_default(),
+                                            )
+                                        })
+                                        .unwrap_or_else(|| "undecodable".to_owned());
+                                    format!(
+                                        "{}={} [{}]",
+                                        subject_ref.to_canonical_string(),
+                                        match subject_evidence.get(subject_ref) {
+                                            Some((_, true)) => "bindable",
+                                            Some((_, false)) => "tombstoned",
+                                            None => "no-row",
+                                        },
+                                        observed,
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join(","),
+                        ),
                         "committed RoleBinding dropped: no subject satisfied the readiness gate",
                     );
                     continue;
@@ -819,7 +820,7 @@ fn validated_stored_resource_envelope(
         || envelope
             .digest()
             .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?
-            != resource.payload_digest
+            != resource.payload_digest.as_str()
     {
         tracing::warn!(
             zone = zone.as_str(),
@@ -2040,7 +2041,7 @@ mod tests {
     use super::*;
     use crate::resource_api::parse_list_request;
     use serde_json::json;
-    use d2b_contracts_resource::v3::{ResourceGeneration, ResourceName};
+    use d2b_contracts_resource::v3::{ResourceGeneration, ResourceName, StateDigest};
     use d2b_resource_api::authz::{
         ApiMethod, AuthorizationDenial, AuthorizationRequest, AuthorizationTarget,
     };
@@ -2103,7 +2104,7 @@ mod tests {
             generation: ResourceGeneration::new(1).unwrap(),
             revision: ZoneRevision::new(1),
             canonical_json,
-            payload_digest: envelope.digest().unwrap(),
+            payload_digest: StateDigest::parse(envelope.digest().unwrap()).unwrap(),
         }
     }
 
@@ -2161,7 +2162,7 @@ mod tests {
             generation: ResourceGeneration::new(1).unwrap(),
             revision: ZoneRevision::new(1),
             canonical_json,
-            payload_digest: envelope.digest().unwrap(),
+            payload_digest: StateDigest::parse(envelope.digest().unwrap()).unwrap(),
         }
     }
 
@@ -2171,10 +2172,13 @@ mod tests {
         value["status"]["observedGeneration"] = json!(observed_generation);
         value["status"]["update"]["observedGeneration"] = json!(observed_generation);
         resource.canonical_json = d2b_contracts_resource::v3::canonical_json_bytes(&value).unwrap();
-        resource.payload_digest = ResourceEnvelope::from_json(&resource.canonical_json)
-            .unwrap()
-            .digest()
-            .unwrap();
+        resource.payload_digest = StateDigest::parse(
+            ResourceEnvelope::from_json(&resource.canonical_json)
+                .unwrap()
+                .digest()
+                .unwrap(),
+        )
+        .unwrap();
     }
 
     fn set_identity(resource: &mut StoredResource, uid: &str, generation: u64) {
@@ -2186,20 +2190,26 @@ mod tests {
         resource.uid = ResourceUid::parse(uid).unwrap();
         resource.generation = ResourceGeneration::new(generation).unwrap();
         resource.canonical_json = d2b_contracts_resource::v3::canonical_json_bytes(&value).unwrap();
-        resource.payload_digest = ResourceEnvelope::from_json(&resource.canonical_json)
-            .unwrap()
-            .digest()
-            .unwrap();
+        resource.payload_digest = StateDigest::parse(
+            ResourceEnvelope::from_json(&resource.canonical_json)
+                .unwrap()
+                .digest()
+                .unwrap(),
+        )
+        .unwrap();
     }
 
     fn set_binding_subjects(resource: &mut StoredResource, subjects: &[&str]) {
         let mut value: Value = serde_json::from_slice(&resource.canonical_json).unwrap();
         value["spec"]["subjects"] = json!(subjects);
         resource.canonical_json = d2b_contracts_resource::v3::canonical_json_bytes(&value).unwrap();
-        resource.payload_digest = ResourceEnvelope::from_json(&resource.canonical_json)
-            .unwrap()
-            .digest()
-            .unwrap();
+        resource.payload_digest = StateDigest::parse(
+            ResourceEnvelope::from_json(&resource.canonical_json)
+                .unwrap()
+                .digest()
+                .unwrap(),
+        )
+        .unwrap();
     }
 
     fn subject_context(subject_ref: &str, subject_uid: &str) -> AuthenticatedSubjectContext {
@@ -3382,7 +3392,7 @@ mod tests {
             generation: ResourceGeneration::new(1).unwrap(),
             revision: ZoneRevision::new(1),
             canonical_json: br#"{"metadata":{"managedBy":"configuration","configurationGeneration":3,"deletionRequestedAt":"2026-08-15T00:00:00Z"}}"#.to_vec(),
-            payload_digest: String::new(),
+            payload_digest: StateDigest::parse(format!("sha256:{}", "0".repeat(64))).unwrap(),
         };
         assert!(configuration_cleanup_pending(&resource, 4));
         resource.canonical_json =

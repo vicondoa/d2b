@@ -8,7 +8,7 @@
 use d2b_contracts_provider::v3::semantic_services::{
     SemanticFamily,
     child_resources::{
-        BindingChildKind, BindingChildPlacement, BindingChildRequest, BindingChildSet,
+        ProcessChildKind, BindingChildPlacement, BindingChildRequest, BindingChildSet,
         explicit_binding_children,
     },
 };
@@ -19,7 +19,7 @@ const USBIP_PROVIDER_REF: &str = "Provider/device-usbip";
 
 const USBIP_BINDING_CHILD_REQUESTS: [BindingChildRequest; 2] = [
     BindingChildRequest::process(
-        BindingChildKind::Process,
+        ProcessChildKind::Process,
         BindingChildPlacement::Guest,
         "guest-proxy",
         "Provider/system-minijail",
@@ -40,6 +40,10 @@ const USBIP_BINDING_CHILD_REQUESTS: [BindingChildRequest; 2] = [
 /// The returned children are UID-free intents. The generic Process Provider
 /// owns launch, adoption, signalling, and reap; this Provider only describes
 /// its required children and observes their status.
+/// # Errors
+///
+/// Returns [`BindingChildError`] when the authored references fail
+/// semantic admission or the child declaration cannot be built.
 pub fn binding_child_resources(
     binding_ref: &ResourceRef,
     service_ref: &ResourceRef,

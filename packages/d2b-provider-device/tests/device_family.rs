@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use d2b_contracts_resource::v3::ControllerGeneration;
+use d2b_contracts_resource::v3::{ControllerGeneration, ZoneId};
 use d2b_provider_device::{
     DEVICE_REGISTRATIONS, DEVICE_RESYNC, DEVICE_TYPE_NAME, DeviceComponent, DeviceDriverArgs,
     device_descriptor,
@@ -25,7 +25,6 @@ use d2b_resource_runtime::identity::{
     ResourceKey, ResourceProvenance, StoredDesiredResource,
 };
 use d2b_resource_runtime::spec_store::EnsureOutcome;
-use d2b_resource_runtime::target::TargetHandle;
 use serde_json::json;
 
 struct DeadManager;
@@ -37,7 +36,7 @@ impl ManagerEndpoint for DeadManager {
         _parent: &ResourceKey,
         _child: ChildEnsure,
     ) -> Result<EnsureOutcome, ResourceError> {
-        Err(ResourceError::ManagerRpc("manager unavailable".to_owned()))
+        Err(ResourceError::ManagerUnavailable("manager unavailable".to_owned()))
     }
 
     async fn get(&self, _key: &ResourceKey) -> Result<Option<StoredDesiredResource>, ResourceError> {
@@ -85,7 +84,7 @@ impl RequeueScheduler for RecordingRequeue {
 
 fn descriptor(runtime: Arc<RecordingRuntime>) -> d2b_resource_types::DriverDescriptor {
     device_descriptor(DeviceDriverArgs {
-        zone: "dev".to_owned(),
+        zone: ZoneId::parse("dev").expect("valid test zone"),
         controller_generation: ControllerGeneration::new(1).expect("generation"),
         facets: d2b_provider_device::test_support::recording_facets(runtime),
     })
@@ -110,7 +109,6 @@ fn context(
     let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
     ResourceContext::new(
         row,
-        TargetHandle::Host,
         descriptor.decoder.clone(),
         Arc::new(DeadManager),
         Arc::new(RecordingRequeue),
@@ -156,7 +154,6 @@ fn descriptor_declares_the_device_type_over_four_providers() {
 
 /// A row is driven by the component its Provider reference selects, and a
 /// Provider outside the four is terminal.
-#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn a_row_runs_the_effect_of_the_provider_its_spec_names() {
     let runtime = Arc::new(RecordingRuntime::default());
@@ -166,7 +163,7 @@ async fn a_row_runs_the_effect_of_the_provider_its_spec_names() {
     driver.validate(&mut ctx).await.expect("tpm row validates");
     driver.reconcile(&mut ctx).await.expect("tpm row reconciles");
     assert_eq!(
-        *runtime.reconciled.lock(), // async-gate-allow: test-support recorder lock
+        *runtime.reconciled.lock().await,
         vec![DeviceComponent::Tpm],
         "the tpm Provider reference selects the tpm component"
     );

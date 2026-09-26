@@ -30,12 +30,20 @@ fn admitted_ready_credentials_spawn_a_co_located_agent_without_egress() {
             )
             .unwrap()
             .unwrap();
-        assert_eq!(agent.binary(), AGENT_BINARY);
-        assert_eq!(agent.owner_ref().resource_type().as_str(), "Credential");
-        assert_eq!(agent.execution_ref().to_canonical_string(), execution);
-        assert_eq!(agent.placement(), binding);
-        assert!(!agent.allow_egress());
-        assert!(agent.requires_effect_port_client());
+        assert_eq!(agent.binary(), AGENT_BINARY, "binding: {binding:?}");
+        assert_eq!(
+            agent.owner_ref().resource_type().as_str(),
+            "Credential",
+            "binding: {binding:?}"
+        );
+        assert_eq!(
+            agent.execution_ref().to_canonical_string(),
+            execution,
+            "binding: {binding:?}"
+        );
+        assert_eq!(agent.placement(), binding, "binding: {binding:?}");
+        assert!(!agent.allow_egress(), "binding: {binding:?}");
+        assert!(agent.requires_effect_port_client(), "binding: {binding:?}");
     }
 }
 
@@ -67,7 +75,8 @@ fn live_methods_route_to_the_agent_and_stored_inspection_stays_secret_free() {
     ] {
         assert_eq!(
             ManagedIdentityController::route(method, true),
-            ManagedIdentityRoute::Agent
+            ManagedIdentityRoute::Agent,
+            "method: {method:?}"
         );
     }
     assert_eq!(
@@ -79,19 +88,19 @@ fn live_methods_route_to_the_agent_and_stored_inspection_stays_secret_free() {
 #[test]
 fn teardown_releases_the_finalizer_only_after_revocation_and_process_deletion() {
     let stop = ManagedIdentityController::teardown_plan(true, false, false);
-    assert!(stop.stop_agent);
-    assert!(!stop.delete_agent);
-    assert!(!stop.clear_provider_revoke);
+    assert!(stop.stop_agent());
+    assert!(!stop.delete_agent());
+    assert!(!stop.clear_provider_revoke());
 
     let delete = ManagedIdentityController::teardown_plan(false, true, false);
-    assert!(!delete.stop_agent);
-    assert!(delete.delete_agent);
-    assert!(!delete.clear_provider_revoke);
+    assert!(!delete.stop_agent());
+    assert!(delete.delete_agent());
+    assert!(!delete.clear_provider_revoke());
 
     let clear = ManagedIdentityController::teardown_plan(false, true, true);
-    assert!(!clear.stop_agent);
-    assert!(!clear.delete_agent);
-    assert!(clear.clear_provider_revoke);
+    assert!(!clear.stop_agent());
+    assert!(!clear.delete_agent());
+    assert!(clear.clear_provider_revoke());
 }
 
 #[test]

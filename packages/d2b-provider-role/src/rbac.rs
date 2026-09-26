@@ -13,9 +13,13 @@ use d2b_contracts_resource::v3::{
 /// Policy revisions that make one positive decision valid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PolicyRevisionSet {
+    /// The policy catalog revision the decision was evaluated against.
     pub policy_revision: u64,
+    /// The API catalog revision the decision was evaluated against.
     pub api_catalog_revision: u64,
+    /// The active configuration revision the decision was evaluated against.
     pub active_configuration_revision: ConfigurationGeneration,
+    /// The zone policy revision the decision was evaluated against.
     pub zone_policy_revision: ZoneRevision,
 }
 
@@ -28,6 +32,7 @@ pub struct AuthorizationCacheKey {
 }
 
 impl AuthorizationCacheKey {
+    /// Construct the exact subject-and-attribute evidence key.
     pub const fn new(
         subject_ref: ResourceRef,
         subject_uid: ResourceUid,
@@ -82,6 +87,8 @@ impl core::fmt::Debug for PositiveDecisionCache {
 }
 
 impl PositiveDecisionCache {
+    /// Construct a bounded positive-only cache.max_entries = 0
+    /// disables caching entirely.
     pub fn new(max_entries: usize) -> Self {
         Self {
             max_entries,
@@ -89,6 +96,7 @@ impl PositiveDecisionCache {
         }
     }
 
+    /// Whether a non-expired entry matching the exact evidence is present.
     pub fn contains(
         &self,
         key: &AuthorizationCacheKey,
@@ -102,6 +110,8 @@ impl PositiveDecisionCache {
             .is_some_and(|entry| entry.revisions == revisions)
     }
 
+    /// Insert one positive decision, evicting expired entries and refusing
+    /// insertions past the bound. An already-expired entry is never stored.
     pub fn insert_allow(
         &self,
         key: AuthorizationCacheKey,
@@ -126,6 +136,7 @@ impl PositiveDecisionCache {
         );
     }
 
+    /// Evict every cached decision.
     pub fn clear(&self) {
         self.lock_entries().clear();
     }

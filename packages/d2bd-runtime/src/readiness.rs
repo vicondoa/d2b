@@ -12,6 +12,13 @@ use crate::supervisor::{
     state::{ProcReader, SystemProcReader},
 };
 
+/// Evaluate one readiness predicate synchronously.
+///
+/// # Errors
+///
+/// Returns a `String` reason for predicates that need the async or
+/// state-aware seat, so a misrouted probe fails loud instead of silently
+/// never being ready.
 pub fn readiness_predicate_ready(predicate: &ReadinessPredicate) -> Result<bool, String> {
     match predicate {
         ReadinessPredicate::ApiSocketInfo(path) => Ok(api_socket_info_ready(path)),
@@ -74,6 +81,7 @@ pub fn api_socket_info_ready(path: &str) -> bool {
     response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200")
 }
 
+/// Whether a filesystem entry at `path` is a socket (any socket kind)..
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn unix_socket_exists(path: &str) -> bool {
     std::fs::metadata(path)
@@ -81,6 +89,9 @@ pub fn unix_socket_exists(path: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether a stream socket at `path` is actively listening, parsed from
+/// `/proc/net/unix` accept flags (no connect side effect; a connected but
+/// non-listening path returns `false`).
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn unix_socket_listening(path: &str) -> bool {
     const SO_ACCEPTCON: u64 = 0x0001_0000;
@@ -100,7 +111,8 @@ pub fn unix_socket_listening(path: &str) -> bool {
 }
 
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
-pub fn tcp_port_ready(host: &str, port: u16) -> bool {
+/// Whether a TCP connect to `host:port` succeeds within 250ms.
+    pub fn tcp_port_ready(host: &str, port: u16) -> bool {
     let Ok(addrs) = format!("{host}:{port}").to_socket_addrs() else {
         return false;
     };
@@ -109,6 +121,11 @@ pub fn tcp_port_ready(host: &str, port: u16) -> bool {
     })
 }
 
+/// Poll `tcp_port_ready` until it succeeds or `timeout` elapses.
+///
+/// # Errors
+///
+/// Returns "tcp-readiness-timeout:host:port" when the port never opens.
 pub async fn wait_for_tcp_port(host: &str, port: u16, timeout: Duration) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
     loop {
@@ -122,7 +139,15 @@ pub async fn wait_for_tcp_port(host: &str, port: u16, timeout: Duration) -> Resu
     }
 }
 
-pub async fn command_ready(command: &[String]) -> Result<bool, String> {
+/// Run `command` to completion and report whether it exited 0, stripping
+/// `NOTIFY_SOCKET` so the probe cannot leak a daemon notify fd into the
+/// child.
+///
+/// # Errors
+///
+/// Returns "command-readiness-empty" for an empty argv and
+/// "command-readiness-exec-failed" when the program cannot be spawned.
+pub async fn command_ready(command: &[String]) -> Result<bool,String> {
     let Some(program) = command.first() else {
         return Err("command-readiness-empty".to_owned());
     };
@@ -325,8 +350,10 @@ pub async fn wait_for_one_shot_exit(
                     Ok(ProcState::ParseFailed) => {
                         if !parse_fail_warned {
                             tracing::warn!(
-                                "wait_for_one_shot_exit: /proc/<pid>/stat unparseable; \
-                                 continuing to poll (will surface as oneshot-timeout if persistent)"
+                                pid = %pid,
+                                path = %format_args!("/proc/{pid}/stat"),
+                                "wait_for_one_shot_exit: proc stat unparseable; \
+                                 continuing to poll (will surface as oneshot-timeout if persistent)",
                             );
                             parse_fail_warned = true;
                         }

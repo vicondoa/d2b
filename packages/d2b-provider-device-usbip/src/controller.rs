@@ -204,6 +204,12 @@ impl core::fmt::Debug for UsbipBindingController {
 
 impl UsbipBindingController {
     /// Construct a Binding controller from explicit authored references.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UsbipBindingControllerError::Admission`] when the binding,
+    /// service, or target reference has the wrong resource type or the
+    /// binding child declaration fails.
     pub fn new(
         binding_ref: &ResourceRef,
         service_ref: &ResourceRef,

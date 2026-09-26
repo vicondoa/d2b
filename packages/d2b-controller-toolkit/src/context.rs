@@ -10,12 +10,38 @@ use d2b_contracts_resource::v3::{ResourceGeneration, ResourceUid, ZoneRevision};
 
 use crate::ResourceKey;
 
+/// The store's immutable singular-owner identity attached to a snapshot.
+///
+/// The owner UID and generation are bound together: the store writes them as
+/// one unit, so a snapshot never carries one without the other.
+#[derive(Clone, PartialEq, Eq)]
+pub struct OwnerIdentity {
+    uid: ResourceUid,
+    generation: ResourceGeneration,
+}
+
+impl OwnerIdentity {
+    /// Construct an owner identity.
+    pub const fn new(uid: ResourceUid, generation: ResourceGeneration) -> Self {
+        Self { uid, generation }
+    }
+
+    /// Borrow the immutable owner UID.
+    pub const fn uid(&self) -> &ResourceUid {
+        &self.uid
+    }
+
+    /// Return the immutable owner generation.
+    pub const fn generation(&self) -> ResourceGeneration {
+        self.generation
+    }
+}
+
 /// Manager-served target body observed by one controller pass.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ResourceSnapshot {
     key: ResourceKey,
-    owner_uid: Option<ResourceUid>,
-    owner_generation: Option<ResourceGeneration>,
+    owner: Option<OwnerIdentity>,
     revision: ZoneRevision,
     generation: ResourceGeneration,
     canonical_json: Vec<u8>,
@@ -33,8 +59,7 @@ impl ResourceSnapshot {
     ) -> Self {
         Self {
             key,
-            owner_uid: None,
-            owner_generation: None,
+            owner: None,
             revision,
             generation,
             canonical_json,
@@ -47,24 +72,14 @@ impl ResourceSnapshot {
         &self.key
     }
 
-    /// Borrow the immutable singular owner UID when the store supplied it.
-    pub fn owner_uid(&self) -> Option<&ResourceUid> {
-        self.owner_uid.as_ref()
-    }
-
-    /// Return the immutable owner generation when the source supplied it.
-    pub const fn owner_generation(&self) -> Option<ResourceGeneration> {
-        self.owner_generation
+    /// Borrow the immutable singular owner identity when the store supplied it.
+    pub const fn owner(&self) -> Option<&OwnerIdentity> {
+        self.owner.as_ref()
     }
 
     /// Attach the store's immutable owner identity to this snapshot.
-    pub fn with_owner_identity(
-        mut self,
-        owner_uid: Option<ResourceUid>,
-        owner_generation: Option<ResourceGeneration>,
-    ) -> Self {
-        self.owner_uid = owner_uid;
-        self.owner_generation = owner_generation;
+    pub fn with_owner_identity(mut self, owner: Option<OwnerIdentity>) -> Self {
+        self.owner = owner;
         self
     }
 

@@ -89,21 +89,6 @@ impl LinuxAnchoredDir {
         }
         Ok(Self { fd })
     }
-
-    /// Return the resolve mask used by all child opens.
-    pub const fn resolve_flags() -> ResolveFlags {
-        RESOLVE
-    }
-
-    /// Return the read-mode flags used by the compiler.
-    pub const fn readable_flags() -> OFlags {
-        READ_FLAGS
-    }
-
-    /// Return the execute-mode flags used by the launcher.
-    pub const fn executable_flags() -> OFlags {
-        EXEC_FLAGS
-    }
 }
 
 impl AnchoredDir for LinuxAnchoredDir {

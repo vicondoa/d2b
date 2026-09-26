@@ -50,7 +50,7 @@ use d2b_contracts_resource::v3::{
     ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneRevision,
 };
 use d2b_controller_toolkit::{
-    DependencySnapshot, ResourceKey as CoreResourceKey, ResourceSnapshot,
+    DependencySnapshot, OwnerIdentity, ResourceKey as CoreResourceKey, ResourceSnapshot,
 };
 use d2b_resource_runtime::context::{ResourceContext, SpecDecoder, typed_spec_decoder};
 use d2b_resource_runtime::driver::{
@@ -211,11 +211,6 @@ pub struct ProviderDriverFactory {
 }
 
 impl ProviderDriverFactory {
-    /// Construct over the fail-closed effects default (unit fixtures).
-    pub fn new() -> Self {
-        Self::with_effects(Arc::new(FailClosedProviderDriverEffects))
-    }
-
     /// Construct over an injected port. The plane composition wires the live
     /// controller-session seam here.
     pub fn with_effects(effects: Arc<dyn ProviderDriverEffects>) -> Self {
@@ -223,12 +218,6 @@ impl ProviderDriverFactory {
             types: [ResourceTypeName::new(PROVIDER_TYPE_NAME)],
             effects,
         }
-    }
-}
-
-impl Default for ProviderDriverFactory {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -352,22 +341,22 @@ impl ProviderDriver {
             resource_uid(ctx.uid()).ok_or_else(|| spec_invalid(DriverOp::Reconcile, "spec/uid"))?;
         let generation = ResourceGeneration::new(ctx.generation())
             .map_err(|_| spec_invalid(DriverOp::Reconcile, "spec/generation"))?;
-        let zone = ZoneId::parse(ctx.key().zone.clone())
+        let zone = ZoneId::parse(ctx.key().zone.as_str())
             .map_err(|_| spec_invalid(DriverOp::Reconcile, "spec/zone"))?;
+
+        let dependencies = self
+            .dependencies(ctx, &provider_ref, &provider_uid, generation)
+            .await?;
 
         // The old `status.observedGeneration` short-circuit selected the
         // `Enable` intent; the in-memory status is its runtime-only successor.
-        let previous = ctx.status::<ProviderDriverStatus>().cloned();
-        let intent = match previous.as_ref() {
+        let previous = ctx.status::<ProviderDriverStatus>();
+        let intent = match previous {
             Some(status) if status.observed_generation == ctx.generation() => {
                 ProviderIntent::Enable
             }
             _ => ProviderIntent::Update,
         };
-
-        let dependencies = self
-            .dependencies(ctx, &provider_ref, &provider_uid, generation)
-            .await?;
 
         // The provider row as the pure observation reads it: spec from the
         // stored envelope, metadata as authored, and the previous
@@ -375,7 +364,7 @@ impl ProviderDriver {
         // `status.resource.owned.refs` projection the store used to derive.
         let metadata: Value = serde_json::from_slice(ctx.metadata())
             .map_err(|_| spec_invalid(DriverOp::Reconcile, "spec/metadata"))?;
-        let status = match previous.as_ref() {
+        let status = match previous {
             Some(previous) => json!({
                 "observedGeneration": previous.observed_generation,
                 "resource": {
@@ -475,12 +464,12 @@ impl ProviderDriver {
         if provider_ref_text == SYSTEM_CORE_PROVIDER_REF
             || provider_ref_text == SYSTEM_MINIJAIL_PROVIDER_REF
         {
-            let zone = ctx.key().zone.clone();
+            let zone = ctx.key().zone.as_str();
             let (host_type, host_name) = SYSTEM_CORE_HOST_REF
                 .split_once('/')
                 .expect("the canonical Host reference is a contract reference");
-            keys.push(ResourceKey::new(zone.as_str(), host_type, host_name));
-            keys.push(ResourceKey::new(zone.as_str(), "Zone", zone.as_str()));
+            keys.push(ResourceKey::new(zone, host_type, host_name));
+            keys.push(ResourceKey::new(zone, "Zone", zone));
         }
         let mut dependencies = Vec::new();
         for key in keys {
@@ -519,7 +508,7 @@ impl ProviderDriver {
     ) -> Option<DependencySnapshot> {
         let resource_ref =
             ResourceRef::parse(&format!("{}/{}", view.key.type_name, view.key.name)).ok()?;
-        let zone = ZoneId::parse(view.key.zone.clone()).ok()?;
+        let zone = ZoneId::parse(view.key.zone.as_str()).ok()?;
         let uid = resource_uid(&view.uid)?;
         let generation = ResourceGeneration::new(view.generation).ok()?;
         let mut metadata: Value = serde_json::from_slice(&view.metadata).ok()?;
@@ -556,7 +545,10 @@ impl ProviderDriver {
                 canonical,
                 view.deleting,
             )
-            .with_owner_identity(Some(provider_uid.clone()), Some(provider_generation)),
+            .with_owner_identity(Some(OwnerIdentity::new(
+                provider_uid.clone(),
+                provider_generation,
+            ))),
         ))
     }
 }
@@ -729,7 +721,6 @@ mod tests {
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
     use d2b_resource_runtime::manager::ResourceView;
     use d2b_resource_runtime::spec_store::EnsureOutcome;
-    use d2b_resource_runtime::target::TargetHandle;
 
     use crate::test_support::RecordingEffects;
 
@@ -825,7 +816,7 @@ mod tests {
             _parent: &ResourceKey,
             _child: ChildEnsure,
         ) -> Result<EnsureOutcome, ResourceError> {
-            Err(ResourceError::ManagerRpc("unexpected ensure_child".into()))
+            Err(ResourceError::ManagerRejected { reason: "unexpected ensure_child".into() })
         }
 
         async fn get(
@@ -842,7 +833,7 @@ mod tests {
                 .expect("calls")
                 .push(format!("view:{}/{}", key.type_name, key.name));
             if self.fail_reads.load(Ordering::SeqCst) {
-                return Err(ResourceError::ManagerRpc("scripted read failure".into()));
+                return Err(ResourceError::ManagerRejected { reason: "scripted read failure".into() });
             }
             Ok(self.view_of(key))
         }
@@ -871,7 +862,7 @@ mod tests {
                 .expect("calls")
                 .push("list-owned".to_owned());
             if self.fail_reads.load(Ordering::SeqCst) {
-                return Err(ResourceError::ManagerRpc("scripted read failure".into()));
+                return Err(ResourceError::ManagerRejected { reason: "scripted read failure".into() });
             }
             Ok(self
                 .rows
@@ -925,7 +916,6 @@ mod tests {
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
         ResourceContext::new(
             target,
-            TargetHandle::Host,
             provider_spec_decoder(),
             manager,
             Arc::new(RecordingRequeue::default()),

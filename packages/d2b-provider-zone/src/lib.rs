@@ -14,8 +14,10 @@
 
 mod driver;
 
-pub mod zone_status;
+mod zone_status;
 
 pub use driver::zone_descriptor;
 
-pub use zone_status::*;
+pub use zone_status::{
+    SystemCoreStatusEmitter, ZoneRuntimeMetadata, ZoneStatusInput, ZoneStatusProjectionError,
+};

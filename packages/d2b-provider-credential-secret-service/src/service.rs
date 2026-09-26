@@ -16,6 +16,10 @@ use crate::{
     SecretServicePortError, SessionKey, invariant,
 };
 
+/// One-second cap on revoking a session's leases during disconnect, finalize,
+/// and drain, so a stalled backend cannot hang session teardown forever.
+const SESSION_CLOSE_REVOKE_DEADLINE_MS: u64 = 1_000;
+
 #[async_trait::async_trait]
 impl CredentialProvider for SecretServiceCredentialProvider {
     fn dispatch(
@@ -657,7 +661,7 @@ impl SecretServiceCredentialProvider {
             self.discard_session_key(session_key)?;
             return Ok(());
         }
-        let deadline = operation_deadline(1_000)?;
+        let deadline = operation_deadline(SESSION_CLOSE_REVOKE_DEADLINE_MS)?;
         self.close_session_locked(session_key, deadline)
     }
 
@@ -671,17 +675,23 @@ impl SecretServiceCredentialProvider {
         self.session_capability(authorization)?;
         self.finalized
             .store(true, std::sync::atomic::Ordering::Release);
-        self.close_all_sessions_locked(operation_deadline(1_000)?)?;
+        self.close_all_sessions_locked(operation_deadline(SESSION_CLOSE_REVOKE_DEADLINE_MS)?)?;
         self.authority.clear().map_err(|_| invariant())?;
         Ok(())
     }
 
     /// Finalize every admitted session and prevent later capability minting.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialServiceError`] when a lease revocation fails or
+    /// exceeds the session-close deadline, or when the session authority
+    /// cannot be cleared.
     pub fn drain(&self) -> Result<(), CredentialServiceError> {
         let _mutation = self.blocking_mutation_guard();
         self.finalized
             .store(true, std::sync::atomic::Ordering::Release);
-        let deadline = operation_deadline(1_000)?;
+        let deadline = operation_deadline(SESSION_CLOSE_REVOKE_DEADLINE_MS)?;
         self.close_all_sessions_locked(deadline)?;
         self.authority.clear().map_err(|_| invariant())?;
         Ok(())
@@ -858,6 +868,9 @@ impl SecretServiceCredentialProvider {
         }
         if unresolved_leases || unresolved_operations {
             tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                unresolved_leases,
+                unresolved_operations,
                 "secret-service session close left unresolved leases or ambiguous operations",
             );
             return Err(invariant());

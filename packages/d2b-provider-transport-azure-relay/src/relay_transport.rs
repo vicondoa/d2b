@@ -626,16 +626,15 @@ impl RelayGenerationFence {
         remove_empty_state(&mut states, key);
     }
 
-    fn is_current(&self, binding: &RelayCredentialBinding) -> bool {
-        let key = generation_key(binding);
+    fn is_current(&self, key: &(String, String, String), generation: u64) -> bool {
         let states = self.lock_states();
-        let Some(state) = states.get(&key) else {
+        let Some(state) = states.get(key) else {
             return false;
         };
-        state.committed == Some(binding.reconnect_generation())
+        state.committed == Some(generation)
             && state
                 .active
-                .get(&binding.reconnect_generation())
+                .get(&generation)
                 .is_some_and(|count| *count > 0)
     }
 
@@ -728,17 +727,68 @@ fn remove_empty_state(
 /// One open relay connection with bounded named-stream credits.
 pub struct RelayConnection {
     socket: Arc<dyn RelaySocket>,
-    credits: Mutex<CreditWindow>,
+    credits: StdMutex<CreditWindow>,
     write_lock: Mutex<()>,
     phase: Mutex<RelaySessionPhase>,
     challenge: RelayEnrollmentChallenge,
     binding: RelayCredentialBinding,
+    generation_key: (String, String, String),
     generation_fence: Arc<RelayGenerationFence>,
     generation_lease: Mutex<Option<RelayGenerationLease>>,
     session_permit: Mutex<Option<OwnedSemaphorePermit>>,
 }
 
+/// A reserved slice of the credit window that returns its bytes on drop
+/// unless the frame send committed.
+///
+/// `send` reserves credits before awaiting the socket write. If the future
+/// is cancelled between the reservation and the write completing (for
+/// example by a session deadline), the reservation must not leak, or the
+/// connection is permanently starved of up to [`MAX_RELAY_FRAME_BYTES`] of
+/// credit. The window is a synchronous mutex so the rollback can run from
+/// `Drop` without awaiting.
+struct CreditReservation<'a> {
+    credits: &'a StdMutex<CreditWindow>,
+    bytes: usize,
+    committed: bool,
+}
+
+impl CreditReservation<'_> {
+    fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for CreditReservation<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "synchronous path"
+            )]
+            match self.credits.lock() {
+                Ok(mut credits) => credits.rollback(self.bytes),
+                Err(poisoned) => poisoned.into_inner().rollback(self.bytes),
+            }
+        }
+    }
+}
+
 impl RelayConnection {
+    // Synchronous path: the credit window's critical sections are
+    // non-blocking arithmetic updates, and the reservation rollback must run
+    // from `Drop` (see `CreditReservation`), which cannot await.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "synchronous path"
+    )]
+    fn lock_credits(&self) -> StdMutexGuard<'_, CreditWindow> {
+        match self.credits.lock() {
+            Ok(credits) => credits,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
     /// Construct a connection whose enrollment was durably committed by Core.
     fn from_committed_socket(
         socket: Arc<dyn RelaySocket>,
@@ -750,13 +800,15 @@ impl RelayConnection {
     ) -> Result<Self, RelayTransportError> {
         let credits =
             CreditWindow::new(credit_bytes).map_err(|_| RelayTransportError::CreditExhausted)?;
+        let generation_key = generation_key(&binding);
         Ok(Self {
             socket,
-            credits: Mutex::new(credits),
+            credits: StdMutex::new(credits),
             write_lock: Mutex::new(()),
             phase: Mutex::new(RelaySessionPhase::EnrollmentCommitted),
             challenge: next_connection_challenge(),
             binding,
+            generation_key,
             generation_fence,
             generation_lease: Mutex::new(Some(generation_lease)),
             session_permit: Mutex::new(Some(session_permit)),
@@ -776,7 +828,10 @@ impl RelayConnection {
     }
 
     async fn ensure_current_generation(&self) -> Result<(), RelayTransportError> {
-        if self.generation_fence.is_current(&self.binding) {
+        if self
+            .generation_fence
+            .is_current(&self.generation_key, self.binding.reconnect_generation())
+        {
             Ok(())
         } else {
             Err(self.reject_stale_generation().await)
@@ -821,16 +876,22 @@ impl RelayConnection {
             return Err(RelayTransportError::InvalidSessionTransition);
         }
         let size = frame.as_bytes().len();
-        {
-            let mut credits = self.credits.lock().await;
+        let reservation = {
+            let mut credits = self.lock_credits();
             credits.reserve(size).map_err(|error| match error {
                 BackpressureError::FrameTooLarge => RelayTransportError::FrameTooLarge,
                 BackpressureError::CreditExhausted => RelayTransportError::CreditExhausted,
             })?;
-        }
+            CreditReservation {
+                credits: &self.credits,
+                bytes: size,
+                committed: false,
+            }
+        };
         let result = self.socket.send(frame).await;
-        if result.is_err() {
-            self.credits.lock().await.rollback(size);
+        if result.is_ok() {
+            reservation.commit();
+        } else {
             *self.phase.lock().await = RelaySessionPhase::Closed;
             self.session_permit.lock().await.take();
             self.release_generation_lease().await;
@@ -857,17 +918,17 @@ impl RelayConnection {
 
     /// Grant credits from the remote named stream.
     pub async fn grant(&self, bytes: usize) {
-        self.credits.lock().await.grant(bytes);
+        self.lock_credits().grant(bytes);
     }
 
     /// Release send credits after a remote acknowledgement.
     pub async fn acknowledge(&self, bytes: usize) {
-        self.credits.lock().await.acknowledge(bytes);
+        self.lock_credits().acknowledge(bytes);
     }
 
     /// Return available and in-flight send credits.
     pub async fn credit_state(&self) -> (usize, usize) {
-        let credits = self.credits.lock().await;
+        let credits = self.lock_credits();
         (credits.available(), credits.in_flight())
     }
 
@@ -1090,7 +1151,8 @@ impl std::error::Error for RelayTransportError {}
 fn map_credential_error(error: crate::RelayCredentialError) -> RelayTransportError {
     match error {
         crate::RelayCredentialError::Unavailable => RelayTransportError::CredentialUnavailable,
-        crate::RelayCredentialError::Expired => RelayTransportError::CredentialExpired,
+        crate::RelayCredentialError::Expired
+        | crate::RelayCredentialError::Clock => RelayTransportError::CredentialExpired,
         crate::RelayCredentialError::RoleMismatch => RelayTransportError::CredentialRoleMismatch,
         crate::RelayCredentialError::InvalidBinding
         | crate::RelayCredentialError::BindingRequired

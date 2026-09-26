@@ -15,7 +15,6 @@
 use d2b_core::bundle_resolver::BundleResolver;
 pub use d2b_core::storage_lifecycle::{
     StorageContractValidationReason, StorageLifecycleIssue, StorageLifecycleReport,
-    classify_storage_validation_reason, storage_validation_offending_id,
 };
 
 /// Persisted storage lifecycle report schema.
@@ -343,22 +342,6 @@ mod tests {
         assert!(!serialized.contains("pidFd"), "{serialized}");
         assert!(!serialized.contains("/run/d2b"), "{serialized}");
         assert!(!serialized.contains("path:run-root"), "{serialized}");
-    }
-
-    #[test]
-    fn storage_classifiers_fall_back_to_unclassified_for_unknown_details() {
-        assert_eq!(
-            classify_storage_validation_reason("future storage validation failure"),
-            StorageContractValidationReason::Unclassified,
-        );
-        assert_eq!(
-            storage_validation_offending_id("duplicate storage path id path:run-root").as_deref(),
-            Some("path:run-root"),
-        );
-        assert_eq!(
-            storage_validation_offending_id("duplicate storage path id /run/d2b").as_deref(),
-            None,
-        );
     }
 
     #[test]

@@ -67,6 +67,14 @@ pub enum ResourceRuntimeError {
     /// The public Resource API refused a provider status update with a typed
     /// error.
     ResourceStatusUpdateFailed(ResourceErrorKind),
+    /// A caller submitted a Host status naming a reconciler-owned field.
+    ///
+    /// `ADR-046-telemetry-audit-and-support`, section "Host resource
+    /// status": the user-only Host posture is set by the system-core
+    /// reconciler and an operator can neither suppress nor override it, so a
+    /// submitted status naming `isolationPosture` or
+    /// `isolationPostureMessage` is refused before it is admitted.
+    HostStatusFieldNotOwned,
     /// The Wave 6 operator acceptance boundary did not converge.
     Wave6AcceptanceFailed,
 }
@@ -107,6 +115,7 @@ impl ResourceRuntimeError {
             Self::CapabilityUnavailable => "resource-runtime-capability-unavailable",
             Self::ResourceGetFailed(_) => "resource-runtime-resource-get-failed",
             Self::ResourceStatusUpdateFailed(_) => "resource-runtime-resource-status-update-failed",
+            Self::HostStatusFieldNotOwned => "resource-runtime-host-status-field-not-owned",
             Self::Wave6AcceptanceFailed => "resource-runtime-wave6-acceptance-failed",
         }
     }
@@ -147,6 +156,12 @@ pub fn resource_runtime_error_frame(error: ResourceRuntimeError) -> Value {
             "never",
             "the requested resource operation is not registered",
             "use a method exposed by the registered Zone service",
+        ),
+        ResourceRuntimeError::HostStatusFieldNotOwned => (
+            code,
+            "never",
+            "the submitted Host status names a field only the system-core reconciler may set",
+            "drop isolationPosture and isolationPostureMessage from the submitted status; the reconciler derives both from the Host spec",
         ),
         ResourceRuntimeError::ResourceGetFailed(kind) => (
             kind.as_str(),

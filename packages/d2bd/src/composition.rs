@@ -37,6 +37,7 @@ use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole,
     BrokerRequest, BrokerRequestEnvelope, BrokerResponse,
     ChildExitKind, ChildExitStatus, ChildReapedNotification,
+    DEFAULT_CONTEXT_DEADLINE_MS,
     ExportBrokerAuditRequest,
     QemuMediaBootRequest as BrokerQemuMediaBootRequest,
     QemuMediaHotplugRequest as BrokerQemuMediaHotplugRequest,
@@ -48,7 +49,8 @@ use d2b_contracts_broker::kernel_client::{
 };
 use d2b_resource_types::{KernelCaller, RunnerLookup};
 use d2b_contracts_control::public_wire::{
-    self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability,
+    self, AuthRole, AuthStatusResponse, DeniedCommandHint, PublicReadModelKind,
+    QemuMediaRegistryState, QemuMediaRunnerState, READ_ONLY_CLI_COMMANDS, SocketReachability,
 };
 use d2b_contracts_resource::resource_proto as resource_wire;
 use d2b_contracts_resource::v3::identity::ReconnectGeneration;
@@ -74,7 +76,7 @@ use d2b_core::bundle_resolver::{
     intent_id_network_bridge_uids, intent_id_network_hosts_uids, intent_id_network_projection_uids,
     intent_id_network_route_uids, intent_id_network_sysctl_uids,
 };
-use d2b_core::error::BundleError;
+use d2b_contracts::error::BundleError;
 use d2b_core::host::{HostJson, QemuMediaSourceIntent};
 use d2b_core::manifest_v04::ManifestV04;
 use d2b_core::processes::{ProcessNode, ProcessRole, ProcessesJson, ReadinessPredicate};
@@ -118,8 +120,7 @@ use d2bd_runtime::public_projection::{
     qemu_media_unix_socket_listening, resolve_vm_filter_target, serde_kebab_string,
 };
 pub use d2bd_runtime::public_read_model::{
-    PublicArtifactFingerprint, PublicReadModelKind, PublicStatusReadModel,
-    request_invalidates_public_status_model,
+    PublicArtifactFingerprint, PublicStatusReadModel, request_invalidates_public_status_model,
 };
 #[cfg(test)]
 pub(crate) use d2bd_runtime::readiness::wait_for_readiness;
@@ -384,13 +385,16 @@ mod audio_dispatch;
 mod audio_host_controller;
 mod credential_resource_runtime;
 pub mod interaction_composition;
-pub mod process_provider_runtime;
+pub(crate) mod process_provider_runtime;
 mod process_resource_runtime;
+#[cfg(not(feature = "test-support"))]
+pub(crate) mod provider_effects;
+#[cfg(feature = "test-support")]
 pub mod provider_effects;
 pub mod provider_registry;
 pub mod provider_shutdown;
 pub mod resource_runtime;
-use d2bd_runtime::typed_error::TypedError;
+use d2bd_runtime::typed_error::{TypedError, error_source};
 
 const VM_RUNNER_ROLE_ID: &str = "ch-runner";
 const VM_STOP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -424,6 +428,15 @@ pub struct StaticProviderComposition {
 }
 
 impl StaticProviderComposition {
+    /// Compose the static Provider deployment and fixed effect adapter for one
+    /// daemon mode; the deployment's admission validation runs first, so
+    /// an over-budget or otherwise refused deployment surfaces before any
+    /// socket is bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AdmissionError` when the provider deployment admission
+    /// (budget, limits, or mode constraints) validation fails.
     pub fn new(
         mode: d2bd_runtime::target_runtime::DaemonMode,
         broker_socket: PathBuf,
@@ -479,7 +492,29 @@ const REQUEST_READ_DEADLINE: Duration = Duration::from_secs(60);
 mod owner_connection_test_hook {
     use std::sync::{Arc, Mutex, OnceLock};
 
-    pub(crate) type Hook = Arc<dyn Fn() + Send + Sync>;
+    use serde_json::Value;
+
+    /// A test fake for the owner body, called with the connection's request
+    /// frame. Returning `true` claims the connection: the body drops it
+    /// without a reply, standing in for an owner that is still running.
+    /// Returning `false` leaves the connection to the real owner body, so a
+    /// hook installed by one test can never swallow a concurrent test's
+    /// connection.
+    pub(crate) type Hook = Arc<dyn Fn(&Value) -> bool + Send + Sync>;
+
+    /// The request field that claims the hook. Only the test that installed
+    /// the hook sets it, and only on the frames it sends itself.
+    pub(crate) const CLAIM_FIELD: &str = "ownerConnectionHookClaim";
+
+    /// Marks `request` as the installing test's own connection.
+    pub(crate) fn claim(request: &mut Value) {
+        request[CLAIM_FIELD] = Value::Bool(true);
+    }
+
+    /// Whether `request` is the installing test's own connection.
+    pub(crate) fn claims(request: &Value) -> bool {
+        request.get(CLAIM_FIELD) == Some(&Value::Bool(true))
+    }
 
     // Synchronous by construction (the accept-loop hook fires from a
     // dedicated handler thread): the process-global slot stays a
@@ -3441,6 +3476,18 @@ fn admission_config(state: &ServerState) -> AdmissionConfig {
     }
 }
 
+/// Load the daemon config, apply CLI overrides, bind the operator socket,
+/// and run the accept loop until a shutdown signal lands. The daemon's
+/// startup contracts (pidfs support, state-lock parent, operator socket
+/// posture) are enforced before any socket is served. Operator tooling
+/// uses `lock_only` to hold the state lock without starting the daemon.
+///
+/// # Errors
+///
+/// Returns [`TypedError`] for config-load and override failures, invalid
+/// startup-contract state (pidfs, state lock, socket path), IO failures
+/// (socket bind, helper socket, pidfd-table restore), and caller
+/// authorization refusals during the accept loop.
 pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     let mut config = load_config(&options.config_path)?;
     apply_overrides(&mut config, &options);
@@ -3467,11 +3514,13 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         .map_err(|error| TypedError::InternalIo {
             context: "install SIGTERM shutdown handler".to_owned(),
             detail: error.to_string(),
+            source: error_source(error),
         })?;
     let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
         .map_err(|error| TypedError::InternalIo {
             context: "install SIGINT shutdown handler".to_owned(),
             detail: error.to_string(),
+            source: error_source(error),
         })?;
     let unsafe_local_helper_uids =
         resolve_unsafe_local_helper_uids(&config, runtime_identity.daemon_uid)?;
@@ -3481,6 +3530,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                 .unsafe_local_helper_socket_gid
                 .ok_or_else(|| TypedError::InternalConfig {
                     detail: "unsafe-local helper socket path requires a socket group".to_owned(),
+                    source: None,
                 })?;
             Some(
                 d2bd_runtime::unsafe_local_helper::bind_helper_socket(
@@ -3491,6 +3541,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                 .map_err(|error| TypedError::InternalIo {
                     context: "bind unsafe-local helper socket".to_owned(),
                     detail: format!("{error:?}"),
+                    source: None,
                 })?,
             )
         } else {
@@ -3536,6 +3587,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         |err| TypedError::InternalIo {
             context: format!("restore pidfd table {}", pidfd_table_path.display()),
             detail: err.to_string(),
+            source: error_source(err),
         },
     )?);
     pidfd_table.set_broker_reap_log(Arc::clone(&broker_reap_log));
@@ -3642,6 +3694,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             .map_err(|error| TypedError::InternalIo {
                 context: "spawn unsafe-local helper listener".to_owned(),
                 detail: error.to_string(),
+                source: error_source(error),
             })?;
     }
     refresh_activation_marker_metrics_on_startup(&state).await;
@@ -3655,7 +3708,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                 .and_then(|zones| committed_zone_topology(&resolver, &zones).ok())
                 .map(|topology| topology.root);
             let provider_ready = match provider_root.as_ref() {
-                Some(_) if resolver.bundle.schema_version == "v3" => {
+                Some(_) if resolver.bundle().schema_version == "v3" => {
                     let process_providers =
                         Arc::new(process_provider_runtime::ProductionProcessProviders::new(
                             resolver.clone(),
@@ -3678,7 +3731,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                 }
                 Some(_) => {
                     tracing::error!(
-                        schema = %resolver.bundle.schema_version,
+                        schema = %resolver.bundle().schema_version,
                         "Provider composition refused: only v3 bundles are supported",
                     );
                     false
@@ -3721,6 +3774,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                                 TypedError::InternalIo {
                                     context: "authoritative resource-plane start audit".to_owned(),
                                     detail: error.to_string(),
+                                    source: error_source(error),
                                 }
                             })?;
                         }
@@ -3858,6 +3912,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                                         context: "authoritative resource-plane refusal audit"
                                             .to_owned(),
                                         detail: audit_error.to_string(),
+                                        source: error_source(audit_error),
                                     }
                                 })?;
                             }
@@ -3872,7 +3927,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             let report = storage_lifecycle::run_startup_contract_check(&resolver);
             if report.has_only_legacy_contract_issue() {
                 tracing::info!(
-                    bundle_version = resolver.bundle.bundle_version,
+                    bundle_version = resolver.bundle().bundle_version,
                     report_kind = "storage-lifecycle",
                     "storage-lifecycle: legacy bundle lacks storage/sync contracts; rebuild host configuration to enable startup contract checks",
                 );
@@ -4041,6 +4096,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                         let accept_error = TypedError::InternalIo {
                             context: "accept public seqpacket client".to_owned(),
                             detail: error.to_string(),
+                            source: error_source(error),
                         };
                         if let Err(cleanup_error) = finalize_daemon_interactions(&state).await {
                             tracing::error!(
@@ -4061,13 +4117,17 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             .map_err(|error| TypedError::InternalIo {
                 context: "set accepted public socket blocking".to_owned(),
                 detail: error.to_string(),
+                source: error_source(error),
             })?;
 
         // The `once` test path stays fully synchronous/inline so unit
         // tests can drive a single connection deterministically.
         if options.once {
             if let Err(error) = handle_connection(stream, &state, None) {
-                eprintln!("{}", error.message());
+                tracing::error!(
+                    error = %error.message(),
+                    "connection handler failed",
+                );
             }
             finalize_daemon_interactions(&state).await?;
             break;
@@ -4085,7 +4145,10 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                     ACCEPT_REFUSAL_WRITE_DEADLINE,
                 );
                 drain_rejected_peer_input(&stream);
-                eprintln!("{}", error.message());
+                tracing::error!(
+                    error = %error.message(),
+                    "public connection authorization refused",
+                );
                 continue;
             }
         };
@@ -4115,22 +4178,24 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             .spawn(move || {
                 // `permit` (and, for an exec session, ownership of it) is
                 // dropped when this handler returns.
+
+                let peer_uid = peer.uid;
                 if let Err(error) =
                     handle_connection_authorized(stream, &conn_state, peer, Some(permit))
                 {
-                    eprintln!("{}", error.message());
+                    tracing::error!(
+                        peer_uid,
+                        error = %error.message(),
+                        "connection handler failed",
+                    );
                 }
             })
         {
             // Spawn failure drops the moved closure (and its permit), so
             // the slot is released; log and keep serving.
-            eprintln!(
-                "{}",
-                TypedError::InternalIo {
-                    context: "spawn connection handler".to_owned(),
-                    detail: err.to_string(),
-                }
-                .message()
+            tracing::error!(
+                error = %err,
+                "connection handler thread spawn failed",
             );
         }
     }
@@ -4182,7 +4247,7 @@ pub struct GatewayGuestZoneLinkOptions {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct GatewayGuestConfigFile {
     credential_path: PathBuf,
     seal_key_path: PathBuf,
@@ -4191,7 +4256,7 @@ struct GatewayGuestConfigFile {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct GatewayGuestRelayConfigFile {
     namespace: Option<String>,
     entity: Option<String>,
@@ -4208,6 +4273,7 @@ fn validate_gateway_guest_observation_path(
     if path != Path::new(GATEWAY_GUEST_OPEN_OBSERVATION_PATH) {
         return Err(TypedError::InternalConfig {
             detail: "Guest gateway observation path is invalid".to_owned(),
+            source: None,
         });
     }
     Ok(Some(path))
@@ -4227,20 +4293,24 @@ async fn load_gateway_guest_zone_link_options(
         Err(_) => {
             return Err(TypedError::InternalConfig {
                 detail: "Guest gateway configuration unavailable".to_owned(),
+                source: None,
             });
         }
     };
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(TypedError::InternalConfig {
             detail: "Guest gateway configuration is not a regular file".to_owned(),
+            source: None,
         });
     }
     let bytes = tokio::fs::read(config_path).await.map_err(|_| TypedError::InternalConfig {
         detail: "Guest gateway configuration unavailable".to_owned(),
+        source: None,
     })?;
     let config: GatewayGuestConfigFile =
         serde_json::from_slice(&bytes).map_err(|_| TypedError::InternalConfig {
             detail: "Guest gateway configuration is invalid".to_owned(),
+            source: None,
         })?;
     let observation_path = validate_gateway_guest_observation_path(config.observation_path)?;
     let namespace = config
@@ -4248,25 +4318,30 @@ async fn load_gateway_guest_zone_link_options(
         .namespace
         .ok_or_else(|| TypedError::InternalConfig {
             detail: "Guest Relay namespace is unavailable".to_owned(),
+            source: None,
         })?;
     let entity = config
         .relay
         .entity
         .ok_or_else(|| TypedError::InternalConfig {
             detail: "Guest Relay entity is unavailable".to_owned(),
+            source: None,
         })?;
     let settings =
         RelayTransportSettings::new(namespace, entity).map_err(|_| TypedError::InternalConfig {
             detail: "Guest Relay settings are invalid".to_owned(),
+            source: None,
         })?;
     let bundle_bytes = bundle
         .zone_resource_bundle_bytes(identity.zone().as_str())
         .ok_or_else(|| TypedError::InternalConfig {
             detail: "Guest Zone resource bundle is unavailable".to_owned(),
+            source: None,
         })?;
     let zone_bundle =
         ResourceBundle::from_json(bundle_bytes).map_err(|_| TypedError::InternalConfig {
             detail: "Guest Zone resource bundle is invalid".to_owned(),
+            source: None,
         })?;
     let providers = zone_bundle
         .resources
@@ -4283,17 +4358,20 @@ async fn load_gateway_guest_zone_link_options(
     let [provider] = providers.as_slice() else {
         return Err(TypedError::InternalConfig {
             detail: "Guest Relay Provider assignment is unavailable".to_owned(),
+            source: None,
         });
     };
     let provider_spec = serde_json::from_slice::<Value>(&provider.spec().to_canonical_bytes())
         .map_err(|_| TypedError::InternalConfig {
             detail: "Guest Relay Provider configuration is invalid".to_owned(),
+            source: None,
         })?;
     let provider_config = provider_spec
         .get("config")
         .and_then(Value::as_object)
         .ok_or_else(|| TypedError::InternalConfig {
             detail: "Guest Relay Provider configuration is unavailable".to_owned(),
+            source: None,
         })?;
     let execution_ref = provider_config
         .get("executionRef")
@@ -4301,6 +4379,7 @@ async fn load_gateway_guest_zone_link_options(
         .and_then(|value| ResourceRef::parse(value).ok())
         .ok_or_else(|| TypedError::InternalConfig {
             detail: "Guest Relay execution assignment is invalid".to_owned(),
+            source: None,
         })?;
     let network_ref = provider_config
         .get("networkRef")
@@ -4308,6 +4387,7 @@ async fn load_gateway_guest_zone_link_options(
         .and_then(|value| ResourceRef::parse(value).ok())
         .ok_or_else(|| TypedError::InternalConfig {
             detail: "Guest Relay network assignment is invalid".to_owned(),
+            source: None,
         })?;
     if execution_ref != *identity.guest_ref()
         || execution_ref.resource_type().as_str() != "Guest"
@@ -4315,6 +4395,7 @@ async fn load_gateway_guest_zone_link_options(
     {
         return Err(TypedError::InternalConfig {
             detail: "Guest Relay Provider placement is invalid".to_owned(),
+            source: None,
         });
     }
     Ok(Some(GatewayGuestZoneLinkOptions {
@@ -4327,6 +4408,41 @@ async fn load_gateway_guest_zone_link_options(
         max_concurrent_sessions: 32,
         connect_timeout_seconds: 30,
     }))
+}
+
+#[cfg(test)]
+mod gateway_guest_config_tests {
+    use super::*;
+
+    /// A typo in the user-written Guest gateway config must be refused at
+    /// the deserialization boundary, not silently ignored until the Relay
+    /// namespace lookup later fails.
+
+    #[test]
+    fn gateway_guest_config_typo_is_refused_at_parse() {
+        let error = serde_json::from_slice::<GatewayGuestConfigFile>(
+            br#"{"credentialPath":"/run/gateway/cred","sealKeyPath":"/run/gateway/seed","relay":{"namespace":"ns","entity":"ent"},"typoKey":true}"#,
+        )
+        .expect_err("a typo'd gateway guest config key must be refused");
+        assert!(
+            error.to_string().contains("unknown field"),
+            "the typo must surface as the serde unknown-field error: {error}"
+        );
+    }
+
+    /// The Relay sub-object refuses unknown keys at the same boundary.
+
+    #[test]
+    fn gateway_guest_relay_config_typo_is_refused_at_parse() {
+        let error = serde_json::from_slice::<GatewayGuestRelayConfigFile>(
+            br#"{"namespace":"ns","entity":"ent","typoKey":true}"#,
+        )
+        .expect_err("a typo'd relay config key must be refused");
+        assert!(
+            error.to_string().contains("unknown field"),
+            "the typo must surface as the serde unknown-field error: {error}"
+        );
+    }
 }
 
 /// The journal-visible event every accepted Guest ComponentSession publishes.
@@ -4359,6 +4475,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
     if !options.state_dir.is_absolute() || !options.broker_socket_path.is_absolute() {
         return Err(TypedError::InternalConfig {
             detail: "guest mode requires absolute state and broker paths".to_owned(),
+            source: None,
         });
     }
     // The production path is sealed to the kernel's boot-id file. A custom
@@ -4372,32 +4489,39 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
     let boot = d2bd_runtime::guest_mode::BootIdentity::read(&boot_id_path).map_err(|_| {
         TypedError::InternalConfig {
             detail: "guest kernel boot identity unavailable".to_owned(),
+            source: None,
         }
     })?;
     let guest_ref =
         ResourceRef::parse(&options.guest_ref).map_err(|_| TypedError::InternalConfig {
             detail: "guest identity reference is invalid".to_owned(),
+            source: None,
         })?;
     let guest_uid = kernel_guest_uid().await.unwrap_or(options.guest_uid);
     let guest_uid = ResourceUid::parse(guest_uid).map_err(|_| TypedError::InternalConfig {
         detail: "guest identity UID is invalid".to_owned(),
+        source: None,
     })?;
     let zone = ZoneId::parse(options.zone).map_err(|_| TypedError::InternalConfig {
         detail: "guest Zone identity is invalid".to_owned(),
+        source: None,
     })?;
     let purpose = d2b_contracts_resource::v3::identity::SessionPurpose::parse(options.purpose)
         .map_err(|_| TypedError::InternalConfig {
             detail: "guest session purpose is invalid".to_owned(),
+            source: None,
         })?;
     let schema = SchemaFingerprint::parse(options.schema_fingerprint).map_err(|_| {
         TypedError::InternalConfig {
             detail: "guest session schema fingerprint is invalid".to_owned(),
+            source: None,
         }
     })?;
     let reconnect_generation =
         ReconnectGeneration::new(options.reconnect_generation).map_err(|_| {
             TypedError::InternalConfig {
                 detail: "guest reconnect generation is invalid".to_owned(),
+                source: None,
             }
         })?;
     let identity = d2bd_runtime::guest_mode::GuestIdentity::new(
@@ -4414,6 +4538,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
     )
     .map_err(|error| TypedError::InternalConfig {
         detail: error.to_string(),
+        source: error_source(error),
     })?;
     if options.validate_only {
         return Ok(());
@@ -4424,6 +4549,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
         .await
         .map_err(|_| TypedError::InternalConfig {
             detail: "guest state root unavailable".to_owned(),
+            source: None,
         })?;
     let runtime = d2bd_runtime::guest_mode::GuestRuntime::new(
         identity.clone(),
@@ -4434,6 +4560,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
     .await
     .map_err(|error| TypedError::InternalConfig {
         detail: error.to_string(),
+        source: error_source(error),
     })?;
     let bundle = BundleResolver::load_on_loader_worker(&options.bundle_path)
         .await
@@ -4445,6 +4572,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
         })
         .map_err(|_| TypedError::InternalConfig {
             detail: "guest process bundle unavailable".to_owned(),
+            source: None,
         })?;
     let gateway_zone_link = load_gateway_guest_zone_link_options(
         options.gateway_zone_link_config_path.as_deref(),
@@ -4468,30 +4596,38 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
         )
         .map_err(|error| TypedError::InternalConfig {
             detail: error.code().to_owned(),
+            source: None,
         })?;
         Ok::<_, TypedError>((runtime, observation_path))
     })
     .transpose()?;
     if gateway_zone_link.is_some() {
-        tracing::info!("Guest-local ZoneLink transport Provider composed");
+        tracing::info!(
+            zone = %identity.zone(),
+            guest_ref = %identity.guest_ref().name().as_str(),
+            "Guest-local ZoneLink transport Provider composed",
+        );
     }
     let local_private_path =
         options
             .local_private_key_path
             .ok_or_else(|| TypedError::InternalConfig {
                 detail: "guest ComponentSession private key is unavailable".to_owned(),
+                source: None,
             })?;
     let parent_public_path =
         options
             .parent_public_key_path
             .ok_or_else(|| TypedError::InternalConfig {
                 detail: "parent Zone ComponentSession key is unavailable".to_owned(),
+                source: None,
             })?;
     let parent_public = read_public_key32(&parent_public_path).await?;
     let mut listener = runtime
         .bind_listener()
         .map_err(|error| TypedError::InternalConfig {
             detail: error.to_string(),
+            source: error_source(error),
         })?;
     tracing::info!(
         port = d2bd_runtime::guest_mode::GUEST_COMPONENT_SESSION_PORT,
@@ -4502,6 +4638,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
             .write_open_observation(observation_path)
             .map_err(|error| TypedError::InternalConfig {
                 detail: error.code().to_owned(),
+                source: None,
             })?;
     }
     // Guest target-control (U13 guest half): one target runtime per Guest,
@@ -4514,6 +4651,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
         d2b_resource_runtime::target::TargetRef::guest(identity.guest_ref().name().as_str())
             .map_err(|error| TypedError::InternalConfig {
                 detail: error.to_string(),
+                source: error_source(error),
             })?;
     let target_service = std::sync::Arc::new(
         d2b_provider_guest::GuestTargetService::new(
@@ -4524,16 +4662,22 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
             d2b_provider_guest::production_guest_target_effects(),
         ),
     );
-    tracing::info!("Guest target-control service composed");
+    tracing::info!(
+        zone = %identity.zone(),
+        guest_ref = %identity.guest_ref().name().as_str(),
+        "Guest target-control service composed",
+    );
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .map_err(|_| TypedError::InternalIo {
             context: "install Guest SIGTERM handler".to_owned(),
             detail: "signal handler unavailable".to_owned(),
+            source: None,
         })?;
     let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
         .map_err(|_| TypedError::InternalIo {
             context: "install Guest SIGINT handler".to_owned(),
             detail: "signal handler unavailable".to_owned(),
+            source: None,
         })?;
     let mut active: Option<(
         tokio::task::JoinHandle<Result<(), d2b_session::SessionServerError>>,
@@ -4635,6 +4779,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                     if options.once {
                         return Err(TypedError::InternalConfig {
                             detail: error.to_string(),
+                            source: error_source(error),
                         });
                     }
                     tracing::warn!(error = %error, "Guest ComponentSession handshake refused");
@@ -4715,25 +4860,31 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
 async fn read_secret32(path: &Path) -> Result<d2b_session::Secret32, TypedError> {
     let bytes = tokio::fs::read(path).await.map_err(|_| TypedError::InternalConfig {
         detail: "guest ComponentSession private key unavailable".to_owned(),
+        source: None,
     })?;
     let bytes: [u8; 32] = bytes.try_into().map_err(|_| TypedError::InternalConfig {
         detail: "guest ComponentSession private key has invalid length".to_owned(),
+        source: None,
     })?;
     d2b_session::Secret32::new(bytes).map_err(|_| TypedError::InternalConfig {
         detail: "guest ComponentSession private key is invalid".to_owned(),
+        source: None,
     })
 }
 
 async fn read_public_key32(path: &Path) -> Result<[u8; 32], TypedError> {
     let bytes = tokio::fs::read(path).await.map_err(|_| TypedError::InternalConfig {
         detail: "parent Zone ComponentSession key unavailable".to_owned(),
+        source: None,
     })?;
     let bytes: [u8; 32] = bytes.try_into().map_err(|_| TypedError::InternalConfig {
         detail: "parent Zone ComponentSession key has invalid length".to_owned(),
+        source: None,
     })?;
     if bytes == [0; 32] {
         return Err(TypedError::InternalConfig {
             detail: "parent Zone ComponentSession key is invalid".to_owned(),
+            source: None,
         });
     }
     Ok(bytes)
@@ -4776,21 +4927,21 @@ async fn finalize_daemon_interactions(state: &ServerState) -> Result<(), TypedEr
     {
         listeners.stop().await;
     }
-    let interaction_error = {
-        let mut runtime = state.interaction_runtime.lock().await;
-        if let Some(runtime) = runtime.as_mut()
-            && let Err(error) = runtime
-                .finalize_async(d2b_provider_display_wayland::GraceState::Expired)
-                .await
-        {
+    let interaction_error = match interaction_composition::finalize_interaction_runtimes(
+        &state.interaction_runtime,
+        d2b_provider_display_wayland::GraceState::Expired,
+    )
+    .await
+    {
+        Some(error) => {
             tracing::error!(?error, "interaction Provider finalization failed");
             Some(TypedError::InternalIo {
                 context: "interaction Provider finalization".to_owned(),
                 detail: error.to_string(),
+                source: error_source(error),
             })
-        } else {
-            None
         }
+        None => None,
     };
     let runtime = state.interaction_runtime.lock().await.take();
     // The interaction composition retains the Resource API client used by
@@ -4811,9 +4962,18 @@ async fn finalize_daemon_interactions(state: &ServerState) -> Result<(), TypedEr
     resource_result.map_err(|error| TypedError::InternalIo {
         context: "authoritative resource-plane shutdown audit".to_owned(),
         detail: error.to_string(),
+        source: error_source(error),
     })
 }
 
+/// Acquire the daemon's state lock and hold it for the requested duration,
+/// then release it. Operator tooling uses this to serialize exclusive
+/// state access without starting the daemon.
+///
+/// # Errors
+///
+/// Returns [`TypedError`] for config-load, state-lock-parent validation, and
+/// lock-acquisition failures.
 pub async fn lock_only(options: LockOnlyOptions) -> Result<(), TypedError> {
     let mut config = load_config(&options.config_path)?;
     if let Some(path) = options.state_lock_path.clone() {
@@ -4965,6 +5125,7 @@ async fn adopt_orphaned_runners_on_startup_with(
         TypedError::InternalIo {
             context: "enumerate daemon runner snapshots".to_owned(),
             detail: err.to_string(),
+            source: error_source(err),
         }
     })?;
     if snapshots.is_empty() {
@@ -5051,6 +5212,7 @@ async fn adopt_orphaned_runners_on_startup_with(
                         return Err(TypedError::InternalIo {
                             context: "register adopted pidfd".to_owned(),
                             detail: error.to_string(),
+                            source: error_source(error),
                         });
                     }
                 }
@@ -5083,6 +5245,7 @@ async fn adopt_orphaned_runners_on_startup_with(
                 .map_err(|err| TypedError::InternalIo {
                     context: "remove missing runner snapshot".to_owned(),
                     detail: err.to_string(),
+                    source: error_source(err),
                 })?;
                 tracing::info!(
                     vm = %adopt.vm,
@@ -5110,6 +5273,7 @@ async fn adopt_orphaned_runners_on_startup_with(
                 .map_err(|err| TypedError::InternalIo {
                     context: "remove raced runner snapshot".to_owned(),
                     detail: err.to_string(),
+                    source: error_source(err),
                 })?;
                 tracing::warn!(
                     vm = %adopt.vm,
@@ -5137,6 +5301,7 @@ async fn adopt_orphaned_runners_on_startup_with(
         .map_err(|err| TypedError::InternalIo {
             context: "persist adopted pidfd table".to_owned(),
             detail: err.to_string(),
+            source: error_source(err),
         })?;
     Ok(())
 }
@@ -5227,8 +5392,7 @@ impl d2bd_runtime::autostart::VmStarter for BrokerVmStarter {
         let request = public_wire::VmLifecycleRequest {
             vm: vm.to_owned(),
             flags: public_wire::MutationFlags {
-                apply: true,
-                dry_run: false,
+                mode: Some(public_wire::MutationMode::Apply),
                 json: true,
             },
             force: false,
@@ -5286,7 +5450,11 @@ async fn run_startup_autostart(state: &ServerState, kernel_module_degraded: &BTr
     };
     let plan = d2bd_runtime::autostart::build_autostart_plan(&resolver);
     if plan.vms.is_empty() {
-        tracing::info!("autostart: nothing to do (empty plan)");
+        tracing::info!(
+            net_vm_count = plan.net_vms().count(),
+            workload_count = plan.workload_vms().count(),
+            "autostart: nothing to do (empty plan)",
+        );
         return;
     }
     tracing::info!(
@@ -5512,6 +5680,7 @@ fn handle_connection_authorized(
                     return Err(TypedError::InternalIo {
                         context: "spawn typed shell owner handler".to_owned(),
                         detail: err.to_string(),
+                        source: error_source(err),
                     });
                 }
             }
@@ -5548,6 +5717,7 @@ fn handle_connection_authorized(
                     return Err(TypedError::InternalIo {
                         context: "spawn Process resource owner".to_owned(),
                         detail: err.to_string(),
+                        source: error_source(err),
                     });
                 }
             }
@@ -5559,6 +5729,7 @@ fn handle_connection_authorized(
                     .map_err(|err| TypedError::InternalIo {
                         context: "serialize error response".to_owned(),
                         detail: err.to_string(),
+                        source: error_source(err),
                     })?,
             };
         write_json_frame(&stream, &response)?;
@@ -6100,13 +6271,16 @@ fn dispatch_config_nixos_service_request(
         .try_lock()
         .map_err(|_| TypedError::InternalConfig {
             detail: "resource plane unavailable".to_owned(),
+            source: None,
         })?
         .clone()
         .ok_or_else(|| TypedError::InternalConfig {
             detail: "resource plane unavailable".to_owned(),
+            source: None,
         })?;
     let runtime = plane.zone(&zone).map_err(|_| TypedError::InternalConfig {
         detail: "config-nixos Zone runtime unavailable".to_owned(),
+        source: None,
     })?;
     let guest_lookup = json!({
         "zoneRef": format!("Zone/{}", zone.as_str()),
@@ -6117,6 +6291,7 @@ fn dispatch_config_nixos_service_request(
     let guest = drive_sync(&state.runtime_handle, runtime.dispatch_public_cli_request(&guest_lookup, peer.uid))
         .map_err(|_| TypedError::InternalConfig {
             detail: "config-nixos Guest lookup failed".to_owned(),
+            source: None,
         })?;
     if guest.get("kind").is_some() {
         return Err(TypedError::AuthzNotAdmin {
@@ -6145,6 +6320,7 @@ fn dispatch_config_nixos_service_request(
                 .try_lock()
                 .map_err(|_| TypedError::InternalConfig {
                     detail: "config staging state unavailable".to_owned(),
+                    source: None,
                 })?
                 .stage(
                     d2b_provider_config_nixos::ConfigCaller::Admin,
@@ -6166,6 +6342,7 @@ fn dispatch_config_nixos_service_request(
                 .try_lock()
                 .map_err(|_| TypedError::InternalConfig {
                     detail: "config staging state unavailable".to_owned(),
+                    source: None,
                 })?
                 .diff(d2b_provider_config_nixos::ConfigCaller::Admin, &zone, &diff)
                 .map_err(config_nixos_wire_error)?;
@@ -6183,6 +6360,7 @@ fn dispatch_config_nixos_service_request(
                 .try_lock()
                 .map_err(|_| TypedError::InternalConfig {
                     detail: "config staging state unavailable".to_owned(),
+                    source: None,
                 })?
                 .approve(
                     d2b_provider_config_nixos::ConfigCaller::Admin,
@@ -6204,6 +6382,7 @@ fn dispatch_config_nixos_service_request(
                 .try_lock()
                 .map_err(|_| TypedError::InternalConfig {
                     detail: "config staging state unavailable".to_owned(),
+                    source: None,
                 })?
                 .reject(
                     d2b_provider_config_nixos::ConfigCaller::Admin,
@@ -6225,6 +6404,7 @@ fn dispatch_config_nixos_service_request(
                 .try_lock()
                 .map_err(|_| TypedError::InternalConfig {
                     detail: "config staging state unavailable".to_owned(),
+                    source: None,
                 })?
                 .status(
                     d2b_provider_config_nixos::ConfigCaller::Admin,
@@ -6758,19 +6938,12 @@ fn dispatch_guest_lifecycle_resource_request(
             });
         }
     };
-    let flags = public_wire::MutationFlags {
-        dry_run: request
-            .get("dryRun")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        apply: request
-            .get("apply")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        json: false,
-    };
     let verb = format!("guest {}", method.to_ascii_lowercase());
-    if let Some(response) = mutating_verb_preflight(&verb, &flags, Some(target.name().as_str())) {
+    let mode = match mutation_mode_from_request(request, &verb) {
+        Ok(mode) => mode,
+        Err(response) => return Ok(response),
+    };
+    if let Some(response) = mutating_verb_preflight(&verb, Some(mode), Some(target.name().as_str())) {
         return Ok(response);
     }
     let caller_role = broker_caller_role_for_peer(peer);
@@ -6959,19 +7132,12 @@ fn dispatch_process_lifecycle_resource_request(
             });
         }
     };
-    let flags = public_wire::MutationFlags {
-        dry_run: request
-            .get("dryRun")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        apply: request
-            .get("apply")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        json: false,
-    };
     let verb = format!("process {}", method.to_ascii_lowercase());
-    if let Some(response) = mutating_verb_preflight(&verb, &flags, Some(target.name().as_str())) {
+    let mode = match mutation_mode_from_request(request, &verb) {
+        Ok(mode) => mode,
+        Err(response) => return Ok(response),
+    };
+    if let Some(response) = mutating_verb_preflight(&verb, Some(mode), Some(target.name().as_str())) {
         return Ok(response);
     }
     let base_operation_id =
@@ -7125,15 +7291,12 @@ fn dispatch_device_usb_resource_request(
         .ok_or_else(|| TypedError::WireInvalidFrame {
             detail: "Device USB request requires busId".to_owned(),
         })?;
+    let mode = match mutation_mode_from_request(request, verb) {
+        Ok(mode) => mode,
+        Err(response) => return Ok(response),
+    };
     let flags = public_wire::MutationFlags {
-        dry_run: request
-            .get("dryRun")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        apply: request
-            .get("apply")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
+        mode: Some(mode),
         json: false,
     };
     match method {
@@ -7157,6 +7320,18 @@ fn dispatch_device_usb_resource_request(
         ),
         _ => unreachable!("closed Device USB method match"),
     }
+}
+
+/// Map a trusted-bundle Network spec parse failure onto the resource
+/// runtime refusal surface, logging the manifest-parse-error reason.
+fn network_intent_parse_error(
+    error: d2b_contracts::error::Error,
+) -> resource_runtime::ResourceRuntimeError {
+    tracing::warn!(
+        error = %error,
+        "Network effect context could not resolve a trusted bundle intent"
+    );
+    resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
 }
 
 pub(crate) fn resolve_network_effect_context(
@@ -7205,15 +7380,18 @@ pub(crate) fn resolve_network_effect_context(
     );
     if resolver
         .resolve_network_bridge_intent(&bridge_id, &provenance)
+        .map_err(network_intent_parse_error)?
         .is_none()
         || resolver
             .resolve_network_bridge_intent(&uplink_bridge_id, &provenance)
+            .map_err(network_intent_parse_error)?
             .is_none()
     {
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
     let projection = resolver
         .resolve_network_projection_intent(&projection_id, &provenance)
+        .map_err(network_intent_parse_error)?
         .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
     let nm_id = intent_id_nm_unmanaged_host();
     if resolver.find_nm_unmanaged_intent(&nm_id).is_none() {
@@ -7226,6 +7404,7 @@ pub(crate) fn resolve_network_effect_context(
     );
     if resolver
         .resolve_network_hosts_intent(&hosts_id, &provenance)
+        .map_err(network_intent_parse_error)?
         .is_none()
     {
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
@@ -7240,12 +7419,14 @@ pub(crate) fn resolve_network_effect_context(
             ))
         })
         .collect::<Vec<_>>();
-    if route_ids.iter().any(|id| {
-        resolver
+    for id in &route_ids {
+        if resolver
             .resolve_network_route_intent(id.as_str(), &provenance)
+            .map_err(network_intent_parse_error)?
             .is_none()
-    }) {
-        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+        {
+            return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+        }
     }
     let sysctl_ids = ["lan", "uplink"]
         .into_iter()
@@ -7266,12 +7447,14 @@ pub(crate) fn resolve_network_effect_context(
                 })
         })
         .collect::<Vec<_>>();
-    if sysctl_ids.iter().any(|id| {
-        resolver
+    for id in &sysctl_ids {
+        if resolver
             .resolve_network_sysctl_intent(id.as_str(), &provenance)
+            .map_err(network_intent_parse_error)?
             .is_none()
-    }) {
-        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+        {
+            return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+        }
     }
     let generation = resolver
         .installed_generation_identity()
@@ -7291,7 +7474,7 @@ pub(crate) fn resolve_network_effect_context(
         sysctl_ids,
         generation,
         projection_digest,
-        resolver.host.site.allow_unsafe_east_west,
+        resolver.host().site.allow_unsafe_east_west,
     )
     .with_additional_bridge_intent(BundleOpId::new(uplink_bridge_id)))
 }
@@ -7826,7 +8009,7 @@ fn prepare_workload_launch(
     state: &ServerState,
     requester_uid: u32,
     catalog: &workload_dispatch::WorkloadCatalog,
-    private: Option<&d2b_core::unsafe_local_workloads::UnsafeLocalWorkloadsJson>,
+    private: Option<&d2b_contracts::unsafe_local_workloads::UnsafeLocalWorkloadsJson>,
     args: &public_wire::LauncherExecArgs,
 ) -> Result<
     (
@@ -8124,9 +8307,7 @@ fn record_workload_availability_metrics(
             } else {
                 "not-applicable"
             };
-            *counts
-                .get_mut(&(provider, component, selected))
-                .expect("bounded workload availability tuple") += 1;
+            *counts.entry((provider, component, selected)).or_insert(0) += 1;
         }
     }
     let samples = counts
@@ -8235,7 +8416,7 @@ fn record_workload_launch_result(
     state
         .daemon_audit
         .write_event_with_authority(
-            &d2bd_runtime::daemon_audit::DaemonEvent::WorkloadLauncher {
+            d2bd_runtime::daemon_audit::DaemonEvent::WorkloadLauncher {
                 target: context.target.clone(),
                 item_id: context.item_id.clone(),
                 operation_id: operation_id.to_string(),
@@ -8249,6 +8430,7 @@ fn record_workload_launch_result(
         .map_err(|_| TypedError::InternalIo {
             context: "authoritative workload audit".to_owned(),
             detail: "daemon audit unavailable".to_owned(),
+            source: None,
         })
 }
 
@@ -8341,8 +8523,6 @@ mod workload_observability_tests {
         launcher::LauncherWorkloadSummary,
         realm::RealmPath,
         workload_identity::{WorkloadIdentity, WorkloadTarget},
-    };
-    use d2b_core::{
         configured_argv::ConfiguredArgv,
         contract_id::ContractId,
         unsafe_local_workloads::{
@@ -8542,7 +8722,7 @@ mod workload_observability_tests {
     fn captured_events(state: &ServerState) -> Vec<Value> {
         state
             .daemon_audit
-            .captured
+            .captured()
             .lock()
             .expect("audit capture")
             .iter()
@@ -8918,6 +9098,7 @@ fn console_sessions_table<'a>(
         .try_lock()
         .map_err(|_| TypedError::InternalConfig {
             detail: "console session table unavailable".to_owned(),
+            source: None,
         })
 }
 
@@ -8982,6 +9163,7 @@ fn dispatch_console(
                 .attach(vm, peer.uid)
                 .map_err(|_| TypedError::InternalConfig {
                     detail: "console: failed to allocate secure session handle".to_owned(),
+                    source: None,
                 })?;
             match attach_result {
                 Some((handle, kind, start_offset)) => {
@@ -9126,7 +9308,7 @@ fn resolve_console_provider_kind(
 /// For qemu-media, requires a pre-provisioned socketpair fd from the broker;
 /// returns ConsoleNotRunning if no live fd is available.
 fn create_console_session_for_vm(
-    _state: &ServerState,
+    state: &ServerState,
     vm: &str,
     provider_kind: public_wire::ConsoleProviderKind,
 ) -> Result<console_session::ConsoleSession, TypedError> {
@@ -9135,8 +9317,12 @@ fn create_console_session_for_vm(
             // Cloud Hypervisor serial socket path.
             let socket_path = format!("/run/d2b/vms/{vm}/console.sock");
             // The path may not exist yet if CH hasn't started, but the
-            // drainer will reconnect automatically.
-            Ok(console_session::create_ch_session(socket_path))
+            // drainer will reconnect automatically. The drainer task runs
+            // on the daemon-owned runtime handle.
+            Ok(console_session::create_ch_session(
+                &state.runtime_handle,
+                socket_path,
+            ))
         }
         public_wire::ConsoleProviderKind::QemuMedia => {
             // qemu-media console requires the broker to create a
@@ -9197,22 +9383,16 @@ fn dispatch_broker_usbip_bind(
     request: public_wire::UsbipBindCliRequest,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "usb attach";
-    if !request.flags.dry_run && !request.flags.apply {
-        return Ok(
-            mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
-                .expect("missing mutation flags produce a preflight response"),
-        );
-    }
     let resolver = load_bundle_resolver(state)?;
     ensure_manifest_entry_runtime_capability(
-        resolver.manifest.vms.get(&request.vm),
+        resolver.manifest().vms.get(&request.vm),
         &request.vm,
         RuntimeCapabilityGate::UsbHotplug,
         VERB,
     )?;
     if vm_is_qemu_media(state, &resolver, &request.vm)? {
         if let Some(response) =
-            mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
+            mutating_verb_preflight(VERB, request.flags.mode, Some(request.vm.as_str()))
         {
             return Ok(response);
         }
@@ -9239,22 +9419,16 @@ fn dispatch_broker_usbip_unbind(
     request: public_wire::UsbipUnbindCliRequest,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "usb detach";
-    if !request.flags.dry_run && !request.flags.apply {
-        return Ok(
-            mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
-                .expect("missing mutation flags produce a preflight response"),
-        );
-    }
     let resolver = load_bundle_resolver(state)?;
     ensure_manifest_entry_runtime_capability(
-        resolver.manifest.vms.get(&request.vm),
+        resolver.manifest().vms.get(&request.vm),
         &request.vm,
         RuntimeCapabilityGate::UsbHotplug,
         VERB,
     )?;
     if vm_is_qemu_media(state, &resolver, &request.vm)? {
         if let Some(response) =
-            mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
+            mutating_verb_preflight(VERB, request.flags.mode, Some(request.vm.as_str()))
         {
             return Ok(response);
         }
@@ -9339,7 +9513,7 @@ fn refresh_qemu_media_registry_index_if_needed_as(
     resolver: &BundleResolver,
     caller_role: BrokerCallerRole,
 ) -> Result<(), TypedError> {
-    if resolver.host.qemu_media.is_none() {
+    if resolver.host().qemu_media.is_none() {
         return Ok(());
     }
     match dispatch_broker_request_as(
@@ -9353,6 +9527,7 @@ fn refresh_qemu_media_registry_index_if_needed_as(
         BrokerResponse::Error(error) => Err(TypedError::InternalIo {
             context: "refresh qemu-media registry index".to_owned(),
             detail: format!("{}:{}", error.operation, error.kind),
+            source: None,
         }),
         other => Err(TypedError::InternalIo {
             context: "refresh qemu-media registry index".to_owned(),
@@ -9360,6 +9535,7 @@ fn refresh_qemu_media_registry_index_if_needed_as(
                 "unexpected broker response {}",
                 broker_response_kind(&other)
             ),
+            source: None,
         }),
     }
 }
@@ -9370,12 +9546,6 @@ fn dispatch_broker_qemu_media_attach(
     caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "usb attach";
-    if let Err(err) = d2b_host::media::validate_usb_busid(&request.bus_id) {
-        return Ok(invalid_request_response(
-            VERB,
-            format!("invalid USB busid selector: {err}"),
-        ));
-    }
     match dispatch_broker_request_as(
         state,
         BrokerRequest::QemuMediaAttach(BrokerQemuMediaHotplugRequest {
@@ -9414,12 +9584,6 @@ fn dispatch_broker_qemu_media_detach(
     caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "usb detach";
-    if let Err(err) = d2b_host::media::validate_usb_busid(&request.bus_id) {
-        return Ok(invalid_request_response(
-            VERB,
-            format!("invalid USB busid selector: {err}"),
-        ));
-    }
     match dispatch_broker_request_as(
         state,
         BrokerRequest::QemuMediaDetach(BrokerQemuMediaHotplugRequest {
@@ -9489,12 +9653,13 @@ fn dispatch_broker_usbip_probe(
 ) -> Result<Value, TypedError> {
     let resolver =
         BundleResolver::load(&state.config.artifacts.bundle_path).map_err(|err| match err {
-            d2b_core::error::Error::Bundle(BundleError::Tampered { path, reason }) => {
+            d2b_contracts::error::Error::Bundle(BundleError::Tampered { path, reason }) => {
                 TypedError::BundleTampered { path, reason }
             }
             other => TypedError::InternalIo {
                 context: "load bundle resolver".to_owned(),
                 detail: other.to_string(),
+                source: error_source(other),
             },
         })?;
     refresh_qemu_media_registry_index_if_needed_as(state, &resolver, caller_role.clone())?;
@@ -9825,7 +9990,7 @@ fn qemu_media_probe_entries(
     state: &ServerState,
     resolver: &BundleResolver,
 ) -> Vec<public_wire::UsbipProbeEntry> {
-    let Some(qemu_media) = resolver.host.qemu_media.as_ref() else {
+    let Some(qemu_media) = resolver.host().qemu_media.as_ref() else {
         return Vec::new();
     };
     const MAX_QEMU_MEDIA_PROBE_CANDIDATES: usize = 16;
@@ -10057,44 +10222,85 @@ fn qemu_media_probe_entry(
     }
 }
 
+/// The mutating mode of a raw public request frame.
+///
+/// These frames never pass through the typed
+/// [`d2b_contracts_control::public_wire::MutationFlags`] admission, so the
+/// `dryRun`/`apply` pair is parsed here. A frame that selects neither mode has
+/// no mode: it keeps the documented `invalid-request` refusal envelope instead
+/// of a decode failure.
+fn mutation_mode_from_request(
+    request: &Value,
+    verb: &str,
+) -> Result<d2b_contracts_control::public_wire::MutationMode, Value> {
+    let dry_run = request
+        .get("dryRun")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let apply = request
+        .get("apply")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    d2b_contracts_control::public_wire::MutationMode::from_flags(dry_run, apply).map_err(|_| {
+        invalid_request_response(
+            verb,
+            format!("d2b {verb} requires either --dry-run or --apply"),
+        )
+    })
+}
+
+/// One mutating-verb preflight response: the structured refusal for a request
+/// that selected no mode, the daemon-side plan for a dry run, or `None` for an
+/// apply request that proceeds to dispatch.
+///
+/// `mode` is `None` when the request set neither `dryRun` nor `apply`. That
+/// case decodes rather than failing, so it is refused here and keeps the
+/// typed outcome and remediation string a client can match on.
 fn mutating_verb_preflight(
     verb: &str,
-    flags: &d2b_contracts_control::public_wire::MutationFlags,
+    mode: Option<d2b_contracts_control::public_wire::MutationMode>,
     target_vm: Option<&str>,
 ) -> Option<Value> {
-    use d2b_contracts_control::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
+    use d2b_contracts_control::public_wire::{
+        MutationMode, MutatingVerbOutcome, MutatingVerbResponse,
+    };
 
-    if !flags.dry_run && !flags.apply {
-        return Some(d2bd_runtime::wire::mutating_verb_response(
-            MutatingVerbResponse {
-                verb: verb.to_owned(),
-                outcome: MutatingVerbOutcome::InvalidRequest,
-                target_wave: None,
-                summary: None,
-                remediation: Some(format!("d2b {verb} requires either --dry-run or --apply")),
-                api_ready: None,
-            },
-        ));
+    let mode = match mode {
+        Some(mode) => mode,
+        None => {
+            return Some(d2bd_runtime::wire::mutating_verb_response(
+                MutatingVerbResponse {
+                    verb: verb.to_owned(),
+                    outcome: MutatingVerbOutcome::InvalidRequest,
+                    target_wave: None,
+                    summary: None,
+                    remediation: Some(format!(
+                        "d2b {verb} requires either --dry-run or --apply"
+                    )),
+                    api_ready: None,
+                },
+            ));
+        }
+    };
+    match mode {
+        MutationMode::Apply => None,
+        MutationMode::DryRun => {
+            let summary = match target_vm {
+                Some(vm) => format!("d2b {verb} --dry-run: daemon-side plan for vm '{vm}'"),
+                None => format!("d2b {verb} --dry-run: daemon-side plan"),
+            };
+            Some(d2bd_runtime::wire::mutating_verb_response(
+                MutatingVerbResponse {
+                    verb: verb.to_owned(),
+                    outcome: MutatingVerbOutcome::DryRunPlanned,
+                    target_wave: None,
+                    summary: Some(summary),
+                    remediation: None,
+                    api_ready: None,
+                },
+            ))
+        }
     }
-
-    if flags.dry_run {
-        let summary = match target_vm {
-            Some(vm) => format!("d2b {verb} --dry-run: daemon-side plan for vm '{vm}'"),
-            None => format!("d2b {verb} --dry-run: daemon-side plan"),
-        };
-        return Some(d2bd_runtime::wire::mutating_verb_response(
-            MutatingVerbResponse {
-                verb: verb.to_owned(),
-                outcome: MutatingVerbOutcome::DryRunPlanned,
-                target_wave: None,
-                summary: Some(summary),
-                remediation: None,
-                api_ready: None,
-            },
-        ));
-    }
-
-    None
 }
 
 pub(crate) fn broker_socket_path(state: &ServerState) -> PathBuf {
@@ -10107,6 +10313,21 @@ pub(crate) fn broker_socket_path(state: &ServerState) -> PathBuf {
 
 /// The broker kernel IO budget one legacy kernel invocation may take.
 pub(crate) const KERNEL_IO_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The io budget the two lifecycle-cell claims poll the broker under.
+///
+/// `consume-cell` and `complete-cell` declare the carrier's
+/// `DeadlineTier::Standard`, so the claim polls for `DEFAULT_CONTEXT_DEADLINE_MS`
+/// rather than the legacy 10s `KERNEL_IO_TIMEOUT`: a poll shorter than the
+/// budget the row is served under abandons a claim the broker is still
+/// serving. Measured 2026-09-25: a 10s poll on this leg turned a slow broker
+/// reply into `EffectRejected`, the one spelling the Device Providers read as
+/// permanent, and the TPM device controller then spun on it for the rest of
+/// the run (`device-worker-launch` failing runs carry 100 to 855
+/// `EffectRejected` lines; most passing runs carry none), which left the
+/// one-shot `EphemeralProcess/swtpm-flush-tpm0` refused and its outcome wait
+/// unsatisfiable.
+const LIFECYCLE_CELL_IO_TIMEOUT: Duration = Duration::from_millis(DEFAULT_CONTEXT_DEADLINE_MS);
 
 /// The daemon-side runner lookup the U10 family seam wires: `(vm, role)` to
 /// the retained `(pid, start_time_ticks)` of the daemon's pidfd table.
@@ -11144,7 +11365,7 @@ pub(crate) async fn ensure_guest_target_session(
     plane
         .bind_guest_target(&guest, generation, control)
         .map_err(|error| format!("guest-session:target-bind-refused:{error}"))?;
-    adopt_guest_target_assignments(plane.targets(), &guest, generation).await;
+    adopt_guest_target_assignments(&plane.targets(), &guest, generation).await;
     Ok(())
 }
 
@@ -11184,7 +11405,7 @@ async fn adopt_guest_target_assignments(
             continue;
         };
         let binding = d2b_resource_runtime::target::TargetBinding::new(
-            std::sync::Arc::clone(directory),
+            directory.as_ref().clone(),
             assignment,
         );
         match binding.adopt().await {
@@ -11236,7 +11457,7 @@ pub(crate) async fn binding_guest_mount_ready(
         .lock()
         .await
         .get(zone.as_str())
-        .map(|plane| std::sync::Arc::clone(plane.targets()));
+        .map(|plane| plane.targets());
     let Some(directory) = directory else {
         return false;
     };
@@ -11260,7 +11481,7 @@ pub(crate) async fn target_local_mount_observed(
         return false;
     }
     let binding = d2b_resource_runtime::target::TargetBinding::new(
-        std::sync::Arc::clone(directory),
+        directory.as_ref().clone(),
         assignment,
     );
     let Ok((binding, _)) = binding.adopt().await else {
@@ -11571,7 +11792,7 @@ fn read_guest_config_typed(
         result.map_err(config_read_error_kind)
     })
     .map_err(|kind| TypedError::ConfigReadFailed { kind })?;
-    d2b_provider_config_nixos::decode_document(&response).map_err(|_| {
+    response.document().map_err(|_| {
         TypedError::ConfigReadFailed {
             kind: d2bd_runtime::typed_error::ConfigReadErrorKind::Protocol,
         }
@@ -12354,7 +12575,8 @@ fn emit_provider_shell_audit(state: &ServerState, event: ProviderShellAudit<'_>)
     let _ =
         state
             .daemon_audit
-            .write_event(&d2bd_runtime::daemon_audit::DaemonEvent::ShellLifecycle {
+            .write_event(
+                d2bd_runtime::daemon_audit::DaemonEvent::ShellLifecycle {
                 target: event.target.to_owned(),
                 peer_uid: event.peer_uid,
                 provider: event.provider,
@@ -12478,7 +12700,7 @@ fn guest_shell_session(
     let resolver = load_bundle_resolver(state)?;
     let entry =
         resolver
-            .manifest
+            .manifest()
             .vms
             .get(vm)
             .ok_or_else(|| TypedError::WorkloadTargetNotFound {
@@ -12597,7 +12819,7 @@ fn configured_shell_targets(state: &ServerState) -> Result<Vec<String>, TypedErr
     let mut targets = std::collections::BTreeSet::new();
     targets.extend(
         resolver
-            .manifest
+            .manifest()
             .vms
             .iter()
             .filter(|(_, vm)| vm.shell.as_ref().is_some_and(|shell| shell.enabled))
@@ -12664,7 +12886,13 @@ fn remember_typed_shell_session_target(
     // is a tokio mutex in the converted d2bd-runtime); a collision skips the
     // cache update fail-closed - the caller's next list pass re-caches.
     if let Ok(mut sessions) = state.typed_shell_session_targets.try_lock() {
-        sessions.remember((peer_uid, name.as_str().to_owned()), target.to_owned());
+        sessions.remember(
+            d2bd_runtime::typed_shell_targets::TypedShellTargetKey::new(
+                peer_uid,
+                name.as_str().to_owned(),
+            ),
+            target.to_owned(),
+        );
     }
 }
 
@@ -12674,7 +12902,10 @@ fn forget_typed_shell_session_target(
     name: &public_wire::ShellName,
 ) {
     if let Ok(mut sessions) = state.typed_shell_session_targets.try_lock() {
-        sessions.forget(&(peer_uid, name.as_str().to_owned()));
+        sessions.forget(&d2bd_runtime::typed_shell_targets::TypedShellTargetKey::new(
+            peer_uid,
+            name.as_str().to_owned(),
+        ));
     }
 }
 
@@ -12697,10 +12928,16 @@ fn cache_unambiguous_typed_shell_session_targets(
     }
     if let Ok(mut sessions) = state.typed_shell_session_targets.try_lock() {
         for name in &conflicts {
-            sessions.forget(&(peer_uid, name.clone()));
+            sessions.forget(&d2bd_runtime::typed_shell_targets::TypedShellTargetKey::new(
+                peer_uid,
+                name.clone(),
+            ));
         }
         for (name, target) in unique {
-            sessions.remember((peer_uid, name), target);
+            sessions.remember(
+                d2bd_runtime::typed_shell_targets::TypedShellTargetKey::new(peer_uid, name),
+                target,
+            );
         }
     }
     if let Some(workload_id) = conflicts.into_iter().next() {
@@ -12744,7 +12981,12 @@ fn cached_typed_shell_session_target(
         .typed_shell_session_targets
         .try_lock()
         .ok()
-        .and_then(|mut sessions| sessions.cached(&(peer_uid, name.as_str().to_owned())))
+        .and_then(|mut sessions| {
+            sessions.cached(&d2bd_runtime::typed_shell_targets::TypedShellTargetKey::new(
+                peer_uid,
+                name.as_str().to_owned(),
+            ))
+        })
 }
 
 fn reserve_typed_shell_session_create(
@@ -12752,7 +12994,10 @@ fn reserve_typed_shell_session_create(
     peer_uid: u32,
     name: &public_wire::ShellName,
 ) -> Result<d2bd_runtime::typed_shell_targets::TypedShellSessionCreateReservation, TypedError> {
-    let key = (peer_uid, name.as_str().to_owned());
+    let key = d2bd_runtime::typed_shell_targets::TypedShellTargetKey::new(
+        peer_uid,
+        name.as_str().to_owned(),
+    );
     d2bd_runtime::typed_shell_targets::TypedShellSessionTargetCache::reserve(
         &state.typed_shell_session_targets,
         key,
@@ -13016,12 +13261,11 @@ fn run_process_resource_owner(
     _conn_permit: Option<d2bd_runtime::concurrency::ConnPermit>,
 ) {
     #[cfg(test)]
+    if let Some(hook) = owner_connection_test_hook::active()
+        && hook(&request)
     {
-        if let Some(hook) = owner_connection_test_hook::active() {
-            hook();
-            drop(stream);
-            return;
-        }
+        drop(stream);
+        return;
     }
     let (vm, execution_ref) = match if request.get("executionRef").is_some() {
         process_resource_execution_ref(&request)
@@ -13189,12 +13433,11 @@ fn run_typed_shell_owner(
     _conn_permit: Option<d2bd_runtime::concurrency::ConnPermit>,
 ) {
     #[cfg(test)]
+    if let Some(hook) = owner_connection_test_hook::active()
+        && hook(&request)
     {
-        if let Some(hook) = owner_connection_test_hook::active() {
-            hook();
-            drop(stream);
-            return;
-        }
+        drop(stream);
+        return;
     }
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -13389,7 +13632,6 @@ fn run_typed_shell_owner(
         );
         let mut control_sequence = established.initial_control_sequence;
         let close_result = match established
-            .backend
             .close_attachment(rt.handle(), &mut control_sequence)
         {
             Ok(_) => d2bd_runtime::daemon_audit::ShellAuditResult::Closed,
@@ -13446,7 +13688,7 @@ fn run_typed_shell_owner(
     {
         let mut control_sequence = established.initial_control_sequence;
         d2bd_runtime::shell_backend::best_effort_cancel(
-            established.backend.as_ref(),
+            &established,
             rt.handle(),
             &mut control_sequence,
         );
@@ -13502,9 +13744,7 @@ fn run_typed_shell_owner(
                 | public_wire::NamedProcessStreamRequest::Cancel
         );
         if close {
-            let result = established
-                .backend
-                .close_attachment(rt.handle(), &mut control_sequence);
+            let result = established.close_attachment(rt.handle(), &mut control_sequence);
             match result {
                 Ok(_) => {
                     close_result = Some(d2bd_runtime::daemon_audit::ShellAuditResult::Closed);
@@ -13610,10 +13850,7 @@ fn run_typed_shell_owner(
             public_wire::NamedProcessStreamRequest::Close
             | public_wire::NamedProcessStreamRequest::Cancel => unreachable!(),
         };
-        let response = match established
-            .backend
-            .handle_op(rt.handle(), &mut control_sequence, op)
-        {
+        let response = match established.handle_op(rt.handle(), &mut control_sequence, op) {
             Ok(Some(d2bd_runtime::shell_backend::ShellTerminalResponse::WriteStdin(result))) => {
                 if close_stdin {
                     public_wire::NamedProcessStreamResponse::Closed(public_wire::ExecCloseResult {
@@ -13663,7 +13900,7 @@ fn run_typed_shell_owner(
     }
     let close_result = close_result.unwrap_or_else(|| {
         d2bd_runtime::shell_backend::best_effort_cancel(
-            established.backend.as_ref(),
+            &established,
             rt.handle(),
             &mut control_sequence,
         )
@@ -13719,18 +13956,18 @@ async fn establish_shell_backend(
             )
             .await
             .map_err(|_| shell_transport_failed())?;
-            Ok(d2bd_runtime::shell_backend::EstablishedShell {
-                backend: Arc::new(backend),
-                attach: public_wire::ShellAttachResult {
+            Ok(d2bd_runtime::shell_backend::EstablishedShell::new(
+                Arc::new(backend),
+                public_wire::ShellAttachResult {
                     session: public_session,
                     resolved_name,
                     state: public_wire::ShellSessionState::Attached,
                     force_evicted: false,
                 },
-                target: vm,
-                operation_digest: None,
-                initial_control_sequence: 0,
-            })
+                vm,
+                None,
+                0,
+            ))
         }
         ShellRoute::CapabilityUnavailable { provider } => {
             Err(TypedError::RuntimeCapabilityUnsupported {
@@ -13808,7 +14045,7 @@ fn new_public_shell_session_handle() -> Result<String, TypedError> {
 
 fn emit_detached_create_audit(state: &ServerState, peer_uid: u32, vm: &str, exec_id: &str) {
     if let Err(err) = state.daemon_audit.write_event(
-        &d2bd_runtime::daemon_audit::DaemonEvent::ComponentSessionExecDetachedCreate {
+        d2bd_runtime::daemon_audit::DaemonEvent::ComponentSessionExecDetachedCreate {
             vm: vm.to_owned(),
             peer_uid,
             action: d2bd_runtime::daemon_audit::DetachedExecAuditAction::Create,
@@ -13865,14 +14102,13 @@ fn dispatch_broker_request_as(
     caller_role: BrokerCallerRole,
 ) -> Result<BrokerResponse, TypedError> {
     let socket_path = broker_socket_path(state);
-    let audit_join = default_audit_join_context(&request);
+    let audit_join = default_audit_join_context(&request)?;
     let socket = connect_seqpacket(&socket_path)?;
     write_json_frame(
         &socket,
         &BrokerRequestEnvelope {
             request,
             caller_role,
-            test_peer_uid: None,
             audit_join: audit_join.clone(),
         },
     )?;
@@ -13881,6 +14117,7 @@ fn dispatch_broker_request_as(
         serde_json::from_slice(&response).map_err(|err| TypedError::InternalBrokerUnavailable {
             path: socket_path,
             detail: err.to_string(),
+            source: error_source(err),
         })?;
     Ok(decoded)
 }
@@ -14058,14 +14295,14 @@ fn host_nft_kernel_payload(
         .find_nft_intent(intent_ref)
         .ok_or_else(|| "host nft intent missing".to_owned())?;
     Ok(serde_json::json!({
-        "family": resolver.host.nftables.family,
-        "table": resolver.host.nftables.table,
+        "family": resolver.host().nftables.family,
+        "table": resolver.host().nftables.table,
         "scriptBody": intent.script_body,
         "ownershipId": intent.ownership_id,
         "destroy": destroy,
         "desiredHash": serde_json::Value::Null,
-        "tableHashAfterApply": resolver.host.nftables.table_hash_after_apply,
-        "coexistencePolicy": serde_json::to_value(&resolver.host.firewall_coexistence_policy).ok(),
+        "tableHashAfterApply": resolver.host().nftables.table_hash_after_apply,
+        "coexistencePolicy": serde_json::to_value(&resolver.host().firewall_coexistence_policy).ok(),
     }))
 }
 
@@ -14106,14 +14343,15 @@ pub(crate) async fn load_bundle_resolver_on_worker(
     loaded.map_err(bundle_resolver_load_error)
 }
 
-fn bundle_resolver_load_error(err: d2b_core::error::Error) -> TypedError {
+fn bundle_resolver_load_error(err: d2b_contracts::error::Error) -> TypedError {
     match err {
-        d2b_core::error::Error::Bundle(BundleError::Tampered { path, reason }) => {
+        d2b_contracts::error::Error::Bundle(BundleError::Tampered { path, reason }) => {
             TypedError::BundleTampered { path, reason }
         }
         other => TypedError::InternalIo {
             context: "load bundle resolver".to_owned(),
             detail: other.to_string(),
+            source: error_source(other),
         },
     }
 }
@@ -14682,10 +14920,11 @@ async fn open_resource_plane(
         // plane - the resources are committed, the reader is just early.
         let mut controller_session_startup =
             Err(resource_runtime::ResourceRuntimeError::HandlerNotReady);
-        // 30 x 2s: with fast fixture IO the reader outruns the broker's
-        // publication by a wide margin, and 10 attempts (20s) exhausted
-        // before the rows landed. Give the publication a full minute.
-        for attempt in 0..30 {
+        // The committed rows are published above; with fast fixture IO the
+        // reader can outrun the broker's publication, so retry the
+        // documented 30 x 2s window (PROVIDER_IDENTITY_SEED_*) instead of
+        // failing the plane.
+        for attempt in 0..PROVIDER_IDENTITY_SEED_ATTEMPTS {
             controller_session_startup = runtime
                 .reconcile_controller_sessions(Arc::new(state.clone()))
                 .await;
@@ -14696,7 +14935,7 @@ async fn open_resource_plane(
                         attempt,
                         "controller session startup raced publication; retrying",
                     );
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    tokio::time::sleep(PROVIDER_IDENTITY_SEED_INTERVAL).await;
                 }
                 _ => break,
             }
@@ -14767,7 +15006,10 @@ async fn compose_gateway_zone_links(
         .authority_bundle_generation()
         .map(|value| value.as_str().to_owned())
     else {
-        tracing::error!("Gateway Guest composition refused: root Zone generation unavailable");
+        tracing::error!(
+            zone = %topology.root,
+            "Gateway Guest composition refused: root Zone generation unavailable",
+        );
         return;
     };
     let authority_generation = root.current_revision().get().max(1);
@@ -15113,22 +15355,15 @@ async fn audit_resource_plane(
     action: d2bd_runtime::daemon_audit::ResourcePlaneAction,
     result: d2bd_runtime::daemon_audit::ResourcePlaneResult,
 ) -> Result<(), std::io::Error> {
+    let event = d2bd_runtime::daemon_audit::DaemonEvent::ResourcePlaneLifecycle {
+        zone: zone.as_str().to_owned(),
+        action,
+        result,
+    };
+    let authority = d2bd_runtime::daemon_audit::DaemonAuditLog::authority_for(&event);
     state
         .daemon_audit
-        .write_event_with_authority_async(
-            &d2bd_runtime::daemon_audit::DaemonEvent::ResourcePlaneLifecycle {
-                zone: zone.as_str().to_owned(),
-                action,
-                result,
-            },
-            d2bd_runtime::daemon_audit::DaemonAuditLog::authority_for(
-                &d2bd_runtime::daemon_audit::DaemonEvent::ResourcePlaneLifecycle {
-                    zone: zone.as_str().to_owned(),
-                    action,
-                    result,
-                },
-            ),
-        )
+        .write_event_with_authority_async(event, authority)
         .await
 }
 
@@ -15181,7 +15416,10 @@ async fn shutdown_resource_plane(state: &ServerState) -> Result<(), std::io::Err
                         .await?;
                     }
                     *state.resource_plane.lock().await = Some(Arc::new(plane));
-                    tracing::warn!("resource plane still has live request owners during shutdown");
+                    tracing::warn!(
+                        zones = ?zones,
+                        "resource plane still has live request owners during shutdown",
+                    );
                 }
                 Err(error) => {
                     for zone in &zones {
@@ -15207,7 +15445,10 @@ async fn shutdown_resource_plane(state: &ServerState) -> Result<(), std::io::Err
                     )
                     .await?;
                 }
-                tracing::warn!("resource plane still has live request owners during shutdown");
+                tracing::warn!(
+                    zones = ?zones,
+                    "resource plane still has live request owners during shutdown",
+                );
             }
         }
     }
@@ -15230,10 +15471,12 @@ fn acquire_vm_start_lock(state: &ServerState, vm: &str) -> Result<Flock<File>, T
         .map_err(|err| TypedError::InternalIo {
             context: format!("open VM start lock {}", path.display()),
             detail: err.to_string(),
+            source: error_source(err),
         })?;
     Flock::lock(file, FlockArg::LockExclusive).map_err(|(_file, err)| TypedError::InternalIo {
         context: format!("lock VM start lock {}", path.display()),
         detail: err.to_string(),
+        source: error_source(err),
     })
 }
 
@@ -15924,15 +16167,18 @@ fn reconcile_display_before_vm_start(
     else {
         return Err("display-session-missing".to_owned());
     };
-    let result = {
-        let mut interactions = drive_sync(&state.runtime_handle, state.interaction_runtime.lock());
-        let runtime_set = interactions
-            .as_mut()
-            .ok_or_else(|| "display-interaction-runtime-unavailable".to_owned())?;
-        runtime_set
-            .reconcile_committed_display_for_vm_start(&zone, vm, &session_ref, &session_uid, &spec)
-            .map_err(|error| error.to_string())?
-    };
+    let result = drive_sync(&state.runtime_handle, async {
+        interaction_composition::reconcile_committed_display_for_vm_start(
+            &state.interaction_runtime,
+            &zone,
+            vm,
+            &session_ref,
+            &session_uid,
+            &spec,
+        )
+        .await
+        .map_err(|error| error.to_string())
+    })?;
     if result.status.phase == d2b_provider_display_wayland::Phase::Failed {
         return Err("display-session-reconcile-failed".to_owned());
     }
@@ -16117,7 +16363,8 @@ struct VmStopRoleReport {
     shutdown_outcome: Option<VmShutdownOutcome>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 enum VmShutdownOutcome {
     CleanGuestShutdown,
     CleanVmmCleanup,
@@ -16140,7 +16387,7 @@ struct ShutdownDegradedReport {
 #[serde(rename_all = "camelCase")]
 struct ShutdownDegradedMarker {
     vm: String,
-    outcome: String,
+    outcome: VmShutdownOutcome,
     severity: String,
     remediation: String,
     elapsed_ms: u64,
@@ -16296,7 +16543,7 @@ fn emit_vm_shutdown_intent_audit(
 ) -> Result<(), std::io::Error> {
     let peer_uid = broker_caller_uid(caller_role);
     state.daemon_audit.write_event_with_authority(
-        &d2bd_runtime::daemon_audit::DaemonEvent::VmShutdownIntent {
+        d2bd_runtime::daemon_audit::DaemonEvent::VmShutdownIntent {
             vm: vm.to_owned(),
             peer_uid,
             provider: provider_audit_label(provider),
@@ -16317,7 +16564,7 @@ fn emit_vm_shutdown_outcome_audit(
 ) -> Result<(), std::io::Error> {
     let peer_uid = broker_caller_uid(caller_role);
     state.daemon_audit.write_event_with_authority(
-        &d2bd_runtime::daemon_audit::DaemonEvent::VmShutdownOutcome {
+        d2bd_runtime::daemon_audit::DaemonEvent::VmShutdownOutcome {
             vm: vm.to_owned(),
             peer_uid,
             provider: provider_audit_label(provider),
@@ -16349,7 +16596,7 @@ fn persist_vm_shutdown_marker(
     if let Some(severity) = outcome.degraded_severity() {
         report.markers.push(ShutdownDegradedMarker {
             vm: vm.to_owned(),
-            outcome: outcome.label().to_owned(),
+            outcome,
             severity: severity.to_owned(),
             remediation: outcome.remediation().replace("<vm>", vm),
             elapsed_ms: elapsed.as_millis() as u64,
@@ -16756,7 +17003,6 @@ fn dispatch_raw_broker_value_with_timeout(
     let envelope = json!({
         "request": request,
         "callerRole": caller_role,
-        "testPeerUid": Value::Null,
     });
     let remaining = broker_remaining_before_op(deadline, &socket_path)?;
     socket
@@ -16764,6 +17010,7 @@ fn dispatch_raw_broker_value_with_timeout(
         .map_err(|err| TypedError::InternalIo {
             context: format!("set raw broker write timeout to {remaining:?}"),
             detail: err.to_string(),
+            source: error_source(err),
         })?;
     write_json_frame(&socket, &envelope)?;
     let remaining = broker_remaining_before_op(deadline, &socket_path)?;
@@ -16772,11 +17019,13 @@ fn dispatch_raw_broker_value_with_timeout(
         .map_err(|err| TypedError::InternalIo {
             context: format!("set raw broker read timeout to {remaining:?}"),
             detail: err.to_string(),
+            source: error_source(err),
         })?;
     let response = read_frame(&socket)?;
     serde_json::from_slice(&response).map_err(|err| TypedError::InternalBrokerUnavailable {
         path: socket_path,
         detail: err.to_string(),
+        source: error_source(err),
     })
 }
 
@@ -16997,11 +17246,11 @@ async fn raw_broker_round_trip_async(
     let envelope = json!({
         "request": request,
         "callerRole": caller_role,
-        "testPeerUid": Value::Null,
     });
     let envelope_bytes = serde_json::to_vec(&envelope).map_err(|err| TypedError::InternalIo {
         context: "serialize raw broker request".to_owned(),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     let remaining = broker_remaining_before_op(deadline, &socket_path)?;
     packet.write_frame(&envelope_bytes, remaining).await?;
@@ -17010,6 +17259,7 @@ async fn raw_broker_round_trip_async(
     serde_json::from_slice(&response).map_err(|err| TypedError::InternalBrokerUnavailable {
         path: socket_path,
         detail: err.to_string(),
+        source: error_source(err),
     })
 }
 
@@ -18535,7 +18785,7 @@ fn dispatch_broker_vm_start_as(
 ) -> Result<Value, TypedError> {
     const VERB: &str = "vm start";
 
-    if let Some(response) = mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
+    if let Some(response) = mutating_verb_preflight(VERB, request.flags.mode, Some(request.vm.as_str()))
     {
         return Ok(response);
     }
@@ -18645,7 +18895,6 @@ impl provider_effects::ProviderLifecycleEffectPort for DaemonGuestLifecycleEffec
             self.operation,
             &self.caller_role,
         )?;
-        let _ = self.force;
         drive_sync(&self.state.runtime_handle, self.runtime.apply_cloud_hypervisor_lifecycle(
             Arc::new(self.state.clone()),
             &self.guest,
@@ -18654,7 +18903,7 @@ impl provider_effects::ProviderLifecycleEffectPort for DaemonGuestLifecycleEffec
             self.operation,
         ))
         .map_err(|_| provider_effects::ProviderEffectError::EffectRejected)?;
-        if self.wait_for_ready {
+        if self.wait_for_ready && !self.force {
             drive_sync(&self.state.runtime_handle, self.runtime.wait_cloud_hypervisor_lifecycle(
                 Arc::new(self.state.clone()),
                 &self.guest,
@@ -18836,7 +19085,7 @@ pub(crate) fn consume_lifecycle_lease(
     for (kernel, result_field) in [("consume-cell", "consumed"), ("complete-cell", "completed")] {
         let reply = envelope_invoke_kernel(
             &broker_socket_path(state),
-            KERNEL_IO_TIMEOUT,
+            LIFECYCLE_CELL_IO_TIMEOUT,
             caller_role.clone(),
             KernelInvocation {
                 operation: kernel,
@@ -18847,7 +19096,20 @@ pub(crate) fn consume_lifecycle_lease(
                 chain_identities: None,
             },
         )
-        .map_err(|_| provider_effects::ProviderEffectError::EffectRejected)?;
+        // A served refusal is the claim's own answer - the cell machinery
+        // refused it, and no retry reverses a spent claim - so it keeps the
+        // permanent spelling. Everything else (an unanswered broker, a
+        // malformed reply) says nothing about the claim and keeps the
+        // retryable spelling the callers defer on; reporting those as
+        // `EffectRejected` made a merely unanswered claim permanently fatal.
+        .map_err(|error| match error {
+            KernelInvokeError::Refused { .. } => {
+                provider_effects::ProviderEffectError::EffectRejected
+            }
+            KernelInvokeError::Transport(_) | KernelInvokeError::Protocol(_) => {
+                provider_effects::ProviderEffectError::StateUnavailable
+            }
+        })?;
         let granted = reply
             .response
             .result
@@ -18866,12 +19128,15 @@ fn next_provider_lifecycle_operation_id(
     operation: &str,
     request: &public_wire::VmLifecycleRequest,
 ) -> String {
+    let (dry_run, apply) = request
+        .flags
+        .mode
+        .map(public_wire::MutationMode::to_flags)
+        .unwrap_or((false, false));
     let fingerprint = format!(
-        "force={};no_wait_api={};dry_run={};apply={};json={}",
+        "force={};no_wait_api={};dry_run={dry_run};apply={apply};json={}",
         request.force,
         request.no_wait_api,
-        request.flags.dry_run,
-        request.flags.apply,
         request.flags.json
     );
     provider_registry::next_lifecycle_operation_id(operation, &request.vm, &fingerprint)
@@ -18886,6 +19151,7 @@ fn provider_lifecycle_authorization(
     let target =
         ResourceRef::parse(&format!("Guest/{guest}")).map_err(|_| TypedError::InternalConfig {
             detail: "Guest lifecycle target is invalid".to_owned(),
+            source: None,
         })?;
     let zone = drive_sync(&state.runtime_handle, d2bd_runtime::zone_authority::authoritative_zone_for_vm(
         &state.zone_coordinator,
@@ -18893,12 +19159,14 @@ fn provider_lifecycle_authorization(
     ))
     .map_err(|_| TypedError::InternalConfig {
         detail: "Guest lifecycle Zone identity is unavailable".to_owned(),
+        source: None,
     })?;
     let plane = state
         .resource_plane
         .try_lock()
         .map_err(|_| TypedError::InternalConfig {
             detail: "Guest lifecycle resource plane is unavailable".to_owned(),
+            source: None,
         })?
         .clone();
     let runtime = plane.as_ref().and_then(|plane| plane.zone(&zone).ok());
@@ -18917,6 +19185,7 @@ fn provider_lifecycle_authorization(
                 )
                 .map_err(|_| TypedError::InternalConfig {
                     detail: "Host shutdown lifecycle lease is invalid".to_owned(),
+                    source: None,
                 });
             }
             return Ok(provider_effects::LifecycleAuthorization::for_test(
@@ -18932,6 +19201,7 @@ fn provider_lifecycle_authorization(
         {
             return Err(TypedError::InternalConfig {
                 detail: "Guest lifecycle resource runtime is unavailable".to_owned(),
+                source: None,
             });
         }
     };
@@ -18940,6 +19210,7 @@ fn provider_lifecycle_authorization(
             drive_sync(&state.runtime_handle, runtime.admit_internal_guest_lifecycle(target.clone(), operation_id))
                 .map_err(|_| TypedError::InternalConfig {
                 detail: "internal Guest lifecycle authorization is unavailable".to_owned(),
+                source: None,
             })?;
         return provider_effects::LifecycleAuthorization::from_lease(
             admission.lease,
@@ -18950,12 +19221,14 @@ fn provider_lifecycle_authorization(
         )
         .map_err(|_| TypedError::InternalConfig {
             detail: "internal Guest lifecycle authorization lease is invalid".to_owned(),
+            source: None,
         });
     }
     let (zone_uid, guest_uid, guest_generation, provider_generation) =
         drive_sync(&state.runtime_handle, runtime.guest_lifecycle_identity(&target)).map_err(|_| {
             TypedError::InternalConfig {
                 detail: "Guest lifecycle identity is unavailable".to_owned(),
+                source: None,
             }
         })?;
     if matches!(caller_role, BrokerCallerRole::HostShutdownUid { .. }) {
@@ -18970,6 +19243,7 @@ fn provider_lifecycle_authorization(
         )
         .map_err(|_| TypedError::InternalConfig {
             detail: "Host shutdown lifecycle lease is invalid".to_owned(),
+            source: None,
         });
     }
     let admission = drive_sync(&state.runtime_handle, runtime.admit_guest_lifecycle(
@@ -18979,11 +19253,13 @@ fn provider_lifecycle_authorization(
     ))
     .map_err(|_| TypedError::InternalConfig {
         detail: "Guest lifecycle authorization is unavailable".to_owned(),
+        source: None,
     })?;
     provider_effects::LifecycleAuthorization::from_lease(
         admission.lease,
         ResourceRef::parse(&format!("Guest/{guest}")).map_err(|_| TypedError::InternalConfig {
             detail: "Guest lifecycle target is invalid".to_owned(),
+            source: None,
         })?,
         admission.guest_uid,
         admission.guest_generation,
@@ -18991,6 +19267,7 @@ fn provider_lifecycle_authorization(
     )
     .map_err(|_| TypedError::InternalConfig {
         detail: "Guest lifecycle authorization lease is invalid".to_owned(),
+        source: None,
     })
 }
 
@@ -19068,6 +19345,7 @@ fn dispatch_broker_vm_start_inner(
         .map_err(|error| TypedError::InternalIo {
             context: format!("load process DAG for {}", request.vm),
             detail: error.kind().to_owned(),
+            source: error_source(error),
         })?
         .vms
         .into_iter()
@@ -19075,6 +19353,7 @@ fn dispatch_broker_vm_start_inner(
         .ok_or_else(|| TypedError::InternalIo {
             context: format!("load process DAG for {}", request.vm),
             detail: "VM not present in processes.json".to_owned(),
+            source: None,
         })?;
 
     let runner = VmStartRunner {
@@ -19342,11 +19621,11 @@ fn dispatch_broker_vm_start_inner(
         );
         // Emit audit-log entry on api-ready timeout.
         if let Err(err) = state.daemon_audit.write_event(
-            &d2bd_runtime::daemon_audit::DaemonEvent::ApiReadyTimeout {
+            d2bd_runtime::daemon_audit::DaemonEvent::ApiReadyTimeout {
                 vm: request.vm.clone(),
                 runner: VM_RUNNER_ROLE_ID.to_owned(),
                 elapsed_secs: api_timeout.as_secs(),
-                mode: "strict".to_owned(),
+                mode: d2bd_runtime::daemon_audit::ApiReadyMode::Strict,
             },
         ) {
             tracing::warn!(
@@ -19382,7 +19661,7 @@ fn dispatch_broker_vm_start_inner(
             // the timeout into a typed `otel-host-bridge-readiness-timeout`
             // refusal envelope (exit code 65). See
             // `docs/reference/otel-host-bridge-readiness.md`.
-            let obs_meta = &resolver.manifest.observability;
+            let obs_meta = &resolver.manifest().observability;
             if obs_meta.enabled && obs_meta.vm_name == request.vm {
                 let cfg =
                     d2bd_runtime::otel_host_bridge_readiness::ReadinessWaitConfig::for_dispatch();
@@ -19607,7 +19886,7 @@ fn emit_vm_start_runner_exited_audit(
         exit_signal: status.and_then(|status| status.signal),
         elapsed_ms,
     };
-    if let Err(error) = state.daemon_audit.write_event(&event) {
+    if let Err(error) = state.daemon_audit.write_event(event) {
         tracing::warn!(
             vm = %vm,
             role_id = %role_id,
@@ -19670,7 +19949,7 @@ fn dispatch_broker_vm_stop_with_timeout_as(
 ) -> Result<Value, TypedError> {
     const VERB: &str = "vm stop";
 
-    if let Some(response) = mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
+    if let Some(response) = mutating_verb_preflight(VERB, request.flags.mode, Some(request.vm.as_str()))
     {
         return Ok(response);
     }
@@ -19898,7 +20177,7 @@ fn dispatch_broker_vm_restart_as(
 ) -> Result<Value, TypedError> {
     const VERB: &str = "vm restart";
 
-    if let Some(response) = mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
+    if let Some(response) = mutating_verb_preflight(VERB, request.flags.mode, Some(request.vm.as_str()))
     {
         return Ok(response);
     }
@@ -19929,7 +20208,7 @@ fn dispatch_broker_host_prepare_as(
 ) -> Result<Value, TypedError> {
     const VERB: &str = "host prepare";
 
-    if let Some(response) = mutating_verb_preflight(VERB, &request.flags, None) {
+    if let Some(response) = mutating_verb_preflight(VERB, request.flags.mode, None) {
         return Ok(response);
     }
     // U12: the retired typed ApplyNftables arm's core is the
@@ -19940,6 +20219,7 @@ fn dispatch_broker_host_prepare_as(
         TypedError::InternalBrokerUnavailable {
             path: broker_socket_path(state),
             detail: format!("host nft intent resolution failed: {reason}"),
+            source: None,
         }
     })?;
     if let Err(response) = dispatch_broker_kernel_ack(
@@ -19959,6 +20239,7 @@ fn dispatch_broker_host_prepare_as(
             .ok_or(TypedError::InternalBrokerUnavailable {
                 path: broker_socket_path(state),
                 detail: "installed generation unavailable for Network effect context".to_owned(),
+                source: None,
             })?;
     let context = d2b_provider_network_local::broker::NetworkEffectContext::for_host_nm(
         ScopeId::new("host"),
@@ -19967,6 +20248,7 @@ fn dispatch_broker_host_prepare_as(
             .map_err(|_| TypedError::InternalBrokerUnavailable {
                 path: broker_socket_path(state),
                 detail: "installed generation invalid for Network effect context".to_owned(),
+                source: None,
             })?,
     );
     // U14: the kernel-invoking adapter is the declaring crate's own
@@ -20007,7 +20289,7 @@ fn dispatch_broker_host_destroy_as(
 ) -> Result<Value, TypedError> {
     const VERB: &str = "host destroy";
 
-    if let Some(response) = mutating_verb_preflight(VERB, &request.flags, None) {
+    if let Some(response) = mutating_verb_preflight(VERB, request.flags.mode, None) {
         return Ok(response);
     }
     // U12: the retired typed ApplyNmUnmanaged / ApplyNftables arms' cores
@@ -20019,6 +20301,7 @@ fn dispatch_broker_host_destroy_as(
         .ok_or(TypedError::InternalBrokerUnavailable {
             path: broker_socket_path(state),
             detail: "host nm-unmanaged intent missing".to_owned(),
+            source: None,
         })?
         .clone();
     let nm_payload = serde_json::json!({
@@ -20046,6 +20329,7 @@ fn dispatch_broker_host_destroy_as(
         TypedError::InternalBrokerUnavailable {
             path: broker_socket_path(state),
             detail: format!("host nft intent resolution failed: {reason}"),
+            source: None,
         }
     })?;
     if let Err(response) = dispatch_broker_kernel_ack(
@@ -20080,7 +20364,7 @@ fn dispatch_broker_host_reconcile_as(
 ) -> Result<Value, TypedError> {
     const VERB: &str = "host reconcile";
 
-    if let Some(response) = mutating_verb_preflight(VERB, &request.flags, None) {
+    if let Some(response) = mutating_verb_preflight(VERB, request.flags.mode, None) {
         return Ok(response);
     }
     if !request.network {
@@ -20097,6 +20381,7 @@ fn dispatch_broker_host_reconcile_as(
         TypedError::InternalBrokerUnavailable {
             path: broker_socket_path(state),
             detail: format!("host nft intent resolution failed: {reason}"),
+            source: None,
         }
     })?;
     if let Err(response) = dispatch_broker_kernel_ack(
@@ -20127,12 +20412,47 @@ enum HostActivationMarkerState {
     Indeterminate,
 }
 
+/// The `mode` a host activation marker records.
+///
+/// The labels mirror the public activation verbs (`switch`, `boot`, `test`,
+/// `rollback`) so a marker's mode is validated instead of accepted as a free
+/// string. The marker itself is written by the activation machinery outside
+/// this workspace, so an unrecognized future mode still parses into
+/// `Unknown` rather than invalidating every other field of the marker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum HostActivationMarkerMode {
+    Switch,
+    Boot,
+    Test,
+    Rollback,
+    #[serde(other)]
+    Unknown,
+}
+
+impl std::fmt::Display for HostActivationMarkerMode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            HostActivationMarkerMode::Switch => "switch",
+            HostActivationMarkerMode::Boot => "boot",
+            HostActivationMarkerMode::Test => "test",
+            HostActivationMarkerMode::Rollback => "rollback",
+            HostActivationMarkerMode::Unknown => "unknown",
+        })
+    }
+}
+
+/// The only activation-marker `schemaVersion` this daemon understands.
+/// The version, not the field set, decides whether a marker is adopted: a
+/// newer version may add, drop, or repurpose fields while still parsing.
+const ACTIVATION_MARKER_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct HostActivationPendingMarker {
     schema_version: u32,
     vm: String,
-    mode: String,
+    mode: HostActivationMarkerMode,
     generation_number: Option<u64>,
     activation_id: String,
     switch_script_basename: String,
@@ -20174,7 +20494,9 @@ impl ActivationLockGuard {
 impl Drop for ActivationLockGuard {
     fn drop(&mut self) {
         let mut coordinator = lock_sync(&self.coordinator);
-        let _ = coordinator.finish_activation(&self.zone);
+        if let Err(error) = coordinator.finish_activation(&self.zone) {
+            tracing::warn!(zone = %self.zone, error = %error, "activation finish refused by Zone coordinator");
+        }
     }
 }
 
@@ -20245,11 +20567,29 @@ fn activation_marker_path(state: &ServerState, vm: &str) -> PathBuf {
     activation_marker_dir(state).join(format!("{vm}.json"))
 }
 
+/// Parse one activation marker body, refusing a `schemaVersion` this daemon
+/// does not understand so a future marker version with a compatible field set
+/// cannot silently parse as current. Every activation-marker parse site goes
+/// through here, so no caller can adopt a marker without the version check.
+fn parse_activation_marker(bytes: &[u8]) -> Option<HostActivationPendingMarker> {
+    let marker: HostActivationPendingMarker = serde_json::from_slice(bytes).ok()?;
+    if marker.schema_version == ACTIVATION_MARKER_SCHEMA_VERSION {
+        return Some(marker);
+    }
+    tracing::warn!(
+        vm = %marker.vm,
+        schema_version = marker.schema_version,
+        supported_schema_version = ACTIVATION_MARKER_SCHEMA_VERSION,
+        "activation marker refused: unsupported schema_version"
+    );
+    None
+}
+
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn read_activation_marker(state: &ServerState, vm: &str) -> Option<HostActivationPendingMarker> {
     let path = activation_marker_path(state, vm);
     let bytes = fs::read(path).ok()?;
-    serde_json::from_slice(&bytes).ok()
+    parse_activation_marker(&bytes)
 }
 
 async fn refresh_activation_marker_metrics_on_startup(state: &ServerState) {
@@ -20261,7 +20601,7 @@ async fn refresh_activation_marker_metrics_on_startup(state: &ServerState) {
         let Ok(bytes) = tokio::fs::read(entry.path()).await else {
             continue;
         };
-        let Ok(marker) = serde_json::from_slice::<HostActivationPendingMarker>(&bytes) else {
+        let Some(marker) = parse_activation_marker(&bytes) else {
             continue;
         };
         tracing::warn!(
@@ -20284,7 +20624,7 @@ async fn restore_configuration_staging_on_startup(state: &ServerState) {
         let Ok(bytes) = tokio::fs::read(entry.path()).await else {
             continue;
         };
-        let Ok(marker) = serde_json::from_slice::<HostActivationPendingMarker>(&bytes) else {
+        let Some(marker) = parse_activation_marker(&bytes) else {
             continue;
         };
         let Some(ordinal) = marker.generation_number else {
@@ -20357,7 +20697,7 @@ fn dispatch_broker_activation(
     mode: DaemonActivationMode,
     caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
-    if let Some(response) = mutating_verb_preflight(verb, &request.flags, Some(request.vm.as_str()))
+    if let Some(response) = mutating_verb_preflight(verb, request.flags.mode, Some(request.vm.as_str()))
     {
         return Ok(response);
     }
@@ -20390,24 +20730,28 @@ fn dispatch_live_guest_activation_resource(
         Ok(guard) => guard,
         Err(frame) => return Ok(frame),
     };
-    let zone = guard.zone().clone();
+    let zone = guard.zone();
     let plane = state
         .resource_plane
         .try_lock()
         .map_err(|_| TypedError::InternalConfig {
             detail: "resource plane unavailable".to_owned(),
+            source: None,
         })?
         .clone()
         .ok_or_else(|| TypedError::InternalConfig {
             detail: "resource plane unavailable".to_owned(),
+            source: None,
         })?;
-    let runtime = plane.zone(&zone).map_err(|_| TypedError::InternalConfig {
+    let runtime = plane.zone(zone).map_err(|_| TypedError::InternalConfig {
         detail: "activation Zone runtime unavailable".to_owned(),
+        source: None,
     })?;
     let guest_ref_text = format!("Guest/{}", request.vm);
     let guest_ref =
         ResourceRef::parse(&guest_ref_text).map_err(|_| TypedError::InternalConfig {
             detail: "activation Guest reference invalid".to_owned(),
+            source: None,
         })?;
     let guest_ref_canonical = guest_ref.to_canonical_string();
     let get_guest = json!({
@@ -20419,29 +20763,33 @@ fn dispatch_live_guest_activation_resource(
     let guest = drive_sync(&state.runtime_handle, runtime.dispatch_public_cli_request(&get_guest, peer_uid))
         .map_err(|_| TypedError::InternalConfig {
             detail: "activation Guest resource unavailable".to_owned(),
+            source: None,
         })?;
     if guest.get("kind").is_some() {
         return Err(TypedError::InternalConfig {
             detail: "activation Guest resource unavailable".to_owned(),
+            source: None,
         });
     }
-    let (ordinal, artifact) = if mode == DaemonActivationMode::Rollback {
+    let list = json!({
+        "zoneRef": format!("Zone/{}", zone.as_str()),
+        "service": "d2b.resource.v3",
+        "method": "List",
+        "resourceType": NIXOS_GENERATION_RESOURCE_TYPE,
+        "executionRef": guest_ref.to_canonical_string(),
+        "limit": 256,
+    });
+    let resources = drive_sync(&state.runtime_handle, runtime.dispatch_public_cli_request(&list, peer_uid))
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "activation generations unavailable".to_owned(),
+            source: None,
+        })?;
+    let (ordinal, artifact) = if mode == DaemonActivationMode::Rollback{
         let target_ordinal = request
             .to_generation
             .ok_or_else(|| TypedError::InternalConfig {
                 detail: "rollback target generation unavailable".to_owned(),
-            })?;
-        let list = json!({
-            "zoneRef": format!("Zone/{}", zone.as_str()),
-            "service": "d2b.resource.v3",
-            "method": "List",
-            "resourceType": NIXOS_GENERATION_RESOURCE_TYPE,
-            "executionRef": guest_ref.to_canonical_string(),
-            "limit": 256,
-        });
-        let resources = drive_sync(&state.runtime_handle, runtime.dispatch_public_cli_request(&list, peer_uid))
-            .map_err(|_| TypedError::InternalConfig {
-                detail: "rollback generations unavailable".to_owned(),
+                source: None,
             })?;
         let artifact = resources
             .get("resources")
@@ -20468,6 +20816,7 @@ fn dispatch_live_guest_activation_resource(
             })
             .ok_or_else(|| TypedError::InternalConfig {
                 detail: "rollback target generation is not retained".to_owned(),
+                source: None,
             })?;
         (target_ordinal, artifact.to_owned())
     } else {
@@ -20475,18 +20824,7 @@ fn dispatch_live_guest_activation_resource(
         // its retained NixosGeneration resources (the same List used by the
         // rollback branch). The next activation is one past the max
         // committed ordinal; `1` when the Guest has no committed generation.
-        let list = json!({
-            "zoneRef": format!("Zone/{}", zone.as_str()),
-            "service": "d2b.resource.v3",
-            "method": "List",
-            "resourceType": NIXOS_GENERATION_RESOURCE_TYPE,
-            "executionRef": guest_ref.to_canonical_string(),
-            "limit": 256,
-        });
-        let resources = drive_sync(&state.runtime_handle, runtime.dispatch_public_cli_request(&list, peer_uid))
-            .map_err(|_| TypedError::InternalConfig {
-                detail: "activation generations unavailable".to_owned(),
-            })?;
+
         let ordinal = resources
             .get("resources")
             .and_then(Value::as_array)
@@ -20514,6 +20852,7 @@ fn dispatch_live_guest_activation_resource(
             .and_then(Value::as_str)
             .ok_or_else(|| TypedError::InternalConfig {
                 detail: "activation system artifact unavailable".to_owned(),
+                source: None,
             })?;
         (ordinal, artifact.to_owned())
     };
@@ -20538,6 +20877,7 @@ fn dispatch_live_guest_activation_resource(
         drive_sync(&state.runtime_handle, runtime.dispatch_public_cli_request(&create, peer_uid)).map_err(|_| {
             TypedError::InternalConfig {
                 detail: "activation resource create failed".to_owned(),
+                source: None,
             }
         })?;
     if created
@@ -20547,6 +20887,7 @@ fn dispatch_live_guest_activation_resource(
     {
         return Err(TypedError::InternalConfig {
             detail: "activation resource create refused".to_owned(),
+            source: None,
         });
     }
     let deadline = Instant::now() + live_activation_timeout_for(state, &request.vm);
@@ -20571,6 +20912,7 @@ fn dispatch_live_guest_activation_resource(
         let current = drive_sync(&state.runtime_handle, runtime.dispatch_public_cli_request(&get, peer_uid))
             .map_err(|_| TypedError::InternalConfig {
                 detail: "activation resource status unavailable".to_owned(),
+                source: None,
             })?;
         let current_spec = current.get("spec");
         if current_spec.and_then(|spec| spec.get("executionRef")) != spec.get("executionRef")
@@ -20624,7 +20966,7 @@ fn activation_generation_name(vm: &str, ordinal: u64, mode: DaemonActivationMode
         DaemonActivationMode::Rollback => "rollback",
     };
     let readable = format!("{vm}--{suffix}-{ordinal}");
-    if ResourceName::parse(readable.clone()).is_ok() {
+    if ResourceName::parse(&readable).is_ok() {
         return readable;
     }
     let mut digest = Sha256::new();
@@ -20795,7 +21137,7 @@ fn dispatch_list(
             .public_status_read_model
             .load_list(state.pidfd_table.generation())
     {
-        return Ok(cached);
+        return Ok(cached.value().clone());
     }
     let before = cacheable
         .then(|| public_artifact_fingerprint(state).ok())
@@ -20807,7 +21149,6 @@ fn dispatch_list(
             PublicReadModelKind::List,
             before,
             frame,
-            "list",
         ));
     }
     Ok(frame)
@@ -20897,7 +21238,6 @@ fn build_public_list(
                             runtime_kind.as_deref(),
                             host,
                             process_vm,
-                            &services,
                         ),
                         "services": services,
                     });
@@ -20930,7 +21270,7 @@ fn dispatch_status_as(
             .public_status_read_model
             .load_status(state.pidfd_table.generation())
     {
-        return Ok(cached);
+        return Ok(cached.value().clone());
     }
     let before = cacheable
         .then(|| public_artifact_fingerprint(state).ok())
@@ -20942,7 +21282,6 @@ fn dispatch_status_as(
             PublicReadModelKind::Status,
             before,
             frame,
-            "status",
         ));
     }
     Ok(frame)
@@ -20953,14 +21292,12 @@ fn publish_public_frame_if_stable(
     kind: PublicReadModelKind,
     before: Option<PublicArtifactFingerprint>,
     frame: Value,
-    kind_name: &'static str,
 ) -> Value {
     state.public_status_read_model.publish_if_unchanged(
         kind,
         before,
         public_artifact_fingerprint(state).ok(),
         frame,
-        kind_name,
     )
 }
 
@@ -21027,7 +21364,6 @@ fn build_public_status(
                             runtime_kind.as_deref(),
                             host,
                             process_vm,
-                            &services,
                         ),
                         "usb": usb_resolver
                             .and_then(|resolver| {
@@ -21077,7 +21413,7 @@ fn typed_error_from_resolution_error(
             workload_id,
             candidates,
         } => TypedError::WorkloadAliasConflict {
-            workload_id: workload_id.clone(),
+            workload_id,
             detail: format!("matches workloads [{}]", candidates.join(", ")),
         },
     }
@@ -21216,7 +21552,6 @@ fn public_qemu_media_status(
     runtime_kind: Option<&str>,
     host: Option<&HostJson>,
     process_vm: Option<&d2b_core::processes::VmProcessDag>,
-    services: &Value,
 ) -> Option<Value> {
     if runtime_kind != Some("qemu-media") {
         return None;
@@ -21228,17 +21563,10 @@ fn public_qemu_media_status(
             .find(|node| node.role == ProcessRole::QemuMediaRunner)
     });
     let qmp_socket = runner.and_then(qemu_media_qmp_socket);
-    let state_text = services
-        .get("qemuMedia")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .unwrap_or_else(|| {
-            d2bd_runtime::public_projection::public_pidfd_role_state(
-                &state.pidfd_table,
-                vm,
-                RunnerRole::QemuMedia.as_str(),
-            )
-        });
+    let runner_state = d2bd_runtime::public_projection::public_qemu_media_runner_state(
+        &state.pidfd_table,
+        vm,
+    );
     let qemu_media_host = host.and_then(|host| host.qemu_media.as_ref());
     let media = qemu_media_host
         .map(|contract| {
@@ -21246,28 +21574,28 @@ fn public_qemu_media_status(
                 .sources
                 .iter()
                 .filter(|source| source.vm == vm)
-                .map(|source| qemu_media_source_status(contract.registry_dir.as_str(), source))
+                .map(qemu_media_source_status)
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
     let qmp_readiness = qmp_socket.as_deref().map(|path| {
         if qemu_media_unix_socket_listening(path) {
             "ready".to_owned()
-        } else if state_text == "running" {
+        } else if runner_state == QemuMediaRunnerState::Running {
             "pending".to_owned()
         } else {
             "not-started".to_owned()
         }
     });
     let pre_cont_progress = match qmp_readiness.as_deref() {
-        Some("ready") if state_text == "running" => "paused-before-cont",
-        Some("pending") if state_text == "running" => "waiting-for-qmp",
+        Some("ready") if runner_state == QemuMediaRunnerState::Running => "paused-before-cont",
+        Some("pending") if runner_state == QemuMediaRunnerState::Running => "waiting-for-qmp",
         _ => "not-started",
     };
     Some(json!({
         "firmwareMode": "none",
         "runner": {
-            "state": state_text,
+            "state": runner_state,
             "role": RunnerRole::QemuMedia.as_str(),
             "preContProgress": pre_cont_progress,
             "qmpReadiness": qmp_readiness,
@@ -21276,8 +21604,8 @@ fn public_qemu_media_status(
     }))
 }
 
-fn qemu_media_source_status(registry_dir: &str, source: &QemuMediaSourceIntent) -> Value {
-    let (state, remediation) = qemu_media_registry_state(registry_dir, source);
+fn qemu_media_source_status(source: &QemuMediaSourceIntent) -> Value {
+    let (state, remediation) = qemu_media_registry_state(source);
     let status = json!({
         "mediaRef": source.media_ref,
         "slot": source.slot,
@@ -21293,11 +21621,10 @@ fn qemu_media_source_status(registry_dir: &str, source: &QemuMediaSourceIntent) 
 }
 
 fn qemu_media_registry_state(
-    _registry_dir: &str,
     source: &QemuMediaSourceIntent,
-) -> (String, Option<String>) {
+) -> (QemuMediaRegistryState, Option<String>) {
     if serde_kebab_string(&source.source_kind) != "physical-usb" {
-        return ("direct-config".to_owned(), None);
+        return (QemuMediaRegistryState::DirectConfig, None);
     }
     let records = qemu_media_probe_registry_records();
     let Some(record) = records
@@ -21305,7 +21632,7 @@ fn qemu_media_registry_state(
         .find(|record| record.vm == source.vm && record.media_ref == source.media_ref)
     else {
         return (
-            "missing".to_owned(),
+            QemuMediaRegistryState::Missing,
             Some(format!(
                 "declare the boot-drive physical USB source for vm `{}` in config, then run `d2b usb probe` to verify the runtime selector for `{}` before starting or attaching this media",
                 source.vm, source.media_ref
@@ -21320,10 +21647,10 @@ fn qemu_media_registry_state(
         && record.format == expected_format
         && record.read_only == source.read_only
     {
-        ("present".to_owned(), None)
+        (QemuMediaRegistryState::Present, None)
     } else {
         (
-            "stale".to_owned(),
+            QemuMediaRegistryState::Stale,
             Some(
                 "registry entry does not match the current declaration; update qemu-media config if needed, then run `d2b usb probe`"
                     .to_owned(),
@@ -21345,7 +21672,8 @@ mod public_status_tests {
         test_state_with_config(DaemonConfig::default())
     }
 
-    fn test_state_with_config(config: DaemonConfig) -> (ServerState, tempfile::TempDir) {
+    /// Shared with sibling test modules that need a bare daemon state.
+    pub(super) fn test_state_with_config(config: DaemonConfig) -> (ServerState, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("temp daemon state");
         let broker_reap_log = BrokerReapLog::new();
         let state = ServerState {
@@ -21460,7 +21788,6 @@ mod public_status_tests {
                 supported_features: Vec::new(),
             }),
             caller_role: caller,
-            test_peer_uid: None,
             audit_join: None,
         };
         let json = serde_json::to_string(&envelope).unwrap();
@@ -21996,11 +22323,23 @@ mod public_status_tests {
             Some(&dag),
         );
         let runtime = public_runtime_summary(&lifecycle, &manifest_entry);
+        let qemu = public_qemu_media_status(
+            &state,
+            "installer",
+            Some("qemu-media"),
+            None,
+            Some(&dag),
+        )
+        .expect("qemu media status");
 
         assert_eq!(lifecycle_state(&lifecycle), "Running");
         assert_eq!(
             runtime.get("kind").and_then(Value::as_str),
             Some("qemu-media")
+        );
+        assert_eq!(
+            qemu.pointer("/runner/state").and_then(Value::as_str),
+            Some("running")
         );
         assert_eq!(
             services.get("microvm").and_then(Value::as_str),
@@ -22049,23 +22388,14 @@ mod public_status_tests {
 
     #[test]
     fn qemu_media_status_reports_manual_runtime_and_missing_registry() {
-        let root = tempfile::tempdir().expect("registry root");
         let (state, _dir) = test_state();
-        let manifest_entry = qemu_media_manifest_entry();
         let dag = qemu_media_process_dag();
-        let services = d2bd_runtime::public_projection::public_service_states(
-            &state.pidfd_table,
-            "installer",
-            &manifest_entry,
-            Some(&dag),
-        );
         let qemu = public_qemu_media_status(
             &state,
             "installer",
             Some("qemu-media"),
             None,
             Some(&dag),
-            &services,
         )
         .expect("qemu media status");
 
@@ -22078,11 +22408,15 @@ mod public_status_tests {
             Some("qemu-media")
         );
         assert_eq!(
+            qemu.pointer("/runner/state").and_then(Value::as_str),
+            Some("stopped")
+        );
+        assert_eq!(
             qemu.pointer("/runner/qmpSocket").and_then(Value::as_str),
             None
         );
         let source_status =
-            qemu_media_source_status(&root.path().display().to_string(), &qemu_media_source());
+            qemu_media_source_status(&qemu_media_source());
         assert_eq!(
             source_status.pointer("/slot").and_then(Value::as_str),
             Some("boot")
@@ -22110,7 +22444,7 @@ mod public_status_tests {
     #[test]
     fn qemu_media_status_reports_direct_image_without_enrollment_remediation() {
         let source_status =
-            qemu_media_source_status("/var/lib/d2b/media-registry", &qemu_media_image_source());
+            qemu_media_source_status(&qemu_media_image_source());
 
         assert_eq!(
             source_status.pointer("/sourceKind").and_then(Value::as_str),
@@ -22420,7 +22754,6 @@ mod public_status_tests {
             PublicReadModelKind::Status,
             Some(before),
             stale_frame.clone(),
-            "status",
         );
 
         assert_eq!(returned, stale_frame);
@@ -22678,7 +23011,10 @@ mod public_status_tests {
             state: &state,
             request: public_wire::VmLifecycleRequest {
                 vm: "vm-a".to_owned(),
-                flags: public_wire::MutationFlags::default(),
+                flags: public_wire::MutationFlags {
+                    mode: Some(public_wire::MutationMode::Apply),
+                    json: false,
+                },
                 force: false,
                 no_wait_api: false,
             },
@@ -22754,6 +23090,103 @@ mod public_status_tests {
         );
         server.join().expect("status server");
     }
+
+    /// A marker body shaped exactly as the activation machinery writes it.
+    fn activation_marker_json(schema_version: u32, mode: &str) -> Value {
+        json!({
+            "schemaVersion": schema_version,
+            "vm": "vm-a",
+            "mode": mode,
+            "generationNumber": 3,
+            "activationId": "activation-1",
+            "switchScriptBasename": "switch.sh",
+            "switchScriptSha256": "sha256:0",
+            "state": "pending",
+            "createdUnixSecs": 1,
+            "updatedUnixSecs": 2,
+        })
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn write_activation_marker(state: &ServerState, schema_version: u32, mode: &str) {
+        let dir = activation_marker_dir(state);
+        fs::create_dir_all(&dir).expect("activation marker dir");
+        fs::write(
+            activation_marker_path(state, "vm-a"),
+            serde_json::to_vec(&activation_marker_json(schema_version, mode))
+                .expect("serialize activation marker"),
+        )
+        .expect("write activation marker");
+    }
+
+    #[test]
+    fn unknown_activation_marker_mode_parses_into_the_catch_all_variant() {
+        let marker: HostActivationPendingMarker =
+            serde_json::from_value(activation_marker_json(1, "warp-drive"))
+                .expect("marker with an unrecognized mode still parses");
+        assert_eq!(marker.mode, HostActivationMarkerMode::Unknown);
+        assert_eq!(marker.mode.to_string(), "unknown");
+
+        for (label, mode) in [
+            ("switch", HostActivationMarkerMode::Switch),
+            ("boot", HostActivationMarkerMode::Boot),
+            ("test", HostActivationMarkerMode::Test),
+            ("rollback", HostActivationMarkerMode::Rollback),
+        ] {
+            let marker: HostActivationPendingMarker =
+                serde_json::from_value(activation_marker_json(1, label))
+                    .expect("known mode label parses");
+            assert_eq!(marker.mode, mode, "mode label {label}");
+            assert_eq!(marker.mode.to_string(), label, "mode label {label}");
+            assert_eq!(
+                serde_json::to_value(mode).expect("mode serializes"),
+                Value::String(label.to_owned()),
+                "mode label {label}"
+            );
+        }
+    }
+
+    #[test]
+    fn activation_marker_parse_refuses_an_unsupported_schema_version() {
+        let current = serde_json::to_vec(&activation_marker_json(1, "switch")).expect("marker body");
+        assert!(parse_activation_marker(&current).is_some());
+
+        // A newer version with a still-compatible field set must not parse as
+        // the current version.
+        let future = serde_json::to_vec(&activation_marker_json(2, "switch")).expect("marker body");
+        assert!(parse_activation_marker(&future).is_none());
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn read_activation_marker_refuses_an_unsupported_schema_version() {
+        let (state, _state_dir) = test_state();
+        write_activation_marker(&state, 1, "switch");
+        assert!(read_activation_marker(&state, "vm-a").is_some());
+
+        write_activation_marker(&state, 2, "switch");
+        assert!(read_activation_marker(&state, "vm-a").is_none());
+    }
+
+    #[test]
+    fn startup_marker_metric_refresh_ignores_an_unsupported_schema_version() {
+        let (state, _state_dir) = test_state();
+        write_activation_marker(&state, 2, "switch");
+        // Driven from this non-async test thread; the adoption path records a
+        // gauge through `MetricsRegistry`'s blocking seat, so the refusal path
+        // is the one this runtime-free test can observe.
+        drive_sync(
+            &state.runtime_handle,
+            refresh_activation_marker_metrics_on_startup(&state),
+        );
+        assert!(
+            !state
+                .metrics_registry
+                .render()
+                .contains("d2b_daemon_vm_degraded{reason=\"activation-pending\"}"),
+            "an unsupported marker version must not record degraded activation"
+        );
+    }
 }
 
 fn dispatch_audit(
@@ -22781,9 +23214,8 @@ fn dispatch_audit(
                 Some("denied") => Ok(Some(
                     d2b_contracts_broker::broker_wire::BrokerAuditSeverity::Denied,
                 )),
-                Some(_) => Err(TypedError::InternalIo {
-                    context: "audit filter".to_owned(),
-                    detail: "severity-invalid".to_owned(),
+                Some(_) => Err(TypedError::WireInvalidFrame {
+                    detail: "audit filter has an invalid severity".to_owned(),
                 }),
             }?;
             Ok::<_, TypedError>(d2b_contracts_broker::broker_wire::BrokerAuditFilter {
@@ -22808,56 +23240,50 @@ fn dispatch_audit(
     )?;
     match response {
         BrokerResponse::ExportBrokerAudit(payload) => {
-            serde_json::to_value(d2bd_runtime::wire::audit_response(payload)).map_err(|err| {
-                TypedError::InternalIo {
-                    context: "serialize audit response".to_owned(),
-                    detail: err.to_string(),
-                }
+            let frame = d2bd_runtime::wire::audit_response(payload)?;
+            serde_json::to_value(frame).map_err(|err| TypedError::InternalIo {
+                context: "serialize audit response".to_owned(),
+                detail: err.to_string(),
+                source: error_source(err),
             })
         }
         BrokerResponse::Error(error) => Err(TypedError::InternalBrokerUnavailable {
             path: state.config.broker_socket_path.clone(),
             detail: error.kind,
+            source: None,
         }),
         _ => Err(TypedError::InternalBrokerUnavailable {
             path: state.config.broker_socket_path.clone(),
             detail: "broker returned an unexpected audit response".to_owned(),
+            source: None,
         }),
     }
+}
+
+/// The read-only command names the CLI parser accepts. The daemon reports the
+/// same surface the CLI's `none` role does, so both halves of `auth status`
+/// name one list.
+fn read_only_command_names() -> Vec<String> {
+    READ_ONLY_CLI_COMMANDS
+        .iter()
+        .map(|command| (*command).to_owned())
+        .collect()
 }
 
 fn dispatch_auth_status(state: &ServerState, peer: &PeerIdentity) -> Value {
     let (role, allowed_subcommands, denied_subcommands) = if peer.role == PeerRole::Admin {
         (
             AuthRole::Admin,
-            vec![
-                "list",
-                "status",
-                "audit",
-                "host check",
-                "auth status",
-                "op inspect",
-                "realm list",
-                "realm inspect",
-                "realm enter",
-                "realm run",
-            ],
+            read_only_command_names()
+                .into_iter()
+                .chain(std::iter::once("audit".to_owned()))
+                .collect(),
             Vec::new(),
         )
     } else {
         (
             AuthRole::Launcher,
-            vec![
-                "list",
-                "status",
-                "host check",
-                "auth status",
-                "op inspect",
-                "realm list",
-                "realm inspect",
-                "realm enter",
-                "realm run",
-            ],
+            read_only_command_names(),
             vec![DeniedCommandHint {
                 command: "audit".to_owned(),
                 reason: "audit requires admin role in d2b.site.adminUsers".to_owned(),
@@ -22866,7 +23292,7 @@ fn dispatch_auth_status(state: &ServerState, peer: &PeerIdentity) -> Value {
     };
     serde_json::to_value(d2bd_runtime::wire::auth_status_response(
         AuthStatusResponse {
-            allowed_subcommands: allowed_subcommands.into_iter().map(str::to_owned).collect(),
+            allowed_subcommands,
             denied_subcommands,
             role,
             sockets: vec![
@@ -23487,8 +23913,11 @@ mod accept_loop_concurrency_tests {
         .expect("encode workload list frame")
     }
 
+    /// The Process create frame the owner-hook test sends on the connection it
+    /// owns. It claims the process-global owner hook, so the hook intercepts
+    /// that connection and leaves every other test's connection alone.
     fn process_resource_start_frame(op_id: u64) -> Vec<u8> {
-        serde_json::to_vec(&json!({
+        let mut frame = json!({
             "type": "resourceRequest",
             "method": "Create",
             "service": "d2b.resource.v3",
@@ -23501,8 +23930,9 @@ mod accept_loop_concurrency_tests {
             "detached": false,
             "argv": ["true"],
             "opId": op_id,
-        }))
-        .expect("serialize Process resource frame")
+        });
+        owner_connection_test_hook::claim(&mut frame);
+        serde_json::to_vec(&frame).expect("serialize Process resource frame")
     }
 
     /// Scoped guard for the test SO_PEERCRED override so a panic still clears
@@ -23667,7 +24097,10 @@ mod accept_loop_concurrency_tests {
         let _hook_guard = HookGuard;
 
         let hook_shared = Arc::clone(&shared);
-        let hook: owner_connection_test_hook::Hook = Arc::new(move || {
+        let hook: owner_connection_test_hook::Hook = Arc::new(move |request| {
+            if !owner_connection_test_hook::claims(request) {
+                return false;
+            }
             let (lock, cv) = &*hook_shared;
             {
                 let mut s = lock.lock().expect("hook state lock");
@@ -23681,6 +24114,7 @@ mod accept_loop_concurrency_tests {
             }
             s.running = false;
             cv.notify_all();
+            true
         });
         owner_connection_test_hook::set(hook);
 
@@ -23791,6 +24225,52 @@ mod accept_loop_concurrency_tests {
         drop(client_a);
     }
 
+    /// A hook installed by one test intercepts only the connections that
+    /// test claimed: an unclaimed connection still reaches the real owner
+    /// body and gets its reply instead of being dropped by the hook.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn owner_connection_hook_leaves_unclaimed_connections_to_the_real_owner() {
+        // Serialize the process-global owner hook with the Process owner test.
+        let _env = PeerOverrideEnv::admin();
+        let (state, _state_dir) = admin_exec_state();
+        let (server, client) = seqpacket_pair();
+
+        struct HookGuard;
+        impl Drop for HookGuard {
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            fn drop(&mut self) {
+                owner_connection_test_hook::clear();
+            }
+        }
+        let _hook_guard = HookGuard;
+        // The plain claim check the owner-body hooks install, so this test
+        // exercises exactly the interception rule they rely on.
+        let hook: owner_connection_test_hook::Hook =
+            Arc::new(owner_connection_test_hook::claims);
+        owner_connection_test_hook::set(hook);
+
+        run_process_resource_owner(
+            server,
+            state,
+            admin_peer_identity(),
+            json!({
+                "resourceType": "EphemeralProcess",
+                "resourceRef": "EphemeralProcess/exec-unclaimed",
+                "executionRef": "Guest/work",
+                "tty": false,
+                "detached": false,
+                "argv": ["true"],
+            }),
+            None,
+        );
+
+        let frame = read_frame(&client).expect("client reads the owner reply frame");
+        let reply: serde_json::Value = serde_json::from_slice(&frame).expect("reply frame is JSON");
+        assert_eq!(reply["type"], "error");
+        assert_eq!(reply["error"]["kind"], "runtime-capability-unsupported");
+    }
+
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn typed_shell_owner_keeps_admission_permit_until_owner_exits() {
@@ -23816,7 +24296,10 @@ mod accept_loop_concurrency_tests {
         let _hook_guard = HookGuard;
 
         let hook_release_rx = Arc::clone(&release_rx);
-        let hook: owner_connection_test_hook::Hook = Arc::new(move || {
+        let hook: owner_connection_test_hook::Hook = Arc::new(move |request| {
+            if !owner_connection_test_hook::claims(request) {
+                return false;
+            }
             entered_tx
                 .send(())
                 .expect("typed shell owner entered receiver");
@@ -23825,15 +24308,18 @@ mod accept_loop_concurrency_tests {
                 .expect("typed shell owner release lock")
                 .recv()
                 .expect("typed shell owner release signal");
+            true
         });
         owner_connection_test_hook::set(hook);
 
         let (server, _client) = seqpacket_pair();
+        let mut request = json!({});
+        owner_connection_test_hook::claim(&mut request);
         let owner = spawn_typed_shell_owner(
             server,
             state,
             admin_peer_identity(),
-            json!({}),
+            request,
             Some(permit),
         )
         .expect("spawn typed shell owner");
@@ -24044,7 +24530,7 @@ mod broker_dispatch_tests {
     };
     use d2b_contracts_control::public_wire;
     use d2b_contracts_control::public_wire::{
-        ActivationRequest, HostDestroyRequest, HostPrepareRequest, MutationFlags,
+        ActivationRequest, HostDestroyRequest, HostPrepareRequest, MutationFlags, MutationMode,
         ShellSessionState, VmLifecycleRequest,
     };
     use d2b_contracts_resource::v3::{ResourceGeneration, ResourceUid};
@@ -24057,6 +24543,7 @@ mod broker_dispatch_tests {
     use serde::Serialize;
     use serde_json::{Value, json};
 
+    use super::mutation_mode_from_request;
     use super::provider_effects::LifecycleAuthorization;
     use super::provider_shutdown::GracefulVmShutdown;
     use super::{
@@ -24084,6 +24571,32 @@ mod broker_dispatch_tests {
     use d2bd_runtime::typed_error::TypedError;
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn raw_mutating_verb_frames_keep_the_documented_mode_refusal() {
+        let bare = json!({"type": "resourceRequest", "method": "Start"});
+        let refusal = mutation_mode_from_request(&bare, "guest start")
+            .expect_err("a frame that selects no mode is refused");
+        assert_eq!(
+            refusal.get("outcome").and_then(Value::as_str),
+            Some("invalid-request")
+        );
+        assert_eq!(
+            refusal.get("remediation").and_then(Value::as_str),
+            Some("d2b guest start requires either --dry-run or --apply")
+        );
+
+        assert_eq!(
+            mutation_mode_from_request(&json!({"dryRun": true}), "guest start")
+                .expect("dryRun selects a mode"),
+            MutationMode::DryRun
+        );
+        assert_eq!(
+            mutation_mode_from_request(&json!({"apply": true}), "guest start")
+                .expect("apply selects a mode"),
+            MutationMode::Apply
+        );
+    }
 
     // Serializes tests that must read-modify-write process env vars so parallel
     // test threads don't observe each other's transient env state.
@@ -25027,8 +25540,8 @@ mod broker_dispatch_tests {
                 d2bd_runtime::wire::Request::VmStart(VmLifecycleRequest {
                     vm: "vm-a".to_owned(),
                     flags: MutationFlags {
-                        dry_run: true,
-                        ..MutationFlags::default()
+                        mode: Some(MutationMode::DryRun),
+                        json: false,
                     },
                     force: false,
                     no_wait_api: false,
@@ -25039,8 +25552,8 @@ mod broker_dispatch_tests {
                 d2bd_runtime::wire::Request::VmStop(VmLifecycleRequest {
                     vm: "vm-a".to_owned(),
                     flags: MutationFlags {
-                        dry_run: true,
-                        ..MutationFlags::default()
+                        mode: Some(MutationMode::DryRun),
+                        json: false,
                     },
                     force: false,
                     no_wait_api: false,
@@ -25051,8 +25564,8 @@ mod broker_dispatch_tests {
                 d2bd_runtime::wire::Request::VmRestart(VmLifecycleRequest {
                     vm: "vm-a".to_owned(),
                     flags: MutationFlags {
-                        dry_run: true,
-                        ..MutationFlags::default()
+                        mode: Some(MutationMode::DryRun),
+                        json: false,
                     },
                     force: false,
                     no_wait_api: false,
@@ -25064,8 +25577,8 @@ mod broker_dispatch_tests {
                     vm: "vm-a".to_owned(),
                     to_generation: None,
                     flags: MutationFlags {
-                        dry_run: true,
-                        ..MutationFlags::default()
+                        mode: Some(MutationMode::DryRun),
+                        json: false,
                     },
                 }),
             ),
@@ -25075,8 +25588,8 @@ mod broker_dispatch_tests {
                     vm: "vm-a".to_owned(),
                     to_generation: None,
                     flags: MutationFlags {
-                        dry_run: true,
-                        ..MutationFlags::default()
+                        mode: Some(MutationMode::DryRun),
+                        json: false,
                     },
                 }),
             ),
@@ -25086,8 +25599,8 @@ mod broker_dispatch_tests {
                     vm: "vm-a".to_owned(),
                     to_generation: None,
                     flags: MutationFlags {
-                        dry_run: true,
-                        ..MutationFlags::default()
+                        mode: Some(MutationMode::DryRun),
+                        json: false,
                     },
                 }),
             ),
@@ -25097,8 +25610,8 @@ mod broker_dispatch_tests {
                     vm: "vm-a".to_owned(),
                     to_generation: None,
                     flags: MutationFlags {
-                        dry_run: true,
-                        ..MutationFlags::default()
+                        mode: Some(MutationMode::DryRun),
+                        json: false,
                     },
                 }),
             ),
@@ -25109,8 +25622,8 @@ mod broker_dispatch_tests {
                         vm: "vm-a".to_owned(),
                         bus_id: "1-1".to_owned(),
                         flags: MutationFlags {
-                            dry_run: true,
-                            ..MutationFlags::default()
+                            mode: Some(MutationMode::DryRun),
+                            json: false,
                         },
                     },
                 ),
@@ -25122,8 +25635,8 @@ mod broker_dispatch_tests {
                         vm: "vm-a".to_owned(),
                         bus_id: "1-1".to_owned(),
                         flags: MutationFlags {
-                            dry_run: true,
-                            ..MutationFlags::default()
+                            mode: Some(MutationMode::DryRun),
+                            json: false,
                         },
                     },
                 ),
@@ -25132,8 +25645,8 @@ mod broker_dispatch_tests {
                 "hostPrepare",
                 d2bd_runtime::wire::Request::HostPrepare(HostPrepareRequest {
                     flags: MutationFlags {
-                        dry_run: true,
-                        ..MutationFlags::default()
+                        mode: Some(MutationMode::DryRun),
+                        json: false,
                     },
                 }),
             ),
@@ -25141,8 +25654,8 @@ mod broker_dispatch_tests {
                 "hostDestroy",
                 d2bd_runtime::wire::Request::HostDestroy(HostDestroyRequest {
                     flags: MutationFlags {
-                        dry_run: true,
-                        ..MutationFlags::default()
+                        mode: Some(MutationMode::DryRun),
+                        json: false,
                     },
                 }),
             ),
@@ -25399,8 +25912,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: "vm-a".to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -25605,8 +26118,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: "vm-a".to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -25938,8 +26451,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: "vm-a".to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -26240,8 +26753,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: "vm-a".to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -26286,8 +26799,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: "vm-a".to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -26325,8 +26838,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: "vm-a".to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -26966,6 +27479,37 @@ mod broker_dispatch_tests {
 
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn an_unanswered_cell_kernel_defers_instead_of_refusing() {
+        // The other half of the refusal contract: a broker that never
+        // answered says nothing about the claim, so the caller hands back
+        // the retryable spelling the Device Providers defer on. Returning
+        // `EffectRejected` here (the served replay refusal above) would read
+        // as permanent, and a Guest whose claim was merely unanswered would
+        // wedge on it.
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("lease-cell-silent"));
+        let authorization = LifecycleAuthorization::for_test_with_guest(
+            "Guest/vm-a",
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+            4,
+            9,
+            7,
+            "lease-caller-silent",
+        );
+        assert_eq!(
+            super::consume_lifecycle_lease(
+                &state,
+                &authorization,
+                super::provider_effects::GuestLifecycleOperation::Start,
+                &BrokerCallerRole::AdminUid { uid: 0 },
+            ),
+            Err(super::provider_effects::ProviderEffectError::StateUnavailable)
+        );
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn the_lease_caller_applies_the_fence_before_invoking() {
         // The caller-side fence (U11): invalid identity fields and
         // stop_only/host-shutdown mismatches are refused without any
@@ -27067,8 +27611,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: "vm-a".to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -27112,8 +27656,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: "vm-a".to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -27256,8 +27800,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: vm.to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -27392,8 +27936,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: vm.to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -27533,8 +28077,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: vm.to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -27640,8 +28184,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: vm.to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -27655,8 +28199,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: vm.to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -27692,8 +28236,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: vm.to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -27746,8 +28290,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: vm.to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -27784,8 +28328,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: vm.to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -27823,8 +28367,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: vm.to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -27874,8 +28418,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: vm.to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -27985,8 +28529,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: vm.to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -28188,8 +28732,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: "vm-a".to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -28214,8 +28758,8 @@ mod broker_dispatch_tests {
             &state,
             HostPrepareRequest {
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
             },
             BrokerCallerRole::AdminUid { uid: state.daemon_uid },
@@ -28310,8 +28854,8 @@ mod broker_dispatch_tests {
             &state,
             HostPrepareRequest {
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
             },
             BrokerCallerRole::AdminUid { uid: state.daemon_uid },
@@ -28350,7 +28894,6 @@ mod broker_dispatch_tests {
     /// dispatches the `apply-nm-unmanaged` kernel with the declared path,
     /// match criteria, reload behaviour, and ownership/mode - never a
     /// compiled constant.
-
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn host_prepare_installs_declared_nm_unmanaged_contract() {
@@ -28515,8 +29058,8 @@ mod broker_dispatch_tests {
             &state,
             HostDestroyRequest {
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
             },
             BrokerCallerRole::AdminUid { uid: state.daemon_uid },
@@ -28559,8 +29102,8 @@ mod broker_dispatch_tests {
             &state,
             HostDestroyRequest {
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
             },
             BrokerCallerRole::AdminUid { uid: state.daemon_uid },
@@ -28636,17 +29179,18 @@ mod broker_dispatch_tests {
         // dispatch_broker_vm_start writes.
         state
             .daemon_audit
-            .write_event(&d2bd_runtime::daemon_audit::DaemonEvent::ApiReadyTimeout {
+            .write_event(
+                d2bd_runtime::daemon_audit::DaemonEvent::ApiReadyTimeout {
                 vm: "vm-a".to_owned(),
                 runner: VM_RUNNER_ROLE_ID.to_owned(),
                 elapsed_secs: 120,
-                mode: "strict".to_owned(),
+                mode: d2bd_runtime::daemon_audit::ApiReadyMode::Strict,
             })
             .expect("write ApiReadyTimeout audit event");
 
         let captured = state
             .daemon_audit
-            .captured
+            .captured()
             .lock()
             .expect("lock captured records");
         assert_eq!(
@@ -29777,8 +30321,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: "obs".to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: Some(MutationMode::Apply),
+                    json: false,
                 },
                 force: false,
                 // Bypass the readiness gate entirely: no degraded field must
@@ -30060,7 +30604,7 @@ mod loader_worker_refusal_tests {
 
     fn assert_bundle_loader_refusal(error: TypedError, name: &str) {
         match error {
-            TypedError::InternalIo { context, detail } => {
+            TypedError::InternalIo { context, detail, .. } => {
                 assert_eq!(context, "load bundle resolver");
                 assert!(
                     detail.contains(name),
@@ -30133,5 +30677,113 @@ mod loader_worker_refusal_tests {
                 String::from_utf8_lossy(&output.stderr),
             );
         }
+    }
+}
+
+/// The daemon's typed refusals carry the error they were raised from: the
+/// public envelope keeps rendering the same strings, while
+/// `std::error::Error::source()` still reaches the origin so the chain
+/// survives to the logging boundary.
+#[cfg(test)]
+mod typed_error_source_tests {
+    use super::*;
+
+    /// A real call site: the VM-start lock open fails, and the refusal keeps
+    /// the `io::Error` behind its operator-visible `detail` string.
+    #[test]
+    fn vm_start_lock_failure_carries_the_origin_error() {
+        let locks_dir = tempfile::tempdir().expect("temp locks dir");
+        let missing_locks_dir = locks_dir.path().join("absent");
+        let (state, _state_dir) = public_status_tests::test_state_with_config(DaemonConfig {
+            locks_dir: missing_locks_dir.clone(),
+            ..DaemonConfig::default()
+        });
+
+        let error = acquire_vm_start_lock(&state, "alpha").expect_err("lock directory is absent");
+
+        assert_eq!(error.kind(), "internal-io");
+        assert_eq!(error.message(), "internal I/O failure");
+        let TypedError::InternalIo {
+            context,
+            detail,
+            source,
+        } = &error
+        else {
+            panic!("expected an internal-io refusal, got {error:?}");
+        };
+        let expected_path = missing_locks_dir.join("vm-start-alpha.lock");
+        assert_eq!(
+            context,
+            &format!("open VM start lock {}", expected_path.display())
+        );
+        assert!(source.is_some(), "the call site attaches the origin error");
+
+        let origin = std::error::Error::source(&error).expect("origin error on the chain");
+        assert_eq!(origin.to_string(), *detail);
+        let io = origin
+            .downcast_ref::<std::io::Error>()
+            .expect("the origin is the fs open failure");
+        assert_eq!(io.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    /// The daemon wire error surface is `kind`/`exitCode`/`message`/
+    /// `remediation`: attaching an origin renders byte-identically to a
+    /// variant without one.
+    #[test]
+    fn error_envelope_is_byte_identical_with_an_attached_origin() {
+        let detail = "No such file or directory (os error 2)".to_owned();
+        let without_origin = TypedError::InternalIo {
+            context: "read daemon config".to_owned(),
+            detail: detail.clone(),
+            source: None,
+        };
+        let with_origin = TypedError::InternalIo {
+            context: "read daemon config".to_owned(),
+            detail,
+            source: error_source(std::io::Error::from_raw_os_error(libc::ENOENT)),
+        };
+
+        let without =
+            serde_json::to_string(&without_origin.to_envelope_value()).expect("render the envelope");
+        let with =
+            serde_json::to_string(&with_origin.to_envelope_value()).expect("render the envelope");
+        assert_eq!(without, with);
+        assert!(without.contains("\"kind\":\"internal-io\""), "{without}");
+    }
+
+    /// The chain is what the daemon logs, not just its first link.
+    #[test]
+    fn origin_chain_reaches_the_root_cause() {
+        #[derive(Debug)]
+        struct ReadOnlyVolume {
+            cause: std::io::Error,
+        }
+
+        impl std::fmt::Display for ReadOnlyVolume {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("cannot write daemon config")
+            }
+        }
+
+        impl std::error::Error for ReadOnlyVolume {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.cause)
+            }
+        }
+
+        let error = TypedError::InternalConfig {
+            detail: ReadOnlyVolume {
+                cause: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "read-only volume"),
+            }
+            .to_string(),
+            source: error_source(ReadOnlyVolume {
+                cause: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "read-only volume"),
+            }),
+        };
+
+        let origin = std::error::Error::source(&error).expect("origin error on the chain");
+        assert_eq!(origin.to_string(), "cannot write daemon config");
+        let root = origin.source().expect("the origin keeps its own cause");
+        assert_eq!(root.to_string(), "read-only volume");
     }
 }

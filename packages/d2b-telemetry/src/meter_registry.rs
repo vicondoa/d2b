@@ -38,6 +38,11 @@ pub struct MetricFamily {
 
 impl MetricFamily {
     /// Construct and validate a metric family.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MetricPolicyError::DescriptorMalformed` when the
+    /// descriptor fails validation or the buckets do not match the kind.
     pub fn new(
         descriptor: MetricDescriptor,
         kind: MetricKind,
@@ -78,6 +83,11 @@ impl MetricFamily {
     }
 
     /// Record a value after policy validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MetricPolicyError` when the data point or the value-kind
+    /// combination fails policy validation.
     pub fn record(
         &mut self,
         labels: &BTreeMap<String, String>,
@@ -124,6 +134,11 @@ pub struct MeterRegistry {
 
 impl MeterRegistry {
     /// Register one family.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MetricPolicyError::DescriptorMalformed` when a family
+    /// with the same name is already registered.
     pub fn register(&mut self, family: MetricFamily) -> Result<(), MetricPolicyError> {
         let name = family.descriptor().name().to_owned();
         if self.families.contains_key(&name) {
@@ -134,6 +149,12 @@ impl MeterRegistry {
     }
 
     /// Record a value in a registered family.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MetricPolicyError::DescriptorMalformed` when the family
+    /// is not registered, plus the family's own record validation
+    /// failures.
     pub fn record(
         &mut self,
         name: &str,
@@ -171,12 +192,26 @@ pub const STORE_WRITE_BUCKETS_SECONDS: &[f64] = &[0.001, 0.005, 0.01, 0.025, 0.0
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metric_label_policy::canonical_descriptor;
 
     #[test]
-    fn target_buckets_are_present() {
-        assert!(CONTROLLER_HINT_BUCKETS_SECONDS.contains(&0.005));
-        assert!(PROCESS_LAUNCH_BUCKETS_SECONDS.contains(&0.020));
-        assert!(STORE_WRITE_BUCKETS_SECONDS.contains(&0.010));
+    fn controller_hint_buckets_accept_in_range_and_reject_out_of_range_values() {
+        let mut family = MetricFamily::new(
+            canonical_descriptor("d2b_controller_hint_to_handler_seconds").unwrap(),
+            MetricKind::Histogram,
+            CONTROLLER_HINT_BUCKETS_SECONDS.iter().copied(),
+        )
+        .unwrap();
+        let labels = BTreeMap::from([("handler".to_owned(), "configuration".to_owned())]);
+        let canaries = IdentityCanaries::default();
+
+        assert!(family
+            .record(&labels, MetricValue::Scalar(0.012), &canaries)
+            .is_ok());
+        assert_eq!(
+            family.record(&labels, MetricValue::Scalar(-0.001), &canaries),
+            Err(MetricPolicyError::DescriptorMalformed)
+        );
     }
 
     #[test]

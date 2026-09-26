@@ -108,6 +108,11 @@ pub const fn is_absolute_unix_ms(value: u64) -> bool {
 
 /// Convert a deadline (absolute Unix milliseconds or a relative duration) into
 /// an `Instant`, failing when the deadline is already exhausted.
+///
+/// # Errors
+///
+/// Returns `DeadlineExceeded` when the deadline is zero or already in the
+/// past, or when the resulting `Instant` overflows.
 pub fn operation_deadline(deadline_ms: u64) -> Result<Instant, CredentialServiceError> {
     let now_unix_ms = now_unix_ms();
     let duration_ms = if is_absolute_unix_ms(deadline_ms) {
@@ -128,6 +133,10 @@ pub fn operation_deadline(deadline_ms: u64) -> Result<Instant, CredentialService
 }
 
 /// Fail when the deadline has already passed.
+///
+/// # Errors
+///
+/// Returns `DeadlineExceeded` when the deadline has already passed.
 pub fn deadline_remaining(deadline: Instant) -> Result<(), CredentialServiceError> {
     if Instant::now() >= deadline {
         return Err(CredentialServiceError::new(

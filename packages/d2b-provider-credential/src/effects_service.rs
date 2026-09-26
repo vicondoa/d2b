@@ -33,7 +33,7 @@ use d2b_resource_types::{ServiceDecl, ServiceMethod};
 
 use crate::driver::{CredentialDependencyFacts, CredentialDriverEffects, CredentialLeaseFacts};
 use crate::facets::CredentialEffectFacets;
-use crate::session::CredentialSession;
+use crate::session::{CredentialResourceRuntimeError, CredentialSession};
 
 /// The Credential family's declared effects service.
 ///
@@ -115,7 +115,7 @@ impl CredentialDriverEffects for CredentialEffectsService {
         &self,
         provider_ref: &ResourceRef,
         execution_ref: &ResourceRef,
-    ) -> Option<CredentialDependencyFacts> {
+    ) -> Result<Option<CredentialDependencyFacts>, CredentialResourceRuntimeError> {
         self.runtime.dependency_facts(provider_ref, execution_ref).await
     }
 
@@ -183,7 +183,7 @@ mod tests {
             &self,
             _provider_ref: &ResourceRef,
             _execution_ref: &ResourceRef,
-        ) -> Option<CredentialDependencyFacts> {
+        ) -> Result<Option<CredentialDependencyFacts>, CredentialResourceRuntimeError> {
             unreachable!("the inspect-credential surface reads no facts")
         }
         async fn lease_facts(

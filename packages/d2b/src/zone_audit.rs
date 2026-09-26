@@ -347,54 +347,13 @@ fn validate_record(
         return Err(RecordValidationError::Invalid);
     }
 
-    fn validate_v2_record(
-        object: &serde_json::Map<String, Value>,
-        class: &str,
-        fields_key: &str,
-        fields: &serde_json::Map<String, Value>,
-        expected_previous: Option<&str>,
-    ) -> Result<String, RecordValidationError> {
-        if object
-            .keys()
-            .any(|key| key.ends_with("_fields") && key != fields_key)
-            || !validate_v2_envelope(object)
-            || !validate_v2_fields(class, fields)
-        {
-            return Err(RecordValidationError::Invalid);
-        }
-        let previous = object
-            .get("prev_hash")
-            .and_then(Value::as_str)
-            .ok_or(RecordValidationError::Invalid)?;
-        let record_hash = object
-            .get("record_hash")
-            .and_then(Value::as_str)
-            .ok_or(RecordValidationError::Invalid)?;
-        if !valid_hash(previous) || !valid_hash(record_hash) {
-            return Err(RecordValidationError::Invalid);
-        }
-        if expected_previous.is_some_and(|expected| expected != previous) {
-            return Err(RecordValidationError::ChainBreak);
-        }
-        let canonical = json!({
-            "ts_ms": object.get("ts_ms").ok_or(RecordValidationError::Invalid)?,
-            "schema_version": object.get("schema_version").ok_or(RecordValidationError::Invalid)?,
-            "zone": object.get("zone").ok_or(RecordValidationError::Invalid)?,
-            "record_class": object.get("record_class").ok_or(RecordValidationError::Invalid)?,
-            "operation_id": object.get("operation_id").ok_or(RecordValidationError::Invalid)?,
-            "correlation_id": object.get("correlation_id").ok_or(RecordValidationError::Invalid)?,
-            "trace_id": object.get("trace_id").ok_or(RecordValidationError::Invalid)?,
-            "source": object.get("source").ok_or(RecordValidationError::Invalid)?,
-            "prev_hash": object.get("prev_hash").ok_or(RecordValidationError::Invalid)?,
-            fields_key: object.get(fields_key).ok_or(RecordValidationError::Invalid)?,
-        });
-        let canonical =
-            serde_json::to_vec(&canonical).map_err(|_| RecordValidationError::Invalid)?;
-        if record_hash != record_hash_for(previous, &canonical) {
-            return Err(RecordValidationError::ChainBreak);
-        }
-        Ok(record_hash.to_owned())
-    }
+    /// Verify the chain tail shared by v1 and v2 records: prev/record digest
+    /// shape, expected-previous linkage, canonical envelope, and digest equality.
+fn verify_chain(
+    object: &serde_json::Map<String, Value>,
+    fields_key: &str,
+    expected_previous: Option<&str>,
+) -> Result<String, RecordValidationError> {
     let previous = object
         .get("prev_hash")
         .and_then(Value::as_str)
@@ -403,7 +362,7 @@ fn validate_record(
         .get("record_hash")
         .and_then(Value::as_str)
         .ok_or(RecordValidationError::Invalid)?;
-    if !valid_hash(previous) || !valid_hash(record_hash) {
+    if !valid_digest(previous) || !valid_digest(record_hash) {
         return Err(RecordValidationError::Invalid);
     }
     if expected_previous.is_some_and(|expected| expected != previous) {
@@ -422,10 +381,32 @@ fn validate_record(
         fields_key: object.get(fields_key).ok_or(RecordValidationError::Invalid)?,
     });
     let canonical = serde_json::to_vec(&canonical).map_err(|_| RecordValidationError::Invalid)?;
-    if record_hash != record_hash_for(previous, &canonical) {
+    if record_hash != record_hash_for(previous,&canonical) {
         return Err(RecordValidationError::ChainBreak);
     }
     Ok(record_hash.to_owned())
+}
+
+
+fn validate_v2_record(
+        object: &serde_json::Map<String, Value>,
+        class: &str,
+        fields_key: &str,
+        fields: &serde_json::Map<String, Value>,
+        expected_previous: Option<&str>,
+    ) -> Result<String, RecordValidationError> {
+        if object
+            .keys()
+            .any(|key| key.ends_with("_fields") && key != fields_key)
+            || !validate_v2_envelope(object)
+            || !validate_v2_fields(class, fields)
+        {
+            return Err(RecordValidationError::Invalid);
+        }
+        verify_chain(object, fields_key, expected_previous)
+    }
+
+    verify_chain(object, fields_key, expected_previous)
 }
 
 const RESOURCE_MUTATION_FIELDS: &[&str] = &[
@@ -588,7 +569,11 @@ fn fields_for_class(class: &str) -> Option<&'static [&'static str]> {
     })
 }
 
-fn validate_public_fields(class: &str, fields: &serde_json::Map<String, Value>) -> bool {
+fn validate_fields(
+    class: &str,
+    fields: &serde_json::Map<String, Value>,
+    validate_field: fn(&str, &str, &Value) -> bool,
+) -> bool {
     let Some(expected) = fields_for_class(class) else {
         return false;
     };
@@ -601,24 +586,17 @@ fn validate_public_fields(class: &str, fields: &serde_json::Map<String, Value>) 
             .all(|key| expected.contains(&key.as_str()) || key == posture_field())
         && fields
             .iter()
-            .all(|(key, value)| validate_public_field(class, key, value))
+            .all(|(key, value)| validate_field(class, key, value))
+}
+
+fn validate_public_fields(class: &str, fields: &serde_json::Map<String, Value>) -> bool {
+    validate_fields(class, fields, validate_public_field)
 }
 
 fn validate_v2_fields(class: &str, fields: &serde_json::Map<String, Value>) -> bool {
-    let Some(expected) = fields_for_class(class) else {
-        return false;
-    };
-    let expected_count = expected.len() + usize::from(class == "process-effect");
-    fields.len() == expected_count
-        && expected.iter().all(|key| fields.contains_key(*key))
-        && (class != "process-effect" || fields.contains_key(posture_field()))
-        && fields
-            .keys()
-            .all(|key| expected.contains(&key.as_str()) || key == posture_field())
-        && fields
-            .iter()
-            .all(|(key, value)| validate_v2_field(class, key, value))
+    validate_fields(class, fields, validate_v2_field)
 }
+
 
 fn validate_v2_field(class: &str, key: &str, value: &Value) -> bool {
     if key == "generation"
@@ -833,16 +811,6 @@ fn safe_public_text(value: &str, allow_slash: bool) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_graphic() && (allow_slash || byte != b'/'))
-}
-
-fn valid_hash(value: &str) -> bool {
-    let Some(hex) = value.strip_prefix("sha256:") else {
-        return false;
-    };
-    hex.len() == 64
-        && hex
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 fn genesis_hash() -> String {

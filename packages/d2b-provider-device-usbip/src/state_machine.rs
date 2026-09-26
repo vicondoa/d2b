@@ -58,7 +58,6 @@
 //! Failures from any step are normalised to
 //! [`UsbipPlanError`] so callers can map the failure into their public error
 //! envelope without importing daemon runtime types.
-#![allow(missing_docs)]
 
 use std::fmt;
 
@@ -112,6 +111,7 @@ pub enum UsbipClaimSource {
 }
 
 impl UsbipClaimSource {
+    /// Whether this claim originated from an explicit operator request.
     pub fn is_explicit(&self) -> bool {
         matches!(self, Self::Explicit)
     }
@@ -210,9 +210,13 @@ pub const CANONICAL_STEPS: [UsbipBusidStep; 7] = [
 /// explicit operator request (`UsbipExplicitBind` + `UsbipExplicitFirewallRule`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsbipBusidPlan {
+    /// Bus identifier this plan mutates.
     pub busid: String,
+    /// Environment the plan runs in.
     pub env: String,
+    /// VM the claim serves.
     pub vm: String,
+    /// Canonical ordered step list.
     pub steps: Vec<UsbipBusidStep>,
     /// Source of this plan: declared from bundle or explicit operator request.
     pub claim_source: UsbipClaimSource,
@@ -251,6 +255,11 @@ impl UsbipBusidPlan {
 /// tagged against the step whose preconditions failed
 /// (`firewall` or `bind`). This is fail-fast at *plan time* so
 /// no executor side-effects ever run for a malformed plan.
+/// # Errors
+///
+/// Returns [`UsbipPlanError`] tagged against the step whose preconditions
+/// failed when the bus id is empty or the resolver lacks the declared
+/// firewall or bind intents.
 pub fn build_usbip_plan(
     busid: &str,
     env: &str,
@@ -376,13 +385,20 @@ pub fn build_usbip_explicit_plan(
 /// Each method MUST be idempotent - replays of the same plan
 /// after a partial failure are expected.
 pub trait UsbipStepExecutor {
-    fn modprobe(&mut self, plan: &UsbipBusidPlan) -> Result<(), String>;
-    fn acquire_lock(&mut self, plan: &UsbipBusidPlan) -> Result<(), String>;
-    fn withhold_non_owners(&mut self, plan: &UsbipBusidPlan) -> Result<(), String>;
-    fn apply_firewall(&mut self, plan: &UsbipBusidPlan) -> Result<(), String>;
-    fn start_backend(&mut self, plan: &UsbipBusidPlan) -> Result<(), String>;
-    fn bind(&mut self, plan: &UsbipBusidPlan) -> Result<(), String>;
-    fn start_proxy(&mut self, plan: &UsbipBusidPlan) -> Result<(), String>;
+    /// Ensure the usbip-host kernel module is loaded.
+    fn modprobe(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError>;
+    /// Acquire the broker-mediated claim lock.
+    fn acquire_lock(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError>;
+    /// Withhold non-owner VMs from the physical device.
+    fn withhold_non_owners(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError>;
+    /// Apply host firewalling for the claim.
+    fn apply_firewall(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError>;
+    /// Start the per-environment USBIP backend.
+    fn start_backend(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError>;
+    /// Bind the device to the host USBIP export.
+    fn bind(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError>;
+    /// Start the per-environment USBIP proxy.
+    fn start_proxy(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError>;
 }
 
 /// Per-step outcome recorded during execution. Successful steps
@@ -390,10 +406,15 @@ pub trait UsbipStepExecutor {
 /// execution halts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct UsbipExecutionReport {
+    /// Bus identifier this report covers.
     pub busid: String,
+    /// Environment the plan ran in.
     pub env: String,
+    /// VM the claim served.
     pub vm: String,
+    /// Steps that completed successfully.
     pub completed: Vec<UsbipBusidStep>,
+    /// First failing step and its error, when execution halted.
     pub failed: Option<(UsbipBusidStep, String)>,
 }
 
@@ -426,6 +447,10 @@ impl UsbipExecutionReport {
 /// [`UsbipPlanError`] tagged with the exact step
 /// that blew up; the caller can lift it into the public error
 /// envelope unchanged.
+/// # Errors
+///
+/// Returns [`UsbipPlanError`] tagged with the exact step that failed;
+/// prior successful steps stay recorded in the report.
 pub fn execute_usbip_plan<E: UsbipStepExecutor>(
     plan: &UsbipBusidPlan,
     executor: &mut E,
@@ -450,22 +475,17 @@ pub fn execute_usbip_plan<E: UsbipStepExecutor>(
         };
         match result {
             Ok(()) => report.completed.push(*step),
-            Err(reason) => {
-                report.failed = Some((*step, reason.clone()));
+            Err(error) => {
+                report.failed = Some((*step, error.reason.clone()));
                 tracing::warn!(
                     busid = %plan.busid,
                     env = %plan.env,
                     vm = %plan.vm,
                     step = %step,
-                    reason = %reason,
+                    reason = %error.reason,
                     "usbip bring-up plan step failed",
                 );
-                let err = UsbipPlanError {
-                    busid: plan.busid.clone(),
-                    step: *step,
-                    reason,
-                };
-                return Err((Box::new(report), err));
+                return Err((Box::new(report), error));
             }
         }
     }
@@ -496,38 +516,46 @@ mod tests {
                 fail_at: Some((step, reason)),
             }
         }
-        fn dispatch(&mut self, step: UsbipBusidStep) -> Result<(), String> {
+        fn dispatch(
+            &mut self,
+            plan: &UsbipBusidPlan,
+            step: UsbipBusidStep,
+        ) -> Result<(), UsbipPlanError> {
             self.calls.push(step);
             if let Some((target, reason)) = self.fail_at
                 && target == step
             {
-                return Err(reason.to_owned());
+                return Err(UsbipPlanError {
+                    busid: plan.busid.clone(),
+                    step,
+                    reason: reason.to_owned(),
+                });
             }
             Ok(())
         }
     }
 
     impl UsbipStepExecutor for FixtureExecutor {
-        fn modprobe(&mut self, _: &UsbipBusidPlan) -> Result<(), String> {
-            self.dispatch(UsbipBusidStep::Modprobe)
+        fn modprobe(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError> {
+            self.dispatch(plan, UsbipBusidStep::Modprobe)
         }
-        fn acquire_lock(&mut self, _: &UsbipBusidPlan) -> Result<(), String> {
-            self.dispatch(UsbipBusidStep::Lock)
+        fn acquire_lock(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError> {
+            self.dispatch(plan, UsbipBusidStep::Lock)
         }
-        fn withhold_non_owners(&mut self, _: &UsbipBusidPlan) -> Result<(), String> {
-            self.dispatch(UsbipBusidStep::Withhold)
+        fn withhold_non_owners(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError> {
+            self.dispatch(plan, UsbipBusidStep::Withhold)
         }
-        fn apply_firewall(&mut self, _: &UsbipBusidPlan) -> Result<(), String> {
-            self.dispatch(UsbipBusidStep::Firewall)
+        fn apply_firewall(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError> {
+            self.dispatch(plan, UsbipBusidStep::Firewall)
         }
-        fn start_backend(&mut self, _: &UsbipBusidPlan) -> Result<(), String> {
-            self.dispatch(UsbipBusidStep::Backend)
+        fn start_backend(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError> {
+            self.dispatch(plan, UsbipBusidStep::Backend)
         }
-        fn bind(&mut self, _: &UsbipBusidPlan) -> Result<(), String> {
-            self.dispatch(UsbipBusidStep::Bind)
+        fn bind(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError> {
+            self.dispatch(plan, UsbipBusidStep::Bind)
         }
-        fn start_proxy(&mut self, _: &UsbipBusidPlan) -> Result<(), String> {
-            self.dispatch(UsbipBusidStep::Proxy)
+        fn start_proxy(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError> {
+            self.dispatch(plan, UsbipBusidStep::Proxy)
         }
     }
 
@@ -892,5 +920,28 @@ if let UsbipClaimSource::Declared {
             manifest,
             BTreeMap::new(),
         )
+    }
+
+    #[test]
+    fn claim_source_round_trips_a_declared_payload() {
+        let payload =
+            r#"{"source":"declared","firewall_ref":"usbip-fw-work-yk-1-2","bind_ref":"usbip-bind-work-yk-1-2"}"#;
+        let source: UsbipClaimSource = serde_json::from_str(payload).unwrap();
+        assert_eq!(
+            source,
+            UsbipClaimSource::Declared {
+                firewall_ref: "usbip-fw-work-yk-1-2".to_owned(),
+                bind_ref: "usbip-bind-work-yk-1-2".to_owned(),
+            }
+        );
+        assert_eq!(serde_json::to_string(&source).unwrap(), payload);
+    }
+
+    #[test]
+    fn claim_source_round_trips_an_explicit_payload() {
+        let payload = r#"{"source":"explicit"}"#;
+        let source: UsbipClaimSource = serde_json::from_str(payload).unwrap();
+        assert_eq!(source, UsbipClaimSource::Explicit);
+        assert_eq!(serde_json::to_string(&source).unwrap(), payload);
     }
 }

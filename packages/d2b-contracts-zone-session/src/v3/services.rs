@@ -4,8 +4,9 @@
 //! fingerprint is derived from the canonical ordered method set, so adding,
 //! removing, or renaming a method cannot be mistaken for the old service.
 
+use d2b_contracts::wire_deserialize;
 use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use d2b_contracts_resource::v3::identity::ServiceName;
@@ -213,7 +214,7 @@ impl ServiceDescriptor {
         }
         if methods
             .iter()
-            .any(|method| BoundedText::parse(method.clone()).is_err())
+            .any(|method| BoundedText::parse(method.as_str()).is_err())
         {
             return Err(ServiceDescriptorError::InvalidMethod);
         }
@@ -262,17 +263,18 @@ impl ServiceDescriptor {
 
 redacted_debug!(ServiceDescriptor);
 
-impl<'de> Deserialize<'de> for ServiceDescriptor {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            package: ServiceName,
-            methods: Vec<String>,
-            fingerprint: SchemaFingerprint,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        let descriptor = Self::new(wire.package, wire.methods).map_err(serde::de::Error::custom)?;
+wire_deserialize!(
+    ServiceDescriptor,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        package: ServiceName,
+        methods: Vec<String>,
+        fingerprint: SchemaFingerprint,
+    },
+    wire,
+    {
+        let descriptor = Self::new(wire.package, wire.methods)
+            .map_err(serde::de::Error::custom)?;
         if descriptor.fingerprint != wire.fingerprint {
             return Err(serde::de::Error::custom(
                 ServiceDescriptorError::FingerprintMismatch,
@@ -280,7 +282,7 @@ impl<'de> Deserialize<'de> for ServiceDescriptor {
         }
         Ok(descriptor)
     }
-}
+);
 
 fn fingerprint(
     package: &ServiceName,

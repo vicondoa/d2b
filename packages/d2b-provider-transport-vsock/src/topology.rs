@@ -81,6 +81,16 @@ impl From<SettingsError> for TopologyError {
 
 impl ZoneLinkSpec {
     /// Validate the exact child-local topology.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TopologyError::ProviderMismatch`] when the selected
+    /// Provider is not the canonical vsock Provider,
+    /// [`TopologyError::ChildZoneMismatch`] when the child name does not
+    /// match the owning Zone, [`TopologyError::InvalidSettings`] when the
+    /// transport settings are invalid, and
+    /// [`TopologyError::CredentialsNotEmpty`] when the link carries
+    /// transport credentials.
     pub fn validate(&self, owning_child_zone: &str) -> Result<(), TopologyError> {
         if self.transport_provider_ref != crate::PROVIDER_REF {
             return Err(TopologyError::ProviderMismatch);
@@ -107,6 +117,11 @@ pub struct ParentStoreResourceCensus {
 
 impl ParentStoreResourceCensus {
     /// Refuse any parent-side resource row for a child-local transport.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TopologyError::ParentStoreReciprocalResource`] when the
+    /// parent store carries a reciprocal Provider or ZoneLink row.
     pub fn validate(self) -> Result<(), TopologyError> {
         if self.provider_rows != 0 || self.zone_link_rows != 0 {
             return Err(TopologyError::ParentStoreReciprocalResource);

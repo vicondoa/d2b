@@ -1,5 +1,4 @@
-use parking_lot::Mutex;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use d2b_contracts_resource::v3::{
     ResourceBundleGenerationId, ResourceGeneration, ResourceUid,
@@ -35,9 +34,23 @@ struct FakePortState {
 }
 
 impl FakePorts {
+    /// Take one recorder lock, failing loudly on poisoning.
+    ///
+    /// The recorded fields are `std::sync::Mutex`: the port methods are
+    /// driven by this file's `block_on` harness (plain `#[test]`
+    /// functions, with no runtime) and the test bodies read the records
+    /// synchronously, so they cannot be awaited async locks. This is the
+    /// single acquisition site and it carries the recorded exception.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn recorder<'a, T>(&self, recorder: &'a Mutex<T>) -> MutexGuard<'a, T> {
+        recorder
+            .lock()
+            .expect("a test-support recorder lock is never poisoned")
+    }
+
     fn push(&self, event: &'static str) -> Result<(), NetworkEffectError> {
-        self.inner.events.lock().push(event);
-        let mut configured = self.inner.effect_error.lock();
+        self.recorder(&self.inner.events).push(event);
+        let mut configured = self.recorder(&self.inner.effect_error);
         if configured.is_some_and(|error| {
             matches!(
                 (event, error),
@@ -54,7 +67,22 @@ impl FakePorts {
     }
 
     fn events(&self) -> Vec<&'static str> {
-        self.inner.events.lock().clone()
+        self.recorder(&self.inner.events).clone()
+    }
+
+    /// Script the error the next matching effect reports.
+    fn script_effect_error(&self, error: Option<NetworkEffectError>) {
+        *self.recorder(&self.inner.effect_error) = error;
+    }
+
+    /// The captured firewall generation identities, oldest first.
+    fn firewall_generations(&self) -> Vec<String> {
+        self.recorder(&self.inner.firewall_generations).clone()
+    }
+
+    /// The recorded mDNS values, oldest first.
+    fn mdns_values(&self) -> Vec<bool> {
+        self.recorder(&self.inner.mdns_values).clone()
     }
 }
 
@@ -79,9 +107,7 @@ impl NetworkEffectPort for FakePorts {
         &self,
         intent: &FirewallIntent,
     ) -> Result<FirewallDigest, NetworkEffectError> {
-        self.inner
-            .firewall_generations
-            .lock() // async-gate-allow: test-support recorder lock
+        self.recorder(&self.inner.firewall_generations)
             .push(intent.expected_generation_id().as_str().to_owned());
         self.push("firewall-apply")?;
         Ok(FirewallDigest::new([1; 32]))
@@ -161,7 +187,7 @@ impl NetworkResourcePort for FakePorts {
     }
 
     async fn reconcile_mdns(&self, enabled: bool) -> Result<(), NetworkEffectError> {
-        self.inner.mdns_values.lock().push(enabled); // async-gate-allow: test-support recorder lock
+        self.recorder(&self.inner.mdns_values).push(enabled);
         self.push("mdns")
     }
 
@@ -296,10 +322,7 @@ fn reconcile_enforces_effect_and_child_readiness_order() {
             "tap-delete",
         ]
     );
-    assert_eq!(
-        *effects.inner.firewall_generations.lock(),
-        [generation().as_str()]
-    );
+    assert_eq!(effects.firewall_generations(), [generation().as_str()]);
     assert_eq!(
         resources.events(),
         [
@@ -352,8 +375,7 @@ fn guest_and_agent_are_barriered_by_volume_and_attachment_readiness() {
 #[test]
 fn stale_configuration_generation_requeues_without_following_effects() {
     let effects = FakePorts::default();
-    *effects.inner.effect_error.lock() =
-        Some(NetworkEffectError::StaleConfigurationGeneration);
+    effects.script_effect_error(Some(NetworkEffectError::StaleConfigurationGeneration));
     let resources = FakePorts::default();
     let controller = NetworkReconciler::new(effects.clone(), resources.clone());
     assert!(matches!(
@@ -463,7 +485,7 @@ fn user_readiness_and_mdns_toggle_are_explicit() {
         block_on(controller.reconcile(&enabled)).unwrap(),
         ReconcileProgress::Ready
     );
-    assert_eq!(*resources.inner.mdns_values.lock(), [true]);
+    assert_eq!(resources.mdns_values(), [true]);
 }
 
 #[test]
@@ -483,7 +505,7 @@ fn east_west_requires_the_site_opt_in_before_any_effect() {
 #[test]
 fn transient_tap_delete_retains_finalizer_stage_for_retry() {
     let effects = FakePorts::default();
-    *effects.inner.effect_error.lock() = Some(NetworkEffectError::Transient);
+    effects.script_effect_error(Some(NetworkEffectError::Transient));
     let resources = FakePorts::default();
     let controller = NetworkReconciler::new(effects.clone(), resources);
     assert_eq!(

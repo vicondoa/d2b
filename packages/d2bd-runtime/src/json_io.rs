@@ -5,8 +5,14 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::typed_error::TypedError;
+use crate::typed_error::{TypedError, error_source};
 
+/// Resolve a bundle-relative artifact path within `base_dir`.
+///
+/// An absolute path is honored verbatim when it already exists; an
+/// absolute path that points nowhere falls back to `base_dir` + its file
+/// name, so a bundle self-reference keeps working after unpacking; a
+/// relative path joins `base_dir` unchanged.
 pub fn resolve_bundle_artifact_path(base_dir: &Path, raw_path: &str) -> PathBuf {
     let raw = Path::new(raw_path);
     if raw.is_absolute() && raw.exists() {
@@ -31,13 +37,21 @@ where
     let bytes = fs::read(path).map_err(|err| TypedError::InternalIo {
         context: format!("read {}", path.display()),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     serde_json::from_slice(&bytes).map_err(|err| TypedError::InternalIo {
         context: format!("decode {}", path.display()),
         detail: err.to_string(),
+        source: error_source(err),
     })
 }
 
+/// Load the bundle manifest as a JSON object, owning its top-level map.
+///
+/// # Errors
+///
+/// Returns `InternalIo` when the file cannot be read or decoded, or when
+/// the root value is not an object (the manifest schema requires one).
 pub fn load_manifest(
     path: &Path,
 ) -> Result<serde_json::Map<String, serde_json::Value>, TypedError> {
@@ -48,6 +62,7 @@ pub fn load_manifest(
         .ok_or_else(|| TypedError::InternalIo {
             context: format!("decode manifest {}", path.display()),
             detail: "manifest must be a JSON object".to_owned(),
+            source: None,
         })
 }
 
@@ -61,5 +76,6 @@ pub fn read_trimmed_file(path: &Path, context: &str) -> Result<String, TypedErro
         .map_err(|err| TypedError::InternalIo {
             context: context.to_owned(),
             detail: err.to_string(),
+            source: error_source(err),
         })
 }

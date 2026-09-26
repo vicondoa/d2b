@@ -13,7 +13,7 @@ use crate::{
 /// Daemon-owned notification effect boundary.
 pub trait NotificationProcessEffectPort: SourceProcessEffectPort {
     /// Release the authenticated ComponentSession authority after drain.
-    fn release_authority(&mut self) -> Result<(), &'static str>;
+    fn release_authority(&mut self) -> Result<(), crate::ProviderError>;
 }
 
 /// Stable failures from notification runtime admission and reconciliation.
@@ -61,6 +61,11 @@ pub struct NotificationRuntime<E> {
 
 impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
     /// Construct a runtime for one fixed notification Provider instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NotificationRuntimeError::ReconciliationFailed`] when the
+    /// placement controller cannot be constructed for the Provider.
     pub fn new(
         config: NotificationProviderConfig,
         effects: E,
@@ -100,7 +105,7 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
             .guest_sources()
             .iter()
             .find(|configured| configured.source_ref() == source_session.subject_ref())
-            .ok_or(NotificationError::InvalidOpaqueKey)?;
+            .ok_or(NotificationError::Denied)?;
         let guest_source =
             GuestSource::from_config_at_generation(config, source_session.generation())
                 .map_err(|_| NotificationError::InvalidOpaqueKey)?;
@@ -161,7 +166,7 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
             .map_err(|error| {
                 warn!(
                     provider = "notification-desktop",
-                    reason = error,
+                    reason = %error,
                     "notification source route reconcile failed"
                 );
                 NotificationRuntimeError::ReconciliationFailed
@@ -195,7 +200,7 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
             .map_err(|error| {
                 warn!(
                     provider = "notification-desktop",
-                    reason = error,
+                    reason = %error,
                     "notification source route reconcile failed"
                 );
                 NotificationRuntimeError::ReconciliationFailed
@@ -216,7 +221,7 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
             .map_err(|error| {
                 warn!(
                     provider = "notification-desktop",
-                    reason = error,
+                    reason = %error,
                     "notification drain reconcile failed"
                 );
                 NotificationRuntimeError::ReconciliationFailed
@@ -242,7 +247,7 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
             .map_err(|error| {
                 warn!(
                     provider = "notification-desktop",
-                    reason = error,
+                    reason = %error,
                     "notification drain reconcile failed"
                 );
                 NotificationRuntimeError::ReconciliationFailed
@@ -255,7 +260,7 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
             .map_err(|error| {
                 warn!(
                     provider = "notification-desktop",
-                    reason = error,
+                    reason = %error,
                     "notification finalize failed: authority release error"
                 );
                 NotificationRuntimeError::ReconciliationFailed
@@ -291,14 +296,14 @@ mod tests {
             &mut self,
             plan: &SourceReconcileResult,
             _lifecycle: &crate::NotificationLifecyclePlan,
-        ) -> Result<crate::SourceProcessEffectReceipt, &'static str> {
+        ) -> Result<crate::SourceProcessEffectReceipt, crate::ProviderError> {
             self.plans += 1;
             Ok(crate::SourceProcessEffectReceipt::complete(plan))
         }
     }
 
     impl NotificationProcessEffectPort for Effects {
-        fn release_authority(&mut self) -> Result<(), &'static str> {
+        fn release_authority(&mut self) -> Result<(), crate::ProviderError> {
             self.authority_releases += 1;
             Ok(())
         }

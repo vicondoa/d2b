@@ -43,7 +43,7 @@ use d2b_contracts_provider::v3::credential::{
 use d2b_contracts_provider::v3::credential_controller::CredentialProviderKind;
 use d2b_contracts_resource::v3::{
     CanonicalJsonObject, CanonicalJsonValue, ControllerGeneration, DesiredLifecycle, ResourceRef,
-    ResourceSpec, ResourceUid,
+    ResourceSpec, ResourceUid, ZoneId,
     execution_policy::{BoundedToken, BudgetSpec, DurationMs, ExecutionDomain},
     identity::ReconnectGeneration,
     process::{
@@ -261,14 +261,16 @@ pub struct CredentialLeaseFacts {
 /// the same seam (R4).
 #[async_trait::async_trait]
 pub trait CredentialDriverEffects: Send + Sync + 'static {
-    /// Provider + execution-target facts. `None` when the Provider row is
-    /// not observable to this daemon (the old controller was never started
-    /// without it; deletion still fails closed rather than guessing).
+    /// Provider + execution-target facts. `Ok(None)` when the Provider row
+    /// is not observable to this daemon (the old controller was never
+    /// started without it; deletion still fails closed rather than
+    /// guessing); `Err` when the dependency read itself failed (a manager
+    /// RPC failure), so absence is never answered for a failed read.
     async fn dependency_facts(
         &self,
         provider_ref: &ResourceRef,
         execution_ref: &ResourceRef,
-    ) -> Option<CredentialDependencyFacts>;
+    ) -> Result<Option<CredentialDependencyFacts>, CredentialResourceRuntimeError>;
 
     /// Provider-side lease facts for one Credential row.
     async fn lease_facts(&self, credential_ref: &ResourceRef) -> Option<CredentialLeaseFacts>;
@@ -292,7 +294,7 @@ pub trait CredentialDriverEffects: Send + Sync + 'static {
 /// and the zone-authority controller generation (KTD7).
 pub struct CredentialDriverArgs {
     /// The zone the plane serves.
-    pub zone: String,
+    pub zone: ZoneId,
     /// Zone controller generation folded into every revocation request
     /// (old `policy_snapshot.controller_generation`).
     pub controller_generation: ControllerGeneration,
@@ -339,9 +341,8 @@ impl ResourceDriverFactory for CredentialDriverFactory {
 // ---------------------------------------------------------------------------
 
 /// One Credential resource's driver.
-#[derive(Clone)]
 pub struct CredentialDriver {
-    zone: String,
+    zone: ZoneId,
     controller_generation: ControllerGeneration,
     effects: Arc<dyn CredentialDriverEffects>,
 }
@@ -454,11 +455,12 @@ impl CredentialDriver {
             "Guest" => PlacementBinding::GuestAgent,
             _ => return Err(invalid()),
         };
-        let zone_ref = format!("Zone/{}", self.zone);
+        let zone_ref = ResourceRef::parse(&format!("Zone/{}", self.zone.as_str()))
+            .expect("a validated zone id renders a canonical zone reference");
         let placement = d2b_provider_credential_managed_identity::ManagedIdentityPlacement::new(
             placement,
             execution_ref.clone(),
-            ResourceRef::parse(&zone_ref).map_err(|_| invalid())?,
+            zone_ref,
         )
         .map_err(|_| invalid())?;
         let controller =
@@ -641,13 +643,19 @@ impl CredentialDriver {
             return Err(unconfirmed());
         };
         let execution_ref = self.execution_ref(spec, op)?.clone();
-        let Some(facts) = self
+        // Absence and a failed dependency read both fail closed: no
+        // authenticated revocation may run without the Provider facts
+        // (R28), and a read failure must not be answered as absence.
+        let facts = match self
             .effects
             .dependency_facts(provider_ref, &execution_ref)
             .await
-        else {
-            ctx.set_status(CredentialDriverStatus::RevocationUncertain { evidence: None });
-            return Err(unconfirmed());
+        {
+            Ok(Some(facts)) => facts,
+            Ok(None) | Err(_) => {
+                ctx.set_status(CredentialDriverStatus::RevocationUncertain { evidence: None });
+                return Err(unconfirmed());
+            }
         };
         let rotation_generation = lease
             .map(|facts| facts.rotation_generation)
@@ -783,7 +791,7 @@ impl ResourceDriver for CredentialDriver {
             return Ok(RecoveryOutcome::Missing);
         }
         let agent_ref = self.agent_ref(ctx, DriverOp::Recover)?;
-        let agent_key = ResourceKey::new(&self.zone, PROCESS_TYPE_NAME, agent_ref.name().as_str());
+        let agent_key = ResourceKey::new(self.zone.as_str(), PROCESS_TYPE_NAME, agent_ref.name().as_str());
         let present = self
             .owned_processes(ctx, DriverOp::Recover)
             .await?
@@ -808,16 +816,22 @@ impl ResourceDriver for CredentialDriver {
         let (envelope, spec) = self.decoded_spec(ctx, DriverOp::Reconcile)?;
         let (provider_ref, kind) = self.provider_of(&envelope, DriverOp::Reconcile)?;
         let execution_ref = self.execution_ref(&spec, DriverOp::Reconcile)?.clone();
-        let Some(facts) = self
+        // Absence and a failed dependency read both report the Provider
+        // unavailable (retryable): a read failure must not be answered as
+        // absence, and neither may reconcile against guessed readiness.
+        let facts = match self
             .effects
             .dependency_facts(&provider_ref, &execution_ref)
             .await
-        else {
-            ctx.set_status(CredentialDriverStatus::ProviderUnavailable);
-            return Err(self.error(
-                CredentialDriverErrorKind::ProviderUnavailable,
-                DriverOp::Reconcile,
-            ));
+        {
+            Ok(Some(facts)) => facts,
+            Ok(None) | Err(_) => {
+                ctx.set_status(CredentialDriverStatus::ProviderUnavailable);
+                return Err(self.error(
+                    CredentialDriverErrorKind::ProviderUnavailable,
+                    DriverOp::Reconcile,
+                ));
+            }
         };
         if !facts.provider_ready {
             ctx.set_status(CredentialDriverStatus::ProviderUnavailable);
@@ -842,7 +856,7 @@ impl ResourceDriver for CredentialDriver {
         }
         let child = self.agent_child(ctx, &spec, &provider_ref, &facts, DriverOp::Reconcile)?;
         let agent_ref = self.agent_ref(ctx, DriverOp::Reconcile)?;
-        let agent_key = ResourceKey::new(&self.zone, PROCESS_TYPE_NAME, agent_ref.name().as_str());
+        let agent_key = ResourceKey::new(self.zone.as_str(), PROCESS_TYPE_NAME, agent_ref.name().as_str());
         let owned = self.owned_processes(ctx, DriverOp::Reconcile).await?;
         match owned.iter().find(|row| row.key == agent_key) {
             Some(row) if row.deleting => {
@@ -1038,7 +1052,7 @@ mod tests {
     use d2b_contracts_provider::v3::credential::CredentialLeaseState;
     use d2b_contracts_resource::v3::identity::ReconnectGeneration;
     use d2b_contracts_resource::v3::process::ProcessSpec;
-    use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ResourceSpec};
+    use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ResourceSpec, ZoneId};
     use d2b_resource_runtime::context::{
         ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, WatchId,
         WatchRegistration,
@@ -1049,7 +1063,6 @@ mod tests {
     use d2b_resource_runtime::error::{FailureClass, ResourceError};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
     use d2b_resource_runtime::spec_store::EnsureOutcome;
-    use d2b_resource_runtime::target::TargetHandle;
     use parking_lot::Mutex;
 
     use crate::session::{
@@ -1084,16 +1097,19 @@ mod tests {
             })
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn with_child(log: Log, child: StoredDesiredResource) -> Arc<Self> {
             let manager = Self::new(log);
             manager.children.lock().push(child);
             manager
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn ensured(&self) -> Vec<ChildEnsure> {
             self.ensured.lock().clone()
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn children(&self) -> Vec<StoredDesiredResource> {
             self.children.lock().clone()
         }
@@ -1101,6 +1117,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ManagerEndpoint for RecordingManager {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         async fn ensure_child(
             &self,
             parent: &ResourceKey,
@@ -1138,6 +1155,7 @@ mod tests {
             }
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         async fn get(
             &self,
             key: &ResourceKey,
@@ -1162,6 +1180,7 @@ mod tests {
             Ok(None)
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
             self.log
                 .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
@@ -1174,6 +1193,7 @@ mod tests {
             Ok(())
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         async fn list_owned(
             &self,
             _owner_uid: [u8; 16],
@@ -1254,7 +1274,6 @@ mod tests {
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
         ResourceContext::new(
             row,
-            TargetHandle::Host,
             credential_spec_decoder(),
             manager,
             Arc::new(NullRequeue),
@@ -1268,7 +1287,7 @@ mod tests {
         // seam from the facets (the factory), tests drive the behavior
         // directly over the recording double.
         CredentialDriver {
-            zone: "dev".to_owned(),
+            zone: ZoneId::parse("dev").unwrap(),
             controller_generation: ControllerGeneration::new(1).unwrap(),
             effects,
         }
@@ -1286,7 +1305,7 @@ mod tests {
     #[test]
     fn factory_registers_only_the_credential_resource_type() {
         let factory = CredentialDriverFactory::new(CredentialDriverArgs {
-            zone: "dev".to_owned(),
+            zone: ZoneId::parse("dev").unwrap(),
             controller_generation: ControllerGeneration::new(1).unwrap(),
             facets: facets(),
         });
@@ -1298,7 +1317,7 @@ mod tests {
     #[tokio::test]
     async fn factory_created_driver_validates_through_the_erased_boundary() {
         let factory = CredentialDriverFactory::new(CredentialDriverArgs {
-            zone: "dev".to_owned(),
+            zone: ZoneId::parse("dev").unwrap(),
             controller_generation: ControllerGeneration::new(1).unwrap(),
             facets: facets(),
         });

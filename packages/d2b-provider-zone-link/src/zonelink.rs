@@ -10,9 +10,9 @@ use crate::zone_links::{ZoneLinkCursor, ZoneLinkError};
 use d2b_contracts_resource::v3::SchemaFingerprint;
 
 pub use crate::zone_links::{
-    BootstrapPsk, SealedEnrollment, ZONE_LINK_METRIC_LABEL_KEYS, ZoneLinkEffect, ZoneLinkEvent,
-    ZoneLinkHandler, ZoneLinkKeyPolicy, ZoneLinkLimits, ZoneLinkMetricSample, ZoneLinkPhase,
-    ZoneLinkRecord, ZoneLinkRouteBinding, ZoneLinkSessionState, ZoneLinkStatus,
+    BootstrapPsk, SealedEnrollment, ZoneLinkEffect, ZoneLinkEvent, ZoneLinkHandler,
+    ZoneLinkKeyPolicy, ZoneLinkLimits, ZoneLinkPhase, ZoneLinkRecord, ZoneLinkRouteBinding,
+    ZoneLinkSessionState, ZoneLinkStatus,
 };
 pub use d2b_contracts_zone_session::v3::zone_routing::{
     ZoneLinkControllerGeneration, ZoneLinkRouteAdmissionRequest,
@@ -60,6 +60,11 @@ pub struct ZoneLinkOwnerProof {
 
 impl ZoneLinkOwnerProof {
     /// Bind a cursor owner to one authority generation and digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZoneLinkAdoptionError::CursorInvalid`] when the authority
+    /// generation is zero.
     pub fn new(
         authority_generation: u64,
         owner_digest: SchemaFingerprint,
@@ -74,6 +79,11 @@ impl ZoneLinkOwnerProof {
     }
 
     /// Build an owner proof from a canonical digest string.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZoneLinkAdoptionError::CursorInvalid`] when the digest is
+    /// not a canonical fingerprint or the authority generation is zero.
     pub fn from_digest(
         authority_generation: u64,
         digest: impl Into<String>,
@@ -194,6 +204,15 @@ impl ZoneLinkCursorAuthority {
     /// More than one durable observation is ambiguous, even when observations
     /// happen to carry the same proof and cursor. The method never chooses a
     /// cursor by recency or map iteration order.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`ZoneLinkAdoption`] quarantine carrying
+    /// [`ZoneLinkAdoptionError::OwnerProofMissing`] when no observation
+    /// exists, [`ZoneLinkAdoptionError::OwnerProofMismatch`] when the
+    /// observation's proof differs, and
+    /// [`ZoneLinkAdoptionError::AmbiguousOwner`] when more than one
+    /// observation exists.
     pub fn adopt(
         &mut self,
         observations: impl IntoIterator<Item = ZoneLinkCursorRecord>,
@@ -232,6 +251,11 @@ impl ZoneLinkCursorAuthority {
     }
 
     /// Borrow the adopted cursor or fail closed while quarantined.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`ZoneLinkAdoptionError`] recorded by the quarantine
+    /// when no cursor was adopted.
     pub fn cursor(&self) -> Result<ZoneLinkCursor, ZoneLinkAdoptionError> {
         self.adoption
             .record()
@@ -325,15 +349,6 @@ impl ZoneLinkController {
     pub const fn cursor_authority(&self) -> &ZoneLinkCursorAuthority {
         &self.cursor_authority
     }
-}
-
-/// Map the existing ZoneLink state machine's transport refusal into the
-/// authority-owned quarantine vocabulary where appropriate.
-pub const fn transport_error_is_quarantine(error: ZoneLinkError) -> bool {
-    matches!(
-        error,
-        ZoneLinkError::StaleCommitProof | ZoneLinkError::ReconcileInFlight
-    )
 }
 
 #[cfg(test)]
@@ -551,12 +566,4 @@ mod tests {
             Err(ZoneLinkError::RouteAdmissionCursorUnavailable)
         );
     }
-#[test]
-    fn transport_error_is_quarantine_maps_only_stale_and_inflight_errors() {
-        assert!(transport_error_is_quarantine(ZoneLinkError::StaleCommitProof));
-        assert!(transport_error_is_quarantine(ZoneLinkError::ReconcileInFlight));
-        assert!(!transport_error_is_quarantine(
-            ZoneLinkError::RouteAdmissionBindingInvalid
-        ));
-        assert!(!transport_error_is_quarantine(ZoneLinkError::BootstrapPskInvalidated));
-    }}
+}

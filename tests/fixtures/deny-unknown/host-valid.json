@@ -92,7 +92,7 @@
       "mode": "0644",
       "owner": "root"
     },
-    "reloadBehavior": "nmcli general reload"
+    "reloadBehavior": "atomic-reload"
   },
   "nftables": {
     "chains": [

@@ -108,6 +108,12 @@ impl SystemCoreStatusEmitter {
 
     /// Emit a validated Zone status containing exactly one Host and User
     /// system-core record.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ZoneStatusProjectionError::Contract` when the input
+    /// carries more than one system-core host or user handler record, or
+    /// when the zone status is rejected by the resource projection.
     pub fn emit(
         &self,
         input: ZoneStatusInput,

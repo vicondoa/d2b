@@ -69,6 +69,15 @@ impl<S> FramedVsockTransport<S> {
     }
 
     /// Read one complete framed record.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportError::Closed`] after the transport was closed,
+    /// [`TransportError::InvalidFrame`] for an empty frame,
+    /// [`TransportError::FrameTooLarge`] when the declared length exceeds
+    /// the bound, and [`TransportError::Disconnected`],
+    /// [`TransportError::Truncated`], or [`TransportError::Io`] when the
+    /// underlying stream fails mid-record.
     pub async fn read_frame(&mut self) -> Result<Vec<u8>, TransportError>
     where
         S: AsyncRead + Unpin,
@@ -94,6 +103,13 @@ impl<S> FramedVsockTransport<S> {
     }
 
     /// Write one complete framed record.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportError::Closed`] after the transport was closed,
+    /// [`TransportError::InvalidFrame`] for an empty payload,
+    /// [`TransportError::FrameTooLarge`] when the payload exceeds the
+    /// bound, and [`TransportError::Io`] when the underlying stream fails.
     pub async fn write_frame(&mut self, bytes: &[u8]) -> Result<(), TransportError>
     where
         S: AsyncWrite + Unpin,

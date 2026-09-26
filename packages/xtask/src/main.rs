@@ -1,10 +1,14 @@
 #![recursion_limit = "256"]
 
 use std::{
+    collections::BTreeMap,
     env, fs,
     path::{Path, PathBuf},
+    sync::LazyLock,
     time::{SystemTime, UNIX_EPOCH},
 };
+
+use syn::spanned::Spanned;
 
 use clap_complete::{
     generate,
@@ -23,12 +27,15 @@ use d2b_contracts_control::cli_output::{
 use d2b_contracts_control::public_wire;
 use d2b_contracts_control::unsafe_local_wire::UnsafeLocalHelperWireSchema;
 use d2b_contracts_resource::v3::storage::ZoneStoreStorageRow;
+use d2b_contracts::{
+    error::Error,
+    unsafe_local_workloads::UnsafeLocalWorkloadsJson,
+};
 use d2b_core::{
-    allocator_config::AllocatorJson, bundle::Bundle, closures::ClosureMetadata, error::Error,
+    allocator_config::AllocatorJson, bundle::Bundle, closures::ClosureMetadata,
     host::HostJson, manifest_v04::ManifestV04, sandbox_profile::SandboxProfile,
     privileges::PrivilegesJson, processes::ProcessesJson, site::SiteJson,
     storage::StorageJson, storage_lifecycle::StorageLifecycleReport, sync::SyncJson,
-    unsafe_local_workloads::UnsafeLocalWorkloadsJson,
 };
 mod diagnostic_redaction;
 use schemars::schema::RootSchema;
@@ -102,6 +109,11 @@ struct RustItem {
     line: usize,
     fields: Vec<Field>,
     variants: Vec<Variant>,
+    /// The fields of the struct this type's hand-written `JsonSchema`
+    /// publishes, when it delegates to one. The table documents the wire,
+    /// so a type that serializes to a different shape than it holds in
+    /// memory is documented from its published schema instead.
+    published_fields: Option<Vec<Field>>,
 }
 
 fn main() -> std::process::ExitCode {
@@ -369,14 +381,17 @@ fn gen_resource_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
 
     let out_file = out_dir.join("d2b_resource_v3_ttrpc.rs");
     sanitize_generated_rust(&out_file)?;
-    // The generated ttrpc surface references `super::d2b_resource_v3::...`
-    // for the message types, so the module file carries the alias beside the
-    // ttrpc module. Generator-owned like the contracts-resource side's
+    // The compiler emits `super::d2b_resource_v3::...` message paths that
+    // used to resolve through an alias module beside the ttrpc module; the
+    // alias is gone, so the paths are rewritten to the canonical
+    // d2b_contracts_resource path (see rewrite_ttrpc_message_paths).
+    // Generator-owned like the contracts-resource side's
     // `write_contract_generated_mod`, so the generated dir has no
     // hand-editable gap.
+    rewrite_ttrpc_message_paths(&out_file)?;
     fs::write(
         out_dir.join("mod.rs"),
-        "// @generated\n\npub mod d2b_resource_v3 {\n    pub use d2b_contracts_resource::resource_proto::*;\n}\n\npub mod d2b_resource_v3_ttrpc;\n",
+        "// @generated\n\npub mod d2b_resource_v3_ttrpc;\n",
     )?;
     Ok(vec![out_file, out_dir.join("mod.rs")])
 }
@@ -426,9 +441,10 @@ fn message_only_proto(
     let mut out = String::new();
     let mut skipping_service = false;
     let mut depth = 0_i32;
+    let service_marker = format!("service {service_name} ");
     for line in proto.lines() {
         let trimmed = line.trim_start();
-        if !skipping_service && trimmed.starts_with(&format!("service {service_name} ")) {
+        if !skipping_service && trimmed.starts_with(&service_marker) {
             skipping_service = true;
         }
         if skipping_service {
@@ -456,6 +472,9 @@ fn sanitize_generated_rust(path: &Path) -> Result<(), Box<dyn std::error::Error>
     generated = generated.replace("#![allow(unsafe_code)]\n", "");
     generated = generated.replace("#![allow(unknown_lints)]\n", "");
     generated = generated.replace("#![allow(clippy::all)]\n", "");
+    // Matches the ttrpc-compiler 0.8.0 marker verbatim, including its
+    // upstream spelling: the committed binding file must stay byte-stable
+    // across regeneration, so this strip is load-bearing, not dead code.
     generated = generated.replace("#![allow(clipto_camel_casepy)]\n", "");
     generated = generated.replace(
         "#![cfg_attr(rustfmt, rustfmt_skip)]\n",
@@ -465,6 +484,81 @@ fn sanitize_generated_rust(path: &Path) -> Result<(), Box<dyn std::error::Error>
         "// https://github.com/rust-lang/rust-clippy/issues/702\n\n",
         "#![allow(clippy::bool_comparison)]\n#![allow(clippy::derivable_impls)]\n#![allow(clippy::match_like_matches_macro)]\n#![allow(clippy::match_ref_pats)]\n#![allow(clippy::needless_borrow)]\n#![allow(clippy::redundant_static_lifetimes)]\n#![allow(clippy::vec_init_then_push)]\n\n",
     );
+    fs::write(path, generated)?;
+    Ok(())
+}
+
+/// Local stand-in for `::ttrpc::async_request_handler!` (ttrpc 0.9.0) that
+/// takes the full request-type path instead of a module ident: the upstream
+/// macro hardcodes `super::$server::`, which no longer resolves once the
+/// alias module is gone. The body mirrors the upstream macro verbatim.
+const TTRPC_HANDLER_MACRO: &str = r#"macro_rules! async_request_handler {
+    ($class: ident, $ctx: ident, $req: ident, $req_type: path, $req_fn: ident) => {
+        let mut req = <$req_type>::new();
+        {
+            let mut s = CodedInputStream::from_bytes(&$req.payload);
+            req.merge_from(&mut s)
+                .map_err(::ttrpc::err_to_others!(e, ""))?;
+        }
+
+        let mut res = ::ttrpc::Response::new();
+        match $class.service.$req_fn(&$ctx, req).await {
+            Ok(rep) => {
+                res.set_status(::ttrpc::get_status(::ttrpc::Code::OK, "".to_string()));
+                res.payload.reserve(rep.compute_size() as usize);
+                let mut s = protobuf::CodedOutputStream::vec(&mut res.payload);
+                rep.write_to(&mut s)
+                    .map_err(::ttrpc::err_to_others!(e, ""))?;
+                s.flush().map_err(::ttrpc::err_to_others!(e, ""))?;
+            }
+            Err(x) => match x {
+                ::ttrpc::Error::RpcStatus(s) => {
+                    res.set_status(s);
+                }
+                _ => {
+                    res.set_status(::ttrpc::get_status(
+                        ::ttrpc::Code::UNKNOWN,
+                        format!("{:?}", x),
+                    ));
+                }
+            },
+        }
+
+        return Ok(res);
+    };
+}"#;
+
+/// Rewrites the ttrpc-compiler message-module references to the canonical
+/// `d2b_contracts_resource::resource_proto` path.
+///
+/// The compiler emits `super::d2b_resource_v3::...` paths in every method
+/// signature and `::ttrpc::async_request_handler!(..., d2b_resource_v3, ...)`
+/// invocations whose `$server` fragment the ttrpc macro expands to
+/// `super::$server::`. Both assumed a `d2b_resource_v3` alias module beside
+/// the ttrpc module; the alias is gone, so the paths are rewritten to the
+/// canonical message-module path and the invocations are redirected to the
+/// local macro above. The ttrpc protocol bytes are untouched - this is a
+/// Rust path rewrite only.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn rewrite_ttrpc_message_paths(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut generated = fs::read_to_string(path)?;
+    generated = generated.replace(
+        "super::d2b_resource_v3::",
+        "d2b_contracts_resource::resource_proto::",
+    );
+    generated = generated.replace(
+        "::ttrpc::async_request_handler!(self, ctx, req, d2b_resource_v3, ",
+        "async_request_handler!(self, ctx, req, d2b_contracts_resource::resource_proto::",
+    );
+    // macro_rules! must precede its uses textually, so the local handler
+    // macro is injected after the import block. The anchor is load-bearing:
+    // if the compiler stops emitting it, fail instead of silently leaving
+    // the invocations unqualified.
+    const ANCHOR: &str = "use async_trait::async_trait;\n";
+    if !generated.contains(ANCHOR) {
+        return Err("generated ttrpc file lost the import anchor".into());
+    }
+    generated = generated.replace(ANCHOR, &format!("{ANCHOR}\n{TTRPC_HANDLER_MACRO}\n"));
     fs::write(path, generated)?;
     Ok(())
 }
@@ -491,23 +585,24 @@ fn redact_generated_protobuf_formatting(path: &Path) -> Result<(), Box<dyn std::
 
     for message_name in &message_names {
         let raw_display = format!(
-            "impl ::std::fmt::Display for {message_name} {{\n\
-             \x20   fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{\n\
-             \x20       ::protobuf::text_format::fmt(self, f)\n\
-             \x20   }}\n\
-             }}"
+            r##"impl ::std::fmt::Display for {message_name} {{
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{
+        ::protobuf::text_format::fmt(self, f)
+    }}
+}}"##
         );
         let redacted_formatting = format!(
-            "impl ::std::fmt::Debug for {message_name} {{\n\
-             \x20   fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{\n\
-             \x20       f.write_str(\"{message_name}(<redacted>)\")\n\
-             \x20   }}\n\
-             }}\n\n\
-             impl ::std::fmt::Display for {message_name} {{\n\
-             \x20   fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{\n\
-             \x20       f.write_str(\"{message_name}(<redacted>)\")\n\
-             \x20   }}\n\
-             }}"
+            r##"impl ::std::fmt::Debug for {message_name} {{
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{
+        f.write_str("{message_name}(<redacted>)")
+    }}
+}}
+
+impl ::std::fmt::Display for {message_name} {{
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{
+        f.write_str("{message_name}(<redacted>)")
+    }}
+}}"##
         );
         if !generated.contains(&raw_display) {
             return Err(format!(
@@ -555,7 +650,7 @@ where
     }
 }
 
-fn repo_root() -> Result<&'static Path, Box<dyn std::error::Error>> {
+static REPO_ROOT: LazyLock<Result<PathBuf, String>> = LazyLock::new(|| {
     let mut candidates = Vec::new();
     for variable in ["D2B_REPO_ROOT", "TEST_SRCDIR", "RUNFILES_DIR"] {
         if let Some(base) = std::env::var_os(variable).map(PathBuf::from) {
@@ -579,14 +674,20 @@ fn repo_root() -> Result<&'static Path, Box<dyn std::error::Error>> {
                 && path.join("BUILD.bazel").is_file()
                 && path.join("flake.nix").is_file()
             {
-                return Ok(Box::leak(path.into_boxed_path()));
+                return Ok(path);
             }
             if !path.pop() {
                 break;
             }
         }
     }
-    Err("cannot locate repo root".into())
+    Err("cannot locate repo root".to_owned())
+});
+
+fn repo_root() -> Result<&'static Path, Box<dyn std::error::Error>> {
+    REPO_ROOT
+        .as_deref()
+        .map_err(|message| message.clone().into())
 }
 
 fn schema_documents() -> Vec<(&'static str, RootSchema)> {
@@ -645,7 +746,7 @@ fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         .join(SCHEMA_VERSION);
     fs::create_dir_all(&out_dir)?;
     let schemas = schema_documents();
-    let mut written = write_schemas(&out_dir, &schemas)?;
+    let mut written = write_schemas(&out_dir, schemas)?;
     let delivery_dir = repo_root.join("docs/reference/schemas/delivery");
     fs::create_dir_all(&delivery_dir)?;
     written.push(write_recovery_schema(&delivery_dir)?);
@@ -760,7 +861,7 @@ fn gen_zone_storage_schema() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>>
     fs::create_dir_all(&out_dir)?;
     write_schemas(
         &out_dir,
-        &[(
+        vec![(
             "zone-storage.json",
             schemars::schema_for!(ZoneStoreStorageRow),
         )],
@@ -791,7 +892,7 @@ fn gen_cli_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         ),
     ];
 
-    write_schemas(&out_dir, &schemas)
+    write_schemas(&out_dir, Vec::from(schemas))
 }
 
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
@@ -957,21 +1058,20 @@ fn write_manpage(path: &Path, rendered: Vec<u8>) -> Result<(), Box<dyn std::erro
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn write_schemas(
     out_dir: &Path,
-    schemas: &[(&str, RootSchema)],
+    schemas: Vec<(&str, RootSchema)>,
 ) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let mut written = Vec::with_capacity(schemas.len());
-    for (file_name, schema) in schemas {
+    for (file_name, mut schema) in schemas {
         let path = out_dir.join(file_name);
-        fs::write(&path, render_schema(schema)?)?;
+        fs::write(&path, render_schema(&mut schema)?)?;
         written.push(path);
     }
     Ok(written)
 }
 
-fn render_schema(schema: &RootSchema) -> Result<String, serde_json::Error> {
-    let mut schema = schema.clone();
+fn render_schema(schema: &mut RootSchema) -> Result<String, serde_json::Error> {
     schema.meta_schema = Some("https://json-schema.org/draft/2020-12/schema".to_owned());
-    let mut data = serde_json::to_string_pretty(&schema)?;
+    let mut data = serde_json::to_string_pretty(schema)?;
     data.push('\n');
     Ok(data)
 }
@@ -1038,14 +1138,19 @@ fn parse_rust_items(
         .to_string_lossy()
         .replace('\\', "/");
     let syntax: syn::File = syn::parse_str(&text)?;
+    let offsets = LineOffsets::new(&text);
 
     let mut items = Vec::new();
     let mut collector = IpcItemCollector {
         text: &text,
+        offsets: &offsets,
         file_rel: &file_rel,
         items: &mut items,
+        struct_fields: BTreeMap::new(),
+        schema_delegates: Vec::new(),
     };
-    syn::visit::Visit::visit_file(&mut collector, &syntax);
+    syn::visit::visit_file(&mut collector, &syntax);
+    collector.resolve_published_shapes();
     Ok(items)
 }
 
@@ -1056,45 +1161,124 @@ fn parse_rust_items(
 /// collected, exactly like the line scanner's skip.
 struct IpcItemCollector<'a> {
     text: &'a str,
+    offsets: &'a LineOffsets,
     file_rel: &'a str,
     items: &'a mut Vec<RustItem>,
+    /// The named fields of every struct in the file, public or private, so
+    /// a `JsonSchema` delegate resolves to the shape it publishes.
+    struct_fields: BTreeMap<String, Vec<Field>>,
+    /// `(owner, candidate)` pairs named by a hand-written `JsonSchema`
+    /// impl, resolved against `struct_fields` after the file is walked.
+    schema_delegates: Vec<(String, String)>,
+}
+
+impl IpcItemCollector<'_> {
+    /// Point every collected type at the fields its hand-written
+    /// `JsonSchema` publishes. Resolved after the walk so a delegate
+    /// declared below its impl still counts.
+    fn resolve_published_shapes(&mut self) {
+        for (owner, candidate) in std::mem::take(&mut self.schema_delegates) {
+            let Some(published) = self.struct_fields.get(&candidate).cloned() else {
+                continue;
+            };
+            for item in self.items.iter_mut() {
+                if item.name == owner {
+                    item.published_fields = Some(published.clone());
+                }
+            }
+        }
+    }
 }
 
 impl<'ast> syn::visit::Visit<'ast> for IpcItemCollector<'_> {
     fn visit_item_struct(&mut self, item: &'ast syn::ItemStruct) {
+        let fields = match &item.fields {
+            syn::Fields::Named(fields) => collect_named_fields(self.text, self.offsets, fields),
+            _ => Vec::new(),
+        };
+        let name = item.ident.to_string();
+        if !fields.is_empty() {
+            self.struct_fields.insert(name.clone(), fields.clone());
+        }
         if !matches!(item.vis, syn::Visibility::Public(_)) {
             return;
         }
-        // Tuple and unit structs carry no brace; their body is empty.
-        let body = match &item.fields {
-            syn::Fields::Named(fields) => slice_source(
-                self.text,
-                fields.brace_token.span.open(),
-                fields.brace_token.span.close(),
-            ),
-            _ => String::new(),
-        };
-        let fields = parse_fields(&extract_body(&body));
         self.items.push(RustItem {
-            name: item.ident.to_string(),
+            name,
             kind: ItemKind::Struct,
             file_rel: self.file_rel.to_owned(),
             line: item.struct_token.span.start().line,
             fields,
             variants: Vec::new(),
+            published_fields: None,
         });
+    }
+
+    /// A type that hand-writes `JsonSchema` publishes another type's shape.
+    /// Record the pair so the response tables document the published wire
+    /// rather than the in-memory struct a hand-written `Serialize` reads
+    /// from.
+    fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+        if !item.trait_.as_ref().is_some_and(|(_, path, _)| {
+            path.segments
+                .last()
+                .is_some_and(|last| last.ident == "JsonSchema")
+        })
+        {
+            return;
+        }
+        let syn::Type::Path(owner) = &*item.self_ty else {
+            return;
+        };
+        if owner.qself.is_some() || owner.path.segments.len() != 1 {
+            return;
+        }
+        let owner = owner.path.segments[0].ident.to_string();
+        let mut delegate = None;
+        syn::visit::visit_item_impl(self, item);
+        let mut finder = SchemaDelegateFinder {
+            owner: &owner,
+            delegate: &mut delegate,
+        };
+        syn::visit::visit_item_impl(&mut finder, item);
+        if let Some(delegate) = delegate {
+            self.schema_delegates.push((owner, delegate));
+        }
     }
 
     fn visit_item_enum(&mut self, item: &'ast syn::ItemEnum) {
         if !matches!(item.vis, syn::Visibility::Public(_)) {
             return;
         }
-        let body = slice_source(
-            self.text,
-            item.brace_token.span.open(),
-            item.brace_token.span.close(),
-        );
-        let variants = parse_variants(&extract_body(&body));
+        let variants = item
+            .variants
+            .iter()
+            .map(|variant| {
+                let name = variant.ident.to_string();
+                let shape = match &variant.fields {
+                    syn::Fields::Unit => "unit".to_string(),
+                    syn::Fields::Named(fields) => {
+                        let fields = collect_named_fields(self.text, self.offsets, fields);
+                        if fields.is_empty() {
+                            "struct {}".to_string()
+                        } else {
+                            format!("struct {{ {} }}", render_fields(&fields))
+                        }
+                    }
+                    syn::Fields::Unnamed(fields) => {
+                        let tys = fields
+                            .unnamed
+                            .iter()
+                            .map(|field| {
+                                normalize_ws(&slice_span(self.text, self.offsets, Spanned::span(&field.ty)))
+                            })
+                            .collect::<Vec<_>>();
+                        format!("({})", tys.join(", "))
+                    }
+                };
+                Variant { name, shape }
+            })
+            .collect();
         self.items.push(RustItem {
             name: item.ident.to_string(),
             kind: ItemKind::Enum,
@@ -1102,144 +1286,85 @@ impl<'ast> syn::visit::Visit<'ast> for IpcItemCollector<'_> {
             line: item.enum_token.span.start().line,
             fields: Vec::new(),
             variants,
+            published_fields: None,
         });
     }
 }
 
-/// The original source text between a braced group's delimiters (the item's
-/// body between its `{` and `}`), so the field/variant extraction below sees
-/// exactly the bytes the previous line-join produced.
-fn slice_source(text: &str, open: proc_macro2::Span, close: proc_macro2::Span) -> String {
-    let start = open.start();
-    let end = close.end();
-    text[line_col_to_offset(text, start.line, start.column)
-        ..line_col_to_offset(text, end.line, end.column)]
-        .to_owned()
+/// Finds the type a hand-written `JsonSchema` impl names first in its body,
+/// so the response tables can document the published wire rather than the
+/// in-memory struct a hand-written `Serialize` reads from. Whether the name
+/// is a struct of this file is decided after the walk, so a delegate
+/// declared below its impl still resolves.
+struct SchemaDelegateFinder<'a, 'b> {
+    owner: &'a str,
+    delegate: &'b mut Option<String>,
 }
 
-/// Byte offset of a 1-based line / 0-based column position.
-fn line_col_to_offset(text: &str, line: usize, column: usize) -> usize {
-    let mut offset = 0;
-    for (index, line_text) in text.split_inclusive('\n').enumerate() {
-        if index + 1 == line {
-            return offset + column;
+impl<'ast> syn::visit::Visit<'ast> for SchemaDelegateFinder<'_, '_> {
+    fn visit_expr_path(&mut self, expr: &'ast syn::ExprPath) {
+        if self.delegate.is_none()
+            && let Some(first) = expr.path.segments.first()
+        {
+            let candidate = first.ident.to_string();
+            if candidate != *self.owner {
+                *self.delegate = Some(candidate);
+            }
         }
-        offset += line_text.len();
+        syn::visit::visit_expr_path(self, expr);
     }
-    offset
 }
 
-fn extract_body(item_text: &str) -> String {
-    let Some(open) = item_text.find('{') else {
-        return String::new();
-    };
-    let Some(close) = item_text.rfind('}') else {
-        return String::new();
-    };
-    item_text[open + 1..close].to_string()
+/// Line start offsets, so a span position resolves to a byte offset in O(1)
+/// instead of a per-span scan of the whole file.
+struct LineOffsets {
+    starts: Vec<usize>,
 }
 
-fn parse_fields(body: &str) -> Vec<Field> {
-    split_top_level_entries(&strip_non_code_lines(body))
-        .into_iter()
-        .filter_map(|entry| {
-            let trimmed = entry.trim();
-            let (name, ty) = trimmed.split_once(':')?;
-            Some(Field {
-                name: name.trim().trim_start_matches("pub ").trim().to_string(),
-                ty: normalize_ws(ty),
-            })
+impl LineOffsets {
+    fn new(text: &str) -> Self {
+        Self {
+            starts: std::iter::once(0)
+                .chain(
+                    text.split_inclusive('\n')
+                        .scan(0usize, |offset, line| {
+                            *offset += line.len();
+                            Some(*offset)
+                        }),
+                )
+                .collect(),
+        }
+    }
+
+    /// Byte offset of a 1-based line / 0-based column position.
+    fn offset(&self, position: proc_macro2::LineColumn) -> usize {
+        self.starts[position.line - 1] + position.column
+    }
+}
+
+/// The original source text a span covers, so the rendered type text stays
+/// byte-identical to what the hand-rolled scanners used to slice.
+fn slice_span(text: &str, offsets: &LineOffsets, span: proc_macro2::Span) -> String {
+    text[offsets.offset(span.start())..offsets.offset(span.end())].to_owned()
+}
+
+/// The named fields of a struct or struct-like variant, with each type text
+/// taken from the original source via its span.
+fn collect_named_fields(
+    text: &str,
+    offsets: &LineOffsets,
+    fields: &syn::FieldsNamed,
+) -> Vec<Field> {
+    fields
+        .named
+        .iter()
+        .filter_map(|field| {
+            let name = field.ident.as_ref()?.to_string();
+            let ty = normalize_ws(&slice_span(text, offsets, Spanned::span(&field.ty)));
+            Some(Field { name, ty })
         })
         .collect()
 }
-
-fn parse_variants(body: &str) -> Vec<Variant> {
-    split_top_level_entries(&strip_non_code_lines(body))
-        .into_iter()
-        .filter_map(|entry| {
-            let trimmed = entry.trim();
-            if trimmed.is_empty() {
-                return None;
-            }
-            let name = trimmed
-                .chars()
-                .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
-                .collect::<String>();
-            if name.is_empty() {
-                return None;
-            }
-            let rest = trimmed[name.len()..].trim();
-            let shape = if rest.is_empty() {
-                "unit".to_string()
-            } else if rest.starts_with('{') {
-                let fields = parse_fields(&extract_body(rest));
-                if fields.is_empty() {
-                    "struct {}".to_string()
-                } else {
-                    format!("struct {{ {} }}", render_fields(&fields))
-                }
-            } else {
-                normalize_ws(rest)
-            };
-            Some(Variant { name, shape })
-        })
-        .collect()
-}
-
-fn strip_non_code_lines(body: &str) -> String {
-    body.lines()
-        .filter(|line| {
-            let trimmed = line.trim_start();
-            !trimmed.is_empty()
-                && !trimmed.starts_with("///")
-                && !trimmed.starts_with("//!")
-                && !trimmed.starts_with("//")
-                && !trimmed.starts_with("#")
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn split_top_level_entries(input: &str) -> Vec<String> {
-    let mut entries = Vec::new();
-    let mut current = String::new();
-    let mut paren = 0i32;
-    let mut brace = 0i32;
-    let mut bracket = 0i32;
-    let mut angle = 0i32;
-
-    for ch in input.chars() {
-        match ch {
-            '(' => paren += 1,
-            ')' => paren -= 1,
-            '{' => brace += 1,
-            '}' => brace -= 1,
-            '[' => bracket += 1,
-            ']' => bracket -= 1,
-            '<' => angle += 1,
-            '>' if angle > 0 => {
-                angle -= 1;
-            }
-            ',' if paren == 0 && brace == 0 && bracket == 0 && angle == 0 => {
-                let trimmed = current.trim();
-                if !trimmed.is_empty() {
-                    entries.push(trimmed.to_string());
-                }
-                current.clear();
-                continue;
-            }
-            _ => {}
-        }
-        current.push(ch);
-    }
-
-    let trimmed = current.trim();
-    if !trimmed.is_empty() {
-        entries.push(trimmed.to_string());
-    }
-    entries
-}
-
 fn normalize_ws(input: &str) -> String {
     input.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -1255,10 +1380,11 @@ fn render_fields(fields: &[Field]) -> String {
 fn render_shape(item: &RustItem) -> String {
     match item.kind {
         ItemKind::Struct => {
-            if item.fields.is_empty() {
+            let fields = item.published_fields.as_deref().unwrap_or(&item.fields);
+            if fields.is_empty() {
                 "empty struct".to_string()
             } else {
-                format!("struct {{ {} }}", render_fields(&item.fields))
+                format!("struct {{ {} }}", render_fields(fields))
             }
         }
         ItemKind::Enum => {
@@ -1541,6 +1667,11 @@ fn gen_release_notes(version: &str) -> Result<PathBuf, Box<dyn std::error::Error
     Ok(changelog_path)
 }
 
+/// Renders today's UTC date as an ISO-8601 calendar date.
+///
+/// The clock may legitimately sit before the Unix epoch; that case renders
+/// as 1970-01-01 (the fallback below discards the error and clamps
+/// to the epoch rather than failing generation).
 fn today_utc_iso8601() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
@@ -1552,6 +1683,10 @@ fn today_utc_iso8601() -> String {
     format!("{:04}-{:02}-{:02}", y, m, d)
 }
 
+/// Converts a day count since the Unix epoch to a civil (year, month, day) date
+/// via the Howard Hinnant civil-calendar algorithm (719_468-day shift, 146_097-day
+/// eras, 36_524-day centuries, and 153-day five-month spans). The caller clamps
+/// sub-epoch clocks to the epoch.
 fn civil_from_days(z: i64) -> (i32, u32, u32) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
@@ -1574,12 +1709,12 @@ mod schema_tests {
     #[test]
     fn schema_generation_is_reproducible() {
         let first = schema_documents()
-            .iter()
-            .map(|(name, schema)| ((*name).to_owned(), render_schema(schema).unwrap()))
+            .into_iter()
+            .map(|(name, mut schema)| (name.to_owned(), render_schema(&mut schema).unwrap()))
             .collect::<Vec<_>>();
         let second = schema_documents()
-            .iter()
-            .map(|(name, schema)| ((*name).to_owned(), render_schema(schema).unwrap()))
+            .into_iter()
+            .map(|(name, mut schema)| (name.to_owned(), render_schema(&mut schema).unwrap()))
             .collect::<Vec<_>>();
         assert_eq!(first, second);
     }
@@ -1588,7 +1723,7 @@ mod schema_tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn committed_schemas_match_the_generator() {
         let root = repo_root().expect("repository root");
-        for (name, schema) in schema_documents() {
+        for (name, mut schema) in schema_documents() {
             let path = root
                 .join("docs/reference/schemas")
                 .join(SCHEMA_VERSION)
@@ -1597,10 +1732,11 @@ mod schema_tests {
                 .unwrap_or_else(|error| panic!("{} is unreadable: {error}", path.display()));
             assert_eq!(
                 committed,
-                render_schema(&schema).unwrap(),
+                render_schema(&mut schema).unwrap(),
                 "{} drifted",
                 path.display()
             );
         }
     }
 }
+

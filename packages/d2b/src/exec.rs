@@ -1,6 +1,6 @@
 //! EphemeralProcess execution commands.
 
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use serde_json::{Value, json};
 
 use crate::{
@@ -83,11 +83,38 @@ pub(crate) struct ExecLogsArgs {
     pub(crate) max_len: Option<u64>,
 }
 
+/// The exec kill signal vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ExecKillSignal {
+    Term,
+    Kill,
+    Int,
+    Hup,
+}
+
+impl ExecKillSignal {
+    /// The wire spelling of this signal.
+    pub(crate) fn as_wire_str(self) -> &'static str {
+        match self {
+            ExecKillSignal::Term => "term",
+            ExecKillSignal::Kill => "kill",
+            ExecKillSignal::Int => "int",
+            ExecKillSignal::Hup => "hup",
+        }
+    }
+}
+
+impl std::fmt::Display for ExecKillSignal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_wire_str())
+    }
+}
+
 #[derive(Debug, Args, Clone)]
 pub(crate) struct ExecKillArgs {
     pub(crate) resource_ref: String,
-    #[arg(long, default_value = "term")]
-    pub(crate) signal: String,
+    #[arg(long, default_value_t = ExecKillSignal::Term)]
+    pub(crate) signal: ExecKillSignal,
 }
 
 pub(crate) fn run(
@@ -227,14 +254,22 @@ fn wait(
         deadline,
         mode,
     )?;
-    let exit_code = value
+    let exit_code = guest_exit_code(&value);
+    context.emit(&value, mode)?;
+    Ok(exit_code.unwrap_or(0))
+}
+
+/// The CLI's exit-code contract for `exec wait`: the daemon's guest exit
+/// code, preferring `guestExitCode` over the legacy `exitCode` spelling,
+/// clamped to the 0-255 range a process exit status can represent, and
+/// absent when the field is missing, non-integral, or out of range.
+fn guest_exit_code(value: &Value) -> Option<i32> {
+    value
         .get("guestExitCode")
         .or_else(|| value.get("exitCode"))
         .and_then(Value::as_i64)
         .filter(|code| (0..=255).contains(code))
-        .map(|code| code as i32);
-    context.emit(&value, mode)?;
-    Ok(exit_code.unwrap_or(0))
+        .map(|code| code as i32)
 }
 
 fn status(
@@ -342,19 +377,11 @@ fn kill(
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
     let resource_ref = validate_exec_ref(context, &args.resource_ref, mode)?;
-    if !matches!(args.signal.as_str(), "term" | "kill" | "int" | "hup") {
-        return Err(context.failure(
-            "ref-invalid",
-            "exec signal must be term, kill, int, or hup",
-            mode,
-            2,
-        ));
-    }
     let value = context.invoke(
         "Cancel",
         json!({
             "resourceRef": resource_ref.to_canonical_string(),
-            "signal": args.signal,
+            "signal": args.signal.as_wire_str(),
         }),
         deadline,
         mode,
@@ -424,6 +451,7 @@ fn with_unsafe_posture(
 mod tests {
     use super::*;
     use crate::context::OutputMode;
+    use std::sync::Arc;
 
     #[test]
     fn attach_rejects_non_ephemeral_resources_with_the_existing_exit_code() {
@@ -462,5 +490,122 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.exit_code, 2);
         assert!(error.message.contains("--tty"));
+    }
+
+    #[test]
+    fn guest_exit_code_prefers_guest_exit_code_and_clamps_to_0_255() {
+        let cases: &[(&str, Option<i32>)] = &[
+            (r#"{"guestExitCode":42}"#, Some(42)),
+            (r#"{"exitCode":7}"#, Some(7)),
+            (r#"{"guestExitCode":3,"exitCode":9}"#, Some(3)),
+            (r#"{"guestExitCode":0}"#, Some(0)),
+            (r#"{"guestExitCode":255}"#, Some(255)),
+            (r#"{"guestExitCode":256}"#, None),
+            (r#"{"guestExitCode":-1}"#, None),
+            (r#"{"guestExitCode":"42"}"#, None),
+            (r#"{"exitCode":300}"#, None),
+            (r#"{"exitCode":"7"}"#, None),
+            (r#"{}"#, None),
+        ];
+        for (json, expected) in cases {
+            let value: Value = serde_json::from_str(json).unwrap();
+            assert_eq!(
+                guest_exit_code(&value),
+                *expected,
+                "guest_exit_code({json}) mismatch"
+            );
+        }
+    }
+
+    #[derive(Debug)]
+    struct MockDaemon {
+        response: Vec<u8>,
+    }
+
+    impl crate::context::SessionClient for MockDaemon {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn invoke(
+            &self,
+            _request: &[u8],
+            _deadline: RequestDeadline,
+        ) -> Result<Vec<u8>, crate::context::TransportError> {
+            Ok(self.response.clone())
+        }
+    }
+
+    fn wait_with_daemon_response(response: &[u8]) -> Result<i32, CliFailure> {
+        let client = Arc::new(MockDaemon {
+            response: response.to_vec(),
+        });
+        let context = ZoneContext::with_client("dev", "/run/d2b/public.sock", client).unwrap();
+        let args = ExecRefArgs {
+            resource_ref: "EphemeralProcess/shell".to_owned(),
+        };
+        crate::with_test_stdout_capture(|| {
+            wait(
+                &context,
+                &args,
+                OutputMode::Json,
+                ZoneContext::deadline(Some("30s")).unwrap(),
+            )
+        })
+        .0
+    }
+
+    #[test]
+    fn wait_passes_the_guest_exit_code_through_to_the_cli_exit_status() {
+        assert_eq!(
+            wait_with_daemon_response(br#"{"guestExitCode":42,"type":"waitOk"}"#).unwrap(),
+            42
+        );
+        assert_eq!(
+            wait_with_daemon_response(br#"{"exitCode":7,"type":"waitOk"}"#).unwrap(),
+            7
+        );
+    }
+
+    #[test]
+    fn wait_defaults_to_zero_when_the_guest_exit_code_is_missing_or_out_of_range() {
+        assert_eq!(
+            wait_with_daemon_response(br#"{"guestExitCode":300,"type":"waitOk"}"#).unwrap(),
+            0
+        );
+        assert_eq!(wait_with_daemon_response(br#"{"type":"waitOk"}"#).unwrap(), 0);
+    }
+
+    #[test]
+    fn validate_env_accepts_only_key_value_pairs_with_bounded_alnum_keys() {
+        let cases: &[(&[&str], bool)] = &[
+            (&[], true),
+            (&["KEY=value"], true),
+            (&["KEY="], true),
+            (&["_UNDERSCORE_9=x"], true),
+            (&["KEY==value"], true),
+            (&["KEY=a=b"], true),
+            (&["=value"], false),
+            (&["KEY"], false),
+            (&["KEY-WITH-DASH=1"], false),
+            (&["KEY WITH SPACE=1"], false),
+            (&["k=1", "=v"], false),
+        ];
+        for (env, expected) in cases {
+            let env: Vec<String> = env.iter().map(|entry| entry.to_string()).collect();
+            assert_eq!(
+                validate_env(&env).is_ok(),
+                *expected,
+                "validate_env({env:?}) should be {}",
+                if *expected { "accepted" } else { "rejected" }
+            );
+        }
+    }
+
+    #[test]
+    fn validate_env_bounds_key_length_at_64_bytes() {
+        let at_limit: Vec<String> = vec![format!("{}=1", "k".repeat(64))];
+        assert!(validate_env(&at_limit).is_ok(), "a 64-byte key is valid");
+        let over_limit: Vec<String> = vec![format!("{}=1", "k".repeat(65))];
+        let error = validate_env(&over_limit).unwrap_err();
+        assert_eq!(error.exit_code, 2);
+        assert!(error.message.contains("key is invalid"));
     }
 }

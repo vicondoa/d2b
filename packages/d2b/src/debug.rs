@@ -415,7 +415,7 @@ fn observed_row(value: &Value) -> Result<ObservedRow, String> {
             retryable: failure.get("retryable").and_then(Value::as_bool),
         });
     Ok(ObservedRow {
-        reference: reference.to_owned(),
+        reference,
         uid: uid.to_owned(),
         generation,
         status_generation,
@@ -469,7 +469,7 @@ fn read_type(
             phase: None,
             label_selector: None,
             updates: false,
-            page_token: page_token.clone(),
+            page_token,
             limit: Some(PAGE_SIZE),
         };
         let value = request_list(context, &args, mode, deadline).map_err(|failure| {

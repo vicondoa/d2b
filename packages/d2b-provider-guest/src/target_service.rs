@@ -65,16 +65,31 @@ pub trait GuestTargetEffect: Send + Sync + 'static {
     /// `Ok` means the effect is serving; the realization is then reported
     /// `ready`. Any error leaves the realization `realizing` - the owning
     /// Host driver's next realize retries it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`GuestTargetEffectError`] the target-local effect
+    /// reports; the realization stays `realizing` and is retried.
     async fn realize(
         &self,
         request: &GuestRealizeRequest,
     ) -> Result<(), GuestTargetEffectError>;
 
     /// Remove the target-local effect for one source.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`GuestTargetEffectError`] the target-local effect
+    /// reports when removal fails.
     async fn delete(&self, source: &ResourceKey) -> Result<(), GuestTargetEffectError>;
 
     /// Re-discover the target-local effect after a reconnect (F5) and report
     /// whether it is present and serving.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`GuestTargetEffectError`] the target-local effect
+    /// reports when discovery fails.
     async fn adopt(&self, source: &ResourceKey) -> Result<bool, GuestTargetEffectError>;
 }
 

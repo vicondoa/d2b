@@ -190,7 +190,7 @@ impl<'a> DeclaredWorkerGpuPort<'a> {
         if view.owner_key.as_ref() != Some(&self.device_key()) {
             return Err(GpuEffectError::StaleDeviceIdentity);
         }
-        let _ = Self::declared_row_template(&view, role)?;
+        Self::declared_row_template(&view, role)?;
         Ok(Some(view))
     }
 
@@ -281,6 +281,7 @@ impl<'a> DeclaredWorkerGpuPort<'a> {
 }
 
 impl GpuLifecycleEffectPort for DeclaredWorkerGpuPort<'_> {
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn reserve_authority(
         &mut self,
         admission: &crate::authority::GpuAuthorityAdmission,
@@ -434,6 +435,7 @@ impl GpuLifecycleEffectPort for DeclaredWorkerGpuPort<'_> {
         ))
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn release_authority(
         &mut self,
         lease: crate::authority::GpuAuthorityLease,
@@ -458,39 +460,103 @@ impl GpuLifecycleEffectPort for DeclaredWorkerGpuPort<'_> {
     }
 }
 
+/// The daemon-supplied dependencies of one declared GPU worker port.
+///
+/// The field set is opaque: callers build the value through
+/// [`DeclaredWorkerGpuPortDeps::new`] and the port reads it on
+/// construction.
+pub struct DeclaredWorkerGpuPortDeps<'a> {
+    runtime: Arc<dyn GpuRuntime>,
+    gpu_authority_leases: Arc<Mutex<BTreeMap<[u8; 16], AuthorityLease>>>,
+    runtime_handle: tokio::runtime::Handle,
+    children: &'a dyn SharedProviderChildSurface,
+}
+
+impl<'a> DeclaredWorkerGpuPortDeps<'a> {
+    /// Build the daemon-supplied dependencies for one declared GPU worker
+    /// port.
+    ///
+    /// # Arguments
+    ///
+    /// - `runtime`: the daemon-supplied GPU runtime facet.
+    /// - `gpu_authority_leases`: the per-resource authority lease cache
+    ///   the calling driver owns.
+    /// - `runtime_handle`: the runtime handle the sync port drives its
+    ///   async child surface on.
+    /// - `children`: manager-routed child surface of the requiring Device.
+    pub fn new(
+        runtime: Arc<dyn GpuRuntime>,
+        gpu_authority_leases: Arc<Mutex<BTreeMap<[u8; 16], AuthorityLease>>>,
+        runtime_handle: tokio::runtime::Handle,
+        children: &'a dyn SharedProviderChildSurface,
+    ) -> Self {
+        Self {
+            runtime,
+            gpu_authority_leases,
+            runtime_handle,
+            children,
+        }
+    }
+}
+
 /// The port's per-resource construction inputs, supplied by the calling
 /// driver (the Device family's runtime) from the row and the driver state.
+///
+/// The field set is opaque: callers build the value through
+/// [`DeclaredWorkerGpuPortArgs::new`] and the port reads it on
+/// construction.
 pub struct DeclaredWorkerGpuPortArgs<'a> {
-    /// The daemon-supplied GPU runtime facet.
-    pub runtime: Arc<dyn GpuRuntime>,
-    /// The per-resource authority lease cache the driver owns.
-    pub gpu_authority_leases: Arc<Mutex<BTreeMap<[u8; 16], AuthorityLease>>>,
-    /// The runtime handle the sync port drives its async child surface on.
-    pub runtime_handle: tokio::runtime::Handle,
-    /// Manager-routed child surface of the requiring Device.
-    pub children: &'a dyn SharedProviderChildSurface,
-    /// The Zone the Device row lives in.
-    pub zone: String,
-    /// The Device row's reference.
-    pub device_ref: ResourceRef,
-    /// The Device row's uid.
-    pub device_uid: ResourceUid,
-    /// The Device row's owning holder reference.
-    pub holder_ref: ResourceRef,
-    /// The Device row's generation.
-    pub generation: ResourceGeneration,
-    /// The reconcile operation id the launch ticket scopes to.
-    pub operation_id: String,
+    deps: DeclaredWorkerGpuPortDeps<'a>,
+    zone: String,
+    device_ref: ResourceRef,
+    device_uid: ResourceUid,
+    holder_ref: ResourceRef,
+    generation: ResourceGeneration,
+    operation_id: String,
+}
+
+impl<'a> DeclaredWorkerGpuPortArgs<'a> {
+    /// Build the construction inputs for one declared GPU worker port.
+    ///
+    /// # Arguments
+    ///
+    /// - `deps`: the daemon-supplied dependencies.
+    /// - `zone`: the Zone the Device row lives in.
+    /// - `device_ref`: the Device row's reference.
+    /// - `device_uid`: the Device row's uid.
+    /// - `holder_ref`: the Device row's owning holder reference.
+    /// - `generation`: the Device row's generation.
+    /// - `operation_id`: the reconcile operation id the launch ticket
+    ///   scopes to.
+    pub fn new(
+        deps: DeclaredWorkerGpuPortDeps<'a>,
+        zone: String,
+        device_ref: ResourceRef,
+        device_uid: ResourceUid,
+        holder_ref: ResourceRef,
+        generation: ResourceGeneration,
+        operation_id: String,
+    ) -> Self {
+        Self {
+            deps,
+            zone,
+            device_ref,
+            device_uid,
+            holder_ref,
+            generation,
+            operation_id,
+        }
+    }
 }
 
 impl<'a> DeclaredWorkerGpuPort<'a> {
     /// Build the port from the calling driver's construction inputs.
     pub fn new(args: DeclaredWorkerGpuPortArgs<'a>) -> Self {
         Self {
-            runtime: args.runtime,
-            gpu_authority_leases: args.gpu_authority_leases,
-            runtime_handle: args.runtime_handle,
-            children: args.children,
+            runtime: args.deps.runtime,
+            gpu_authority_leases: args.deps.gpu_authority_leases,
+            runtime_handle: args.deps.runtime_handle,
+            children: args.deps.children,
             zone: args.zone,
             device_ref: args.device_ref,
             device_uid: args.device_uid,

@@ -20,6 +20,7 @@ pub struct TransportPacket {
 }
 
 impl TransportPacket {
+    /// Construct a packet with no attachments.
     pub fn new(bytes: Vec<u8>) -> Self {
         Self {
             bytes,
@@ -27,18 +28,22 @@ impl TransportPacket {
         }
     }
 
+    /// Construct a packet with its owned attachment set.
     pub fn with_attachments(bytes: Vec<u8>, attachments: Vec<OwnedAttachment>) -> Self {
         Self { bytes, attachments }
     }
 
+    /// Borrow the packet body.
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
 
+    /// Borrow the attached fds.
     pub fn attachments(&self) -> &[OwnedAttachment] {
         &self.attachments
     }
 
+    /// Split the packet into its body and attachment set.
     pub fn into_parts(self) -> (Vec<u8>, Vec<OwnedAttachment>) {
         (self.bytes, self.attachments)
     }
@@ -150,7 +155,7 @@ pub trait OwnedTransport: Send + 'static {
 /// The handle exposes only the transport descriptor and the ability to
 /// consume or close the owned carriage. It carries no ZoneLink state,
 /// authorization claims, or raw locator.
-pub struct OwnedTransportHandle(Option<Box<dyn OwnedTransport>>);
+pub struct OwnedTransportHandle(Box<dyn OwnedTransport>);
 
 impl OwnedTransportHandle {
     /// Wrap one owned transport without exposing its implementation type.
@@ -158,36 +163,27 @@ impl OwnedTransportHandle {
     where
         T: OwnedTransport,
     {
-        Self(Some(Box::new(transport)))
+        Self(Box::new(transport))
     }
 
     /// Wrap an already erased owned transport.
     pub fn from_box(transport: Box<dyn OwnedTransport>) -> Self {
-        Self(Some(transport))
+        Self(transport)
     }
 
     /// Borrow the immutable carriage descriptor.
     pub fn descriptor(&self) -> TransportDescriptor {
-        self.0
-            .as_ref()
-            .expect("an owned transport handle is consumed only once")
-            .descriptor()
+        self.0.descriptor()
     }
 
     /// Consume the handle and return the session-owned transport.
-    pub fn into_owned_transport(mut self) -> Box<dyn OwnedTransport> {
+    pub fn into_owned_transport(self) -> Box<dyn OwnedTransport> {
         self.0
-            .take()
-            .expect("an owned transport handle is consumed only once")
     }
 
     /// Close the owned carriage and consume the handle.
     pub async fn close(mut self) -> std::result::Result<(), TransportError> {
-        self.0
-            .take()
-            .expect("an owned transport handle is consumed only once")
-            .close()
-            .await
+        self.0.close().await
     }
 }
 
@@ -205,10 +201,13 @@ struct SerializedWriter {
     transport: std::sync::Arc<Mutex<Box<dyn OwnedTransport>>>,
 }
 
-/// Compatibility split for transports that are never driven concurrently.
+/// Serialized-compatibility split for transports that are never driven
+/// concurrently.
 ///
-/// Production transports and driver tests must provide independent halves;
-/// this helper exists for direct engine-only test transports.
+/// The reader and writer halves share one transport through a mutex, so
+/// they must never be driven concurrently: a read and a write in flight at
+/// the same time interleave on the same transport. Production transports
+/// and driver tests provide independent halves instead.
 pub fn serialized_transport_split(
     transport: Box<dyn OwnedTransport>,
 ) -> (Box<dyn TransportReader>, Box<dyn TransportWriter>) {

@@ -1,4 +1,31 @@
 use std::path::PathBuf;
+use std::sync::Arc;
+
+/// Origin error attached to a [`TypedError`] variant whose `detail` string
+/// was rendered from it.
+///
+/// `Arc`, not `Box`: `TypedError` is `Clone`, so cloning a variant carrying an
+/// origin only bumps a refcount. The origin stays reachable through
+/// [`std::error::Error::source`], so the failure chain survives to the
+/// daemon's logging boundary instead of collapsing into the rendered `detail`
+/// string.
+///
+/// Deliberately outside the daemon wire surface: `TypedError` is not
+/// `serde::Serialize` (the public error surface is [`ErrorEnvelope`], built
+/// from `kind`/`exit_code`/`message`/`remediation`), so no serializer can
+/// reach an attached origin. A future `Serialize` derive on `TypedError`
+/// MUST mark the field `#[serde(skip)]`.
+pub type ErrorSource = Arc<dyn std::error::Error + Send + Sync>;
+
+/// Attach the error a [`TypedError`] variant was built from, for variants
+/// whose `detail` renders that error. The bound is what keeps the field an
+/// error object: a call site cannot pass a pre-rendered string.
+pub fn error_source<E>(error: E) -> Option<ErrorSource>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    Some(Arc::new(error))
+}
 
 /// Closed enum of component-session config-read failure classes. Each maps to a
 /// distinct wire `kind` slug; the daemon never attaches a path, byte, or
@@ -472,6 +499,8 @@ pub enum TypedError {
     InternalBrokerUnavailable {
         path: PathBuf,
         detail: String,
+        /// Origin error this refusal was raised from, when there was one.
+        source: Option<ErrorSource>,
     },
     /// The privileged broker round trip (connect + write + read) did not
     /// complete before the caller's single absolute deadline. Distinct
@@ -486,10 +515,14 @@ pub enum TypedError {
     },
     InternalConfig {
         detail: String,
+        /// Origin error this refusal was raised from, when there was one.
+        source: Option<ErrorSource>,
     },
     InternalIo {
         context: String,
         detail: String,
+        /// Origin error this refusal was raised from, when there was one.
+        source: Option<ErrorSource>,
     },
     InternalLockParentInvalid {
         path: PathBuf,
@@ -676,6 +709,74 @@ pub enum TypedError {
         workload_id: String,
         detail: String,
     },
+    /// An audio mutation (`set-volume` / `mute`) named a VM that is not
+    /// declared in the public manifest. The status path reports the same class
+    /// per VM as `AudioErrorKind::VmNotFound`, so a mutation caller
+    /// distinguishes a bad target from an internal I/O failure by `kind` /
+    /// exit code instead of by matching the message text.
+    AudioVmNotFound {
+        vm: String,
+    },
+    /// An audio mutation (`set-volume` / `mute`) named a VM whose manifest
+    /// entry does not declare audio. The status path reports the same class
+    /// per VM as `AudioErrorKind::AudioNotEnabled`.
+    AudioNotEnabled {
+        vm: String,
+    },
+}
+
+impl std::fmt::Display for TypedError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message())
+    }
+}
+
+impl std::error::Error for TypedError {
+    /// The origin error attached to the variant, when the refusal was raised
+    /// from one. Variants without an origin return `None`.
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InternalBrokerUnavailable { source, .. }
+            | Self::InternalConfig { source, .. }
+            | Self::InternalIo { source, .. } => source.as_ref().map(plain_error),
+            _ => None,
+        }
+    }
+}
+
+/// Erase the `Send + Sync` bounds of an [`ErrorSource`] so it satisfies
+/// [`std::error::Error::source`].
+fn plain_error(error: &ErrorSource) -> &(dyn std::error::Error + 'static) {
+    error.as_ref()
+}
+
+/// Stops a rendered origin chain, so a self-referential one cannot spin the
+/// log path.
+const MAX_SOURCE_CHAIN_DEPTH: usize = 8;
+
+/// Renders an origin error and its own `source()` chain into one log field -
+/// `origin: cause: root` - so a caller's `detail` string is not the end of the
+/// chain.
+struct SourceChain<'a>(Option<&'a (dyn std::error::Error + 'static)>);
+
+impl std::fmt::Display for SourceChain<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Some(origin) = self.0 else {
+            return formatter.write_str("none");
+        };
+        write!(formatter, "{origin}")?;
+        let mut current = origin.source();
+        let mut depth = 0;
+        while let Some(cause) = current {
+            if depth == MAX_SOURCE_CHAIN_DEPTH {
+                return formatter.write_str(": ...");
+            }
+            depth += 1;
+            write!(formatter, ": {cause}")?;
+            current = cause.source();
+        }
+        Ok(())
+    }
 }
 
 /// Classify the detail string for a lock-parent validation failure into
@@ -753,6 +854,8 @@ impl TypedError {
             Self::ConsoleSessionTableFull { .. } => "console-session-table-full",
             Self::WorkloadTargetNotFound { .. } => "workload-target-not-found",
             Self::WorkloadAliasConflict { .. } => "workload-alias-conflict",
+            Self::AudioVmNotFound { .. } => "audio-vm-not-found",
+            Self::AudioNotEnabled { .. } => "audio-not-enabled",
         }
     }
 
@@ -814,6 +917,13 @@ impl TypedError {
             // Ambiguous alias is an operator error (wrong invocation),
             // not a runtime or internal failure.
             Self::WorkloadAliasConflict { .. } => 2,
+            // Audio mutation refusals share the "target not found" convention
+            // with ConsoleVmNotFound and WorkloadTargetNotFound above.
+            Self::AudioVmNotFound { .. } => 2,
+            // A VM whose manifest entry does not declare audio is a
+            // configuration refusal of the same class as GuestShellDisabled and
+            // RuntimeCapabilityUnsupported.
+            Self::AudioNotEnabled { .. } => 70,
         }
     }
 
@@ -955,6 +1065,12 @@ impl TypedError {
                      use the canonical target (e.g. {workload_id}.realm.d2b) to disambiguate"
                 )
             }
+            Self::AudioVmNotFound { vm } => {
+                format!("audio: VM '{vm}' not found in the public manifest")
+            }
+            Self::AudioNotEnabled { vm } => {
+                format!("audio: VM '{vm}' does not declare audio in its manifest entry")
+            }
         }
     }
 
@@ -1092,6 +1208,15 @@ impl TypedError {
                      select the specific workload unambiguously"
                 )
             }
+            Self::AudioVmNotFound { vm } => {
+                format!(
+                    "verify that '{vm}' is declared in the d2b configuration and the bundle is up to date"
+                )
+            }
+            Self::AudioNotEnabled { .. } => {
+                "enable d2b.vms.<vm>.audio.enable for this VM, rebuild the bundle, and retry"
+                    .to_owned()
+            }
         }
     }
 
@@ -1126,11 +1251,16 @@ impl TypedError {
                     "daemon lock is already held"
                 );
             }
-            Self::InternalBrokerUnavailable { path, detail } => {
+            Self::InternalBrokerUnavailable {
+                path,
+                detail,
+                source,
+            } => {
                 tracing::error!(
                     kind = self.kind(),
                     path = %path.display(),
                     detail = %detail,
+                    origin = %SourceChain(source.as_ref().map(plain_error)),
                     "could not reach broker socket"
                 );
             }
@@ -1141,18 +1271,24 @@ impl TypedError {
                     "broker round trip exceeded its deadline"
                 );
             }
-            Self::InternalConfig { detail } => {
+            Self::InternalConfig { detail, source } => {
                 tracing::error!(
                     kind = self.kind(),
                     detail = %detail,
+                    origin = %SourceChain(source.as_ref().map(plain_error)),
                     "invalid daemon configuration"
                 );
             }
-            Self::InternalIo { context, detail } => {
+            Self::InternalIo {
+                context,
+                detail,
+                source,
+            } => {
                 tracing::error!(
                     kind = self.kind(),
                     context = %context,
                     detail = %detail,
+                    origin = %SourceChain(source.as_ref().map(plain_error)),
                     "internal I/O failure"
                 );
             }
@@ -1203,6 +1339,20 @@ impl TypedError {
                     "usbip explicit attach rejected: active claim conflict"
                 );
             }
+            Self::AudioVmNotFound { vm } => {
+                tracing::warn!(
+                    kind = self.kind(),
+                    vm = %vm,
+                    "audio mutation refused: VM not declared in the public manifest"
+                );
+            }
+            Self::AudioNotEnabled { vm } => {
+                tracing::warn!(
+                    kind = self.kind(),
+                    vm = %vm,
+                    "audio mutation refused: audio not enabled for this VM"
+                );
+            }
             // Remaining variants already carry only safe values in
             // their public messages (UIDs, version ranges, frame
             // sizes, field names) - no extra logging needed.
@@ -1250,7 +1400,9 @@ impl TypedError {
             | Self::ConsoleSessionStale
             | Self::ConsoleSessionTableFull { .. }
             | Self::WorkloadTargetNotFound { .. }
-            | Self::WorkloadAliasConflict { .. } => "internalError",
+            | Self::WorkloadAliasConflict { .. }
+            | Self::AudioVmNotFound { .. }
+            | Self::AudioNotEnabled { .. } => "internalError",
         }
     }
 }
@@ -1288,6 +1440,7 @@ mod tests {
         let err = TypedError::InternalBrokerUnavailable {
             path: PathBuf::from("/run/d2b/priv.sock"),
             detail: "Connection refused (os error 111)".to_owned(),
+            source: None,
         };
         assert_eq!(err.kind(), "internal-broker-unavailable");
         assert_no_path_leak("InternalBrokerUnavailable", &err.message());
@@ -1297,6 +1450,7 @@ mod tests {
     fn internal_config_redacted() {
         let err = TypedError::InternalConfig {
             detail: "/etc/d2b/daemon-config.json: missing field `serverVersion`".to_owned(),
+            source: None,
         };
         assert_eq!(err.kind(), "internal-config-invalid");
         assert_no_path_leak("InternalConfig", &err.message());
@@ -1307,6 +1461,7 @@ mod tests {
         let err = TypedError::InternalIo {
             context: format!("read {}", "/home/paydro/secrets/key.pem"),
             detail: "No such file or directory (os error 2)".to_owned(),
+            source: None,
         };
         assert_eq!(err.kind(), "internal-io");
         assert_no_path_leak("InternalIo", &err.message());
@@ -1532,12 +1687,14 @@ mod tests {
                 TypedError::InternalBrokerUnavailable {
                     path: PathBuf::from("/run/d2b/priv.sock"),
                     detail: "refused".to_owned(),
+                    source: None,
                 },
                 "internal-broker-unavailable",
             ),
             (
                 TypedError::InternalConfig {
                     detail: "bad".to_owned(),
+                    source: None,
                 },
                 "internal-config-invalid",
             ),
@@ -1545,6 +1702,7 @@ mod tests {
                 TypedError::InternalIo {
                     context: "read /etc/nixos/foo.nix".to_owned(),
                     detail: "ENOENT".to_owned(),
+                    source: None,
                 },
                 "internal-io",
             ),
@@ -1632,12 +1790,60 @@ mod tests {
                 },
                 "host-kernel-modules-missing",
             ),
+            (
+                TypedError::AudioVmNotFound {
+                    vm: "work".to_owned(),
+                },
+                "audio-vm-not-found",
+            ),
+            (
+                TypedError::AudioNotEnabled {
+                    vm: "work".to_owned(),
+                },
+                "audio-not-enabled",
+            ),
         ];
         for (err, expected_kind) in &cases {
             assert_eq!(err.kind(), *expected_kind, "kind mismatch for {err:?}");
             let envelope = err.to_envelope();
             assert_eq!(envelope.kind, *expected_kind);
         }
+    }
+
+    #[test]
+    fn audio_mutation_refusals_are_structured_and_leak_free() {
+        // An audio mutation must not report a user-input refusal as
+        // the `internal-io` class, so a caller can tell the two apart without
+        // matching the message text.
+        let not_found = TypedError::AudioVmNotFound {
+            vm: "work".to_owned(),
+        };
+        assert_eq!(not_found.kind(), "audio-vm-not-found");
+        assert_eq!(not_found.exit_code(), 2);
+        let envelope = not_found.to_envelope();
+        assert_eq!(envelope.kind, "audio-vm-not-found");
+        assert_eq!(envelope.exit_code, 2);
+        assert!(envelope.message.contains("work"));
+        assert!(!envelope.remediation.is_empty());
+        assert_no_path_leak("AudioVmNotFound", &envelope.message);
+        assert_no_path_leak("AudioVmNotFound", &envelope.remediation);
+
+        let not_enabled = TypedError::AudioNotEnabled {
+            vm: "work".to_owned(),
+        };
+        assert_eq!(not_enabled.kind(), "audio-not-enabled");
+        assert_eq!(not_enabled.exit_code(), 70);
+        let envelope = not_enabled.to_envelope();
+        assert_eq!(envelope.kind, "audio-not-enabled");
+        assert_eq!(envelope.exit_code, 70);
+        assert!(envelope.message.contains("work"));
+        assert!(!envelope.remediation.is_empty());
+        assert_no_path_leak("AudioNotEnabled", &envelope.message);
+        assert_no_path_leak("AudioNotEnabled", &envelope.remediation);
+
+        assert_ne!(not_found.kind(), not_enabled.kind());
+        assert_ne!(not_found.kind(), "internal-io");
+        assert_ne!(not_enabled.kind(), "internal-io");
     }
 
     #[test]

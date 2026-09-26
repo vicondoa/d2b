@@ -561,65 +561,6 @@ pub fn zeroizing_bytes(bytes: Vec<u8>) -> CredentialSensitiveBytes {
 }
 
 impl GuestCredentialBackendResponse {
-    /// Borrow the optional backend state.
-    pub fn state(&self) -> Option<&str> {
-        self.state.as_deref()
-    }
-
-    /// Borrow the optional opaque lease handle.
-    pub fn lease_handle(&self) -> Option<&str> {
-        self.lease_handle.as_deref()
-    }
-
-    /// Borrow the optional opaque source version.
-    pub fn source_version(&self) -> Option<&str> {
-        self.source_version.as_deref()
-    }
-
-    /// Return the optional rotation generation.
-    pub const fn rotation_generation(&self) -> Option<u64> {
-        self.rotation_generation
-    }
-
-    /// Return the optional absolute expiry.
-    pub const fn expires_at_unix_ms(&self) -> Option<u64> {
-        self.expires_at_unix_ms
-    }
-
-    /// Borrow the optional closed outcome label.
-    pub fn outcome(&self) -> Option<&str> {
-        self.outcome.as_deref()
-    }
-
-    /// Consume the response and return sensitive bytes in a zeroizing owner.
-    pub fn into_bytes(self) -> Option<zeroize::Zeroizing<Vec<u8>>> {
-        self.bytes
-    }
-
-    /// Explicitly erase and discard any sensitive response bytes.
-    pub fn clear_bytes(&mut self) {
-        self.bytes.take();
-    }
-}
-
-impl std::fmt::Debug for GuestCredentialBackendResponse {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("GuestCredentialBackendResponse(<redacted>)")
-    }
-}
-
-/// A non-secret or zeroizing response returned by one Guest backend operation.
-pub struct GuestCredentialBackendReply {
-    state: Option<String>,
-    lease_handle: Option<String>,
-    source_version: Option<String>,
-    rotation_generation: Option<u64>,
-    expires_at_unix_ms: Option<u64>,
-    outcome: Option<String>,
-    bytes: Option<zeroize::Zeroizing<Vec<u8>>>,
-}
-
-impl GuestCredentialBackendReply {
     /// Construct a typed backend reply. Sensitive bytes remain zeroizing.
     pub fn new(
         state: Option<String>,
@@ -663,9 +604,44 @@ impl GuestCredentialBackendReply {
         )
     }
 
-    /// Consume the reply and return sensitive bytes in a zeroizing owner.
-    pub fn into_bytes(self) -> Option<CredentialSensitiveBytes> {
+    /// Borrow the optional backend state.
+    pub fn state(&self) -> Option<&str> {
+        self.state.as_deref()
+    }
+
+    /// Borrow the optional opaque lease handle.
+    pub fn lease_handle(&self) -> Option<&str> {
+        self.lease_handle.as_deref()
+    }
+
+    /// Borrow the optional opaque source version.
+    pub fn source_version(&self) -> Option<&str> {
+        self.source_version.as_deref()
+    }
+
+    /// Return the optional rotation generation.
+    pub const fn rotation_generation(&self) -> Option<u64> {
+        self.rotation_generation
+    }
+
+    /// Return the optional absolute expiry.
+    pub const fn expires_at_unix_ms(&self) -> Option<u64> {
+        self.expires_at_unix_ms
+    }
+
+    /// Borrow the optional closed outcome label.
+    pub fn outcome(&self) -> Option<&str> {
+        self.outcome.as_deref()
+    }
+
+    /// Consume the response and return sensitive bytes in a zeroizing owner.
+    pub fn into_bytes(self) -> Option<zeroize::Zeroizing<Vec<u8>>> {
         self.bytes
+    }
+
+    /// Explicitly erase and discard any sensitive response bytes.
+    pub fn clear_bytes(&mut self) {
+        self.bytes.take();
     }
 
     fn encode(self) -> Result<zeroize::Zeroizing<Vec<u8>>, GuestCredentialBackendHandlerError> {
@@ -704,11 +680,18 @@ impl GuestCredentialBackendReply {
     }
 }
 
-impl std::fmt::Debug for GuestCredentialBackendReply {
+impl std::fmt::Debug for GuestCredentialBackendResponse {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("GuestCredentialBackendReply(<redacted>)")
+        formatter.write_str("GuestCredentialBackendResponse(<redacted>)")
     }
 }
+
+/// A non-secret or zeroizing response returned by one Guest backend operation.
+///
+/// The responder and client halves share one shape: the responder encodes it
+/// with [`GuestCredentialBackendResponse::encode`] and the client decodes the
+/// same wire fields back into this type.
+pub type GuestCredentialBackendReply = GuestCredentialBackendResponse;
 
 /// Closed failures from a Guest backend responder handler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -885,6 +868,7 @@ impl GuestCredentialBackend {
     }
 
     /// Bind a prearmed backend socket for Layer-1 transport tests.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn from_socket_for_test(socket: SeqpacketSocket) -> Arc<Self> {
         Arc::new(Self {
             state: Arc::new(tokio::sync::Mutex::new(GuestCredentialBackendState {
@@ -898,6 +882,7 @@ impl GuestCredentialBackend {
 
     /// Bind a prearmed backend socket to an authenticated route for transport
     /// and session-fencing tests.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn from_socket_for_test_with_route(
         socket: SeqpacketSocket,
         route: AuthenticatedSessionRouteBinding,
@@ -923,24 +908,7 @@ impl GuestCredentialBackend {
         if operation.is_empty()
             || operation.len() > 128
             || !operation.is_ascii()
-            || !matches!(
-                operation,
-                "secret-service.state"
-                    | "secret-service.issue-lease"
-                    | "secret-service.inspect-lease"
-                    | "secret-service.refresh-lease"
-                    | "secret-service.revoke-lease"
-                    | "entra.state"
-                    | "entra.issue-lease"
-                    | "entra.inspect-lease"
-                    | "entra.refresh-lease"
-                    | "entra.revoke-lease"
-                    | "managed-identity.state"
-                    | "managed-identity.issue-lease"
-                    | "managed-identity.inspect-lease"
-                    | "managed-identity.refresh-lease"
-                    | "managed-identity.revoke-lease"
-            )
+            || !valid_guest_backend_operation(operation)
             || !fields.is_object()
         {
             return Err(GuestCredentialBackendError::Malformed);

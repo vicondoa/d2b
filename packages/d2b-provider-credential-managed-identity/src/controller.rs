@@ -81,14 +81,32 @@ impl core::fmt::Debug for AgentProcessSpec {
 }
 
 /// Ordered teardown effects owned by the controller.
+///
+/// The fields are private: only [`ManagedIdentityController::teardown_plan`]
+/// constructs a plan, so the emitted combinations are the only
+/// representable ones.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ManagedIdentityTeardownPlan {
+    stop_agent: bool,
+    delete_agent: bool,
+    clear_provider_revoke: bool,
+}
+
+impl ManagedIdentityTeardownPlan {
     /// Whether the agent must first drain and stop.
-    pub stop_agent: bool,
+    pub const fn stop_agent(self) -> bool {
+        self.stop_agent
+    }
+
     /// Whether the controller may delete the agent Process.
-    pub delete_agent: bool,
+    pub const fn delete_agent(self) -> bool {
+        self.delete_agent
+    }
+
     /// Whether revocation and Process deletion permit finalizer release.
-    pub clear_provider_revoke: bool,
+    pub const fn clear_provider_revoke(self) -> bool {
+        self.clear_provider_revoke
+    }
 }
 
 /// Common status plus closed client state.
@@ -134,6 +152,11 @@ impl ManagedIdentityController {
 
     /// Create the agent projection only after admission and dependency
     /// readiness. The controller receives no client while doing so.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CredentialServiceError::InvariantFailure` when the
+    /// reference is not a `Credential`.
     pub fn plan_agent(
         &self,
         credential_ref: ResourceRef,
@@ -168,6 +191,11 @@ impl ManagedIdentityController {
     }
 
     /// Project bounded non-secret lease state.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CredentialServiceError::InvariantFailure` when the
+    /// metadata cannot project into the lease or status shape.
     pub fn reconcile(
         &self,
         client_state: ManagedIdentityClientState,
@@ -199,6 +227,11 @@ impl ManagedIdentityController {
     }
 
     /// Build a caller-initiated audit record after the authorization decision.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CredentialObservabilityError::InvalidAuditRecord` when
+    /// the audit field set is malformed or sensitive.
     #[allow(clippy::too_many_arguments)]
     pub fn authorized_service_audit(
         &self,
@@ -224,6 +257,11 @@ impl ManagedIdentityController {
     }
 
     /// Build one complete closed Credential telemetry frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CredentialObservabilityError::ForbiddenTelemetryField`
+    /// when a telemetry key or value is not in the closed set.
     pub fn telemetry(
         &self,
         zone: &str,

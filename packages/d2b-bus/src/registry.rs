@@ -4,7 +4,10 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     future::Future,
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use async_trait::async_trait;
@@ -256,14 +259,17 @@ pub struct EndpointSessionFailure {
 }
 
 impl EndpointSessionFailure {
+    /// Borrow the endpoint failure class.
     pub const fn class(self) -> EndpointFailureClass {
         self.class
     }
 
+    /// Borrow the session error code.
     pub const fn code(self) -> SessionErrorCode {
         self.code
     }
 
+    /// Borrow the operator-facing remediation.
     pub const fn remediation(self) -> Remediation {
         self.remediation
     }
@@ -373,7 +379,12 @@ pub trait BusEndpoint: Send + Sync + 'static {
         Err(EndpointError::Unavailable)
     }
 
-    /// Deliver one already-authorized method invocation.
+    /// Deliver one already-authorized method invocation..
+    ///
+    /// # Errors
+    /// Returns the implementation's own `EndpointError` variant when the
+    /// endpoint cannot serve the invocation; the default implementation
+    /// rejects with `EndpointError::Unavailable`.
     async fn invoke(&self, request: DeliveredInvocation) -> Result<BusResponse, EndpointError>;
 
     /// Send one response for a request received on the authenticated
@@ -519,8 +530,17 @@ impl SessionIdentity {
     }
 }
 
+/// Route-lease revocation latch.
+///
+/// Revocation is one-way and is only ever read as "is this lease dead yet",
+/// so the flag needs no mutual exclusion: a `Release` store at revocation and
+/// `Acquire` loads at every check are the weakest correct ordering. The
+/// acquire-load that observes the revocation also observes everything written
+/// before the release-store; a `Relaxed` load would drop that edge, and a
+/// `SeqCst` fence would buy nothing because no other memory location is
+/// ordered against the latch.
 struct RouteLeaseState {
-    revoked: Mutex<bool>,
+    revoked: AtomicBool,
 }
 
 pub(crate) struct RevocableRouteLease {
@@ -546,7 +566,7 @@ impl RevocableRouteLease {
             generation,
             endpoint,
             state: Arc::new(RouteLeaseState {
-                revoked: Mutex::new(false),
+                revoked: AtomicBool::new(false),
             }),
         }
     }
@@ -567,16 +587,8 @@ impl RevocableRouteLease {
         Arc::clone(&self.endpoint)
     }
 
-    // Route-lease revocation is a brief non-suspending critical section shared
-    // with synchronous teardown paths;the lease flag has no async form here.
-    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub(crate) fn with_active<T>(&self, action: impl FnOnce() -> T) -> Result<T, RegistryError> {
-        let revoked = self
-            .state
-            .revoked
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if *revoked {
+        if self.state.revoked.load(Ordering::Acquire) {
             return Err(RegistryError::RouteRevoked);
         }
         Ok(action())
@@ -730,24 +742,20 @@ impl Registry {
                 routes,
                 endpoint: registration.endpoint,
                 route_lease: Arc::new(RouteLeaseState {
-                    revoked: Mutex::new(false),
+                    revoked: AtomicBool::new(false),
                 }),
             },
         );
     }
 
-    // Session removal marks the lease revoked in a brief non-suspending critical
-    // section;the lease flag has no async form (see with_active).
-    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub(crate) fn remove(&mut self, session: SessionId) -> bool {
         let Some(registered) = self.sessions.remove(&session) else {
             return false;
         };
-        *registered
+        registered
             .route_lease
             .revoked
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+            .store(true, Ordering::Release);
         for route in registered.routes {
             self.routes.remove(&route);
         }

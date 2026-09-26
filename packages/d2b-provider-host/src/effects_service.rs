@@ -37,7 +37,7 @@ use d2b_provider_toolkit::{
 };
 use d2b_resource_types::{ServiceDecl, ServiceMethod};
 
-use crate::driver::HostDriverEffects;
+use crate::driver::{HostDriverEffects, ObserveError};
 use crate::facets::HostEffectFacets;
 
 /// The Host family's declared effects service.
@@ -158,7 +158,7 @@ impl HostDriverEffects for HostEffectsService {
         host_ref: &ResourceRef,
         provider_ref: &ResourceRef,
         spec: &HostSpec,
-    ) -> Result<HostObservationReport, String> {
+    ) -> Result<HostObservationReport, ObserveError> {
         match HostReconciler::new()
             .reconcile_with_probe(
                 host_ref,
@@ -177,7 +177,7 @@ impl HostDriverEffects for HostEffectsService {
                 // rather than failing the resource.
                 let mut status = HostReconciler::new()
                     .reconcile(host_ref, provider_ref, spec)
-                    .map_err(|error| format!("{probe_error}; {error}"))?;
+                    .map_err(|error| ObserveError { probe: probe_error, fallback: Some(error) })?;
                 status.phase = ResourcePhase::Degraded;
                 Ok(HostObservationReport {
                     status,

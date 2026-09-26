@@ -52,7 +52,7 @@ use serde_json::{Value, json};
 
 /// Canonical location the default-switch auto-flip gate reads from.
 /// Mirrors `nixos-modules/options-daemon.nix:validationEvidenceDir`.
-pub const DEFAULT_EVIDENCE_DIR: &str = "/var/lib/d2b/validated";
+pub(crate) const DEFAULT_EVIDENCE_DIR: &str = "/var/lib/d2b/validated";
 
 /// One known readiness wave plus the per-wave Layer-2 validator scripts
 /// the operator is expected to have exercised before
@@ -62,7 +62,7 @@ pub const DEFAULT_EVIDENCE_DIR: &str = "/var/lib/d2b/validated";
 /// `readinessWaveSpecs` in `nixos-modules/options-daemon.nix` -
 /// `tests/host-validate-verb-eval.sh` enforces parity.
 #[derive(Debug, Clone, Copy)]
-pub struct WaveSpec {
+pub(crate) struct WaveSpec {
     /// Wave id, e.g. `"p1"` or `"w5Fu"`. Matches the file basename the
     /// readiness option consumes (`/var/lib/d2b/validated/<wave>.json`).
     pub wave: &'static str,
@@ -76,7 +76,7 @@ pub struct WaveSpec {
 /// Canonical, deterministic wave order. Sequencing matches the
 /// natural rollout (`w*Fu` follow-ups → `p0`..`p7` phase work) so
 /// human readers can scan the report top-to-bottom.
-pub const WAVE_CATALOG: &[WaveSpec] = &[
+pub(crate) const WAVE_CATALOG: &[WaveSpec] = &[
     WaveSpec {
         wave: "w4Fu",
         summary: "Headless daemon + supervisor path (Ubuntu Tier-1 smoke).",
@@ -179,7 +179,7 @@ pub const WAVE_CATALOG: &[WaveSpec] = &[
 /// Per-wave status reported by both dry-run and apply modes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum WaveStatus {
+pub(crate) enum WaveStatus {
     /// Every declared validator script is present on disk.
     Ready,
     /// At least one declared validator script is missing.
@@ -212,7 +212,7 @@ impl WaveStatus {
 }
 
 #[derive(Debug, Clone)]
-pub struct WaveReport {
+pub(crate) struct WaveReport {
     pub wave: &'static str,
     pub summary: &'static str,
     pub status: WaveStatus,
@@ -226,7 +226,8 @@ pub struct WaveReport {
 }
 
 #[derive(Debug, Clone)]
-pub struct ValidateReport {
+/// Complete result of one `host validate` run, as per-wave evidence rows.
+pub(crate) struct ValidateReport {
     pub mode: ValidateMode,
     pub evidence_dir: PathBuf,
     pub scripts_dir: PathBuf,
@@ -234,7 +235,8 @@ pub struct ValidateReport {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ValidateMode {
+/// The mutation mode of a `host validate` run.
+pub(crate) enum ValidateMode {
     DryRun,
     Apply,
 }
@@ -251,7 +253,7 @@ impl ValidateMode {
 /// Inputs to a `host validate` invocation. All paths are absolute or
 /// resolved by `run_host_validate` against the process cwd.
 #[derive(Debug, Clone)]
-pub struct ValidateRequest {
+pub(crate) struct ValidateRequest {
     pub mode: ValidateMode,
     /// Where per-wave evidence records are written
     /// (`<wave>.json`). Defaults to `DEFAULT_EVIDENCE_DIR`.
@@ -310,7 +312,7 @@ fn resolve_default_scripts_dir() -> PathBuf {
 
 /// Top-level entry point invoked from `cmd_host_validate` in
 /// `lib.rs`.
-pub fn run_host_validate(req: &ValidateRequest) -> ValidateReport {
+pub(crate) fn run_host_validate(req: &ValidateRequest) -> ValidateReport {
     let mut waves = Vec::with_capacity(WAVE_CATALOG.len());
     for spec in WAVE_CATALOG {
         if let Some(only) = &req.only_wave
@@ -534,7 +536,7 @@ fn read_hostname() -> String {
 // Renderers
 // ---------------------------------------------------------------
 
-pub fn render_summary(report: &ValidateReport) -> Value {
+pub(crate) fn render_summary(report: &ValidateReport) -> Value {
     let waves: Vec<Value> = report
         .waves
         .iter()
@@ -568,7 +570,7 @@ pub fn render_summary(report: &ValidateReport) -> Value {
     })
 }
 
-pub fn render_human(report: &ValidateReport) -> String {
+pub(crate) fn render_human(report: &ValidateReport) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
     let counts = tally(&report.waves);
@@ -622,7 +624,8 @@ fn tally(waves: &[WaveReport]) -> serde_json::Map<String, Value> {
     m
 }
 
-pub fn exit_code(report: &ValidateReport) -> i32 {
+/// Derive the process exit code from the validation report statuses.
+pub(crate) fn exit_code(report: &ValidateReport) -> i32 {
     // Apply mode: any write-failure is exit 1.
     // Any wave still `Missing` after apply is exit 78 (operator must
     // re-run after running the per-wave validator).

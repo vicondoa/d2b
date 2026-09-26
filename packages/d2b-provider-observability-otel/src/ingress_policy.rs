@@ -152,7 +152,9 @@ impl core::fmt::Debug for MetricPoint {
 /// A bounded frame. All points are admitted or rejected together.
 #[derive(Clone, PartialEq)]
 pub struct MetricFrame {
-    /// Approximate encoded frame size.
+    /// Encoded frame size measured at the frame's decode boundary. A frame
+    /// built without a boundary measurement carries zero, and admission then
+    /// measures the canonical encoded frame instead of trusting the caller.
     pub encoded_bytes: usize,
     /// Data points.
     pub points: Vec<MetricPoint>,
@@ -396,7 +398,16 @@ impl IngressPolicyGate {
         {
             return (IngressOutcome::Quarantined, IngressErrorClass::Malformed);
         }
-        if frame.measured_encoded_bytes() > MAX_INGRESS_FRAME_BYTES {
+        // The size is measured once at the frame's decode boundary
+        // (admit_raw/admit_parsed) and threaded through `encoded_bytes`;
+        // a frame built without a boundary measurement carries zero and
+        // is measured here so admission never trusts an unmeasured size.
+        let encoded_bytes = if frame.encoded_bytes == 0 {
+            frame.measured_encoded_bytes()
+        } else {
+            frame.encoded_bytes
+        };
+        if encoded_bytes > MAX_INGRESS_FRAME_BYTES {
             return self.reject(ingress, connection_id, IngressErrorClass::Oversize);
         }
         if !valid_resource_attributes(&frame.resource_attributes) {
@@ -649,7 +660,7 @@ impl IngressPolicyGate {
                 ingress = ?ingress,
                 "ingress connection tracking table full; new connection rejected"
             );
-            return (IngressOutcome::Rejected, IngressErrorClass::Malformed);
+            return (IngressOutcome::Rejected, IngressErrorClass::None);
         }
         let state = self
             .connections

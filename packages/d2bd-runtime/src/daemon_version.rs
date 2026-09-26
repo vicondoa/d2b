@@ -71,18 +71,29 @@ pub enum DaemonRestartStatus {
     VersionFileUnreadable { detail: String },
 }
 
+/// Failure classifying one file-system read in the restart-status
+/// computation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VersionFileReadError {
+    /// The file does not exist.
+    Missing,
+    /// The file exists but could not be read or parsed.
+    Unreadable(String),
+}
+
 /// File-system reads the [`compute_restart_status`] function needs.
 /// Production CLI: [`SystemFilesystemReader`]. Tests: an in-memory
 /// fake that maps the two paths to canned outcomes.
 pub trait FilesystemReader: Send + Sync {
-    /// Returns the parsed [`DaemonVersionFile`], `None` if absent,
-    /// or `Err(detail)` if present but unparseable.
-    fn read_version_file(&self) -> Result<Option<DaemonVersionFile>, String>;
+    /// Returns the parsed [`DaemonVersionFile`],
+    /// [`VersionFileReadError::Missing`] if absent, or
+    /// [`VersionFileReadError::Unreadable`] if present but unreadable.
+    fn read_version_file(&self) -> Result<DaemonVersionFile, VersionFileReadError>;
     /// Returns the canonicalized path the install-path symlink
     /// resolves to (`/run/current-system/sw/bin/d2bd` on
-    /// NixOS, the package install path on Tier-0). `None` if the
-    /// path does not exist.
-    fn read_on_disk_binary_path(&self) -> Result<Option<String>, String>;
+    /// NixOS, the package install path on Tier-0).
+    /// [`VersionFileReadError::Missing`] if the path does not exist.
+    fn read_on_disk_binary_path(&self) -> Result<String, VersionFileReadError>;
 }
 
 /// Production [`FilesystemReader`] backed by `/run/d2b/version`
@@ -97,15 +108,18 @@ impl FilesystemReader for SystemFilesystemReader {
         clippy::disallowed_methods,
         reason = "synchronous path"
     )]
-    fn read_version_file(&self) -> Result<Option<DaemonVersionFile>, String> {
+    fn read_version_file(&self) -> Result<DaemonVersionFile, VersionFileReadError> {
         match std::fs::read_to_string(&self.version_file_path) {
-            Ok(content) => {
-                let parsed: DaemonVersionFile = serde_json::from_str(&content)
-                    .map_err(|e| format!("parsing {}: {}", self.version_file_path, e))?;
-                Ok(Some(parsed))
+            Ok(content) => serde_json::from_str(&content).map_err(|e| {
+                VersionFileReadError::Unreadable(format!(
+                    "parsing {}: {}",
+                    self.version_file_path, e
+                ))
+            }),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                Err(VersionFileReadError::Missing)
             }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(err) => Err(err.to_string()),
+            Err(err) => Err(VersionFileReadError::Unreadable(err.to_string())),
         }
     }
 
@@ -113,11 +127,13 @@ impl FilesystemReader for SystemFilesystemReader {
         clippy::disallowed_methods,
         reason = "synchronous path"
     )]
-    fn read_on_disk_binary_path(&self) -> Result<Option<String>, String> {
+    fn read_on_disk_binary_path(&self) -> Result<String, VersionFileReadError> {
         match std::fs::canonicalize(&self.install_path) {
-            Ok(p) => Ok(Some(p.to_string_lossy().into_owned())),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(err) => Err(err.to_string()),
+            Ok(p) => Ok(p.to_string_lossy().into_owned()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                Err(VersionFileReadError::Missing)
+            }
+            Err(err) => Err(VersionFileReadError::Unreadable(err.to_string())),
         }
     }
 }
@@ -127,16 +143,18 @@ impl FilesystemReader for SystemFilesystemReader {
 /// classified [`DaemonRestartStatus`].
 pub fn compute_restart_status(reader: &dyn FilesystemReader) -> DaemonRestartStatus {
     let version = match reader.read_version_file() {
-        Ok(Some(v)) => v,
-        Ok(None) => return DaemonRestartStatus::DaemonNotRunning,
-        Err(detail) => return DaemonRestartStatus::VersionFileUnreadable { detail },
+        Ok(v) => v,
+        Err(VersionFileReadError::Missing) => return DaemonRestartStatus::DaemonNotRunning,
+        Err(VersionFileReadError::Unreadable(detail)) => {
+            return DaemonRestartStatus::VersionFileUnreadable { detail }
+        }
     };
     let on_disk = match reader.read_on_disk_binary_path() {
-        Ok(Some(p)) => p,
+        Ok(p) => p,
         // Install path missing OR an unrelated error → treat as
         // "no on-disk newer binary" rather than spurious pending-
         // restart; the daemon process is still authoritative.
-        _ => return DaemonRestartStatus::UpToDate,
+        Err(_) => return DaemonRestartStatus::UpToDate,
     };
     if version.binary_path == on_disk {
         DaemonRestartStatus::UpToDate
@@ -174,44 +192,45 @@ mod tests {
 
     #[derive(Default)]
     struct FakeFs {
-        version: Mutex<Option<Result<Option<DaemonVersionFile>, String>>>,
-        on_disk: Mutex<Option<Result<Option<String>, String>>>,
+        version: Mutex<Option<Result<DaemonVersionFile, VersionFileReadError>>>,
+        on_disk: Mutex<Option<Result<String, VersionFileReadError>>>,
     }
 
     impl FakeFs {
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn with_version_running(path: &str) -> Self {
             let me = Self::default();
-            *me.version.lock().unwrap() = Some(Ok(Some(DaemonVersionFile {
+            *me.version.lock().unwrap() = Some(Ok(DaemonVersionFile {
                 server_version: "0.4.0".to_owned(),
                 binary_path: path.to_owned(),
                 started_at: "2026-05-29T03:00:00Z".to_owned(),
                 protocol_version: 3,
-            })));
+            }));
             me
         }
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn with_on_disk(self, path: &str) -> Self {
-            *self.on_disk.lock().unwrap() = Some(Ok(Some(path.to_owned())));
+            *self.on_disk.lock().unwrap() = Some(Ok(path.to_owned()));
             self
         }
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn with_no_version_file(self) -> Self {
-            *self.version.lock().unwrap() = Some(Ok(None));
-            *self.on_disk.lock().unwrap() = Some(Ok(Some("ignored".to_owned())));
+            *self.version.lock().unwrap() = Some(Err(VersionFileReadError::Missing));
+            *self.on_disk.lock().unwrap() = Some(Ok("ignored".to_owned()));
             self
         }
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn with_unparseable_version(self) -> Self {
-            *self.version.lock().unwrap() =
-                Some(Err("parsing /run/d2b/version: expected JSON".to_owned()));
+            *self.version.lock().unwrap() = Some(Err(VersionFileReadError::Unreadable(
+                "parsing /run/d2b/version: expected JSON".to_owned(),
+            )));
             self
         }
     }
 
     impl FilesystemReader for FakeFs {
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-        fn read_version_file(&self) -> Result<Option<DaemonVersionFile>, String> {
+        fn read_version_file(&self) -> Result<DaemonVersionFile, VersionFileReadError> {
             self.version
                 .lock()
                 .unwrap()
@@ -219,8 +238,12 @@ mod tests {
                 .expect("fake fs configured for version")
         }
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-        fn read_on_disk_binary_path(&self) -> Result<Option<String>, String> {
-            self.on_disk.lock().unwrap().clone().unwrap_or(Ok(None))
+        fn read_on_disk_binary_path(&self) -> Result<String, VersionFileReadError> {
+            self.on_disk
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or(Err(VersionFileReadError::Missing))
         }
     }
 

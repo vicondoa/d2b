@@ -37,19 +37,20 @@ mod error;
 mod host;
 mod user;
 
-pub mod ownership;
+mod ownership;
+#[cfg(feature = "test-support")]
 pub mod testing;
 
 pub use error::SystemCoreError;
 pub use host::{
     HostCapabilityClass, HostObservationReport, HostProbeEffectPort,
-    HostProbeMetadata, HostProbeSnapshot, HostReconciler, HostStatusReport,
+    HostProbeMetadata, HostReconciler, HostStatusReport,
     ISOLATION_POSTURE_MESSAGE, MinijailPlatformGate, NO_ISOLATION_STATUS_FIELDS,
 };
 pub use ownership::{DISOWNED_RESOURCE_TYPES, OWNED_RESOURCE_TYPES};
 pub use user::{
     DiscoveredUser, UserBinding, UserDiscoveryCondition, UserDiscoveryEffectPort,
-    UserIdentityDigest, UserObservation, UserReconciler, UserStatusReport,
+    UserIdentityDigest, UserObservation, UserReconciler, UserStatusReport, required_bindings,
 };
 
 /// The Provider name this bootstrap controller implements.
@@ -61,10 +62,4 @@ pub const PROVIDER_NAME: &str = "system-core";
 /// the same constant the Host primitive contract pins.
 pub const PROVIDER_REF: &str = d2b_contracts_resource::v3::host::HOST_PROVIDER_REF;
 
-/// The canonical `Provider/system-core` resource UID.
-///
-/// This is the fixed UID the daemon's bootstrap admits for the bootstrap
-/// Provider's own subject row. It is not part of any wire contract; the
-/// bus keeps its own copy until the daemon's composition re-homes its
-/// subject installation onto this constant.
-pub const PROVIDER_UID: &str = "11111111-1111-4111-8111-111111111111";
+

@@ -66,7 +66,7 @@ impl AudioBindingChildSource for ProviderChildren {
 
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
     audio_binding_descriptor(InteractionDriverArgs {
-        zone: "work".to_owned(),
+        zone: ZoneId::parse("work").expect("zone"),
         controller_generation: ControllerGeneration::new(3).expect("generation"),
         effects: Arc::new(UnusedEffects),
         behavior: AudioBinding::new(Arc::new(ProviderChildren)),
@@ -79,7 +79,6 @@ fn binding_spec() -> AudioBindingSpec {
         ResourceRef::parse("Guest/workstation").expect("target"),
         "work",
     )
-    .expect("binding spec")
 }
 
 fn envelope() -> InteractionSpecEnvelope {
@@ -198,8 +197,8 @@ fn a_foreign_row_is_refused() {
         .downcast::<InteractionSpecEnvelope>()
         .expect("the decoder yields the family envelope");
     let behavior = AudioBinding::new(Arc::new(ProviderChildren));
-    assert_eq!(
+    assert!(matches!(
         behavior.validate(&envelope),
-        Err(InteractionEffectError::InvalidResource)
-    );
+        Err(InteractionEffectError::InvalidSpec(_))
+    ));
 }

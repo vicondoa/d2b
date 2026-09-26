@@ -92,6 +92,11 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
     }
 
     /// Admit a route retained by the daemon after bus registration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClipboardRuntimeError::SessionUnauthenticated`] when the
+    /// retained route is not authenticated for this Provider.
     pub fn admit_route(
         &self,
         route: AuthenticatedSessionRouteBinding,

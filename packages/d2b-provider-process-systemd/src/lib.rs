@@ -16,18 +16,39 @@
 //! validates the ticket and calls the injected
 //! [`ProcessLaunchEffectPort`], which the fixed core process effect adapter
 //! implements.
+//!
+//! The library target exports the surface production composes today: the
+//! Provider controller, the `lifecycle` root re-exports, [`effects_service`],
+//! and [`operations`]. The controller family (`controller`), `drain`,
+//! `metrics`, `audit`, `launch`, and `sandbox` have no production consumer:
+//! this crate's conformance tests exercise the first three, and the daemon
+//! reconcile composition has not landed on any of the six, so they compile
+//! behind the `test-support` feature instead of being exported by the
+//! library.
 
 #![deny(missing_docs)]
 
+// The gated surface above has no production consumer: this crate's tests and
+// the conformance suites reach it, and consumers opt in through the
+// `test-support` feature. Gating on `any(test, feature = "test-support")`
+// makes it available automatically to this crate's unit tests; the
+// integration tests that consume it declare `required-features`, so run those
+// with `--features test-support` (or let the Bazel `*_test_support` target
+// compile them).
+#[cfg(any(test, feature = "test-support"))]
 pub mod audit;
+#[cfg(any(test, feature = "test-support"))]
 pub mod controller;
+#[cfg(any(test, feature = "test-support"))]
 pub mod drain;
 pub mod effects_service;
-pub mod error;
+#[cfg(any(test, feature = "test-support"))]
 pub mod launch;
-pub mod lifecycle;
+mod lifecycle;
+#[cfg(any(test, feature = "test-support"))]
 pub mod metrics;
 pub mod operations;
+#[cfg(any(test, feature = "test-support"))]
 pub mod sandbox;
 
 pub use lifecycle::{
@@ -138,7 +159,7 @@ impl<P: ProcessLaunchEffectPort> SystemdProcessProvider<P> {
         if ticket.operation().cancellation() == CancellationBinding::Cancelled {
             debug!(
                 provider = PROVIDER_NAME,
-                resource = %ticket.process_ref().to_canonical_string(),
+                resource = %ticket.process_ref(),
                 "assignment rejected: operation cancelled"
             );
             return Err(ProcessConformanceError::Cancelled);

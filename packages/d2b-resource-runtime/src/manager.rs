@@ -48,6 +48,7 @@
 //! never touch disk (AE6, R11): they only update the in-memory view and
 //! publish.
 
+/// The module declared name, asserted by the crate smoke test.
 pub const MODULE_NAME: &str = "manager";
 
 use std::collections::{HashMap, HashSet};
@@ -204,8 +205,9 @@ impl ResourceView {
     /// generation N pass as readiness of generation N+1.
     pub fn observed_status(&self) -> Option<ResourceStatus> {
         self.status
-            .clone()
+            .as_ref()
             .filter(|_| self.status_generation == Some(self.generation))
+            .cloned()
     }
 
     /// The `status.resource` layer published **for this exact row
@@ -333,6 +335,12 @@ pub enum ResourceManagerMsg {
     List {
         selector: ResourceSelector,
         reply: oneshot::Sender<Result<Vec<ResourceView>, ResourceError>>,
+    },
+    /// Stable-uid to manager-key resolution through the uid index (KTD2):
+    /// `None` when no row with that uid is in this manager.
+    KeyForUid {
+        uid: [u8; 16],
+        reply: oneshot::Sender<Result<Option<ResourceKey>, ResourceError>>,
     },
     /// External API watch (R23): served from the in-memory hub; replay plus
     /// live delivery is gap-free within the daemon epoch.
@@ -662,7 +670,7 @@ impl ResourceManagerState {
                 type_name: type_name.to_string(),
                 message: error.to_string(),
             })?;
-        let target_binding = TargetBinding::new(Arc::clone(&self.targets), assignment);
+        let target_binding = TargetBinding::new((*self.targets).clone(), assignment);
         let args = ResourceActorArgs {
             row: row.clone(),
             target: target_binding.handle(),
@@ -847,7 +855,9 @@ impl ResourceManagerState {
 pub struct ResourceManagerArgs {
     /// The Zone this manager is the runtime authority for (KTD5).
     pub zone: String,
+    /// The single-writer spec store persisting desired rows.
     pub store: Arc<SpecStore>,
+    /// The per-type provider registry producing resource drivers.
     pub providers: ProviderDirectory,
     pub hub: Arc<WatchHub>,
     /// Manager-boundary admission hook (KTD2 execution decision).
@@ -871,17 +881,12 @@ pub struct ResourceManagerArgs {
 }
 
 /// The per-Zone manager actor (spec section 4).
+#[derive(Default)]
 pub struct ResourceManager;
 
 impl ResourceManager {
     pub const fn new() -> Self {
         Self
-    }
-}
-
-impl Default for ResourceManager {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -970,10 +975,10 @@ impl Actor for ResourceManager {
             }
             ResourceManagerMsg::Ensure { subject, owner, desired, reply } => {
                 let result = if desired.key.zone != state.zone {
-                    Err(ResourceError::ManagerRpc(format!(
+                    Err(ResourceError::ManagerRejected { reason: format!(
                         "resource zone {} does not belong to manager zone {}",
                         desired.key.zone, state.zone
-                    )))
+                    ) })
                 } else {
                     match resolve_owner(state, owner.as_ref()) {
                         Ok(owner_uid) => {
@@ -1003,6 +1008,9 @@ impl Actor for ResourceManager {
                     .filter_map(|key| state.view(key))
                     .collect();
                 reply.send(Ok(views)).ok();
+            }
+            ResourceManagerMsg::KeyForUid { uid, reply } => {
+                reply.send(Ok(state.by_uid.get(&uid).cloned())).ok();
             }
             ResourceManagerMsg::Watch { selector, after, reply } => {
                 // One manager serializes list snapshots, revisions, and watch
@@ -1097,9 +1105,9 @@ impl Actor for ResourceManager {
                             }
                         }
                     }
-                    None => Err(ResourceError::ManagerRpc(format!(
+                    None => Err(ResourceError::ManagerRejected { reason: format!(
                         "parent {parent} is not known to the manager"
-                    ))),
+                    ) }),
                 };
                 reply.send(result).ok();
             }
@@ -1247,9 +1255,9 @@ fn resolve_owner(
         None => Ok(None),
         Some(owner_key) => match state.rows.get(owner_key) {
             Some(row) => Ok(Some(row.uid)),
-            None => Err(ResourceError::ManagerRpc(format!(
+            None => Err(ResourceError::ManagerRejected { reason: format!(
                 "owner {owner_key} is not known to the manager"
-            ))),
+            ) }),
         },
     }
 }
@@ -1295,9 +1303,9 @@ fn reparent_refusal(
         .get(&existing_owner)
         .map(ResourceKey::to_string)
         .unwrap_or_else(|| "an unknown owner".to_owned());
-    Some(ResourceError::ManagerRpc(format!(
+    Some(ResourceError::ManagerRejected { reason: format!(
         "child {key} is owned by {owner}; refusing re-parent to {parent}"
-    )))
+    ) })
 }
 
 fn handle_from_outcome(outcome: &EnsureOutcome, actor: ActorRef<ResourceMsg>) -> ResourceHandle {
@@ -1320,9 +1328,9 @@ fn register_watch(
 ) -> Result<WatchId, ResourceError> {
     let target = registration.target.clone();
     let Some(target_actor) = state.actors.get(&target).cloned() else {
-        return Err(ResourceError::ManagerRpc(format!(
+        return Err(ResourceError::ManagerRejected { reason: format!(
             "watch target {target} has no running actor"
-        )));
+        ) });
     };
     let id = WatchId(state.next_watch_id);
     state.next_watch_id += 1;
@@ -1350,7 +1358,7 @@ async fn reconcile_children(
     desired: Vec<ChildEnsure>,
 ) -> Result<ChildrenDiff, ResourceError> {
     let Some(parent_row) = state.rows.get(owner).cloned() else {
-        return Err(ResourceError::ManagerRpc(format!("owner {owner} is not known to the manager")));
+        return Err(ResourceError::ManagerRejected { reason: format!("owner {owner} is not known to the manager") });
     };
     let subject =
         MutationSubject { principal: owner.to_string(), origin: ResourceProvenance::Resource };
@@ -1387,21 +1395,33 @@ async fn reconcile_children(
     // Obsolete: owned, not deleting, not desired anymore.
     let desired_names: std::collections::HashSet<String> =
         desired.iter().map(|child| child.name.clone()).collect();
-    let owned: Vec<StoredDesiredResource> = state
+    let owned: Vec<ResourceKey> = state
         .rows
         .values()
         .filter(|row| row.owner_uid == Some(parent_row.uid) && !row.deleting)
-        .cloned()
+        .map(|row| row.key.clone())
         .collect();
     for child in owned {
-        if !desired_names.contains(&child.key.name) {
-            state.remove_internal(&subject, &child.key).await?;
-            diff.obsolete.push(child.key.clone());
+        if !desired_names.contains(&child.name) {
+            state.remove_internal(&subject, &child).await?;
+            diff.obsolete.push(child);
         }
     }
     Ok(diff)
 }
 
+
+/// Route one request/reply exchange through the manager mailbox.
+async fn manager_rpc<T>(
+    actor: &ActorRef<ResourceManagerMsg>,
+    build: impl FnOnce(oneshot::Sender<Result<T, ResourceError>>) -> ResourceManagerMsg,
+) -> Result<T, ResourceError> {
+    let (reply, rx) = oneshot::channel();
+    actor
+        .send_message(build(reply))
+        .map_err(|_| ResourceError::ManagerUnavailable("manager channel closed".into()))?;
+    rx.await.map_err(|_| ResourceError::ManagerUnavailable("manager dropped the request".into()))?
+}
 
 /// The manager endpoint injected into every driver context (R2): all
 /// durable child mutations and internal-watch registrations ride the manager
@@ -1420,11 +1440,7 @@ impl ManagerActorEndpoint {
         &self,
         build: impl FnOnce(oneshot::Sender<Result<T, ResourceError>>) -> ResourceManagerMsg,
     ) -> Result<T, ResourceError> {
-        let (reply, rx) = oneshot::channel();
-        self.manager
-            .send_message(build(reply))
-            .map_err(|_| ResourceError::ManagerRpc("manager channel closed".into()))?;
-        rx.await.map_err(|_| ResourceError::ManagerRpc("manager dropped the request".into()))?
+        manager_rpc(&self.manager, build).await
     }
 }
 
@@ -1497,10 +1513,12 @@ pub struct ResourceManagerClient {
 }
 
 impl ResourceManagerClient {
+    /// Wrap the manager's actor handle as a caller-facing client.
     pub fn new(actor: ActorRef<ResourceManagerMsg>) -> Self {
         Self { actor }
     }
 
+    /// The underlying manager actor handle, for supervision wiring.
     pub fn actor(&self) -> &ActorRef<ResourceManagerMsg> {
         &self.actor
     }
@@ -1509,13 +1527,20 @@ impl ResourceManagerClient {
         &self,
         build: impl FnOnce(oneshot::Sender<Result<T, ResourceError>>) -> ResourceManagerMsg,
     ) -> Result<T, ResourceError> {
-        let (reply, rx) = oneshot::channel();
-        self.actor
-            .send_message(build(reply))
-            .map_err(|_| ResourceError::ManagerRpc("manager channel closed".into()))?;
-        rx.await.map_err(|_| ResourceError::ManagerRpc("manager dropped the request".into()))?
+        manager_rpc(&self.actor, build).await
     }
 
+    /// Apply one top-level desired resource; the row commits, then the
+    /// resource's actor starts (F1: the durable commit precedes the spawn).
+    ///
+    /// # Errors
+    ///
+    /// [`ResourceError::ManagerUnavailable`] when the manager channel is
+    /// closed or the request is dropped; [`ResourceError::AdmissionDenied`] when
+    /// mutation admission refuses; [`ResourceError::Provider`] when no
+    /// driver factory can produce the resource; [`ResourceError::Store`] on
+    /// durable store failure; [`ResourceError::DeletingConflict`] when the
+    /// row is marked deleting.
     pub async fn apply(
         &self,
         subject: MutationSubject,
@@ -1524,6 +1549,14 @@ impl ResourceManagerClient {
         self.rpc(|reply| ResourceManagerMsg::Apply { subject, desired, reply }).await
     }
 
+    /// Ensure a desired row, optionally bound to an owner; an unknown owner
+    /// or a row of another Zone is refused.
+    ///
+    /// # Errors
+    ///
+    /// Beyond the [`Self::apply`] variants:
+    /// [`ResourceError::ManagerRejected`] also when the desired zone is not
+    /// the manager's zone or the named owner is not known to the manager.
     pub async fn ensure(
         &self,
         subject: MutationSubject,
@@ -1533,6 +1566,15 @@ impl ResourceManagerClient {
         self.rpc(|reply| ResourceManagerMsg::Ensure { subject, owner, desired, reply }).await
     }
 
+    /// Mark a row deleting and run its cleanup; absent rows are a no-op.
+    ///
+    /// # Errors
+    ///
+    /// [`ResourceError::ManagerUnavailable`] when the request cannot be routed;
+    /// [`ResourceError::AdmissionDenied`] when mutation admission refuses;
+    /// [`ResourceError::Store`] on durable store failure;
+    /// [`ResourceError::DeletingConflict`] when the row is already marked
+    /// deleting.
     pub async fn remove(
         &self,
         subject: MutationSubject,
@@ -1541,10 +1583,21 @@ impl ResourceManagerClient {
         self.rpc(|reply| ResourceManagerMsg::Remove { subject, key, reply }).await
     }
 
+    /// The runtime view of one row, including the observed status of the
+    /// row's current generation when there is one.
+    ///
+    /// # Errors
+    ///
+    /// [`ResourceError::ManagerUnavailable`] when the request cannot be routed.
     pub async fn get(&self, key: ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
         self.rpc(|reply| ResourceManagerMsg::Get { key, reply }).await
     }
 
+    /// Every runtime view matching the selector.
+    ///
+    /// # Errors
+    ///
+    /// [`ResourceError::ManagerUnavailable`] when the request cannot be routed.
     pub async fn list(
         &self,
         selector: ResourceSelector,
@@ -1552,6 +1605,27 @@ impl ResourceManagerClient {
         self.rpc(|reply| ResourceManagerMsg::List { selector, reply }).await
     }
 
+    /// The manager key for one stable row uid, resolved through the manager's
+    /// uid index; `None` when no row with that uid is in this manager.
+    ///
+    /// # Errors
+    ///
+    /// [`ResourceError::ManagerUnavailable`] when the request cannot be routed.
+    pub async fn key_for_uid(
+        &self,
+        uid: [u8; 16],
+    ) -> Result<Option<ResourceKey>, ResourceError> {
+        self.rpc(|reply| ResourceManagerMsg::KeyForUid { uid, reply }).await
+    }
+
+    /// Open a gap-free watch on matching changes: the registration atomically
+    /// serves a list snapshot (from `after`, when servable) and live delivery.
+    ///
+    /// # Errors
+    ///
+    /// [`ResourceError::ManagerUnavailable`] when the request cannot be routed; an
+    /// unsupported cursor (older or future epoch, or evicted from the ring)
+    /// is reported as [`WatchRegistration::Expired`] rather than an error.
     pub async fn watch(
         &self,
         selector: ExternalWatchSelector,
@@ -1560,6 +1634,11 @@ impl ResourceManagerClient {
         self.rpc(|reply| ResourceManagerMsg::Watch { selector, after, reply }).await
     }
 
+    /// The stored desired row, without the runtime view.
+    ///
+    /// # Errors
+    ///
+    /// [`ResourceError::ManagerUnavailable`] when the request cannot be routed.
     pub async fn get_row(
         &self,
         key: ResourceKey,
@@ -1567,6 +1646,11 @@ impl ResourceManagerClient {
         self.rpc(|reply| ResourceManagerMsg::GetRow { key, reply }).await
     }
 
+    /// Every stored row owned by one owner uid.
+    ///
+    /// # Errors
+    ///
+    /// [`ResourceError::ManagerUnavailable`] when the request cannot be routed.
     pub async fn list_owned(
         &self,
         owner_uid: [u8; 16],
@@ -1574,6 +1658,17 @@ impl ResourceManagerClient {
         self.rpc(|reply| ResourceManagerMsg::ListOwned { owner_uid, reply }).await
     }
 
+    /// Ensure one child of `parent`. A child whose row already commits a
+    /// different owner is refused rather than re-parented (R8).
+    ///
+    /// # Errors
+    ///
+    /// [`ResourceError::ManagerUnavailable`] when the request cannot be routed,
+    /// [`ResourceError::ManagerRejected`] when the parent is unknown or the
+    /// child is owned by a different parent;
+    /// [`ResourceError::AdmissionDenied`], [`ResourceError::Provider`],
+    /// [`ResourceError::Store`], and
+    /// [`ResourceError::DeletingConflict`] as for [`Self::apply`].
     pub async fn ensure_child(
         &self,
         parent: ResourceKey,
@@ -1582,6 +1677,13 @@ impl ResourceManagerClient {
         self.rpc(|reply| ResourceManagerMsg::ChildEnsure { parent, child, reply }).await
     }
 
+    /// Register an internal watch routed to a running target actor.
+    ///
+    /// # Errors
+    ///
+    /// [`ResourceError::ManagerUnavailable`] when the request cannot be routed,
+    /// [`ResourceError::ManagerRejected`] when the watch target has no
+    /// running actor.
     pub async fn register_watch(
         &self,
         subscriber: ResourceKey,
@@ -1590,10 +1692,26 @@ impl ResourceManagerClient {
         self.rpc(|reply| ResourceManagerMsg::RegisterWatch { registration, subscriber, reply }).await
     }
 
+    /// Cancel a watch allocated by [`Self::register_watch`].
+    ///
+    /// # Errors
+    ///
+    /// [`ResourceError::ManagerUnavailable`] when the request cannot be routed.
     pub async fn cancel_watch(&self, watch: WatchId) -> Result<(), ResourceError> {
         self.rpc(|reply| ResourceManagerMsg::CancelWatch { watch, reply }).await
     }
 
+    /// Declarative owned-child reconciliation: missing children are ensured,
+    /// obsolete children are removed, and children already deleting are
+    /// reported as obsolete.
+    ///
+    /// # Errors
+    ///
+    /// [`ResourceError::ManagerUnavailable`] when the request cannot be
+    /// routed, [`ResourceError::ManagerRejected`] when the owner is unknown
+    /// or a child would be re-parented;
+    /// [`ResourceError::AdmissionDenied`], [`ResourceError::Provider`], and
+    /// [`ResourceError::Store`] as for [`Self::apply`].
     pub async fn reconcile_children(
         &self,
         owner: ResourceKey,
@@ -1601,7 +1719,6 @@ impl ResourceManagerClient {
     ) -> Result<ChildrenDiff, ResourceError> {
         self.rpc(|reply| ResourceManagerMsg::ReconcileChildren { owner, desired, reply }).await
     }
-
 }
 
 /// Owner filtering resolves the owner key to its stable uid against the
@@ -1773,7 +1890,7 @@ mod tests {
             })
             .expect("notify reconnect");
         wait_status(&h.client, &k, ResourceStatus::Ready).await;
-        let binding = TargetBinding::new(Arc::clone(&targets), assignment);
+        let binding = TargetBinding::new((*targets).clone(), assignment);
         assert_eq!(
             binding.guest().expect("guest handle").session_generation(),
             Some(1),

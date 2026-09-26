@@ -44,7 +44,7 @@ impl InteractionDriverEffects for UnusedEffects {
 
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
     shell_session_descriptor(InteractionDriverArgs {
-        zone: "work".to_owned(),
+        zone: ZoneId::parse("work").expect("zone"),
         controller_generation: ControllerGeneration::new(3).expect("generation"),
         effects: Arc::new(UnusedEffects),
         behavior: ShellSession,

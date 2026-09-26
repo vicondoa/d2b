@@ -209,19 +209,15 @@ tagline sweep (drop "on microvm.nix" from `flake.nix` /
 
 ## `d2b status` output schema (v1.0 vs v1.1 vs v1.1.1)
 
-> **v1.1.1 status note**: v1.1.1 ships the `StatusOutputV3` wire
-> schema (`packages/d2b/src/lib.rs` `StatusServicesOutputV3`
-> + `from_v2` migration shim) per the rename map below. The CLI
-> `d2b status` command still EMITS the v1.0/v1.1
-> `StatusServicesOutputV2` shape at v1.1.1; the emit-side
-> flip to V3 is scheduled for v1.1.2.
+> **v1.1.1 status note**: v1.1.1 keeps emitting the v1.0/v1.1
+> `StatusServicesOutputV2` shape. The V3 wire schema
+> ships with the emit-side flip, scheduled for v1.1.2. The V3 shape is the
+> rename map below applied to V2; it is not a type you can name today.
 >
 > Tooling authors that consume the JSON output should:
 > - At v1.1.1, continue parsing V2 (`microvm`/`snd`/`virtiofsd`).
 > - At v1.1.2+, parse V3 (`hypervisor`/`audio`/`virtiofsd_per_share`/...)
 >   with the documented rename map below.
-> - The `StatusServicesOutputV3::from_v2()` migration shim lives
->   in the public surface so tooling can adopt incrementally.
 
 ### v1.1.1 SHIPPED → CLI-emit at v1.1.2 rename map
 
@@ -232,7 +228,7 @@ instances: `virtiofsd[store]` is the share whose `tag` is `store`;
 output; JSON uses `{"virtiofsd_per_share": {"store": {...}},
 "usbip_backend_per_env": {"default": {...}}}`.
 
-| V2 field (current CLI output)    | V3 field (wire-side, v1.1.1+) | Notes                                                              |
+| V2 field (current CLI output)    | V3 field (wire-side, v1.1.2+) | Notes                                                              |
 | -------------------------------- | ----------------------------- | ------------------------------------------------------------------ |
 | `d2b`                        | (deleted)                     | The legacy wrapper unit was removed in v1.0; V3 drops the field.   |
 | `microvm`                        | `hypervisor`                  | Cloud Hypervisor runner is broker-spawned in v1.1.                 |

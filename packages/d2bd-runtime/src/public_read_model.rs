@@ -14,7 +14,10 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::{daemon_config::ArtifactPaths, typed_error::TypedError};
+use crate::{
+    daemon_config::ArtifactPaths,
+    typed_error::{TypedError, error_source},
+};
 
 pub fn request_invalidates_public_status_model(request: &crate::wire::Request) -> bool {
     !matches!(
@@ -49,8 +52,15 @@ pub struct FileFingerprint {
 
 #[derive(Debug)]
 pub struct CachedPublicFrame {
-    pub fingerprint: PublicArtifactFingerprint,
-    pub value: Value,
+    fingerprint: PublicArtifactFingerprint,
+    value: Value,
+}
+
+impl CachedPublicFrame {
+    /// The rendered read-model frame.
+    pub fn value(&self) -> &Value {
+        &self.value
+    }
 }
 
 #[derive(Debug)]
@@ -59,12 +69,6 @@ pub struct PublicStatusReadModel {
     latest_published_generation: AtomicU64,
     list: ArcSwapOption<CachedPublicFrame>,
     status: ArcSwapOption<CachedPublicFrame>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PublicReadModelKind {
-    List,
-    Status,
 }
 
 impl PublicStatusReadModel {
@@ -83,27 +87,26 @@ impl PublicStatusReadModel {
         self.status.store(None);
     }
 
-    pub fn load_list(&self, pidfd_generation: u64) -> Option<Value> {
+    pub fn load_list(&self, pidfd_generation: u64) -> Option<Arc<CachedPublicFrame>> {
         self.load_if_fresh(pidfd_generation, &self.list)
     }
 
-    pub fn load_status(&self, pidfd_generation: u64) -> Option<Value> {
+    pub fn load_status(&self, pidfd_generation: u64) -> Option<Arc<CachedPublicFrame>> {
         self.load_if_fresh(pidfd_generation, &self.status)
     }
 
     pub fn publish_if_unchanged(
         &self,
-        kind: PublicReadModelKind,
+        kind: public_wire::PublicReadModelKind,
         before: Option<PublicArtifactFingerprint>,
         current: Option<PublicArtifactFingerprint>,
         value: Value,
-        kind_name: &'static str,
     ) -> Value {
         let Some(fingerprint) = before else {
             return value;
         };
         if current.as_ref() == Some(&fingerprint) {
-            self.publish_stable(kind, value, fingerprint, kind_name)
+            self.publish_stable(kind, value, fingerprint)
         } else {
             value
         }
@@ -113,20 +116,19 @@ impl PublicStatusReadModel {
         &self,
         pidfd_generation: u64,
         slot: &ArcSwapOption<CachedPublicFrame>,
-    ) -> Option<Value> {
+    ) -> Option<Arc<CachedPublicFrame>> {
         let cached = slot.load_full()?;
-        (cached.fingerprint.pidfd_generation == pidfd_generation).then(|| cached.value.clone())
+        (cached.fingerprint.pidfd_generation == pidfd_generation).then_some(cached)
     }
 
     fn publish_stable(
         &self,
-        kind: PublicReadModelKind,
+        kind: public_wire::PublicReadModelKind,
         value: Value,
         fingerprint: PublicArtifactFingerprint,
-        kind_name: &'static str,
     ) -> Value {
         let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
-        let value = attach_read_model_metadata(value, &fingerprint, generation, kind_name);
+        let value = attach_read_model_metadata(value, &fingerprint, generation, kind);
         let mut observed = self.latest_published_generation.load(Ordering::Acquire);
         while generation > observed {
             match self.latest_published_generation.compare_exchange_weak(
@@ -141,8 +143,8 @@ impl PublicStatusReadModel {
                         value: value.clone(),
                     });
                     match kind {
-                        PublicReadModelKind::List => self.list.store(Some(frame)),
-                        PublicReadModelKind::Status => self.status.store(Some(frame)),
+                        public_wire::PublicReadModelKind::List => self.list.store(Some(frame)),
+                        public_wire::PublicReadModelKind::Status => self.status.store(Some(frame)),
                     }
                     return value;
                 }
@@ -150,7 +152,7 @@ impl PublicStatusReadModel {
             }
         }
         tracing::debug!(
-            read_model_kind = kind_name,
+            read_model_kind = ?kind,
             generation,
             latest_generation = observed,
             "skipped stale public read-model publish"
@@ -193,6 +195,7 @@ fn file_fingerprint(path: &Path) -> Result<FileFingerprint, TypedError> {
     let metadata = fs::metadata(path).map_err(|error| TypedError::InternalIo {
         context: format!("fingerprint {}", path.display()),
         detail: error.to_string(),
+        source: error_source(error),
     })?;
     Ok(FileFingerprint {
         path: path.display().to_string(),
@@ -212,7 +215,7 @@ fn attach_read_model_metadata(
     mut frame: Value,
     fingerprint: &PublicArtifactFingerprint,
     generation: u64,
-    kind: &'static str,
+    kind: public_wire::PublicReadModelKind,
 ) -> Value {
     let metadata = json!({
         "schemaVersion": 1,
@@ -223,7 +226,7 @@ fn attach_read_model_metadata(
         "freshness": "fresh",
         "deepRefresh": "available",
     });
-    if kind == "status"
+    if kind == public_wire::PublicReadModelKind::Status
         && let Some(status) = frame.get_mut("status").and_then(Value::as_object_mut)
     {
         status.insert("readModel".to_owned(), metadata);

@@ -4,7 +4,7 @@ use core::fmt;
 use d2b_contracts_provider::v3::semantic_services::{
     SemanticFamily,
     child_resources::{
-        BindingChildKind, BindingChildPlacement, BindingChildRequest, BindingChildSet,
+        ProcessChildKind, BindingChildPlacement, BindingChildRequest, BindingChildSet,
         explicit_binding_children, explicit_binding_children_with_user,
     },
 };
@@ -19,7 +19,7 @@ const SECURITY_KEY_PROVIDER_REF: &str = "Provider/device-security-key";
 
 const SECURITY_KEY_BINDING_CHILD_REQUESTS: [BindingChildRequest; 2] = [
     BindingChildRequest::process(
-        BindingChildKind::Process,
+        ProcessChildKind::Process,
         BindingChildPlacement::Guest,
         "guest-frontend",
         "Provider/system-systemd",
@@ -36,7 +36,7 @@ const SECURITY_KEY_BINDING_CHILD_REQUESTS: [BindingChildRequest; 2] = [
 
 const SECURITY_KEY_BINDING_CHILD_REQUESTS_WITH_USER: [BindingChildRequest; 2] = [
     BindingChildRequest::process_for_user(
-        BindingChildKind::Process,
+        ProcessChildKind::Process,
         BindingChildPlacement::Guest,
         "guest-frontend",
         "Provider/system-systemd",
@@ -159,6 +159,11 @@ pub struct SecurityKeyController {
 impl SecurityKeyController {
     /// Construct a controller after admitting the configured session-ring
     /// capacity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecurityKeyControllerError::RingCapacity`] when the session
+    /// ring capacity is outside the frozen bound.
     pub fn new(
         holder: ResourceUid,
         backing: PhysicalUsbBackingClaim,
@@ -172,6 +177,13 @@ impl SecurityKeyController {
     }
 
     /// Construct a controller from one exact Core Device admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecurityKeyControllerError::RingCapacity`] when the session
+    /// ring capacity is outside the frozen bound and
+    /// [`SecurityKeyControllerError::Lease`] when the admission cannot seed
+    /// the lease.
     pub fn new_authorized(
         device_uid: ResourceUid,
         admission: SecurityKeyAdmission,
@@ -206,6 +218,11 @@ impl SecurityKeyController {
     /// `target_ref` is the Guest execution target extracted from the Binding's
     /// target object. The caller must provide the authored Binding and its
     /// existing Service; a Service alone never creates consumer children.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecurityKeyControllerError::Admission`] when the target is
+    /// not a Guest resource or the binding child declaration fails.
     pub fn child_resources(
         binding_ref: &ResourceRef,
         service_ref: &ResourceRef,
@@ -240,6 +257,12 @@ impl SecurityKeyController {
 
     /// Build security-key children while binding the frontend to the
     /// authored workload User identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecurityKeyControllerError::Admission`] when the target is
+    /// not a Guest resource, the user reference is not a User, or the binding
+    /// child declaration fails.
     pub fn child_resources_for_user(
         binding_ref: &ResourceRef,
         service_ref: &ResourceRef,
@@ -277,6 +300,12 @@ impl SecurityKeyController {
     }
 
     /// Start a session through the authority-before-open sequence.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecurityKeyControllerError::Lease`] with the underlying
+    /// [`SecurityKeyLeaseError`] when the session cannot start; the
+    /// controller is quarantined on authorization-denied failures.
     pub fn acquire<P: SecurityKeyEffectPort>(
         &mut self,
         session: SecurityKeySessionId,
@@ -307,6 +336,12 @@ impl SecurityKeyController {
     }
 
     /// Acquire a session after exact Device and holder revalidation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecurityKeyControllerError::Lease`] with the underlying
+    /// [`SecurityKeyLeaseError`] when the session cannot start; the
+    /// controller is quarantined on authorization-denied failures.
     pub fn acquire_authorized<P: SecurityKeyEffectPort>(
         &mut self,
         session: SecurityKeySessionId,
@@ -340,6 +375,12 @@ impl SecurityKeyController {
 
     /// Rebind the controller to fresh Core admission evidence after a
     /// completed session.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecurityKeyControllerError::Lease`] with
+    /// [`SecurityKeyLeaseError::AuthorizationDenied`] when the lease state or
+    /// the admission binding does not match.
     pub fn rebind_authorized(
         &mut self,
         device_uid: ResourceUid,
@@ -359,6 +400,12 @@ impl SecurityKeyController {
     }
 
     /// Complete and record the active session.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecurityKeyControllerError::Lease`] with
+    /// [`SecurityKeyLeaseError::InvalidTransition`] when no session is active
+    /// or with the underlying error when the physical backing release fails.
     pub fn complete<P: SecurityKeyEffectPort>(
         &mut self,
         port: &mut P,

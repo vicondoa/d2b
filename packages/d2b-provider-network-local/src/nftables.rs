@@ -264,7 +264,12 @@ pub struct FirewallDigest([u8; 32]);
 impl FirewallDigest {
     /// Render hexadecimal bytes for the bounded provider status field.
     pub fn to_hex(&self) -> String {
-        self.0.iter().map(|byte| format!("{byte:02x}")).collect()
+        use std::fmt::Write;
+        let mut out = String::with_capacity(64);
+        for byte in &self.0 {
+            write!(out, "{byte:02x}").expect("writing to String is infallible");
+        }
+        out
     }
 }
 
@@ -585,7 +590,11 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
         let mut words = [0u32; 64];
         for (index, word) in words[..16].iter_mut().enumerate() {
             let offset = index * 4;
-            *word = u32::from_be_bytes(chunk[offset..offset + 4].try_into().unwrap());
+            *word = u32::from_be_bytes(
+                chunk[offset..offset + 4]
+                    .try_into()
+                    .expect("64-byte chunk yields a 4-byte word slice"),
+            );
         }
         for index in 16..64 {
             let small0 = words[index - 15].rotate_right(7)

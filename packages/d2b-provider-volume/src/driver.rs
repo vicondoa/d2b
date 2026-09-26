@@ -48,7 +48,7 @@ use d2b_resource_runtime::error::{
     DriverFailure, DriverOp, FailureClass, FailureComparison, FailureDetail, FailureKind,
     FailureKinds,
 };
-use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
+use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName, StoredDesiredResource};
 use d2b_resource_types::{
     AllowedSources, CONVERTED_TYPE_VERBS, ChildCreation, ChildCustody, DriverDescriptor,
     WellKnownType,
@@ -243,11 +243,8 @@ pub trait VolumeDriverEffects: Send + Sync + 'static {
 // ---------------------------------------------------------------------------
 
 /// Everything the plane must construct to instantiate the Volume driver
-/// factory for one zone: the declared facet set the effects run over plus
-/// the zone identity every derived row folds in (U7).
+/// factory for one zone: the declared facet set the effects run over (U7).
 pub struct VolumeDriverArgs {
-    /// The zone this driver's rows live in.
-    pub zone: String,
     /// The daemon-supplied facet set the family's effects implementation is
     /// built from. The composition supplies the objects; the driver never
     /// holds a daemon state type and no externally built port appears here
@@ -279,7 +276,6 @@ impl ResourceDriverFactory for VolumeDriverFactory {
 
     async fn create(&self, _key: &ResourceKey) -> Box<dyn DynResourceDriver> {
         Box::new(VolumeDriver::new(VolumeDriverArgs {
-            zone: self.args.zone.clone(),
             facets: self.args.facets.clone(),
         }))
     }
@@ -324,17 +320,17 @@ impl VolumeDriver {
     }
 
     /// Decode the stored envelope and the typed spec in one step.
-    fn decoded_spec(
+    fn decoded_spec<'a>(
         &self,
-        ctx: &ResourceContext,
+        ctx: &'a ResourceContext,
         op: DriverOp,
-    ) -> Result<(VolumeSpecEnvelope, VolumeSpec), VolumeDriverError> {
+    ) -> Result<(&'a VolumeSpecEnvelope, VolumeSpec), VolumeDriverError> {
         let envelope = ctx
             .spec::<VolumeSpecEnvelope>()
             .map_err(|_| self.error(VolumeDriverErrorKind::SpecInvalid, op))?;
         let spec = serde_json::from_slice::<VolumeSpec>(&envelope.base.to_canonical_bytes())
             .map_err(|_| self.error(VolumeDriverErrorKind::SpecInvalid, op))?;
-        Ok((envelope.clone(), spec))
+        Ok((envelope, spec))
     }
 
     /// Provider check (old `validate_spec`): the Volume must select the
@@ -377,7 +373,7 @@ impl VolumeDriver {
         spec: &VolumeSpec,
         op: DriverOp,
     ) -> Result<Vec<DesiredBindingChild>, VolumeDriverError> {
-        let intents = desired_binding_intents(volume_ref.clone(), spec, false).map_err(|error| {
+        let intents = desired_binding_intents(volume_ref, spec, false).map_err(|error| {
             self.error(VolumeDriverErrorKind::ChildDerivation, op)
                 .with_detail(derivation_detail(error.code()))
         })?;
@@ -422,7 +418,7 @@ impl VolumeDriver {
         ctx: &mut ResourceContext,
         desired: &[DesiredBindingChild],
         op: DriverOp,
-    ) -> Result<(), VolumeDriverError> {
+    ) -> Result<Vec<StoredDesiredResource>, VolumeDriverError> {
         for child in desired {
             let ensure = ChildEnsure {
                 type_name: ResourceTypeName::new(VOLUME_BINDING_TYPE),
@@ -438,19 +434,22 @@ impl VolumeDriver {
             .children()
             .await
             .map_err(|_| self.error(VolumeDriverErrorKind::ChildMutation, op))?;
-        for row in owned {
-            if row.key.type_name != VOLUME_BINDING_TYPE
-                || desired.iter().any(|child| child.name == row.key.name)
-            {
-                continue;
-            }
+        let obsolete = owned
+            .iter()
+            .filter(|row| {
+                row.key.type_name == VOLUME_BINDING_TYPE
+                    && !desired.iter().any(|child| child.name == row.key.name)
+            })
+            .map(|row| row.key.clone())
+            .collect::<Vec<_>>();
+        for key in obsolete {
             // Obsolete child: the manager retires it and owns its own
             // teardown (endpoint -> process last), R9/F3.
-            ctx.delete(&row.key)
+            ctx.delete(&key)
                 .await
                 .map_err(|_| self.error(VolumeDriverErrorKind::ChildMutation, op))?;
         }
-        Ok(())
+        Ok(owned)
     }
 
     /// Spawn the preserved layout effect as a long effect (R5, KTD12): the
@@ -564,7 +563,7 @@ impl ResourceDriver for VolumeDriver {
     /// Spec decode plus provider reference check (old `validate_spec`).
     async fn validate(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
         let (envelope, _) = self.decoded_spec(ctx, DriverOp::Validate)?;
-        self.check_provider(&envelope, DriverOp::Validate)?;
+        self.check_provider(envelope, DriverOp::Validate)?;
         Ok(())
     }
 
@@ -573,7 +572,7 @@ impl ResourceDriver for VolumeDriver {
     /// reconcile.
     async fn recover(&mut self, ctx: &mut ResourceContext) -> Result<RecoveryOutcome, Self::Error> {
         let (envelope, _) = self.decoded_spec(ctx, DriverOp::Recover)?;
-        self.check_provider(&envelope, DriverOp::Recover)?;
+        self.check_provider(envelope, DriverOp::Recover)?;
         let uid = resource_uid(ctx.uid())
             .map_err(|_| self.error(VolumeDriverErrorKind::SpecInvalid, DriverOp::Recover))?;
         if self.effects.has_layout(&uid) {
@@ -598,23 +597,22 @@ impl ResourceDriver for VolumeDriver {
     /// converged.
     async fn reconcile(&mut self, ctx: &mut ResourceContext) -> Result<ReconcileOutcome, Self::Error> {
         let (envelope, spec) = self.decoded_spec(ctx, DriverOp::Reconcile)?;
-        self.check_provider(&envelope, DriverOp::Reconcile)?;
+        self.check_provider(envelope, DriverOp::Reconcile)?;
         let uid = resource_uid(ctx.uid())
             .map_err(|_| self.error(VolumeDriverErrorKind::SpecInvalid, DriverOp::Reconcile))?;
         let volume_ref = self.volume_ref(ctx, DriverOp::Reconcile)?;
 
         if !self.layout_ready.load(std::sync::atomic::Ordering::SeqCst) {
-            return self.spawn_layout(ctx, uid, spec, envelope.base.get("provider").map(|value| {
-                serde_json::to_value(value).unwrap_or(serde_json::Value::Null)
-            }));
+            let provider = envelope.base.get("provider").map(|value| {
+                serde_json::to_value(value).expect("canonical JSON values always serialize")
+            });
+            return self.spawn_layout(ctx, uid, spec, provider);
         }
 
         let desired = self.desired_children(&volume_ref, &spec, DriverOp::Reconcile)?;
-        self.reconcile_children(ctx, &desired, DriverOp::Reconcile).await?;
-        let owned = ctx
-            .children()
-            .await
-            .map_err(|_| self.error(VolumeDriverErrorKind::ChildMutation, DriverOp::Reconcile))?;
+        let owned = self
+            .reconcile_children(ctx, &desired, DriverOp::Reconcile)
+            .await?;
         let converged = desired.iter().all(|child| {
             owned
                 .iter()
@@ -753,11 +751,12 @@ mod tests {
     use d2b_resource_runtime::identity::{
         ResourceKey, ResourceProvenance, StoredDesiredResource,
     };
-    use d2b_resource_runtime::target::TargetHandle;
     use super::{VolumeDriverArgs, VolumeDriverFactory, volume_spec_decoder};
     use crate::test_support::{RecordingRuntime, recording_facets};
 
     // -- fakes ---------------------------------------------------------------
+    /// Records nothing: the Volume flows schedule their re-checks on
+    /// [`VOLUME_RESYNC`], and the tests assert the outcome that carries them.
     struct NullRequeue;
 
     impl RequeueScheduler for NullRequeue {
@@ -839,7 +838,6 @@ mod tests {
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
         let ctx = ResourceContext::new(
             row,
-            TargetHandle::Host,
             volume_spec_decoder(),
             Arc::new(manager),
             Arc::new(NullRequeue),
@@ -851,7 +849,6 @@ mod tests {
 
     async fn driver(runtime: Arc<RecordingRuntime>) -> Box<dyn DynResourceDriver> {
         let factory = VolumeDriverFactory::new(VolumeDriverArgs {
-            zone: "work".to_owned(),
             facets: recording_facets(runtime),
         });
         factory
@@ -874,8 +871,6 @@ mod tests {
         // The actor re-reconciles on the effect completion.
         d.reconcile(&mut f.ctx).await.expect("reconcile two")
     }
-
-    // -- factory -------------------------------------------------------------
 
     // -- ensure: layout effect, then children ---------------------------------
 
@@ -1116,7 +1111,6 @@ mod tests {
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut ctx2 = ResourceContext::new(
             grown,
-            TargetHandle::Host,
             volume_spec_decoder(),
             Arc::new(manager.clone()),
             Arc::new(NullRequeue),
@@ -1145,7 +1139,6 @@ mod tests {
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut ctx3 = ResourceContext::new(
             shrunk,
-            TargetHandle::Host,
             volume_spec_decoder(),
             Arc::new(manager.clone()),
             Arc::new(NullRequeue),

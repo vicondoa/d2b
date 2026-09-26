@@ -18,10 +18,12 @@
 
 use std::sync::Arc;
 
+#[cfg(any(test, feature = "test-support"))]
 use d2b_resource_runtime::identity::ResourceKey;
 use d2b_resource_runtime::metadata::{
     METADATA_EXECUTION_DOMAINS, MetadataDriverFactory, metadata_spec_decoder,
 };
+#[cfg(any(test, feature = "test-support"))]
 use d2b_resource_runtime::provider::{ProviderDirectory, ProviderDirectoryError};
 
 use crate::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
@@ -69,6 +71,11 @@ pub fn metadata_descriptor(resource_type: WellKnownType) -> DriverDescriptor {
 /// This is the assertion every per-type crate's registration test runs: the
 /// coverage lives here once, and each crate contributes the one type it
 /// declares.
+///
+/// The assertion is test-only: every caller is a `tests/registration.rs`
+/// suite, so it is compiled only for this crate's own tests or for consumers
+/// that opt in through the `test-support` feature.
+#[cfg(any(test, feature = "test-support"))]
 pub async fn assert_metadata_registration(descriptor: &DriverDescriptor, expected: WellKnownType) {
     assert_eq!(descriptor.resource_type, expected);
     let type_name = descriptor.resource_type.to_resource_type_name();

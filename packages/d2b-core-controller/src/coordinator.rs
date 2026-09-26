@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, btree_map::Entry};
 
-use d2b_contracts_resource::v3::{ResourceBundleGenerationId, ZoneId};
+use d2b_contracts_resource::v3::ZoneId;
 
 /// Closed failure from the per-Zone coordinator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,16 +18,12 @@ pub enum CoordinatorError {
     VmNotRegistered,
     /// A VM was already bound to a different Zone.
     VmZoneConflict,
-    /// A USBIP reconciliation pass is already active for this Zone.
-    UsbipReconcileInFlight,
     /// An activation lock is already held for this Zone.
     ActivationInFlight,
     /// A different configuration generation is already staged for this Zone.
     ConfigurationStagingInFlight,
     /// The caller attempted to release a lock that is not held.
     LockNotHeld,
-    /// A shutdown generation cannot be zero.
-    InvalidShutdownGeneration,
     /// A shutdown generation cannot advance any further.
     ShutdownGenerationExhausted,
     /// A configuration generation cannot be zero.
@@ -41,13 +37,11 @@ impl CoordinatorError {
             Self::ZoneNotRegistered => "zone-coordinator-zone-not-registered",
             Self::VmNotRegistered => "zone-coordinator-vm-not-registered",
             Self::VmZoneConflict => "zone-coordinator-vm-zone-conflict",
-            Self::UsbipReconcileInFlight => "zone-coordinator-usbip-reconcile-in-flight",
             Self::ActivationInFlight => "zone-coordinator-activation-in-flight",
             Self::ConfigurationStagingInFlight => {
                 "zone-coordinator-configuration-staging-in-flight"
             }
             Self::LockNotHeld => "zone-coordinator-lock-not-held",
-            Self::InvalidShutdownGeneration => "zone-coordinator-shutdown-generation-invalid",
             Self::ShutdownGenerationExhausted => "zone-coordinator-shutdown-generation-exhausted",
             Self::InvalidConfigurationGeneration => {
                 "zone-coordinator-configuration-generation-invalid"
@@ -67,8 +61,6 @@ impl std::error::Error for CoordinatorError {}
 /// Per-Zone configuration staging state.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ConfigurationStaging {
-    pub(crate) pending: Option<ResourceBundleGenerationId>,
-    pub(crate) active: Option<ResourceBundleGenerationId>,
     pub(crate) pending_ordinal: Option<u64>,
     pub(crate) active_ordinal: Option<u64>,
 }
@@ -77,21 +69,9 @@ impl ConfigurationStaging {
     /// Create empty staging for one Zone.
     pub const fn empty() -> Self {
         Self {
-            pending: None,
-            active: None,
             pending_ordinal: None,
             active_ordinal: None,
         }
-    }
-
-    /// Borrow the staged outgoing or candidate generation.
-    pub const fn pending(&self) -> Option<&ResourceBundleGenerationId> {
-        self.pending.as_ref()
-    }
-
-    /// Borrow the active generation known to this coordinator.
-    pub const fn active(&self) -> Option<&ResourceBundleGenerationId> {
-        self.active.as_ref()
     }
 
     /// Return the staged configuration ordinal used by the daemon publisher.
@@ -109,8 +89,6 @@ impl core::fmt::Debug for ConfigurationStaging {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("ConfigurationStaging")
-            .field("has_pending", &self.pending.is_some())
-            .field("has_active", &self.active.is_some())
             .field("has_pending_ordinal", &self.pending_ordinal.is_some())
             .field("has_active_ordinal", &self.active_ordinal.is_some())
             .finish()
@@ -119,7 +97,6 @@ impl core::fmt::Debug for ConfigurationStaging {
 
 #[derive(Clone, PartialEq, Eq)]
 struct ZoneCoordinatorState {
-    usbip_reconcile_active: bool,
     force_shutdown_generation: Option<u64>,
     activation_lock_held: bool,
     staging: ConfigurationStaging,
@@ -128,7 +105,6 @@ struct ZoneCoordinatorState {
 impl ZoneCoordinatorState {
     const fn new() -> Self {
         Self {
-            usbip_reconcile_active: false,
             force_shutdown_generation: None,
             activation_lock_held: false,
             staging: ConfigurationStaging::empty(),
@@ -139,18 +115,12 @@ impl ZoneCoordinatorState {
 /// A snapshot of state owned by one Zone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZoneCoordinatorSnapshot {
-    usbip_reconcile_active: bool,
     force_shutdown_generation: Option<u64>,
     activation_lock_held: bool,
     staging: ConfigurationStaging,
 }
 
 impl ZoneCoordinatorSnapshot {
-    /// Whether this Zone currently owns a USBIP reconcile pass.
-    pub const fn usbip_reconcile_active(&self) -> bool {
-        self.usbip_reconcile_active
-    }
-
     /// Return the force-shutdown generation, if one is recorded.
     pub const fn force_shutdown_generation(&self) -> Option<u64> {
         self.force_shutdown_generation
@@ -229,11 +199,6 @@ impl ZoneCoordinator {
             .ok_or(CoordinatorError::VmNotRegistered)
     }
 
-    /// Return the number of independently coordinated Zones.
-    pub fn zone_count(&self) -> usize {
-        self.zones.len()
-    }
-
     /// Return a redacted snapshot of one Zone's coordination state.
     pub fn snapshot(&self, zone: &ZoneId) -> Result<ZoneCoordinatorSnapshot, CoordinatorError> {
         let state = self
@@ -241,31 +206,10 @@ impl ZoneCoordinator {
             .get(zone)
             .ok_or(CoordinatorError::ZoneNotRegistered)?;
         Ok(ZoneCoordinatorSnapshot {
-            usbip_reconcile_active: state.usbip_reconcile_active,
             force_shutdown_generation: state.force_shutdown_generation,
             activation_lock_held: state.activation_lock_held,
             staging: state.staging.clone(),
         })
-    }
-
-    /// Acquire the per-Zone USBIP reconcile lease.
-    pub fn begin_usbip_reconcile(&mut self, zone: &ZoneId) -> Result<(), CoordinatorError> {
-        let state = self.state_mut(zone)?;
-        if state.usbip_reconcile_active {
-            return Err(CoordinatorError::UsbipReconcileInFlight);
-        }
-        state.usbip_reconcile_active = true;
-        Ok(())
-    }
-
-    /// Release the per-Zone USBIP reconcile lease.
-    pub fn finish_usbip_reconcile(&mut self, zone: &ZoneId) -> Result<(), CoordinatorError> {
-        let state = self.state_mut(zone)?;
-        if !state.usbip_reconcile_active {
-            return Err(CoordinatorError::LockNotHeld);
-        }
-        state.usbip_reconcile_active = false;
-        Ok(())
     }
 
     /// Acquire the configuration activation lock for one Zone.
@@ -288,19 +232,6 @@ impl ZoneCoordinator {
         Ok(())
     }
 
-    /// Record a force-shutdown generation only in the selected Zone.
-    pub fn set_force_shutdown_generation(
-        &mut self,
-        zone: &ZoneId,
-        generation: u64,
-    ) -> Result<(), CoordinatorError> {
-        if generation == 0 {
-            return Err(CoordinatorError::InvalidShutdownGeneration);
-        }
-        self.state_mut(zone)?.force_shutdown_generation = Some(generation);
-        Ok(())
-    }
-
     /// Advance and record a force-shutdown generation for one Zone.
     pub fn note_force_shutdown_request(&mut self, zone: &ZoneId) -> Result<u64, CoordinatorError> {
         let state = self.state_mut(zone)?;
@@ -311,29 +242,6 @@ impl ZoneCoordinator {
             .ok_or(CoordinatorError::ShutdownGenerationExhausted)?;
         state.force_shutdown_generation = Some(generation);
         Ok(generation)
-    }
-
-    /// Clear a force-shutdown generation after the matching Zone teardown.
-    pub fn clear_force_shutdown_generation(
-        &mut self,
-        zone: &ZoneId,
-        generation: u64,
-    ) -> Result<(), CoordinatorError> {
-        let state = self.state_mut(zone)?;
-        if state.force_shutdown_generation == Some(generation) {
-            state.force_shutdown_generation = None;
-        }
-        Ok(())
-    }
-
-    /// Stage a candidate generation for exactly one Zone.
-    pub fn stage_configuration(
-        &mut self,
-        zone: &ZoneId,
-        generation: ResourceBundleGenerationId,
-    ) -> Result<(), CoordinatorError> {
-        self.state_mut(zone)?.staging.pending = Some(generation);
-        Ok(())
     }
 
     /// Stage a broker-published configuration ordinal for exactly one Zone.
@@ -354,44 +262,6 @@ impl ZoneCoordinator {
             return Err(CoordinatorError::ConfigurationStagingInFlight);
         }
         state.staging.pending_ordinal = Some(ordinal);
-        Ok(())
-    }
-
-    /// Commit the staged generation after the durable generation record commit.
-    pub fn commit_configuration(
-        &mut self,
-        zone: &ZoneId,
-    ) -> Result<Option<ResourceBundleGenerationId>, CoordinatorError> {
-        let state = self.state_mut(zone)?;
-        let pending = state.staging.pending.take();
-        if let Some(generation) = pending.clone() {
-            state.staging.active = Some(generation);
-        }
-        Ok(pending)
-    }
-
-    /// Commit the broker-published ordinal after its durable generation record.
-    pub fn commit_configuration_ordinal(
-        &mut self,
-        zone: &ZoneId,
-    ) -> Result<Option<u64>, CoordinatorError> {
-        let state = self.state_mut(zone)?;
-        let pending = state.staging.pending_ordinal.take();
-        if let Some(ordinal) = pending {
-            state.staging.active_ordinal = Some(ordinal);
-        }
-        Ok(pending)
-    }
-
-    /// Clear a pending staging record after an aborted activation.
-    pub fn abort_configuration(&mut self, zone: &ZoneId) -> Result<(), CoordinatorError> {
-        self.state_mut(zone)?.staging.pending = None;
-        Ok(())
-    }
-
-    /// Clear a pending broker-published ordinal after an aborted activation.
-    pub fn abort_configuration_ordinal(&mut self, zone: &ZoneId) -> Result<(), CoordinatorError> {
-        self.state_mut(zone)?.staging.pending_ordinal = None;
         Ok(())
     }
 
@@ -420,11 +290,6 @@ mod tests {
         ZoneId::parse(name).expect("valid Zone")
     }
 
-    fn generation(byte: char) -> ResourceBundleGenerationId {
-        ResourceBundleGenerationId::parse(format!("sha256:{}", byte.to_string().repeat(64)))
-            .expect("valid generation")
-    }
-
     #[test]
     fn coordination_state_is_isolated_by_zone() {
         let mut coordinator = ZoneCoordinator::new();
@@ -435,51 +300,21 @@ mod tests {
         assert_eq!(coordinator.bind_vm("work-vm", &work), Ok(true));
         assert_eq!(coordinator.bind_vm("personal-vm", &personal), Ok(true));
 
-        coordinator.begin_usbip_reconcile(&work).unwrap();
         coordinator.begin_activation(&work).unwrap();
-        coordinator
-            .stage_configuration(&work, generation('a'))
-            .unwrap();
-        coordinator.set_force_shutdown_generation(&work, 7).unwrap();
+        coordinator.note_force_shutdown_request(&work).unwrap();
+        coordinator.stage_configuration_ordinal(&work, 4).unwrap();
 
         let untouched = coordinator.snapshot(&personal).unwrap();
-        assert!(!untouched.usbip_reconcile_active());
         assert!(!untouched.activation_lock_held());
         assert_eq!(untouched.force_shutdown_generation(), None);
-        assert_eq!(untouched.staging().pending(), None);
         assert_eq!(untouched.staging().pending_ordinal(), None);
         assert_eq!(
-            coordinator.begin_usbip_reconcile(&personal),
+            coordinator.begin_activation(&personal),
             Ok(()),
             "one Zone cannot suppress another Zone"
         );
         assert_eq!(coordinator.zone_for_vm("work-vm"), Ok(&work));
         assert_eq!(coordinator.zone_for_vm("personal-vm"), Ok(&personal));
-    }
-
-    #[test]
-    fn staged_generation_is_committed_only_for_its_zone() {
-        let mut coordinator = ZoneCoordinator::new();
-        let work = zone("work");
-        let personal = zone("personal");
-        coordinator.register_zone(work.clone());
-        coordinator.register_zone(personal.clone());
-        coordinator
-            .stage_configuration(&work, generation('a'))
-            .unwrap();
-        assert_eq!(coordinator.commit_configuration(&personal), Ok(None));
-        assert_eq!(
-            coordinator.commit_configuration(&work).unwrap(),
-            Some(generation('a'))
-        );
-        assert_eq!(
-            coordinator.snapshot(&work).unwrap().staging().active(),
-            Some(&generation('a'))
-        );
-        assert_eq!(
-            coordinator.snapshot(&personal).unwrap().staging().active(),
-            None
-        );
     }
 
     #[test]
@@ -527,15 +362,6 @@ mod tests {
                 .staging()
                 .pending_ordinal(),
             None
-        );
-        assert_eq!(coordinator.commit_configuration_ordinal(&work), Ok(Some(4)));
-        assert_eq!(
-            coordinator
-                .snapshot(&work)
-                .unwrap()
-                .staging()
-                .active_ordinal(),
-            Some(4)
         );
     }
 }

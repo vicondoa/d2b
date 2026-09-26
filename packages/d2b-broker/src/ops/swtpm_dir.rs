@@ -768,6 +768,7 @@ pub async fn harden(
     // 4. Idempotent ancestor traverse ACL for the swtpm principal on
     //    the per-VM root.
     apply_ancestor_traverse_acl(per_vm_root_fd.as_fd(), cfg.expected_uid)
+        .await
         .map_err(|reason| fail(reason, marker_result))?;
 
     // 5. Unlink a stale trusted control socket under the runtime dir.
@@ -1007,11 +1008,16 @@ fn verify_acl_clean(fd: std::os::fd::BorrowedFd<'_>) -> Result<(), &'static str>
 
 /// Idempotent `u:<uid>:--x` traverse ACL on the per-VM root so the
 /// swtpm principal can reach its dir through the sticky 3770 parent.
-fn apply_ancestor_traverse_acl(
+///
+/// The `setfacl` fork/exec/wait runs on the dedicated bounded setfacl
+/// worker (via [`pidfd_sys::run_setfacl_op_on_fd_async`]) so the executor
+/// worker is never parked on the subprocess.
+async fn apply_ancestor_traverse_acl(
     per_vm_root_fd: std::os::fd::BorrowedFd<'_>,
     uid: u32,
 ) -> Result<(), &'static str> {
-    pidfd_sys::run_setfacl_op_on_fd(per_vm_root_fd, "-m", &format!("u:{uid}:--x"))
+    pidfd_sys::run_setfacl_op_on_fd_async(per_vm_root_fd, "-m", &format!("u:{uid}:--x"))
+        .await
         .map_err(|_| reasons::ANCESTOR_ACL_FAILED)
 }
 

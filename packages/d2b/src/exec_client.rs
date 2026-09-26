@@ -494,6 +494,7 @@ fn expect_write(resp: ExecOpResponse) -> Result<ExecWriteStdinResult, ExecClient
     }
 }
 
+/// Expect the `ExecOpResponse::Start` variant, else return a protocol error.
 pub fn expect_start(resp: ExecOpResponse) -> Result<ExecStartResult, ExecClientError> {
     match resp {
         ExecOpResponse::Start(result) => Ok(result),
@@ -504,6 +505,7 @@ pub fn expect_start(resp: ExecOpResponse) -> Result<ExecStartResult, ExecClientE
     }
 }
 
+/// Expect the `ExecOpResponse::DetachedCreate` variant, else return a protocol error.
 pub fn expect_detached_create(
     resp: ExecOpResponse,
 ) -> Result<d2b_contracts_control::public_wire::ExecDetachedCreateResult, ExecClientError> {
@@ -516,6 +518,7 @@ pub fn expect_detached_create(
     }
 }
 
+/// Expect the `ExecOpResponse::List` variant, else return a protocol error.
 pub fn expect_detached_list(
     resp: ExecOpResponse,
 ) -> Result<d2b_contracts_control::public_wire::ExecDetachedListResult, ExecClientError> {
@@ -528,6 +531,7 @@ pub fn expect_detached_list(
     }
 }
 
+/// Expect the `ExecOpResponse::Logs` variant, else return a protocol error.
 pub fn expect_detached_logs(
     resp: ExecOpResponse,
 ) -> Result<d2b_contracts_control::public_wire::ExecDetachedLogsResult, ExecClientError> {
@@ -540,6 +544,7 @@ pub fn expect_detached_logs(
     }
 }
 
+/// Expect the `ExecOpResponse::Status` variant, else return a protocol error.
 pub fn expect_detached_status(
     resp: ExecOpResponse,
 ) -> Result<d2b_contracts_control::public_wire::ExecDetachedStatusResult, ExecClientError> {
@@ -552,6 +557,7 @@ pub fn expect_detached_status(
     }
 }
 
+/// Expect the `ExecOpResponse::Kill` variant, else return a protocol error.
 pub fn expect_detached_kill(
     resp: ExecOpResponse,
 ) -> Result<d2b_contracts_control::public_wire::ExecDetachedKillResult, ExecClientError> {

@@ -1,9 +1,9 @@
 use d2b_contracts_resource::v3::{ExecutionDomain, ResourceRef};
 use d2b_provider_audio_pipewire::{
     AudioArbitrationState, AudioBindingController, AudioBindingPhase, AudioChannel, AudioGrant,
-    AudioLeaseId, AudioMediator, AudioMediatorError, AudioReadiness, FakeAudioMediator,
-    GuestAudioReadiness, HostAudioReadiness, LevelPercent, shared_microphone_arbiter,
-    validate_audio_binding,
+    AudioLeaseId, AudioMediator, AudioMediatorError, AudioReadiness, AUDIO_QUEUE_BOUND,
+    FakeAudioMediator, GuestAudioReadiness, HostAudioReadiness, LevelPercent,
+    shared_microphone_arbiter, validate_audio_binding,
 };
 
 #[derive(Debug)]
@@ -68,7 +68,6 @@ fn binding() -> d2b_provider_audio_pipewire::AudioBindingSpec {
         ResourceRef::parse("Guest/dev-vm").unwrap(),
         "zone-a",
     )
-    .unwrap()
 }
 
 #[test]
@@ -180,7 +179,7 @@ fn queued_microphone_binding_is_not_ready() {
 
 #[test]
 fn bindings_can_share_one_service_microphone_authority() {
-    let shared = shared_microphone_arbiter(64);
+    let shared = shared_microphone_arbiter(AUDIO_QUEUE_BOUND);
     let mut first =
         AudioBindingController::with_shared_microphone(FakeAudioMediator::ready(), shared.clone());
     let mut second =
@@ -210,7 +209,7 @@ fn bindings_can_share_one_service_microphone_authority() {
 
 #[test]
 fn shared_finalization_does_not_enable_the_promoted_binding_through_the_old_mediator() {
-    let shared = shared_microphone_arbiter(64);
+    let shared = shared_microphone_arbiter(AUDIO_QUEUE_BOUND);
     let mut first =
         AudioBindingController::with_shared_microphone(FakeAudioMediator::ready(), shared.clone());
     let mut second =
@@ -225,7 +224,7 @@ fn shared_finalization_does_not_enable_the_promoted_binding_through_the_old_medi
         .unwrap();
 
     assert_eq!(
-        first.finalize_shared(AudioLeaseId::new(1)).unwrap(),
+        first.finalize(AudioLeaseId::new(1)).unwrap(),
         Some(AudioLeaseId::new(2))
     );
     assert_eq!(first.mediator().grant(), AudioGrant::Off);
@@ -303,7 +302,7 @@ fn speaker_admission_rejects_before_mutating_mediator() {
     let mut requested = binding();
     requested.grants.speaker_level =
         Some(d2b_provider_audio_pipewire::LevelPercent::new(25).expect("bounded test level"));
-    for lease in 1..=64 {
+    for lease in 1..=AUDIO_QUEUE_BOUND.get() as u64 {
         controller
             .reconcile(&requested, "zone-a", AudioLeaseId::new(lease))
             .unwrap();
@@ -311,7 +310,7 @@ fn speaker_admission_rejects_before_mutating_mediator() {
     let last_level = controller.mediator().level();
     assert_eq!(
         controller
-            .reconcile(&requested, "zone-a", AudioLeaseId::new(65))
+            .reconcile(&requested, "zone-a", AudioLeaseId::new(AUDIO_QUEUE_BOUND.get() as u64 + 1))
             .unwrap_err(),
         d2b_provider_audio_pipewire::AudioControllerError::Admission
     );
@@ -460,8 +459,7 @@ fn ready_audio_service_without_an_authored_binding_has_no_children() {
     let target_ref = ResourceRef::parse("Guest/dev-vm").expect("canonical Guest");
     let service_only_ref = service_ref.clone();
     let service_only =
-        d2b_provider_audio_pipewire::AudioBindingSpec::new(service_ref, target_ref, "zone-a")
-            .unwrap();
+        d2b_provider_audio_pipewire::AudioBindingSpec::new(service_ref, target_ref, "zone-a");
 
     assert_eq!(
         AudioBindingController::<FakeAudioMediator>::child_resources(

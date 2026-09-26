@@ -342,9 +342,45 @@ impl ZoneRouteAdmission {
                 if now_ms < snapshot.issued_at_unix_ms || now_ms >= snapshot.expires_at_unix_ms {
                     return Err(ZoneRouteFailClosedReason::Expired);
                 }
-                snapshot.source_zone = expected.source_zone.clone();
-                snapshot.target_zone = expected.target_zone.clone();
-                validate_snapshot(&snapshot, &expected)?;
+                let ZoneRouteAdmissionExpectation {
+                    source_zone,
+                    target_zone,
+                    zone_link_uid,
+                    edge,
+                    controller_generation,
+                    reconnect_generation,
+                    source_zone_uid,
+                    target_zone_uid,
+                    operation_id,
+                    verb,
+                    required_capability,
+                    policy_revision,
+                } = expected;
+                snapshot.source_zone = source_zone;
+                snapshot.target_zone = target_zone;
+                if snapshot.source_zone.is_none()
+                    || snapshot.target_zone.is_none()
+                    || snapshot.zone_link_uid != zone_link_uid
+                    || snapshot.edge != edge
+                    || snapshot.source_zone_uid != source_zone_uid
+                    || snapshot.target_zone_uid != target_zone_uid
+                    || snapshot.operation_id != operation_id
+                    || snapshot.verb != verb
+                    || snapshot.policy_revision != policy_revision
+                {
+                    return Err(ZoneRouteFailClosedReason::PolicyDenial);
+                }
+                if snapshot.controller_generation != controller_generation
+                    || snapshot.reconnect_generation != reconnect_generation
+                {
+                    return Err(ZoneRouteFailClosedReason::ZoneLinkDisconnected);
+                }
+                if snapshot.required_capability != required_capability {
+                    return Err(ZoneRouteFailClosedReason::MissingCapability);
+                }
+                if snapshot.expires_at_unix_ms <= snapshot.issued_at_unix_ms {
+                    return Err(ZoneRouteFailClosedReason::Expired);
+                }
                 Ok(snapshot)
             }
             #[cfg(any(test, feature = "test-support"))]
@@ -481,6 +517,7 @@ fn daemon_now_unix_seconds() -> Result<u64, ZoneRouteFailClosedReason> {
         .map_err(|_| ZoneRouteFailClosedReason::PolicyDenial)
 }
 
+#[cfg(test)]
 fn validate_snapshot(
     snapshot: &RouteAdmissionSnapshot,
     expected: &ZoneRouteAdmissionExpectation,
@@ -2862,5 +2899,43 @@ mod tests {
             queued.audit_event(),
             ZoneRouteAuditEventKind::ZoneLinkIntentQueued
         );
+    }
+
+    #[test]
+    fn every_engine_reason_has_a_distinct_wire_label() {
+        // The closed refusal vocabulary is the 16 reasons below; each must
+        // map to its own wire label, so a collision between two reasons'
+        // labels would fail this suite. This is a distinctness assertion,
+        // not a coverage claim: producing every reason is the other tests'
+        // job, and `SiblingOrParentRouteAdvert` cannot reach the engine from
+        // an advertisement at all - the contract's own constructor already
+        // proves descendant strictness and next-hop agreement, and the
+        // engine uses that reason only for a withdrawal naming a route
+        // another Zone owns.
+        let produced = [
+            ZoneRouteFailClosedReason::MalformedAdvert,
+            ZoneRouteFailClosedReason::UnknownParent,
+            ZoneRouteFailClosedReason::NamespaceViolation,
+            ZoneRouteFailClosedReason::SiblingOrParentRouteAdvert,
+            ZoneRouteFailClosedReason::Loop,
+            ZoneRouteFailClosedReason::MultiParent,
+            ZoneRouteFailClosedReason::Expired,
+            ZoneRouteFailClosedReason::Replay,
+            ZoneRouteFailClosedReason::RateLimited,
+            ZoneRouteFailClosedReason::QueueFullDropNew,
+            ZoneRouteFailClosedReason::MissingCapability,
+            ZoneRouteFailClosedReason::PolicyDenial,
+            ZoneRouteFailClosedReason::ZoneLinkDisconnected,
+            ZoneRouteFailClosedReason::HopLimitExceeded,
+            ZoneRouteFailClosedReason::RelayDenied,
+            ZoneRouteFailClosedReason::AttachmentNotPermittedOverZoneLink,
+        ];
+        let mut labels = produced
+            .iter()
+            .map(|reason| reason.label())
+            .collect::<Vec<_>>();
+        labels.sort_unstable();
+        labels.dedup();
+        assert_eq!(labels.len(), produced.len());
     }
 }

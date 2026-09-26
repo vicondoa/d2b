@@ -6,7 +6,7 @@
 //! database it coordinated.
 
 pub mod context;
-pub mod contract;
+mod contract;
 
-pub use context::{DependencySnapshot, ResourceSnapshot};
+pub use context::{DependencySnapshot, OwnerIdentity, ResourceSnapshot};
 pub use contract::ResourceKey;

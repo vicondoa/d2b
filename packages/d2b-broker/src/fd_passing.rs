@@ -10,17 +10,28 @@ use nix::sys::stat::fstat;
 use nix::unistd::close;
 use std::io::{IoSlice, IoSliceMut};
 
+/// A malformed or refused SCM_RIGHTS frame from the `recv_fds*` family:
+/// the frame lacks a required descriptor, carries duplicates or the wrong
+/// count or a non-CLOEXEC fd, was truncated, or failed I/O.
 #[derive(Debug, PartialEq, Eq)]
 pub enum FdPassingError {
+    /// A frame carrying no descriptor arrived where one was required.
     MissingPassedFd,
+    /// One send carried the same raw fd more than once.
     DuplicateFdInSingleSend,
+    /// The frame carried a different number of descriptors than the
+    /// operation declared.
     UnexpectedFdCount {
         expected: usize,
         actual: usize,
     },
+    /// A received descriptor was not CLOEXEC.
     MissingCloexec,
+    /// The payload was truncated mid-frame.
     MessageTruncated,
+    /// The ancillary control data was truncated.
     ControlTruncated,
+    /// The underlying socket I/O failed.
     IOError,
     /// Nothing is ready on the socket. A nonblocking receive reports an
     /// empty descriptor here rather than a failed one, so the caller can
@@ -28,16 +39,20 @@ pub enum FdPassingError {
     WouldBlock,
 }
 
+/// A set of raw fds the holder closes together on [`FdRegistry::clear`] or
+/// drop, transferring ownership from the registerer to the registry.
 #[derive(Debug, Default)]
 pub struct FdRegistry {
     owned: Vec<RawFd>,
 }
 
 impl FdRegistry {
+    /// Take ownership of `fd`, to be closed by this registry later.
     pub fn register(&mut self, fd: RawFd) {
         self.owned.push(fd);
     }
 
+    /// Close every registered fd, releasing this registry's ownership.
     pub fn clear(&mut self) {
         for fd in self.owned.drain(..) {
             let _ = close(fd);
@@ -51,20 +66,26 @@ impl Drop for FdRegistry {
     }
 }
 
+/// A borrowed raw fd that closes on drop unless [`FdLease::release`]
+/// disarms the close first, transferring ownership back to the caller.
 #[derive(Debug)]
 pub struct FdLease {
     fd: Option<RawFd>,
 }
 
 impl FdLease {
+    /// Take ownership of `fd`, to be closed on drop unless released.
     pub fn new(fd: RawFd) -> Self {
         Self { fd: Some(fd) }
     }
 
+    /// The still-owned fd, if not yet released.
     pub fn raw(&self) -> Option<RawFd> {
         self.fd
     }
 
+    /// Disarm the drop-time close and hand the fd back to the caller.
+    /// The lease no longer owns it:the caller must close or re-lease it..
     pub fn release(&mut self) -> Option<RawFd> {
         self.fd.take()
     }

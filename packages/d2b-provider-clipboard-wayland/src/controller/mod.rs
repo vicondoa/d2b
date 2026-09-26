@@ -14,8 +14,6 @@ pub const CLIPBOARD_REPAIR_INTERVAL_SECS: u64 = 300;
 pub struct ClipboardRunnerContract {
     service_package: &'static str,
     repair_interval_secs: u64,
-    watched_configuration_is_dependency: bool,
-    component_session_only: bool,
 }
 
 impl ClipboardRunnerContract {
@@ -31,12 +29,12 @@ impl ClipboardRunnerContract {
 
     /// Whether configuration is dependency-only.
     pub const fn watched_configuration_is_dependency(self) -> bool {
-        self.watched_configuration_is_dependency
+        true
     }
 
     /// Whether clipboard state remains on typed ComponentSession streams.
     pub const fn component_session_only(self) -> bool {
-        self.component_session_only
+        true
     }
 }
 
@@ -45,8 +43,6 @@ pub const fn clipboard_runner_contract() -> ClipboardRunnerContract {
     ClipboardRunnerContract {
         service_package: crate::MANAGEMENT_SERVICE,
         repair_interval_secs: CLIPBOARD_REPAIR_INTERVAL_SECS,
-        watched_configuration_is_dependency: true,
-        component_session_only: true,
     }
 }
 
@@ -75,6 +71,92 @@ pub struct DisplayDependencyEvidence {
     pub(crate) session_digest: [u8; 32],
 }
 
+/// Plain-field view of the display route shape the controller validates.
+/// `user_ref_type` is `None` for the Core-authenticated route and carries
+/// the committed User resource type for the daemon-committed route.
+struct DisplayRouteShape<'a> {
+    provider_ref: &'a ResourceRef,
+    service: &'a str,
+    evidence_class: EvidenceClass,
+    locality: Locality,
+    subject_type: &'a str,
+    user_ref_type: Option<&'a str>,
+    reconnect_generation: u64,
+    provider_generation: u64,
+    host_execution_type: &'a str,
+    controller_generation: u64,
+}
+
+/// Validate the Core-authenticated display route shape: canonical display
+/// Provider, display v3 service, UnixPeer evidence, Local locality, a User
+/// subject, no committed User reference, nonzero generations, and a Host
+/// execution context.
+fn validate_authenticated_route_shape(
+    shape: DisplayRouteShape<'_>,
+) -> Result<(), &'static str> {
+    let DisplayRouteShape {
+        provider_ref,
+        service,
+        evidence_class,
+        locality,
+        subject_type,
+        user_ref_type,
+        reconnect_generation,
+        provider_generation,
+        host_execution_type,
+        controller_generation,
+    } = shape;
+    if provider_ref.to_canonical_string() != DISPLAY_PROVIDER_REF
+        || service != "d2b.display.v3"
+        || evidence_class != EvidenceClass::UnixPeer
+        || locality != Locality::Local
+        || subject_type != "User"
+        || user_ref_type.is_some()
+        || reconnect_generation == 0
+        || provider_generation == 0
+        || host_execution_type != "Host"
+        || controller_generation == 0
+    {
+        return Err("clipboard-display-unauthenticated");
+    }
+    Ok(())
+}
+
+/// Validate the daemon-authenticated display route shape: the canonical
+/// display Provider, display v3 service, UnixPeer evidence, Local locality,
+/// a Guest subject, a committed User reference, nonzero generations, and a
+/// Host execution context.
+fn validate_committed_display_route_shape(
+    shape: DisplayRouteShape<'_>,
+) -> Result<(), &'static str> {
+    let DisplayRouteShape {
+        provider_ref,
+        service,
+        evidence_class,
+        locality,
+        subject_type,
+        user_ref_type,
+        reconnect_generation,
+        provider_generation,
+        host_execution_type,
+        controller_generation,
+    } = shape;
+    if provider_ref.to_canonical_string() != DISPLAY_PROVIDER_REF
+        || service != "d2b.display.v3"
+        || evidence_class != EvidenceClass::UnixPeer
+        || locality != Locality::Local
+        || subject_type != "Guest"
+        || user_ref_type != Some("User")
+        || reconnect_generation == 0
+        || provider_generation == 0
+        || host_execution_type != "Host"
+        || controller_generation == 0
+    {
+        return Err("clipboard-display-unauthenticated");
+    }
+    Ok(())
+}
+
 impl DisplayDependencyEvidence {
     /// Consume a Core-authenticated display route.
     ///
@@ -91,26 +173,24 @@ impl DisplayDependencyEvidence {
         let Some(provider_generation) = route.provider_generation() else {
             return Err("clipboard-display-unauthenticated");
         };
-        if provider_ref.to_canonical_string() != DISPLAY_PROVIDER_REF
-            || route.service().as_str() != "d2b.display.v3"
-            || route.evidence_class() != EvidenceClass::UnixPeer
-            || route.locality() != Locality::Local
-            || route.subject_ref().resource_type().as_str() != "User"
-            || route.reconnect_generation().get() == 0
-            || provider_generation.get() == 0
-        {
-            return Err("clipboard-display-unauthenticated");
-        }
         let Some(host_execution_ref) = route.context().execution_ref() else {
             return Err("clipboard-display-unauthenticated");
         };
         let Some(controller_generation) = route.controller_generation() else {
             return Err("clipboard-display-unauthenticated");
         };
-        if host_execution_ref.resource_type().as_str() != "Host" || controller_generation.get() == 0
-        {
-            return Err("clipboard-display-unauthenticated");
-        }
+        validate_authenticated_route_shape(DisplayRouteShape {
+            provider_ref,
+            service: route.service().as_str(),
+            evidence_class: route.evidence_class(),
+            locality: route.locality(),
+            subject_type: route.subject_ref().resource_type().as_str(),
+            user_ref_type: None,
+            reconnect_generation: route.reconnect_generation().get(),
+            provider_generation: provider_generation.get(),
+            host_execution_type: host_execution_ref.resource_type().as_str(),
+            controller_generation: controller_generation.get(),
+        })?;
         let mut digest = Sha256::new();
         digest.update(provider_ref.to_canonical_string().as_bytes());
         digest.update([0]);
@@ -151,27 +231,24 @@ impl DisplayDependencyEvidence {
         let Some(provider_generation) = route.provider_generation() else {
             return Err("clipboard-display-unauthenticated");
         };
-        if provider_ref.to_canonical_string() != DISPLAY_PROVIDER_REF
-            || route.service().as_str() != "d2b.display.v3"
-            || route.evidence_class() != EvidenceClass::UnixPeer
-            || route.locality() != Locality::Local
-            || route.subject_ref().resource_type().as_str() != "Guest"
-            || user_ref.resource_type().as_str() != "User"
-            || route.reconnect_generation().get() == 0
-            || provider_generation.get() == 0
-        {
-            return Err("clipboard-display-unauthenticated");
-        }
         let Some(host_execution_ref) = route.context().execution_ref() else {
             return Err("clipboard-display-unauthenticated");
         };
         let Some(controller_generation) = route.controller_generation() else {
             return Err("clipboard-display-unauthenticated");
         };
-        if host_execution_ref.resource_type().as_str() != "Host" || controller_generation.get() == 0
-        {
-            return Err("clipboard-display-unauthenticated");
-        }
+        validate_committed_display_route_shape(DisplayRouteShape {
+            provider_ref,
+            service: route.service().as_str(),
+            evidence_class: route.evidence_class(),
+            locality: route.locality(),
+            subject_type: route.subject_ref().resource_type().as_str(),
+            user_ref_type: Some(user_ref.resource_type().as_str()),
+            reconnect_generation: route.reconnect_generation().get(),
+            provider_generation: provider_generation.get(),
+            host_execution_type: host_execution_ref.resource_type().as_str(),
+            controller_generation: controller_generation.get(),
+        })?;
         let mut digest = Sha256::new();
         digest.update(provider_ref.to_canonical_string().as_bytes());
         digest.update([0]);
@@ -344,6 +421,66 @@ impl core::fmt::Debug for ClipboardController {
 mod tests {
     use super::*;
 
+    const DISPLAY_SERVICE: &str = "d2b.display.v3";
+
+    fn display_provider() -> ResourceRef {
+        ResourceRef::parse(DISPLAY_PROVIDER_REF).unwrap()
+    }
+
+    /// One wrong-value permutation of a display route shape: every field
+    /// except the one under test carries the canonical value.
+    #[derive(Clone, Copy)]
+    struct WrongRoute {
+        provider: &'static str,
+        service: &'static str,
+        evidence_class: EvidenceClass,
+        locality: Locality,
+        subject_type: &'static str,
+        user_ref_type: Option<&'static str>,
+        reconnect_generation: u64,
+        provider_generation: u64,
+        host_execution_type: &'static str,
+        controller_generation: u64,
+    }
+
+    fn assert_authenticated_shape_rejected(case: WrongRoute) {
+        let provider_ref = ResourceRef::parse(case.provider).unwrap();
+        assert_eq!(
+            validate_authenticated_route_shape(DisplayRouteShape {
+                provider_ref: &provider_ref,
+                service: case.service,
+                evidence_class: case.evidence_class,
+                locality: case.locality,
+                subject_type: case.subject_type,
+                user_ref_type: case.user_ref_type,
+                reconnect_generation: case.reconnect_generation,
+                provider_generation: case.provider_generation,
+                host_execution_type: case.host_execution_type,
+                controller_generation: case.controller_generation,
+            }),
+            Err("clipboard-display-unauthenticated")
+        );
+    }
+
+    fn assert_committed_shape_rejected(case: WrongRoute) {
+        let provider_ref = ResourceRef::parse(case.provider).unwrap();
+        assert_eq!(
+            validate_committed_display_route_shape(DisplayRouteShape {
+                provider_ref: &provider_ref,
+                service: case.service,
+                evidence_class: case.evidence_class,
+                locality: case.locality,
+                subject_type: case.subject_type,
+                user_ref_type: case.user_ref_type,
+                reconnect_generation: case.reconnect_generation,
+                provider_generation: case.provider_generation,
+                host_execution_type: case.host_execution_type,
+                controller_generation: case.controller_generation,
+            }),
+            Err("clipboard-display-unauthenticated")
+        );
+    }
+
     fn dependency(provider_ref: &str) -> DisplayDependencyEvidence {
         DisplayDependencyEvidence {
             provider_ref: ResourceRef::parse(provider_ref).unwrap(),
@@ -354,6 +491,84 @@ mod tests {
             reconnect_generation: 1,
             controller_generation: 1,
             session_digest: [1; 32],
+        }
+    }
+
+    #[test]
+    fn authenticated_route_shape_accepts_only_the_canonical_user_route() {
+        let provider_ref = display_provider();
+        assert_eq!(
+            validate_authenticated_route_shape(DisplayRouteShape {
+                provider_ref: &provider_ref,
+                service: DISPLAY_SERVICE,
+                evidence_class: EvidenceClass::UnixPeer,
+                locality: Locality::Local,
+                subject_type: "User",
+                user_ref_type: None,
+                reconnect_generation: 1,
+                provider_generation: 1,
+                host_execution_type: "Host",
+                controller_generation: 1,
+            }),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn authenticated_route_shape_rejects_each_wrong_value() {
+        let cases: [WrongRoute; 10] = [
+            WrongRoute { provider: "Provider/other", service: DISPLAY_SERVICE, evidence_class: EvidenceClass::UnixPeer, locality: Locality::Local, subject_type: "User", user_ref_type: None, reconnect_generation: 1, provider_generation: 1, host_execution_type: "Host", controller_generation: 1 },
+            WrongRoute { provider: DISPLAY_PROVIDER_REF, service: "d2b.other.v3", evidence_class: EvidenceClass::UnixPeer, locality: Locality::Local, subject_type: "User", user_ref_type: None, reconnect_generation: 1, provider_generation: 1, host_execution_type: "Host", controller_generation: 1 },
+            WrongRoute { provider: DISPLAY_PROVIDER_REF, service: DISPLAY_SERVICE, evidence_class: EvidenceClass::EnrolledKk, locality: Locality::Local, subject_type: "User", user_ref_type: None, reconnect_generation: 1, provider_generation: 1, host_execution_type: "Host", controller_generation: 1 },
+            WrongRoute { provider: DISPLAY_PROVIDER_REF, service: DISPLAY_SERVICE, evidence_class: EvidenceClass::UnixPeer, locality: Locality::Remote, subject_type: "User", user_ref_type: None, reconnect_generation: 1, provider_generation: 1, host_execution_type: "Host", controller_generation: 1 },
+            WrongRoute { provider: DISPLAY_PROVIDER_REF, service: DISPLAY_SERVICE, evidence_class: EvidenceClass::UnixPeer, locality: Locality::Local, subject_type: "Guest", user_ref_type: None, reconnect_generation: 1, provider_generation: 1, host_execution_type: "Host", controller_generation: 1 },
+            WrongRoute { provider: DISPLAY_PROVIDER_REF, service: DISPLAY_SERVICE, evidence_class: EvidenceClass::UnixPeer, locality: Locality::Local, subject_type: "User", user_ref_type: Some("User"), reconnect_generation: 1, provider_generation: 1, host_execution_type: "Host", controller_generation: 1 },
+            WrongRoute { provider: DISPLAY_PROVIDER_REF, service: DISPLAY_SERVICE, evidence_class: EvidenceClass::UnixPeer, locality: Locality::Local, subject_type: "User", user_ref_type: None, reconnect_generation: 0, provider_generation: 1, host_execution_type: "Host", controller_generation: 1 },
+            WrongRoute { provider: DISPLAY_PROVIDER_REF, service: DISPLAY_SERVICE, evidence_class: EvidenceClass::UnixPeer, locality: Locality::Local, subject_type: "User", user_ref_type: None, reconnect_generation: 1, provider_generation: 0, host_execution_type: "Host", controller_generation: 1 },
+            WrongRoute { provider: DISPLAY_PROVIDER_REF, service: DISPLAY_SERVICE, evidence_class: EvidenceClass::UnixPeer, locality: Locality::Local, subject_type: "User", user_ref_type: None, reconnect_generation: 1, provider_generation: 1, host_execution_type: "Guest", controller_generation: 1 },
+            WrongRoute { provider: DISPLAY_PROVIDER_REF, service: DISPLAY_SERVICE, evidence_class: EvidenceClass::UnixPeer, locality: Locality::Local, subject_type: "User", user_ref_type: None, reconnect_generation: 1, provider_generation: 1, host_execution_type: "Host", controller_generation: 0 },
+        ];
+        for case in cases {
+            assert_authenticated_shape_rejected(case);
+        }
+    }
+
+    #[test]
+    fn committed_display_route_shape_accepts_only_the_canonical_guest_route() {
+        let provider_ref = display_provider();
+        assert_eq!(
+            validate_committed_display_route_shape(DisplayRouteShape {
+                provider_ref: &provider_ref,
+                service: DISPLAY_SERVICE,
+                evidence_class: EvidenceClass::UnixPeer,
+                locality: Locality::Local,
+                subject_type: "Guest",
+                user_ref_type: Some("User"),
+                reconnect_generation: 1,
+                provider_generation: 1,
+                host_execution_type: "Host",
+                controller_generation: 1,
+            }),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn committed_display_route_shape_rejects_each_wrong_value() {
+        let cases: [WrongRoute; 10] = [
+            WrongRoute { provider: "Provider/other", service: DISPLAY_SERVICE, evidence_class: EvidenceClass::UnixPeer, locality: Locality::Local, subject_type: "Guest", user_ref_type: Some("User"), reconnect_generation: 1, provider_generation: 1, host_execution_type: "Host", controller_generation: 1 },
+            WrongRoute { provider: DISPLAY_PROVIDER_REF, service: "d2b.other.v3", evidence_class: EvidenceClass::UnixPeer, locality: Locality::Local, subject_type: "Guest", user_ref_type: Some("User"), reconnect_generation: 1, provider_generation: 1, host_execution_type: "Host", controller_generation: 1 },
+            WrongRoute { provider: DISPLAY_PROVIDER_REF, service: DISPLAY_SERVICE, evidence_class: EvidenceClass::EnrolledKk, locality: Locality::Local, subject_type: "Guest", user_ref_type: Some("User"), reconnect_generation: 1, provider_generation: 1, host_execution_type: "Host", controller_generation: 1 },
+            WrongRoute { provider: DISPLAY_PROVIDER_REF, service: DISPLAY_SERVICE, evidence_class: EvidenceClass::UnixPeer, locality: Locality::Remote, subject_type: "Guest", user_ref_type: Some("User"), reconnect_generation: 1, provider_generation: 1, host_execution_type: "Host", controller_generation: 1 },
+            WrongRoute { provider: DISPLAY_PROVIDER_REF, service: DISPLAY_SERVICE, evidence_class: EvidenceClass::UnixPeer, locality: Locality::Local, subject_type: "User", user_ref_type: Some("User"), reconnect_generation: 1, provider_generation: 1, host_execution_type: "Host", controller_generation: 1 },
+            WrongRoute { provider: DISPLAY_PROVIDER_REF, service: DISPLAY_SERVICE, evidence_class: EvidenceClass::UnixPeer, locality: Locality::Local, subject_type: "Guest", user_ref_type: Some("Guest"), reconnect_generation: 1, provider_generation: 1, host_execution_type: "Host", controller_generation: 1 },
+            WrongRoute { provider: DISPLAY_PROVIDER_REF, service: DISPLAY_SERVICE, evidence_class: EvidenceClass::UnixPeer, locality: Locality::Local, subject_type: "Guest", user_ref_type: Some("User"), reconnect_generation: 0, provider_generation: 1, host_execution_type: "Host", controller_generation: 1 },
+            WrongRoute { provider: DISPLAY_PROVIDER_REF, service: DISPLAY_SERVICE, evidence_class: EvidenceClass::UnixPeer, locality: Locality::Local, subject_type: "Guest", user_ref_type: Some("User"), reconnect_generation: 1, provider_generation: 0, host_execution_type: "Host", controller_generation: 1 },
+            WrongRoute { provider: DISPLAY_PROVIDER_REF, service: DISPLAY_SERVICE, evidence_class: EvidenceClass::UnixPeer, locality: Locality::Local, subject_type: "Guest", user_ref_type: Some("User"), reconnect_generation: 1, provider_generation: 1, host_execution_type: "Guest", controller_generation: 1 },
+            WrongRoute { provider: DISPLAY_PROVIDER_REF, service: DISPLAY_SERVICE, evidence_class: EvidenceClass::UnixPeer, locality: Locality::Local, subject_type: "Guest", user_ref_type: Some("User"), reconnect_generation: 1, provider_generation: 1, host_execution_type: "Host", controller_generation: 0 },
+        ];
+        for case in cases {
+            assert_committed_shape_rejected(case);
         }
     }
 

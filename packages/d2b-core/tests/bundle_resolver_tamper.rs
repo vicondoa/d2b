@@ -6,7 +6,8 @@
 //! The tests use [`BundleVerifyPolicy`] with the **current process's**
 //! uid/gid so that files created without `chown` still pass the owner
 //! check.  The "owner = nobody" test (`tamper_owner_wrong_uid`) requires
-//! `chown` and is skipped automatically when the process is not root.
+//! `chown` and is `#[ignore]`d (root-only), so the skip is visible in
+//! test output instead of passing vacuously on non-root runs.
 //!
 //! These bundles are v3 zone-native (`schemaVersion: "v3"`, `bundleVersion: 1`,
 //! empty `zones`), so they load via the production zone-native path. The
@@ -14,7 +15,7 @@
 //! SHA-256 self-hash), which the loader verifies before sibling artifacts.
 
 use d2b_core::bundle_resolver::{BundleResolver, BundleVerifyPolicy};
-use d2b_core::error::{BundleError, Error};
+use d2b_contracts::error::{BundleError, Error};
 use sha2::Digest as _;
 use std::fs;
 use std::io::Write as _;
@@ -142,15 +143,13 @@ fn tamper_symlink() {
 // ---------------------------------------------------------------
 // Test 2: owner = wrong uid → BundleTampered { reason: "owner" }
 //
-// Requires root (or CAP_CHOWN) to call fchown; skipped otherwise.
+// Requires root (or CAP_CHOWN) to call fchown; ignored (not silently
+// skipped) on non-root runs so the skip is visible in test output.
+// Run with `--ignored` under root (or CAP_CHOWN) to exercise it.
 // ---------------------------------------------------------------
 #[test]
+#[ignore = "root-only: requires CAP_CHOWN to chown the bundle file"]
 fn tamper_owner_wrong_uid() {
-    if rustix::process::getuid().as_raw() != 0 {
-        eprintln!("tamper_owner_wrong_uid: skipping - not root (cannot chown)");
-        return;
-    }
-
     let dir = TempDir::new().expect("tempdir");
     let bundle_path = dir.path().join("bundle.json");
     write_private(&bundle_path, &minimal_bundle_json_no_hash());
@@ -270,8 +269,8 @@ fn loads_correct() {
     let resolver = BundleResolver::load_with_policy(&bundle_path, &policy)
         .expect("all-correct bundle should load without error");
 
-    assert_eq!(resolver.bundle.bundle_version, 1);
-    assert_eq!(resolver.bundle.schema_version, "v3");
+    assert_eq!(resolver.bundle().bundle_version, 1);
+    assert_eq!(resolver.bundle().schema_version, "v3");
 }
 
 // ---------------------------------------------------------------

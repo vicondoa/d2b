@@ -24,8 +24,15 @@ impl ReadinessReporter {
         }
     }
 
-    // The readiness reporter is a sync public surface; it is driven by the CLI
-    // binary's poll loop and has no async form at this boundary.
+    /// Connect the readiness reporter to the daemon socket.
+    ///
+    /// The readiness reporter is a sync public surface; it is driven by the CLI
+    /// binary's poll loop and has no async form at this boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying io error when the socket cannot be connected or
+    /// its write timeout cannot be set.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn connect(identity: ProxyIdentity, path: &Path) -> io::Result<Self> {
         let stream = UnixStream::connect(path)?;
@@ -36,6 +43,12 @@ impl ReadinessReporter {
         })
     }
 
+    /// Report a readiness stage transition.
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying io error when the event cannot be written to the
+    /// connected socket.
     pub fn ready(&mut self, stage: ProxyReadinessStage) -> io::Result<()> {
         let event = ProxyReadinessEvent::ready(
             self.identity.target().clone(),
@@ -45,6 +58,12 @@ impl ReadinessReporter {
         self.emit(&event)
     }
 
+    /// Report a readiness failure at a stage.
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying io error when the event cannot be written to the
+    /// connected socket.
     pub fn failed(
         &mut self,
         stage: ProxyReadinessStage,

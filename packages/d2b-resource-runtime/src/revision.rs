@@ -34,6 +34,7 @@
 //! count must fit in 32 bits (satisfied until year 2106). The full mapping
 //! lands with U8; this module only pins the budget.
 
+/// The module declared name.
 pub const MODULE_NAME: &str = "revision";
 
 /// Maximum revisions per daemon epoch under the U8 wire mapping: the
@@ -154,7 +155,6 @@ mod tests {
     fn display_shows_epoch_and_sequence() {
         let revision = RuntimeRevision::new(1_728_000_000, 42);
         let rendered = revision.to_string();
-        assert!(rendered.contains("1728000000"), "got: {rendered}");
         assert!(rendered.contains('4'), "got: {rendered}");
         assert!(rendered.contains("e1728000000+42"), "got: {rendered}");
     }
@@ -177,5 +177,16 @@ mod tests {
             RuntimeRevision::new(7, 1),
         );
         assert!(RuntimeRevision::first_of(epoch) < RuntimeRevision::new(7, 2));
+    }
+
+    #[test]
+    fn wire_budget_bounds_sequence_for_u32_low_word() {
+        // The U8 wire mapping packs (epoch_seconds << 32) | sequence(u32);
+        // so the largest in-budget sequence must survive the low-32-bit
+        // truncation intact and the epoch must stay in the high word.
+        let max_sequence = WIRE_SEQUENCE_BUDGET - 1;
+        let wire = (1_u64 << 32) | max_sequence;
+        assert_eq!(wire as u32 as u64, max_sequence);
+        assert_eq!(wire >> 32, 1);
     }
 }

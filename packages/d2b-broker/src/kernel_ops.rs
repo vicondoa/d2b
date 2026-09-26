@@ -96,8 +96,8 @@ pub struct KernelConfig {
 /// Every kernel is registered under its committed broker-generic row name;
 /// the mixed [`KernelDispatcher`](crate::envelope::KernelDispatcher) routes
 /// exactly those names to this table and forwards every other operation.
-pub fn kernel_table(config: &KernelConfig) -> HandlerTable {
-    let config = Arc::new(config.clone());
+pub fn kernel_table(config: KernelConfig) -> HandlerTable {
+    let config = Arc::new(config);
     HandlerTable::new()
         .with(OPEN_PIDFD, {
             let config = Arc::clone(&config);
@@ -233,7 +233,7 @@ async fn open_pidfd(
     let pid = field_i64(invocation.payload, "pid")? as i32;
     let expected_start_time_ticks = field_i64(invocation.payload, "expectedStartTimeTicks")? as u64;
     let outcome = crate::live_handlers::live_open_pidfd(pid, expected_start_time_ticks)
-        .map_err(|error| errored(format!("open-pidfd: {error}")))?;
+        .map_err(|error| pidfd_open_failure(&error))?;
     Ok(DispatchOutcome {
         result: canonical(serde_json::json!({
             "pid": outcome.pid,
@@ -241,6 +241,17 @@ async fn open_pidfd(
         }))?,
         fds: vec![outcome.pidfd],
     })
+}
+
+/// The dispatch failure of one failed pidfd-open kernel step: the handler's
+/// shared failure kind, then its own detail text. The kind is the one the
+/// daemon-side classifier reads off this leg, so the refusal names it
+/// instead of leaving it implicit in the display text.
+fn pidfd_open_failure(error: &crate::live_handlers::LiveHandlerError) -> DispatchFailure {
+    match error.pidfd_dispatch_failure() {
+        Some(kind) => errored(format!("open-pidfd: {kind}: {error}")),
+        None => errored(format!("open-pidfd: {error}")),
+    }
 }
 
 /// The peer-pidfd kernel: derive the accepted socket's peer pidfd via
@@ -916,7 +927,8 @@ async fn spawn_process(
         &runner_id,
         duplicate(&outcome.pidfd).map_err(|error| errored(format!("spawn-process: {error}")))?,
     ) {
-        crate::runtime::cleanup_spawned_runner_after_failure(&runner_id, outcome.pidfd.as_fd());
+        crate::runtime::cleanup_spawned_runner_after_failure(&runner_id, outcome.pidfd.as_fd())
+            .await;
         let _ = crate::runtime::runner_pidfds().remove(invocation_id);
         return Err(errored(format!("spawn-process registry: {error:?}")));
     }
@@ -952,7 +964,8 @@ async fn spawn_process(
         // registration is a concurrent duplicate that slipped in between
         // the guard and the insert; roll the spawn back rather than
         // overwrite the live registration.
-        crate::runtime::cleanup_spawned_runner_after_failure(&runner_id, outcome.pidfd.as_fd());
+        crate::runtime::cleanup_spawned_runner_after_failure(&runner_id, outcome.pidfd.as_fd())
+            .await;
         let _ = crate::runtime::runner_pidfds().remove(invocation_id);
         return Err(errored(format!(
             "spawn-process metadata registry: runner {runner_id} already registered"
@@ -1160,7 +1173,7 @@ async fn apply_nm_unmanaged(
         mode: field_i64(invocation.payload, "mode")? as u32,
         owner: field_str(invocation.payload, "owner")?.to_owned(),
         group: field_str(invocation.payload, "group")?.to_owned(),
-        reload_behavior: field_str(invocation.payload, "reloadBehavior")?.to_owned(),
+        reload_behavior: parse_field(invocation.payload, "reloadBehavior")?,
     };
     let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
     if destroy {
@@ -2605,5 +2618,52 @@ mod tests {
             Some("Z".to_owned())
         );
         assert_eq!(parse_proc_state("no close paren"), None);
+    }
+
+    /// An open-pidfd refusal names the failure kind the caller classifies
+    /// it by, from the shared vocabulary: without it a pidfd-open refusal
+    /// and a race refusal read as the same unlabelled error in the log.
+    #[test]
+    fn open_pidfd_refusals_name_the_shared_failure_kind() {
+        use crate::live_handlers::LiveHandlerError;
+
+        let [pidfd_race, pidfd_open_failed, proc_stat_read_failed] =
+            d2b_contracts_broker::broker_wire::PIDFD_DISPATCH_FAILURE_KINDS;
+        for (kind, error) in [
+            (
+                pidfd_open_failed,
+                LiveHandlerError::PidfdOpenFailed {
+                    pid: 7,
+                    detail: "ESRCH".to_owned(),
+                },
+            ),
+            (
+                pidfd_race,
+                LiveHandlerError::PidfdRace {
+                    pid: 7,
+                    expected_start_time_ticks: 2,
+                    observed_start_time_ticks: Some(3),
+                },
+            ),
+            (
+                proc_stat_read_failed,
+                LiveHandlerError::ProcStatReadFailed {
+                    pid: 7,
+                    detail: "EIO".to_owned(),
+                },
+            ),
+        ] {
+            let failure = pidfd_open_failure(&error);
+            assert_eq!(
+                failure.code,
+                crate::envelope::HANDLER_ERRORED,
+                "the kernel leg keeps reporting the handler-errored refusal"
+            );
+            let detail = failure.detail.expect("the refusal carries its detail");
+            assert!(
+                detail.starts_with(&format!("open-pidfd: {kind}: ")),
+                "the refusal must name the shared kind {kind}: {detail}"
+            );
+        }
     }
 }

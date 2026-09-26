@@ -34,7 +34,10 @@ fn guest_profile_admits_only_local_process_effects() {
             "guest profile should admit declared local effect {operation}"
         );
         assert!(
-            BrokerProfile::Guest.operations().contains(&operation),
+            BrokerProfile::Guest
+                .operations()
+                .iter()
+                .any(|item| item.as_str() == operation),
             "guest profile lost the committed local effect {operation}"
         );
     }
@@ -130,10 +133,13 @@ fn guest_binary_rejects_host_effects_before_bundle_mutation() {
             fd_kinds: Vec::new(),
         }),
         caller_role: BrokerCallerRole::AdminUid { uid: D2BD_UID },
-        test_peer_uid: Some(D2BD_UID),
         audit_join: None,
     };
-    send_json_frame(client.as_raw_fd(), &envelope).expect("send host-only request");
+    send_json_frame(
+        client.as_raw_fd(),
+        &d2b_broker::runtime::test_peer_uid_frame(envelope, Some(D2BD_UID)),
+    )
+    .expect("send host-only request");
     let response: BrokerResponse = recv_json_frame(client.as_raw_fd())
         .expect("receive guest profile response")
         .expect("guest broker response");

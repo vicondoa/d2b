@@ -15,6 +15,7 @@ use super::{
         serde_json_error_metadata, validate_canonical_string,
     },
 };
+use d2b_contracts::wire_deserialize;
 
 /// Resource API version carried by every complete envelope.
 pub const RESOURCE_API_VERSION: &str = "resources.d2bus.org/v3";
@@ -332,34 +333,31 @@ impl core::fmt::Debug for ResourceMetadata {
     }
 }
 
-impl<'de> Deserialize<'de> for ResourceMetadata {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
+wire_deserialize!(
+    ResourceMetadata,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        name: ResourceName,
+        zone: ZoneId,
+        uid: ResourceUid,
+        generation: ResourceGeneration,
+        revision: ZoneRevision,
+        owner_ref: RequiredNullable<ResourceRef>,
+        finalizers: Vec<FinalizerId>,
+        deletion_requested_at: RequiredNullable<Timestamp>,
+        created_at: Timestamp,
+        updated_at: Timestamp,
+        managed_by: ManagedBy,
+        configuration_generation: Option<ConfigurationGeneration>,
+        controller_generation: Option<ControllerGeneration>,
+        provider_generation: Option<ResourceGeneration>,
+        #[serde(default)]
+        labels: BTreeMap<String, String>,
+        #[serde(default)]
+        annotations: BTreeMap<String, String>,
+    },
+    wire,
     {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            name: ResourceName,
-            zone: ZoneId,
-            uid: ResourceUid,
-            generation: ResourceGeneration,
-            revision: ZoneRevision,
-            owner_ref: RequiredNullable<ResourceRef>,
-            finalizers: Vec<FinalizerId>,
-            deletion_requested_at: RequiredNullable<Timestamp>,
-            created_at: Timestamp,
-            updated_at: Timestamp,
-            managed_by: ManagedBy,
-            configuration_generation: Option<ConfigurationGeneration>,
-            controller_generation: Option<ControllerGeneration>,
-            provider_generation: Option<ResourceGeneration>,
-            #[serde(default)]
-            labels: BTreeMap<String, String>,
-            #[serde(default)]
-            annotations: BTreeMap<String, String>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
         let presentation = PresentationMetadata::new(wire.labels, wire.annotations)
             .map_err(serde::de::Error::custom)?;
         Self::new(
@@ -381,7 +379,7 @@ impl<'de> Deserialize<'de> for ResourceMetadata {
         )
         .map_err(serde::de::Error::custom)
     }
-}
+);
 
 /// Policy for disruptive desired-state changes.
 #[derive(
@@ -480,23 +478,17 @@ impl core::fmt::Debug for ProviderSpecExtension {
     }
 }
 
-impl<'de> Deserialize<'de> for ProviderSpecExtension {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            schema_id: ExtensionSchemaId,
-            schema_version: SchemaVersion,
-            settings: CanonicalJsonObject,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.schema_id, wire.schema_version, wire.settings)
-            .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ProviderSpecExtension,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        schema_id: ExtensionSchemaId,
+        schema_version: SchemaVersion,
+        settings: CanonicalJsonObject,
+    },
+    wire,
+    Self::new(wire.schema_id, wire.schema_version, wire.settings).map_err(serde::de::Error::custom)
+);
 
 /// ResourceType base spec fields plus the optional Provider extension.
 #[derive(Clone, PartialEq, Eq)]
@@ -617,13 +609,8 @@ impl Serialize for ResourceSpec {
         if let Some(update_policy) = &self.update_policy {
             map.serialize_entry("updatePolicy", update_policy)?;
         }
-        for key in self.base.keys() {
-            map.serialize_entry(
-                key,
-                self.base
-                    .get(key)
-                    .expect("key returned by canonical object"),
-            )?;
+        for (key, value) in self.base.iter() {
+            map.serialize_entry(key, value)?;
         }
         if let Some(provider) = &self.provider {
             map.serialize_entry("provider", provider)?;
@@ -794,22 +781,19 @@ impl core::fmt::Debug for ResourceEnvelope {
     }
 }
 
-impl<'de> Deserialize<'de> for ResourceEnvelope {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
+wire_deserialize!(
+    ResourceEnvelope,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        api_version: String,
+        #[serde(rename = "type")]
+        resource_type: ResourceTypeName,
+        metadata: ResourceMetadata,
+        spec: ResourceSpec,
+        status: ResourceStatus,
+    },
+    wire,
     {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            api_version: String,
-            #[serde(rename = "type")]
-            resource_type: ResourceTypeName,
-            metadata: ResourceMetadata,
-            spec: ResourceSpec,
-            status: ResourceStatus,
-        }
-        let wire = Wire::deserialize(deserializer)?;
         if wire.api_version != RESOURCE_API_VERSION {
             return Err(serde::de::Error::custom(
                 "apiVersion must be resources.d2bus.org/v3",
@@ -817,6 +801,15 @@ impl<'de> Deserialize<'de> for ResourceEnvelope {
         }
         Self::new(wire.resource_type, wire.metadata, wire.spec, wire.status)
             .map_err(serde::de::Error::custom)
+    }
+);
+
+impl From<&ResourceEnvelope> for ResourceRef {
+    fn from(envelope: &ResourceEnvelope) -> Self {
+        Self::new(
+            envelope.resource_type().clone(),
+            envelope.metadata().name().clone(),
+        )
     }
 }
 

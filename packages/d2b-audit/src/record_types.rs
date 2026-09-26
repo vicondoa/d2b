@@ -424,6 +424,43 @@ impl core::fmt::Debug for AuditRecord {
 
 impl AuditRecord {
     /// Construct and hash a record.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuditRecordError::TextOutOfBounds`] when a text field
+    /// exceeds the bounded envelope, [`AuditRecordError::FieldInvalid`] when
+    /// the class fields fall outside their closed domain, and
+    /// [`AuditRecordError::Serialization`] when canonical hashing fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use d2b_audit::record_types::{AuditRecord, AuditRecordFields, ProcessEffectFields};
+    /// use d2b_audit::genesis_hash;
+    ///
+    /// let record = AuditRecord::new(
+    ///     1,
+    ///     "work",
+    ///     "op",
+    ///     "corr",
+    ///     None,
+    ///     "test",
+    ///     genesis_hash(),
+    ///     AuditRecordFields::ProcessEffect(ProcessEffectFields {
+    ///         event: "launch".to_owned(),
+    ///         provider: "systemd".to_owned(),
+    ///         domain: "system".to_owned(),
+    ///         no_isolation: false,
+    ///         execution_ref_digest:
+    ///             "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+    ///                 .to_owned(),
+    ///         process_uid: "uid".to_owned(),
+    ///         outcome: "ok".to_owned(),
+    ///         exit_class: None,
+    ///     }),
+    /// )
+    /// .expect("the record is within bounds");
+    /// ```
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         ts_ms: u64,
@@ -495,6 +532,11 @@ impl AuditRecord {
     }
 
     /// Return the Zone-scoped operation join key for this record.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuditRecordError::FieldInvalid`] when the record's Zone
+    /// cannot be parsed or derived into a canonical Zone identity.
     pub fn zone_operation_key(&self) -> Result<crate::ZoneOperationKey, AuditRecordError> {
         Ok(crate::ZoneOperationKey::new(
             crate::ZoneId::parse(&self.zone)
@@ -535,6 +577,13 @@ impl AuditRecord {
     }
 
     /// Verify the record hash and predecessor link.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuditRecordError::ChainMismatch`] when the predecessor hash
+    /// does not match `expected_previous`, [`AuditRecordError::HashMismatch`]
+    /// when the record's stored hash does not match its recomputed hash, and
+    /// [`AuditRecordError::Serialization`] when canonical hashing fails.
     pub fn verify(&self, expected_previous: &AuditHash) -> Result<(), AuditRecordError> {
         if &self.previous_hash != expected_previous {
             return Err(AuditRecordError::ChainMismatch);
@@ -746,12 +795,19 @@ impl Serialize for AuditRecord {
     }
 }
 
-impl<'de> Deserialize<'de> for AuditRecord {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = serde_json::Value::deserialize(deserializer)?;
+impl AuditRecord {
+    /// Parse one record line into its wire shape without re-verifying the
+    /// record hash.
+    ///
+    /// The [`Deserialize`] admission gate re-verifies the hash on every read;
+    /// this companion parse runs the same envelope and field checks so a
+    /// caller can tell a chain break from a malformed line before running
+    /// [`AuditRecord::verify`].
+    pub(crate) fn parse_unverified(line: &str) -> Result<Self, serde_json::Error> {
+        Self::from_wire_value(serde_json::from_str(line)?)
+    }
+
+    pub(crate) fn from_wire_value(value: serde_json::Value) -> Result<Self, serde_json::Error> {
         let object = value
             .as_object()
             .ok_or_else(|| serde::de::Error::custom("audit-record-not-object"))?;
@@ -865,6 +921,17 @@ impl<'de> Deserialize<'de> for AuditRecord {
             record_hash,
             fields,
         };
+        Ok(record)
+    }
+}
+
+impl<'de> Deserialize<'de> for AuditRecord {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let record = Self::from_wire_value(serde_json::Value::deserialize(deserializer)?)
+            .map_err(serde::de::Error::custom)?;
         if record
             .computed_record_hash()
             .map_err(serde::de::Error::custom)?

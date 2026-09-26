@@ -19,6 +19,7 @@ use super::{
         BoundedToken, PrimitiveSpecError, parsed_deserialize, redacted_debug, string_schema,
     },
 };
+use d2b_contracts::wire_deserialize;
 
 /// The canonical ResourceType name for this module.
 pub const DEVICE_RESOURCE_TYPE: &str = "Device";
@@ -125,9 +126,6 @@ impl DeviceAuthorityDescriptor {
 
 redacted_debug!(DeviceAuthorityDescriptor);
 
-/// Short alias used by Provider descriptors.
-pub type AuthorityDescriptor = DeviceAuthorityDescriptor;
-
 /// Core-derived opaque identity for one physical device backing.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
@@ -146,9 +144,6 @@ impl DeviceAuthorityKey {
 }
 
 redacted_debug!(DeviceAuthorityKey);
-
-/// Short alias for the Core-derived physical backing key.
-pub type OpaqueAuthorityKey = DeviceAuthorityKey;
 
 impl<'de> Deserialize<'de> for DeviceAuthorityKey {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -312,33 +307,33 @@ pub enum InventorySelector {
 
 redacted_debug!(InventorySelector);
 
-impl<'de> Deserialize<'de> for InventorySelector {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        /// The union of every declared selector field.
-        ///
-        /// Serde does not support `deny_unknown_fields` on an internally
-        /// tagged enum, so the flat union is parsed strictly and every field
-        /// that does not belong to the selected `busClass` variant is
-        /// rejected explicitly.
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            bus_class: BusClass,
-            label: BoundedToken,
-            #[serde(default)]
-            vendor_id: Option<HexId>,
-            #[serde(default)]
-            product_id: Option<HexId>,
-            #[serde(default)]
-            serial: Option<DeviceFilterText>,
-            #[serde(default)]
-            pci_slot: Option<DeviceFilterText>,
-            #[serde(default)]
-            slot: Option<DeviceFilterText>,
-            #[serde(default)]
-            index: Option<u8>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
+wire_deserialize!(
+    InventorySelector,
+    /// The union of every declared selector field.
+    ///
+    /// Serde does not support `deny_unknown_fields` on an internally
+    /// tagged enum, so the flat union is parsed strictly and every field
+    /// that does not belong to the selected `busClass` variant is
+    /// rejected explicitly.
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        bus_class: BusClass,
+        label: BoundedToken,
+        #[serde(default)]
+        vendor_id: Option<HexId>,
+        #[serde(default)]
+        product_id: Option<HexId>,
+        #[serde(default)]
+        serial: Option<DeviceFilterText>,
+        #[serde(default)]
+        pci_slot: Option<DeviceFilterText>,
+        #[serde(default)]
+        slot: Option<DeviceFilterText>,
+        #[serde(default)]
+        index: Option<u8>,
+    },
+    wire,
+    {
         let reject = |present: bool| {
             if present {
                 Err(serde::de::Error::custom(
@@ -418,7 +413,7 @@ impl<'de> Deserialize<'de> for InventorySelector {
             }
         }
     }
-}
+);
 
 /// The closed inventory bus-class discriminant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -453,17 +448,16 @@ impl InventorySpec {
 
 redacted_debug!(InventorySpec);
 
-impl<'de> Deserialize<'de> for InventorySpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            selector: Option<InventorySelector>,
-        }
-        Ok(Self::new(Wire::deserialize(deserializer)?.selector))
-    }
-}
+wire_deserialize!(
+    InventorySpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default)]
+        selector: Option<InventorySelector>,
+    },
+    wire,
+    Ok(Self::new(wire.selector))
+);
 
 /// The Device ResourceType base spec.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -542,27 +536,25 @@ impl DeviceSpec {
 
 redacted_debug!(DeviceSpec);
 
-impl<'de> Deserialize<'de> for DeviceSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            device_class: DeviceClass,
-            arbitration: DeviceArbitration,
-            #[serde(default = "one")]
-            max_concurrent_claims: u32,
-            inventory: InventorySpec,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.device_class,
-            wire.arbitration,
-            wire.max_concurrent_claims,
-            wire.inventory,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    DeviceSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        device_class: DeviceClass,
+        arbitration: DeviceArbitration,
+        #[serde(default = "one")]
+        max_concurrent_claims: u32,
+        inventory: InventorySpec,
+    },
+    wire,
+    Self::new(
+        wire.device_class,
+        wire.arbitration,
+        wire.max_concurrent_claims,
+        wire.inventory,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// Whether a Device is currently healthy enough for a claimant.
 #[derive(
@@ -653,29 +645,27 @@ impl DeviceClaim {
 
 redacted_debug!(DeviceClaim);
 
-impl<'de> Deserialize<'de> for DeviceClaim {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            holder_ref: ResourceRef,
-            claim: DeviceClaimKind,
-            #[serde(default)]
-            passthrough: Option<BoundedToken>,
-            claimed_at: Timestamp,
-            health: DeviceHealth,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.holder_ref,
-            wire.claim,
-            wire.passthrough,
-            wire.claimed_at,
-            wire.health,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    DeviceClaim,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        holder_ref: ResourceRef,
+        claim: DeviceClaimKind,
+        #[serde(default)]
+        passthrough: Option<BoundedToken>,
+        claimed_at: Timestamp,
+        health: DeviceHealth,
+    },
+    wire,
+    Self::new(
+        wire.holder_ref,
+        wire.claim,
+        wire.passthrough,
+        wire.claimed_at,
+        wire.health,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// The common Device-specific status resource layer.
 ///
@@ -756,39 +746,34 @@ impl DeviceStatusResource {
 
 redacted_debug!(DeviceStatusResource);
 
-/// Alias used by ResourceType status adapters.
-pub type DeviceStatus = DeviceStatusResource;
-
-impl<'de> Deserialize<'de> for DeviceStatusResource {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            present: Option<bool>,
-            health: DeviceHealth,
-            holder_refs: Vec<ResourceRef>,
-            claims: Vec<DeviceClaim>,
-            #[serde(default)]
-            provisioned_at: Option<Timestamp>,
-            #[serde(default)]
-            last_probed_at: Option<Timestamp>,
-            #[serde(default)]
-            provider_diagnostic: Option<StatusMessage>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.present,
-            wire.health,
-            wire.holder_refs,
-            wire.claims,
-            wire.provisioned_at,
-            wire.last_probed_at,
-            wire.provider_diagnostic,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    DeviceStatusResource,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default)]
+        present: Option<bool>,
+        health: DeviceHealth,
+        holder_refs: Vec<ResourceRef>,
+        claims: Vec<DeviceClaim>,
+        #[serde(default)]
+        provisioned_at: Option<Timestamp>,
+        #[serde(default)]
+        last_probed_at: Option<Timestamp>,
+        #[serde(default)]
+        provider_diagnostic: Option<StatusMessage>,
+    },
+    wire,
+    Self::new(
+        wire.present,
+        wire.health,
+        wire.holder_refs,
+        wire.claims,
+        wire.provisioned_at,
+        wire.last_probed_at,
+        wire.provider_diagnostic,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// Stable Device-specific error codes.
 #[derive(
@@ -913,9 +898,6 @@ impl DeviceResourceVerb {
         ]
     }
 }
-
-/// Alias used by RBAC policy code.
-pub type DeviceRbacVerb = DeviceResourceVerb;
 
 /// Closed Device effect operation classes used by Core's adapter.
 #[derive(
@@ -1114,9 +1096,6 @@ pub const DEVICE_OTEL_RESOURCE_ATTRIBUTES: [&str; 2] = ["d2b.zone", "d2b.provide
 
 /// Device telemetry contract version.
 pub const DEVICE_TELEMETRY_CONTRACT_VERSION: &str = "device-telemetry/v1";
-
-/// Alias used by semantic telemetry adapters.
-pub type DeviceTelemetryLabels = DeviceMetricLabels;
 
 const fn one() -> u32 {
     1

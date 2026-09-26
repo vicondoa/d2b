@@ -293,13 +293,8 @@ fn network_cidr_host_address(cidr: &str, host: u8) -> Option<String> {
     }
     let last = octets.last_mut()?;
     *last = last.checked_add(host)?;
-    Some(
-        octets
-            .into_iter()
-            .map(|octet| octet.to_string())
-            .collect::<Vec<_>>()
-            .join("."),
-    )
+    let [a, b, c, d] = octets.try_into().ok()?;
+    Some(format!("{a}.{b}.{c}.{d}"))
 }
 
 /// Host-fabric names and CIDRs admitted for one immutable Network identity.
@@ -414,7 +409,7 @@ impl NetworkAdmissionIntent {
         let mut unique_interfaces = BTreeSet::new();
         if interface_names
             .iter()
-            .any(|ifname| !unique_interfaces.insert(ifname.as_str().to_owned()))
+            .any(|ifname| !unique_interfaces.insert(ifname.as_str()))
         {
             debug!(
                 provider = "network-local",

@@ -26,8 +26,6 @@ pub enum WaylandSpecError {
     BorderTooWide,
     /// A policy named an interface outside the compiled catalog.
     UnknownInterface,
-    /// The pre-provisioned principal pool has no free account.
-    NoPrincipalAvailable,
 }
 
 impl core::fmt::Display for WaylandSpecError {
@@ -40,7 +38,6 @@ impl core::fmt::Display for WaylandSpecError {
             Self::CrossDomainUntrusted => "cross-domain-not-trusted",
             Self::BorderTooWide => "wayland-border-too-wide",
             Self::UnknownInterface => "unknown-interface-rejected",
-            Self::NoPrincipalAvailable => "no-principal-available",
         })
     }
 }
@@ -114,6 +111,13 @@ impl<'de> Deserialize<'de> for DisplayIdentity {
 
 impl DisplayIdentity {
     /// Validate a display identity with default border and label settings.
+    ///
+    /// # Errors
+    ///
+    /// Returns `WaylandSpecError::InvalidLabel` when the label does not match
+    /// the closed identifier grammar, `WaylandSpecError::LabelTooLong` when the
+    /// label exceeds its bound, and `WaylandSpecError::InvalidColor` when a
+    /// color is not a six-digit RGB value.
     pub fn new(
         label: impl Into<String>,
         active_color: impl Into<String>,
@@ -227,11 +231,7 @@ impl core::fmt::Debug for DisplayIdentity {
 
 /// Authenticated desired state for one Wayland display session.
 #[derive(Clone, PartialEq, Eq, Serialize)]
-#[serde(
-    rename_all = "camelCase",
-    deny_unknown_fields,
-    try_from = "WaylandSessionSpecWire"
-)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WaylandSessionSpec {
     guest_ref: ResourceRef,
     host_ref: ResourceRef,
@@ -289,6 +289,12 @@ impl<'de> Deserialize<'de> for WaylandSessionSpec {
 
 impl WaylandSessionSpec {
     /// Validate and construct a trusted cross-domain session.
+    ///
+    /// # Errors
+    ///
+    /// Returns `WaylandSpecError::InvalidReference` when a ref has the wrong
+    /// closed resource type, and `WaylandSpecError::CrossDomainUntrusted` when
+    /// the session is not explicitly trusted.
     pub fn new(
         guest_ref: ResourceRef,
         host_ref: ResourceRef,

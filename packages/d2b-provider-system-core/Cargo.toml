@@ -15,7 +15,6 @@ await_holding_refcell_ref = "deny"
 
 [dependencies]
 async-trait = "0.1"
-tokio = { workspace = true, features = ["sync"] }
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 # KTD3: the hermetic suite's no-op-waker driver lives in the Provider
 # toolkit (`testing::block_on`), which this crate re-exports.
@@ -23,3 +22,21 @@ d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-boot
 tracing = "0.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[features]
+test-support = []
+
+[[test]]
+name = "host_reconciliation"
+path = "tests/host_reconciliation.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "ownership"
+path = "tests/ownership.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "user_discovery"
+path = "tests/user_discovery.rs"
+required-features = ["test-support"]

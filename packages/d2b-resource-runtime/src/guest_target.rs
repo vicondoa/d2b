@@ -23,6 +23,7 @@
 pub const MODULE_NAME: &str = "guest_target";
 
 use std::{collections::HashMap, fmt, sync::Arc};
+use std::fmt::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
@@ -175,7 +176,7 @@ pub fn target_local_spec_digest(spec: &[u8]) -> String {
     let mut rendered = String::with_capacity(7 + 64);
     rendered.push_str("sha256:");
     for byte in bytes {
-        rendered.push_str(&format!("{byte:02x}"));
+        write!(&mut rendered, "{byte:02x}").expect("writing to a String cannot fail");
     }
     rendered
 }
@@ -202,6 +203,8 @@ pub struct TargetControlAssignment {
 }
 
 impl TargetControlAssignment {
+    /// A target-control assignment naming one owned resource and the session
+    /// generation it was bound under.
     pub fn new(
         source: ResourceKey,
         source_uid: [u8; 16],
@@ -211,18 +214,22 @@ impl TargetControlAssignment {
         Self { source, source_uid, assignment_generation, session_generation }
     }
 
+    /// The owning resource key this assignment was recorded for.
     pub const fn source(&self) -> &ResourceKey {
         &self.source
     }
 
+    /// The owning resource's stable uid.
     pub const fn source_uid(&self) -> &[u8; 16] {
         &self.source_uid
     }
 
+    /// The desired-generation the assignment was recorded for..
     pub const fn assignment_generation(&self) -> u64 {
         self.assignment_generation
     }
 
+    /// The guest session generation the assignment is bound to.
     pub const fn session_generation(&self) -> u64 {
         self.session_generation
     }
@@ -446,6 +453,7 @@ pub struct GuestTargetRuntime {
 }
 
 impl GuestTargetRuntime {
+    /// The runtime authority for one guest target reference.
     pub fn new(reference: TargetRef) -> Self {
         Self {
             inner: Arc::new(GuestTargetInner {
@@ -457,8 +465,8 @@ impl GuestTargetRuntime {
     }
 
     /// The Guest this runtime realizes for.
-    pub fn reference(&self) -> TargetRef {
-        self.inner.reference.clone()
+    pub fn reference(&self) -> &TargetRef {
+        &self.inner.reference
     }
 
     /// The authenticated ComponentSession generation currently bound.
@@ -511,7 +519,7 @@ impl GuestTargetRuntime {
         };
         let mut instances: Vec<TargetResourceInstance> =
             state.values().cloned().collect();
-        instances.sort_by(|left, right| identity_order(&left.source).cmp(&identity_order(&right.source)));
+        instances.sort_by_cached_key(|instance| identity_order(&instance.source));
         instances
     }
 
@@ -816,7 +824,7 @@ impl TargetControlFrame {
             TargetControlRequest::Delete { assignment } => json_request("delete", assignment),
             TargetControlRequest::Adopt { assignment } => json_request("adopt", assignment),
         };
-        let frame = json_object(&[
+        let frame = json_object([
             ("protocol", Value::String(self.protocol.clone())),
             ("request", request),
         ]);
@@ -842,24 +850,24 @@ impl TargetControlResponse {
     /// Encode this response for the target-control channel.
     pub fn encode(&self) -> Vec<u8> {
         let response = match self {
-            Self::Realized { realization } => json_object(&[
+            Self::Realized { realization } => json_object([
                 ("kind", Value::String("realized".to_owned())),
                 ("realization", json_realization(realization)),
             ]),
-            Self::Observed(observation) => json_object(&[
+            Self::Observed(observation) => json_object([
                 ("kind", Value::String("observed".to_owned())),
                 ("observation", json_observation(*observation)),
             ]),
-            Self::Deleted => json_object(&[("kind", Value::String("deleted".to_owned()))]),
-            Self::Adopted(adoption) => json_object(&[
+            Self::Deleted => json_object([("kind", Value::String("deleted".to_owned()))]),
+            Self::Adopted(adoption) => json_object([
                 ("kind", Value::String("adopted".to_owned())),
                 ("adoption", json_adoption(adoption)),
             ]),
             Self::SessionUnavailable => {
-                json_object(&[("kind", Value::String("session-unavailable".to_owned()))])
+                json_object([("kind", Value::String("session-unavailable".to_owned()))])
             }
         };
-        let frame = json_object(&[("response", response)]);
+        let frame = json_object([("response", response)]);
         serde_json::to_vec(&frame).expect("target-control responses are JSON objects")
     }
 
@@ -1001,16 +1009,16 @@ impl<C: TargetControlChannel> GuestTargetControl for TargetControlClient<C> {
     }
 }
 
-fn json_object(members: &[(&str, Value)]) -> Value {
-    let mut object = serde_json::Map::with_capacity(members.len());
+fn json_object(members: impl IntoIterator<Item = (&'static str, Value)>) -> Value {
+    let mut object = serde_json::Map::new();
     for (name, value) in members {
-        object.insert((*name).to_owned(), value.clone());
+        object.insert(name.to_owned(), value);
     }
     Value::Object(object)
 }
 
 fn json_key(key: &ResourceKey) -> Value {
-    json_object(&[
+    json_object([
         ("zone", Value::String(key.zone.clone())),
         ("typeName", Value::String(key.type_name.clone())),
         ("name", Value::String(key.name.clone())),
@@ -1018,7 +1026,7 @@ fn json_key(key: &ResourceKey) -> Value {
 }
 
 fn json_assignment(assignment: &TargetControlAssignment) -> Value {
-    json_object(&[
+    json_object([
         ("source", json_key(assignment.source())),
         ("sourceUid", Value::String(hex_encode(&assignment.source_uid()[..]))),
         (
@@ -1033,14 +1041,14 @@ fn json_assignment(assignment: &TargetControlAssignment) -> Value {
 }
 
 fn json_request(kind: &str, assignment: &TargetControlAssignment) -> Value {
-    json_object(&[
+    json_object([
         ("kind", Value::String(kind.to_owned())),
         ("assignment", json_assignment(assignment)),
     ])
 }
 
 fn json_realization(instance: &TargetResourceInstance) -> Value {
-    json_object(&[
+    json_object([
         ("source", json_key(instance.source())),
         ("sourceUid", Value::String(hex_encode(&instance.source_uid()[..]))),
         (
@@ -1059,28 +1067,28 @@ fn json_realization(instance: &TargetResourceInstance) -> Value {
 
 fn json_observation(observation: TargetObservation) -> Value {
     match observation {
-        TargetObservation::Absent => json_object(&[("kind", Value::String("absent".to_owned()))]),
-        TargetObservation::Realizing { session_generation } => json_object(&[
+        TargetObservation::Absent => json_object([("kind", Value::String("absent".to_owned()))]),
+        TargetObservation::Realizing { session_generation } => json_object([
             ("kind", Value::String("realizing".to_owned())),
             ("sessionGeneration", Value::from(session_generation)),
         ]),
-        TargetObservation::Ready { session_generation } => json_object(&[
+        TargetObservation::Ready { session_generation } => json_object([
             ("kind", Value::String("ready".to_owned())),
             ("sessionGeneration", Value::from(session_generation)),
         ]),
         TargetObservation::Unavailable => {
-            json_object(&[("kind", Value::String("unavailable".to_owned()))])
+            json_object([("kind", Value::String("unavailable".to_owned()))])
         }
     }
 }
 
 fn json_adoption(adoption: &GuestAdoption) -> Value {
     match adoption {
-        GuestAdoption::Adopted(instance) => json_object(&[
+        GuestAdoption::Adopted(instance) => json_object([
             ("kind", Value::String("adopted".to_owned())),
             ("realization", json_realization(instance)),
         ]),
-        GuestAdoption::Missing => json_object(&[("kind", Value::String("missing".to_owned()))]),
+        GuestAdoption::Missing => json_object([("kind", Value::String("missing".to_owned()))]),
     }
 }
 
@@ -1209,7 +1217,7 @@ fn json_decode_adoption(value: &Value) -> Result<GuestAdoption, GuestTargetError
 fn hex_encode(bytes: &[u8]) -> String {
     let mut rendered = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
-        rendered.push_str(&format!("{byte:02x}"));
+        write!(&mut rendered, "{byte:02x}").expect("writing to a String cannot fail");
     }
     rendered
 }
@@ -1271,8 +1279,12 @@ impl fmt::Display for GuestTargetError {
 impl std::error::Error for GuestTargetError {}
 
 /// Stable ordering for resource identities inside a target.
-fn identity_order(key: &ResourceKey) -> (&str, &str, &str) {
-    (&key.zone, &key.type_name, &key.name)
+///
+/// The key is owned rather than a tuple of borrows because the ordering is
+/// applied through `sort_by_cached_key`, which caches one key per element and
+/// so cannot take a key borrowed from the element it is called on.
+fn identity_order(key: &ResourceKey) -> (String, String, String) {
+    (key.zone.clone(), key.type_name.clone(), key.name.clone())
 }
 
 #[cfg(test)]

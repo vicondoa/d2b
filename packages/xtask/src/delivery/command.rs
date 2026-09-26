@@ -101,6 +101,7 @@ pub const WAVE_COMMANDS: [WaveCommand; 7] = [
 ];
 
 impl WaveCommand {
+    /// The canonical wire name of this stage, as used on the command line.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Help => "help",
@@ -113,6 +114,7 @@ impl WaveCommand {
         }
     }
 
+    /// Resolves a wire name to its stage, or `None` when unknown.
     pub fn parse(name: &str) -> Option<Self> {
         WAVE_COMMANDS
             .into_iter()
@@ -202,6 +204,7 @@ impl WaveCommand {
         }
     }
 
+    /// The options this stage requires, in usage order.
     pub fn required_options(self) -> &'static [&'static str] {
         match self {
             Self::Help => &[],
@@ -231,6 +234,7 @@ impl WaveCommand {
         }
     }
 
+    /// The options this stage accepts beyond the required set.
     pub fn optional_options(self) -> &'static [&'static str] {
         match self {
             Self::Help => &[],
@@ -422,6 +426,7 @@ impl StateHelp {
 }
 
 impl WorkflowOutput {
+    /// A successful output for the given operation, with no artifacts yet.
     pub fn ok(operation: WaveCommand) -> Self {
         Self {
             schema_version: DELIVERY_SCHEMA_VERSION,
@@ -436,6 +441,7 @@ impl WorkflowOutput {
         }
     }
 
+    /// Records the candidate's three digests on this output.
     #[must_use]
     pub fn with_digests(mut self, digests: &CandidateDigests) -> Self {
         self.candidate_id = Some(digests.candidate_id.as_str().to_owned());
@@ -461,6 +467,7 @@ impl WorkflowOutput {
     }
 }
 
+/// One stage's help record, as published by the `help` command.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct WorkflowCommandHelp {
     pub name: String,
@@ -553,6 +560,7 @@ pub struct CliOptions {
 }
 
 impl CliOptions {
+    /// Parses `--name value` pairs, collecting repeats.
     pub fn parse(args: &[String]) -> Result<Self> {
         let mut values = BTreeMap::<String, Vec<String>>::new();
         let mut chunks = args.chunks_exact(2);
@@ -577,6 +585,7 @@ impl CliOptions {
         Ok(Self { values })
     }
 
+    /// Consumes an option that must appear exactly once.
     pub fn required_string(&mut self, name: &str) -> Result<String> {
         let values = self
             .values
@@ -590,10 +599,12 @@ impl CliOptions {
         Ok(values.into_iter().next().expect("exactly one value"))
     }
 
+    /// Consumes an option that must appear exactly once, as a path.
     pub fn required_path(&mut self, name: &str) -> Result<PathBuf> {
         self.required_string(name).map(PathBuf::from)
     }
 
+    /// Consumes an option that may appear at most once.
     pub fn optional_string(&mut self, name: &str) -> Result<Option<String>> {
         match self.values.remove(name) {
             None => Ok(None),
@@ -604,6 +615,7 @@ impl CliOptions {
         }
     }
 
+    /// Consumes an option that may appear at most once, as a path.
     pub fn optional_path(&mut self, name: &str) -> Result<Option<PathBuf>> {
         Ok(self.optional_string(name)?.map(PathBuf::from))
     }
@@ -634,6 +646,7 @@ impl CliOptions {
         Ok(roots)
     }
 
+    /// Rejects any option the stage did not consume.
     pub fn finish(&self) -> Result<()> {
         if self.values.is_empty() {
             return Ok(());
@@ -1060,18 +1073,15 @@ mod tests {
             // Belt-and-suspenders guard over the macro-generated domain. Both
             // `WorkflowStatus::ALL` and the wire strings come from the single
             // `workflow_status!` declaration, so they cannot drift; this
-            // wildcard-free match adds a second checkpoint that still fails to
-            // compile if a variant is ever introduced outside that macro,
-            // keeping every variant present in `ALL`, which feeds every
-            // status-domain golden.
+            // wildcard-free match is the real guard - adding a variant is a
+            // compile error until an arm is added, keeping every variant
+            // present in `ALL`, which feeds every status-domain golden. (The
+            // former `ALL.contains` probe re-derived its expectation from the
+            // same `ALL` it iterated, so the assert could never fail.)
             for status in WorkflowStatus::ALL {
-                let listed = match status {
-                    WorkflowStatus::Ok => WorkflowStatus::ALL.contains(&WorkflowStatus::Ok),
-                };
-                assert!(
-                    listed,
-                    "every WorkflowStatus variant must be listed in WorkflowStatus::ALL"
-                );
+                match status {
+                    WorkflowStatus::Ok => {}
+                }
             }
         }
 
@@ -1079,29 +1089,20 @@ mod tests {
         fn wave_commands_enumerates_every_stage() {
             // The operation domain is `WAVE_COMMANDS`, a hand-maintained array.
             // This wildcard-free guard makes adding a `WaveCommand` variant a
-            // compile error until an arm is added, and the arm forces the new
-            // stage into `WAVE_COMMANDS`, so the operation-domain golden cannot
-            // silently omit a live stage.
+            // compile error until an arm is added, so the operation-domain
+            // golden cannot silently omit a live stage. (The former per-arm
+            // `WAVE_COMMANDS.contains` probe re-derived its expectation from
+            // the same array it iterated, so the assert could never fail.)
             fn assert_listed(command: WaveCommand) {
-                let listed = match command {
-                    WaveCommand::Help => WAVE_COMMANDS.contains(&WaveCommand::Help),
-                    WaveCommand::Snapshot => WAVE_COMMANDS.contains(&WaveCommand::Snapshot),
-                    WaveCommand::ValidateImport => {
-                        WAVE_COMMANDS.contains(&WaveCommand::ValidateImport)
-                    }
-                    WaveCommand::RecoveryImport => {
-                        WAVE_COMMANDS.contains(&WaveCommand::RecoveryImport)
-                    }
-                    WaveCommand::Seal => WAVE_COMMANDS.contains(&WaveCommand::Seal),
-                    WaveCommand::MergeTarget => WAVE_COMMANDS.contains(&WaveCommand::MergeTarget),
-                    WaveCommand::MergeEligibility => {
-                        WAVE_COMMANDS.contains(&WaveCommand::MergeEligibility)
-                    }
-                };
-                assert!(
-                    listed,
-                    "every WaveCommand variant must be listed in WAVE_COMMANDS"
-                );
+                match command {
+                    WaveCommand::Help => {}
+                    WaveCommand::Snapshot => {}
+                    WaveCommand::ValidateImport => {}
+                    WaveCommand::RecoveryImport => {}
+                    WaveCommand::Seal => {}
+                    WaveCommand::MergeTarget => {}
+                    WaveCommand::MergeEligibility => {}
+                }
             }
             for command in WAVE_COMMANDS {
                 assert_listed(command);

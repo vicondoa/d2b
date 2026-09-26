@@ -6,7 +6,7 @@ use d2b_contracts_resource::v3::{
     ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneRevision,
 };
 use d2b_provider_guest_cloud_hypervisor::{
-    AuthenticatedResourceApiAdapter, AuthenticatedResourceSession, BootstrapGraph,
+    AuthenticatedResourceApiAdapter, AuthenticatedResourceSession, BootstrapGraph, ChildRole,
     CloudHypervisorController, CloudHypervisorResourceApiError, CloudHypervisorResourceRequest,
     CloudHypervisorResourceResponse, GuestGenerationSet, GuestSnapshot,
 };
@@ -203,8 +203,7 @@ async fn one_uid_free_batch_contains_the_complete_guest_owned_child_graph() {
     assert_eq!(batch.owner_uid(), &ResourceUid::parse(GUEST_UID).unwrap());
     assert_eq!(batch.owner_revision(), ZoneRevision::new(7));
     assert!(batch.mutations().iter().all(|mutation| {
-        mutation.expected_uid().is_none()
-            && mutation.owner_ref() == &ResourceRef::parse("Guest/gateway").unwrap()
+        mutation.owner_ref() == &ResourceRef::parse("Guest/gateway").unwrap()
             && mutation.zone() == &ZoneId::parse("work").unwrap()
     }));
     for mutation in batch.mutations() {
@@ -246,8 +245,12 @@ fn same_guest_name_in_different_zones_has_distinct_private_runtime_identity() {
     .unwrap();
 
     assert_ne!(
-        controller.private_runtime_scope(&first, "vmm").unwrap(),
-        controller.private_runtime_scope(&second, "vmm").unwrap()
+        controller
+            .private_runtime_scope(&first, ChildRole::VmmProcess)
+            .unwrap(),
+        controller
+            .private_runtime_scope(&second, ChildRole::VmmProcess)
+            .unwrap()
     );
 }
 

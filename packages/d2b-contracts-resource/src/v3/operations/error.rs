@@ -1,6 +1,6 @@
 //! Storage-neutral resource store errors.
 
-use crate::v3::{MAX_BATCH_MUTATIONS, RetryClass, ZoneRevision};
+use crate::v3::{MAX_BATCH_MUTATIONS, ResourceErrorKind, RetryClass, ZoneRevision};
 
 /// Upper bound on the stores one composition root may open.
 pub const MAX_STORE_SLOTS: usize = 64;
@@ -18,6 +18,7 @@ impl MutationOrdinal {
         Ok(Self(u8::try_from(value).map_err(|_| MutationOrdinalError)?))
     }
 
+    /// Read the zero-based batch index.
     pub const fn get(self) -> u32 {
         self.0 as u32
     }
@@ -47,6 +48,7 @@ impl StoreSlot {
         Ok(Self(u8::try_from(index).map_err(|_| StoreSlotError)?))
     }
 
+    /// Read the zero-based store position.
     pub const fn get(self) -> u32 {
         self.0 as u32
     }
@@ -89,41 +91,20 @@ impl SealIdentityMismatch {
 }
 
 /// Closed store error classification.
+///
+/// The resource-plane half of the set is the shared
+/// [`ResourceErrorKind`] classification itself, so one resource-plane kind
+/// has exactly one spelling and one mapping; the three store-only kinds are
+/// the store machinery failures with no resource-plane counterpart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum StoreErrorKind {
-    ResourceNotFound,
-    ResourceAlreadyExists,
-    ResourceConflict,
-    ResourceSchemaInvalid,
-    ResourceRefInvalid,
-    ResourceOwnerCycle,
-    ResourceOwnerDepth,
-    ResourceFinalizerDenied,
-    ResourceProviderUnavailable,
-    ResourceControllerMismatch,
-    ResourceStatusOwnerMismatch,
-    StatusOversize,
-    StatusProviderSchemaInvalid,
-    StatusProviderOverlap,
-    SpecProviderSchemaInvalid,
-    SpecProviderShadow,
-    UnsupportedCapability,
-    ExpeditedNotAuthorized,
-    ExpeditedQuotaExceeded,
-    ExpeditedReconcilePending,
-    UpgradeRequired,
-    EndpointResolveDenied,
-    RelayDenied,
-    RoleRelayGrantRestricted,
-    AuthorizationDenied,
-    RevisionExpired,
-    Backpressure,
-    Timeout,
-    Cancelled,
-    ResourcePlaneUnavailable,
-    InternalIntegrityFailure,
+    /// A resource-plane error, classified by the closed API set.
+    Resource(ResourceErrorKind),
+    /// The store's own integrity machinery failed.
     StoreIntegrityFailure,
+    /// The store's internal queue is overfull.
     StoreBackpressure,
+    /// The store quarantined the operation.
     StoreQuarantined,
 }
 
@@ -131,77 +112,16 @@ impl StoreErrorKind {
     /// Exact stable contract spelling.
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::ResourceNotFound => "resource-not-found",
-            Self::ResourceAlreadyExists => "resource-already-exists",
-            Self::ResourceConflict => "resource-conflict",
-            Self::ResourceSchemaInvalid => "resource-schema-invalid",
-            Self::ResourceRefInvalid => "resource-ref-invalid",
-            Self::ResourceOwnerCycle => "resource-owner-cycle",
-            Self::ResourceOwnerDepth => "resource-owner-depth",
-            Self::ResourceFinalizerDenied => "resource-finalizer-denied",
-            Self::ResourceProviderUnavailable => "resource-provider-unavailable",
-            Self::ResourceControllerMismatch => "resource-controller-mismatch",
-            Self::ResourceStatusOwnerMismatch => "resource-status-owner-mismatch",
-            Self::StatusOversize => "status-oversize",
-            Self::StatusProviderSchemaInvalid => "status-provider-schema-invalid",
-            Self::StatusProviderOverlap => "status-provider-overlap",
-            Self::SpecProviderSchemaInvalid => "spec-provider-schema-invalid",
-            Self::SpecProviderShadow => "spec-provider-shadow",
-            Self::UnsupportedCapability => "unsupported-capability",
-            Self::ExpeditedNotAuthorized => "expedited-not-authorized",
-            Self::ExpeditedQuotaExceeded => "expedited-quota-exceeded",
-            Self::ExpeditedReconcilePending => "expedited-reconcile-pending",
-            Self::UpgradeRequired => "upgrade-required",
-            Self::EndpointResolveDenied => "endpoint-resolve-denied",
-            Self::RelayDenied => "relay-denied",
-            Self::RoleRelayGrantRestricted => "role-relay-grant-restricted",
-            Self::AuthorizationDenied => "authorization-denied",
-            Self::RevisionExpired => "revision-expired",
-            Self::Backpressure => "backpressure",
-            Self::Timeout => "timeout",
-            Self::Cancelled => "cancelled",
-            Self::ResourcePlaneUnavailable => "resource-plane-unavailable",
-            Self::InternalIntegrityFailure => "internal-integrity-failure",
+            Self::Resource(kind) => kind.as_str(),
             Self::StoreIntegrityFailure => "store-integrity-failure",
             Self::StoreBackpressure => "store-backpressure",
             Self::StoreQuarantined => "store-quarantined",
         }
     }
 
-    /// Exhaustive stable variant order.
-    pub const fn all() -> &'static [Self; 34] {
+    /// The store-only kinds, in stable order.
+    pub const fn all() -> &'static [Self; 3] {
         &[
-            Self::ResourceNotFound,
-            Self::ResourceAlreadyExists,
-            Self::ResourceConflict,
-            Self::ResourceSchemaInvalid,
-            Self::ResourceRefInvalid,
-            Self::ResourceOwnerCycle,
-            Self::ResourceOwnerDepth,
-            Self::ResourceFinalizerDenied,
-            Self::ResourceProviderUnavailable,
-            Self::ResourceControllerMismatch,
-            Self::ResourceStatusOwnerMismatch,
-            Self::StatusOversize,
-            Self::StatusProviderSchemaInvalid,
-            Self::StatusProviderOverlap,
-            Self::SpecProviderSchemaInvalid,
-            Self::SpecProviderShadow,
-            Self::UnsupportedCapability,
-            Self::ExpeditedNotAuthorized,
-            Self::ExpeditedQuotaExceeded,
-            Self::ExpeditedReconcilePending,
-            Self::UpgradeRequired,
-            Self::EndpointResolveDenied,
-            Self::RelayDenied,
-            Self::RoleRelayGrantRestricted,
-            Self::AuthorizationDenied,
-            Self::RevisionExpired,
-            Self::Backpressure,
-            Self::Timeout,
-            Self::Cancelled,
-            Self::ResourcePlaneUnavailable,
-            Self::InternalIntegrityFailure,
             Self::StoreIntegrityFailure,
             Self::StoreBackpressure,
             Self::StoreQuarantined,
@@ -249,7 +169,7 @@ impl StoreError {
         reason_code: &'static str,
     ) -> Self {
         Self {
-            kind: StoreErrorKind::ResourceConflict,
+            kind: StoreErrorKind::Resource(ResourceErrorKind::ResourceConflict),
             current_revision: Some(current_revision),
             mutation_ordinal: Some(mutation_ordinal),
             store_slot: None,
@@ -259,35 +179,43 @@ impl StoreError {
         }
     }
 
+    /// Read the error kind.
     pub const fn kind(&self) -> StoreErrorKind {
         self.kind
     }
 
+    /// Read the revision that caused the conflict, when present.
     pub const fn current_revision(&self) -> Option<ZoneRevision> {
         self.current_revision
     }
 
+    /// Read the batch ordinal that caused the conflict, when present.
     pub const fn mutation_ordinal(&self) -> Option<MutationOrdinal> {
         self.mutation_ordinal
     }
 
+    /// Read the store slot the error refers to, when present.
     pub const fn store_slot(&self) -> Option<StoreSlot> {
         self.store_slot
     }
 
+    /// Bind the error to the store slot being operated on.
     pub const fn with_store_slot(mut self, store_slot: StoreSlot) -> Self {
         self.store_slot = Some(store_slot);
         self
     }
 
+    /// Read the suggested retry delay, when the error is retryable.
     pub const fn retry_after_ms(&self) -> Option<u32> {
         self.retry_after_ms
     }
 
+    /// Read the retry class.
     pub const fn retry_class(&self) -> RetryClass {
         self.retry_class
     }
 
+    /// Read the stable reason code.
     pub const fn reason_code(&self) -> &'static str {
         self.reason_code
     }
@@ -358,7 +286,10 @@ mod tests {
             "revision-changed",
         );
 
-        assert_eq!(error.kind(), StoreErrorKind::ResourceConflict);
+        assert_eq!(
+            error.kind(),
+            StoreErrorKind::Resource(ResourceErrorKind::ResourceConflict)
+        );
         assert_eq!(error.current_revision(), Some(ZoneRevision::new(9)));
         assert_eq!(error.mutation_ordinal().unwrap().get(), 3);
         assert_eq!(error.retry_after_ms(), None);

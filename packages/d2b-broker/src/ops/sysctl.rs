@@ -13,21 +13,13 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 #[derive(Debug, Clone)]
-pub struct ApplySysctlRequest {
+pub(crate) struct ApplySysctlRequest {
     pub intents: Vec<SysctlIntent>,
     /// Override the `/proc/sys` root for tests.
     pub proc_sys_root: PathBuf,
 }
 
-impl ApplySysctlRequest {
-    pub fn with_default_root(intents: Vec<SysctlIntent>) -> Self {
-        Self {
-            intents,
-            proc_sys_root: PathBuf::from("/proc/sys"),
-        }
-    }
-}
-
+/// One applied sysctl write with its before/after values and drift verdict.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApplySysctlOutcome {
     pub key: String,
@@ -36,6 +28,8 @@ pub struct ApplySysctlOutcome {
     pub drift: bool,
 }
 
+/// A failed sysctl application: an I/O failure or a readback drift
+/// after the write.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplySysctlError {
     Io(String),
@@ -73,7 +67,7 @@ impl From<io::Error> for ApplySysctlError {
 /// Converts `net.ipv6.conf.<ifname>.disable_ipv6` to
 /// `<root>/net/ipv6/conf/<ifname>/disable_ipv6` for safe per-link
 /// writes.
-pub fn intent_to_proc_path(root: &Path, intent: &SysctlIntent) -> PathBuf {
+pub(crate) fn intent_to_proc_path(root: &Path, intent: &SysctlIntent) -> PathBuf {
     let mut path = root.to_path_buf();
     for component in intent.key.split('.') {
         path.push(component);
@@ -81,7 +75,7 @@ pub fn intent_to_proc_path(root: &Path, intent: &SysctlIntent) -> PathBuf {
     path
 }
 
-pub async fn apply_sysctl_intents(
+pub(crate) async fn apply_sysctl_intents(
     req: &ApplySysctlRequest,
 ) -> Result<Vec<ApplySysctlOutcome>, ApplySysctlError> {
     let mut out = Vec::with_capacity(req.intents.len());
@@ -109,6 +103,8 @@ pub async fn apply_sysctl_intents(
     Ok(out)
 }
 
+/// A sysctl-apply failure from the executor or the post-write readback:
+/// an executor error, a readback I/O failure, or observed drift.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplyWithReadbackError {
     ReconcileExec(ReconcileExecError),
@@ -205,6 +201,7 @@ fn proc_sys_path(key: &str) -> PathBuf {
 /// key, read from `d2b_host::netlink` (the crate that owns the sysctl
 /// tables). A key with no destroy value cannot be destroyed; the broker
 /// fails closed instead of guessing a value.
+#[cfg(not(feature = "layer1-bootstrap"))]
 pub use d2b_host::netlink::destroy_value_for_key;
 
 #[cfg(test)]

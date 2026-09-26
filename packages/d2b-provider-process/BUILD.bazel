@@ -78,7 +78,7 @@ d2b_rust_library(
 d2b_rust_test(
     name = "d2b_provider_process_test",
     compile_data = ["Cargo.toml"],
-    crate = ":d2b_provider_process",
+    crate = ":d2b_provider_process_test_support",
 )
 
 d2b_rust_test(

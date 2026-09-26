@@ -1,10 +1,10 @@
 //! Controller-created runtime Volume specification.
 
-use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::{BoundedToken, ResourceRef};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::types::{runtime_volume_name, validate_token};
+use crate::types::runtime_volume_name;
 
 /// Runtime Volume finalizer.
 pub const RUNTIME_VOLUME_FINALIZER: &str = "runtime-qemu-media.d2bus.org/runtime-volume";
@@ -118,7 +118,7 @@ impl RuntimeVolumeSpec {
             return Err(VolumeSpecError::Invalid);
         }
         let zone = zone.into();
-        if !validate_token(&zone) {
+        if BoundedToken::parse(zone.as_str()).is_err() {
             return Err(VolumeSpecError::Invalid);
         }
         let name = runtime_volume_name(&short_guest_key(
@@ -162,7 +162,7 @@ impl RuntimeVolumeSpec {
         ));
         if self.owner_ref.resource_type().as_str() != "Guest"
             || self.provider_ref.resource_type().as_str() != "Provider"
-            || !validate_token(&self.zone)
+            || BoundedToken::parse(self.zone.as_str()).is_err()
             || self.name != expected_name
             || self.source_kind != "tmpfs"
             || self.source_policy_id != "runtime-qemu-media-runtime-tmpfs"

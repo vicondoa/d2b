@@ -839,6 +839,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1266,6 +1267,7 @@ dependencies = [
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-core-controller",
+ "d2b-resource-client",
  "d2b-session",
  "d2b-session-unix",
  "serde",
@@ -1767,6 +1769,18 @@ dependencies = [
  "tokio",
  "tracing",
  "ttrpc",
+]
+
+[[package]]
+name = "d2b-resource-client"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts-control",
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
+ "d2b-core-controller",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
