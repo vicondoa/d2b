@@ -79,7 +79,7 @@ use d2b_audit::evidence_chain::{
     ChainAuditSink, ChainLeg, ChainOutcome, ChainRecord, ChainRecordClass, EvidenceChain,
     MAX_NESTED_DEPTH, NESTED_DEPTH_EXCEEDED,
 };
-use d2b_contracts_broker::FORWARD_SOCKET_ENV;
+use d2b_contracts_broker::broker_wire::FORWARD_SOCKET_ENV;
 use d2b_contracts_broker::broker_wire::{
     DEFAULT_CONTEXT_DEADLINE_MS, FD_LEG, FdKind, ForwardContext, ForwardOperationOutcome,
     ForwardOperationRequest, ForwardOperationResponse, MAX_CONTEXT_DEADLINE_MS, MAX_FRAME_FDS,

@@ -7,7 +7,7 @@ pub mod bootstrap;
 pub mod config;
 pub mod controller;
 pub mod effect;
-pub mod error;
+mod error;
 
 pub use bootstrap::{
     BootstrapAdmission, BootstrapAdmissionState, BootstrapPsk, BootstrapService,

@@ -20,4 +20,3 @@ mod driver;
 pub mod operation;
 
 pub use driver::operation_descriptor;
-pub use operation::*;

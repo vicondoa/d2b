@@ -120,13 +120,14 @@ use crate::provider_lifecycle::{
 };
 use d2b_provider_toolkit::EffectServiceFactory;
 use d2b_provider_device::{
-    DEVICE_EFFECTS_SERVICE, DeviceDriverArgs, device_descriptor,
+    DeviceDriverArgs, device_descriptor, effects_service::DEVICE_EFFECTS_SERVICE,
 };
 use d2b_provider_device_security_key::{
-    SECURITY_KEY_EFFECTS_SERVICE, SecurityKeyDriverArgs, security_key_descriptors,
+    SecurityKeyDriverArgs, security_key_descriptors,
+    effects_service::SECURITY_KEY_EFFECTS_SERVICE,
 };
 use d2b_provider_device_usbip::{
-    USBIP_EFFECTS_SERVICE, UsbipDriverArgs, usbip_descriptors,
+    UsbipDriverArgs, usbip_descriptors, effects_service::USBIP_EFFECTS_SERVICE,
 };
 
 use d2b_provider_network_local::{

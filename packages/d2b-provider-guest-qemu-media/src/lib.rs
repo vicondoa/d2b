@@ -5,7 +5,7 @@
 
 pub mod adoption;
 pub mod config;
-pub mod controller;
+mod controller;
 pub mod hotplug;
 pub mod qmp;
 pub mod types;

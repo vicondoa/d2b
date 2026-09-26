@@ -21,4 +21,3 @@ mod driver;
 pub mod quota;
 
 pub use driver::quota_descriptor;
-pub use quota::*;

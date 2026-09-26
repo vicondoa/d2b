@@ -416,7 +416,7 @@ impl FoundationSeed {
             spawn_authority(),
             Default::default(),
             Default::default(),
-            d2b_provider_operation::PayloadProvenance::Derived,
+            d2b_provider_operation::operation::PayloadProvenance::Derived,
             None,
         )
         .map_err(|_| SeedError::InvalidRow {
@@ -864,18 +864,18 @@ fn clone_payload(schema: &PayloadSchema) -> PayloadSchema {
 /// fields needs at least redacted access, a plain payload none.
 fn secret_access_ceiling(
     schema: &PayloadSchema,
-) -> d2b_provider_operation::SecretAccess {
+) -> d2b_provider_operation::operation::SecretAccess {
     if schema
         .property_names()
         .any(|name| schema.is_write_only(name))
     {
-        d2b_provider_operation::SecretAccess::RedactedOnly
+        d2b_provider_operation::operation::SecretAccess::RedactedOnly
     } else {
-        d2b_provider_operation::SecretAccess::None
+        d2b_provider_operation::operation::SecretAccess::None
     }
 }
 
-fn audit_facet(schema: &PayloadSchema) -> d2b_provider_operation::OperationAudit {
+fn audit_facet(schema: &PayloadSchema) -> d2b_provider_operation::operation::OperationAudit {
     use d2b_contracts_resource::v3::{ BoundedText, BoundedToken };
 use d2b_provider_operation::operation::{ AuditMode, OperationAudit };
     let retained = schema
@@ -898,7 +898,7 @@ use d2b_provider_operation::operation::{ AuditMode, OperationAudit };
     .expect("bounded audit facet")
 }
 
-fn spawn_authority() -> d2b_provider_operation::OperationAuthority {
+fn spawn_authority() -> d2b_provider_operation::operation::OperationAuthority {
     use d2b_contracts_resource::v3::{ BoundedText };
 use d2b_provider_operation::operation::{ BrokerRequirement, OperationAuthority, OperationDomain, OperationSurface };
     OperationAuthority::new(
@@ -1357,7 +1357,7 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
         );
         assert_ne!(
             spec.secret_access(),
-            d2b_provider_operation::SecretAccess::None
+            d2b_provider_operation::operation::SecretAccess::None
         );
         // The role's posture row resolves the committed profile and principal.
         let role = row_spec(&fixture.store, "Role/worker").await.expect("role row");

@@ -19,4 +19,3 @@ pub use driver::command_descriptor;
 
 /// The Command ResourceType spec and status shapes owned by this crate.
 pub mod command;
-pub use command::*;

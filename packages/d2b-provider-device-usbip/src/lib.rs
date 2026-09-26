@@ -43,7 +43,6 @@ pub use driver::{
     UsbipComponent, UsbipDriverArgs, UsbipDriverEffects, declared_dependency_refs,
     usbip_descriptors,
 };
-pub use effects_service::USBIP_EFFECTS_SERVICE;
 pub use firewall::{
     FirewallConfirmation, FirewallConfirmationKind, FirewallDigest, FirewallGenerationFence,
     FirewallObservation, FirewallProjectionAction, FirewallProjectionIntent, FirewallToken,

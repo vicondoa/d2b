@@ -660,7 +660,7 @@ mod tests {
             d2b_contracts_resource::v3::BoundedToken::parse(purpose).is_ok(),
             "relay endpoint purpose must be a closed BoundedToken"
         );
-        serde_json::from_value::<d2b_provider_endpoint::EndpointSpec>(value.clone())
+        serde_json::from_value::<d2b_provider_endpoint::endpoint::EndpointSpec>(value.clone())
             .expect("the relay Endpoint child decodes as the closed EndpointSpec");
     }
 }
