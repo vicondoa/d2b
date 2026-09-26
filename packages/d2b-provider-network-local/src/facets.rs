@@ -68,9 +68,10 @@ pub trait NetworkRuntime: Send + Sync + 'static {
     /// The daemon implementation loads a fresh, fully re-verified resolver
     /// per invocation (the retired adapter's per-call reload), so an
     /// on-disk bundle replacement is observed without a daemon restart; the
-    /// owned `Arc` keeps the served resolver valid for the caller's
-    /// synchronous read.
-    fn bundle(&self) -> Arc<BundleResolver>;
+    /// owned `Arc` keeps the served resolver valid for the caller's read.
+    /// The seat is async because the reload re-reads and re-verifies the
+    /// on-disk bundle, which must not park an executor worker.
+    async fn bundle(&self) -> Arc<BundleResolver>;
 
     /// The authenticated daemon-to-broker origination socket one kernel
     /// invocation goes over.

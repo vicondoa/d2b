@@ -427,11 +427,18 @@ where
 }
 
 /// Daemon-owned collection of independently Zone-bound compositions.
+///
+/// Every Zone keeps its own composition behind its own lock, so an
+/// in-flight dispatch holds only the Zone it belongs to: a second Zone's
+/// dispatch and the VM-start display reconcile never queue behind it. The
+/// daemon-global slot that holds this set is an install/teardown handle
+/// only - a caller takes it to clone one per-Zone handle and drops it
+/// before locking that handle.
 pub struct InteractionRuntimeSet<S>
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
 {
-    runtimes: BTreeMap<String, InteractionComposition<S>>,
+    runtimes: BTreeMap<String, Arc<AsyncMutex<InteractionComposition<S>>>>,
 }
 
 impl<S> core::fmt::Debug for InteractionRuntimeSet<S>
@@ -459,7 +466,8 @@ where
 
     /// Insert one fully Zone-bound runtime.
     pub fn insert(&mut self, zone: ZoneId, runtime: InteractionComposition<S>) {
-        self.runtimes.insert(zone.as_str().to_owned(), runtime);
+        self.runtimes
+            .insert(zone.as_str().to_owned(), Arc::new(AsyncMutex::new(runtime)));
     }
 
     /// Return whether any Zone runtime is installed.
@@ -472,72 +480,123 @@ where
         self.runtimes.keys().map(String::as_str)
     }
 
-    fn runtime_for(&self, zone: &ZoneId) -> Option<&InteractionComposition<S>> {
-        self.runtimes.get(zone.as_str())
-    }
-
-    fn runtime_for_mut(&mut self, zone: &ZoneId) -> Option<&mut InteractionComposition<S>> {
-        self.runtimes.get_mut(zone.as_str())
-    }
-
-    /// Reconcile the committed WaylandSession for one exact VM before its
-    /// process DAG waits on the Host proxy socket.
-    pub(crate) fn reconcile_committed_display_for_vm_start(
-        &mut self,
-        zone: &ZoneId,
-        vm: &str,
-        session_ref: &ResourceRef,
-        session_uid: &ResourceUid,
-        spec: &WaylandSessionSpec,
-    ) -> Result<d2b_provider_display_wayland::ReconcileResult, DisplayRuntimeError> {
-        self.runtime_for_mut(zone)
-            .ok_or(DisplayRuntimeError::SessionUnauthenticated)?
-            .reconcile_committed_display_for_vm_start(vm, session_ref, session_uid, spec)
-    }
-
-    /// Find the sole authenticated ComponentSession owned by one exact
-    /// execution target and service across the daemon's Zone compositions.
-    /// Absent, stale, or ambiguous sources fail closed.
-    pub fn component_session_driver_for_target(
+    /// Clone one Zone's composition handle. The caller locks the handle for
+    /// as long as it owns that Zone's composition - never the set that
+    /// handed it out.
+    pub(crate) fn runtime_handle(
         &self,
-        service: &str,
-        target: &ResourceRef,
-    ) -> Option<d2b_session::SessionDriverHandle> {
-        let mut drivers = self
-            .runtimes
-            .values()
-            .filter_map(|runtime| runtime.component_session_driver_for_target(service, target));
-        let driver = drivers.next()?;
-        drivers.next().is_none().then_some(driver)
+        zone: &ZoneId,
+    ) -> Option<Arc<AsyncMutex<InteractionComposition<S>>>> {
+        self.runtimes.get(zone.as_str()).cloned()
     }
 
-    async fn remove_session(&mut self, zone: &ZoneId, session_key: &str) -> Result<(), String> {
-        self.runtime_for_mut(zone)
-            .ok_or_else(|| "interaction runtime unavailable".to_owned())?
-            .remove_session(session_key)
-            .await
+    /// Every installed Zone handle, in Zone order.
+    fn runtime_handles(&self) -> Vec<Arc<AsyncMutex<InteractionComposition<S>>>> {
+        self.runtimes.values().cloned().collect()
     }
+}
 
-    /// Finalize every Zone composition, retaining failed state for retry.
-    pub async fn finalize_async(
-        &mut self,
-        grace: d2b_provider_display_wayland::GraceState,
-    ) -> Result<(), InteractionFinalizeError> {
-        let zones = self.runtimes.keys().cloned().collect::<Vec<_>>();
-        let mut failure = None;
-        for zone in zones {
-            if let Some(runtime) = self.runtimes.get_mut(&zone)
-                && let Err(error) = runtime.finalize_async(grace).await
-            {
-                failure.get_or_insert(error);
-            }
+/// The sole driver of a Zone-by-Zone scan: absent or ambiguous fails closed.
+fn sole_driver(
+    drivers: Vec<d2b_session::SessionDriverHandle>,
+) -> Option<d2b_session::SessionDriverHandle> {
+    let mut drivers = drivers.into_iter();
+    let driver = drivers.next()?;
+    drivers.next().is_none().then_some(driver)
+}
+
+/// Reconcile the committed WaylandSession of one Zone for one exact VM
+/// before its process DAG waits on the Host proxy socket.
+///
+/// The set lock is taken only to clone that Zone's handle and is released
+/// before the composition is locked, so a VM start in one Zone does not
+/// queue behind another Zone's in-flight dispatch.
+pub(crate) async fn reconcile_committed_display_for_vm_start<S>(
+    runtime: &Arc<AsyncMutex<Option<InteractionRuntimeSet<S>>>>,
+    zone: &ZoneId,
+    vm: &str,
+    session_ref: &ResourceRef,
+    session_uid: &ResourceUid,
+    spec: &WaylandSessionSpec,
+) -> Result<d2b_provider_display_wayland::ReconcileResult, DisplayRuntimeError>
+where
+    S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
+{
+    let handle = {
+        let guard = runtime.lock().await;
+        guard.as_ref().and_then(|set| set.runtime_handle(zone))
+    }
+    .ok_or(DisplayRuntimeError::SessionUnauthenticated)?;
+    handle
+        .lock()
+        .await
+        .reconcile_committed_display_for_vm_start(vm, session_ref, session_uid, spec)
+}
+
+/// Finalize every Zone composition of one daemon-owned runtime set,
+/// retaining each Zone's failed state for retry.
+///
+/// The set lock is taken only to clone the per-Zone handles and is released
+/// before any Zone is finalized, so no outer guard is held across a Zone's
+/// awaits. The first failure is returned; `None` means no Zone composition
+/// is installed or all of them finalized.
+pub async fn finalize_interaction_runtimes<S>(
+    runtime: &Arc<AsyncMutex<Option<InteractionRuntimeSet<S>>>>,
+    grace: d2b_provider_display_wayland::GraceState,
+) -> Option<InteractionFinalizeError>
+where
+    S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
+{
+    let handles = {
+        let guard = runtime.lock().await;
+        guard.as_ref()?.runtime_handles()
+    };
+    let mut failure = None;
+    for handle in handles {
+        let mut handle = handle.lock().await;
+        if let Err(error) = handle.finalize_async(grace).await {
+            failure.get_or_insert(error);
         }
-        failure.map_or(Ok(()), Err)
     }
+    failure
+}
+
+/// Find the sole authenticated ComponentSession owned by one exact
+/// execution target and service across the daemon's Zone compositions.
+/// Absent, stale, or ambiguous sources fail closed.
+///
+/// The set lock is taken only to clone the per-Zone handles and is released
+/// before any of them is locked; the handles are then locked one at a time,
+/// so a contended Zone reports its composition once it is free instead of
+/// being reported as an absent source.
+pub async fn component_session_driver_for_service<S>(
+    runtime: &Arc<AsyncMutex<Option<InteractionRuntimeSet<S>>>>,
+    service: &str,
+    target: &ResourceRef,
+) -> Option<d2b_session::SessionDriverHandle>
+where
+    S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
+{
+    let handles = {
+        let guard = runtime.lock().await;
+        guard.as_ref()?.runtime_handles()
+    };
+    let mut drivers = Vec::new();
+    for handle in handles {
+        let handle = handle.lock().await;
+        drivers.extend(handle.component_session_driver_for_target(service, target));
+    }
+    sole_driver(drivers)
 }
 
 /// Resolve one exact service-owned ComponentSession without converting a
 /// contended runtime lock into an absent source.
+///
+/// Synchronous seat: the set lock is taken only to clone the per-Zone
+/// handles and is released before any of them is locked, so a caller parked
+/// in a dispatch holds nothing this needs. A contended Zone handle waits
+/// rather than reporting the driver as absent - the same fail-closed rule
+/// the async seat follows.
 pub(crate) fn blocking_component_session_driver_for_service<S>(
     runtime: &Arc<AsyncMutex<Option<InteractionRuntimeSet<S>>>>,
     service: &str,
@@ -546,10 +605,16 @@ pub(crate) fn blocking_component_session_driver_for_service<S>(
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
 {
-    let runtime = runtime.blocking_lock();
-    runtime
-        .as_ref()
-        .and_then(|runtime| runtime.component_session_driver_for_target(service, target))
+    let handles = {
+        let guard = runtime.blocking_lock();
+        guard.as_ref()?.runtime_handles()
+    };
+    let mut drivers = Vec::new();
+    for handle in handles {
+        let handle = handle.blocking_lock();
+        drivers.extend(handle.component_session_driver_for_target(service, target));
+    }
+    sole_driver(drivers)
 }
 
 impl<S> Default for InteractionRuntimeSet<S>
@@ -5451,12 +5516,17 @@ where
     .await
     .map_err(|_| "interaction-handshake-timeout".to_owned())?
     .map_err(|error| error.to_string())?;
-    let acceptor = {
+    // The Zone handle is cloned out of the install/teardown lock and that
+    // lock is dropped before the composition is taken: this session holds
+    // only its own Zone for the rest of its life, so a second Zone's session
+    // and the VM-start display reconcile never wait behind its dispatch.
+    let zone_runtime = {
         let guard = runtime.lock().await;
-        let composition = guard
-            .as_ref()
-            .and_then(|set| set.runtime_for(&zone))
-            .ok_or_else(|| "interaction runtime unavailable".to_owned())?;
+        guard.as_ref().and_then(|set| set.runtime_handle(&zone))
+    }
+    .ok_or_else(|| "interaction runtime unavailable".to_owned())?;
+    let acceptor = {
+        let composition = zone_runtime.lock().await;
         composition
             .registrar()
             .component_session_acceptor(policy, verified_peer)
@@ -5470,11 +5540,7 @@ where
         ),
     );
     let request_receiver = {
-        let mut guard = runtime.lock().await;
-        let composition = guard
-            .as_mut()
-            .and_then(|set| set.runtime_for_mut(&zone))
-            .ok_or_else(|| "interaction runtime unavailable".to_owned())?;
+        let mut composition = zone_runtime.lock().await;
         let registered = composition
             .admit_and_register_for_service(acceptor, engine, evidence, 1, &service)
             .await
@@ -5531,23 +5597,9 @@ where
         } else {
             Vec::new()
         };
-        // Residual, recorded rather than half-fixed: this session's request
-        // dispatch holds the *global* runtime-set lock across its awaits, so
-        // another Zone's session (and the VM-start display reconcile) waits
-        // behind it. Removing the hold means the set must hand out a per-Zone
-        // handle (`BTreeMap<String, Arc<AsyncMutex<InteractionComposition>>>`)
-        // so the outer lock is taken only to clone that handle - which also
-        // moves `reconcile_committed_display_for_vm_start` and
-        // `component_session_driver_for_target` off their synchronous seats,
-        // and the latter's documented rule is that a contended lock is never
-        // reported as an absent source. That is a design change to the
-        // interaction runtime's ownership, not a seat swap, and it needs its
-        // own concurrency test.
-        let mut guard = runtime.lock().await;
-        let composition = guard
-            .as_mut()
-            .and_then(|set| set.runtime_for_mut(&zone))
-            .ok_or_else(|| "interaction runtime unavailable".to_owned())?;
+        // Only this Zone's composition is held across the dispatch, so a
+        // second Zone's request is dispatched while this one is in flight.
+        let mut composition = zone_runtime.lock().await;
         if let Err(error) = composition
             .dispatch_component_request_for_session(&session_key, frame, attachments)
             .await
@@ -5558,12 +5610,7 @@ where
             break;
         }
     }
-    let mut guard = runtime.lock().await;
-    guard
-        .as_mut()
-        .ok_or_else(|| "interaction runtime unavailable".to_owned())?
-        .remove_session(&zone, &session_key)
-        .await?;
+    zone_runtime.lock().await.remove_session(&session_key).await?;
     Ok(())
 }
 
@@ -6291,6 +6338,44 @@ mod tests {
     type TestInteractionRuntime =
         Arc<AsyncMutex<Option<InteractionRuntimeSet<ProviderSupervisor<Backend>>>>>;
 
+    /// Clone one Zone's composition handle out of the daemon-global slot.
+    async fn zone_runtime_handle(
+        runtime: &TestInteractionRuntime,
+        zone: &ZoneId,
+    ) -> Arc<AsyncMutex<InteractionComposition<ProviderSupervisor<Backend>>>> {
+        let handle = {
+            let guard = runtime.lock().await;
+            guard.as_ref().and_then(|set| set.runtime_handle(zone))
+        };
+        handle.expect("interaction runtime unavailable")
+    }
+
+    /// The session count of one Zone's composition, read under that Zone's
+    /// own handle rather than the daemon-global slot.
+    async fn zone_session_count(runtime: &TestInteractionRuntime, zone: &ZoneId) -> Option<usize> {
+        let handle = {
+            let guard = runtime.lock().await;
+            guard.as_ref().and_then(|set| set.runtime_handle(zone))
+        }?;
+        Some(handle.lock().await.session_count())
+    }
+
+    /// Whether one Zone's composition admitted a session for `service`.
+    async fn zone_has_service_session(
+        runtime: &TestInteractionRuntime,
+        zone: &ZoneId,
+        service: &str,
+    ) -> bool {
+        let handle = {
+            let guard = runtime.lock().await;
+            guard.as_ref().and_then(|set| set.runtime_handle(zone))
+        };
+        let Some(handle) = handle else {
+            return false;
+        };
+        handle.lock().await.has_service_session(service)
+    }
+
     #[test]
     fn durable_display_process_payloads_bind_owner_provider_template_and_target() {
         let supervisor = d2b_provider_supervisor::ProviderSupervisor::new(Backend::default());
@@ -6605,24 +6690,14 @@ mod tests {
         .expect("client handshake timeout")
         .expect("client handshake failed");
         for _ in 0..100 {
-            let admitted = runtime
-                .lock()
-                .await
-                .as_ref()
-                .and_then(|set| set.runtime_for(&zone))
-                .is_some_and(|composition| composition.session_count() == 1);
-            if admitted {
+            if zone_session_count(&runtime, &zone).await == Some(1) {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        assert!(
-            runtime
-                .lock()
-                .await
-                .as_ref()
-                .and_then(|set| set.runtime_for(&zone))
-                .is_some_and(|composition| composition.session_count() == 1),
+        assert_eq!(
+            zone_session_count(&runtime, &zone).await,
+            Some(1),
             "the reactor accept loop admitted the connecting client"
         );
         engine.close(
@@ -6668,13 +6743,7 @@ mod tests {
         )
         .await;
         for _ in 0..50 {
-            if runtime
-                .lock()
-                .await
-                .as_ref()
-                .and_then(|set| set.runtime_for(&zone))
-                .is_some_and(|composition| composition.session_count() == 2)
-            {
+            if zone_session_count(&runtime, &zone).await == Some(2) {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(1)).await;
@@ -6682,11 +6751,8 @@ mod tests {
         let target = ResourceRef::parse(&format!("Guest/uid-{uid}")).unwrap();
         let display_target = ResourceRef::parse("Host/host-system").unwrap();
         let missing = ResourceRef::parse("Guest/missing").unwrap();
-        let guard = runtime.lock().await;
-        let composition = guard
-            .as_ref()
-            .and_then(|set| set.runtime_for(&zone))
-            .expect("runtime");
+        let composition = zone_runtime_handle(&runtime, &zone).await;
+        let composition = composition.lock().await;
         assert!(
             composition
                 .component_session_driver_for_target(PROCESS_ATTACH_SERVICE, &target,)
@@ -6714,7 +6780,7 @@ mod tests {
                 .is_none(),
             "an absent target must remain fail-closed"
         );
-        drop(guard);
+        drop(composition);
 
         let stream = d2b_session::StreamId::new(0x101).unwrap();
         process_client
@@ -6726,13 +6792,10 @@ mod tests {
             .await
             .unwrap();
         let process_driver = {
-            let guard = runtime.lock().await;
-            guard
-                .as_ref()
-                .and_then(|set| set.runtime_for(&zone))
-                .and_then(|composition| {
-                    composition.component_session_driver_for_target(PROCESS_ATTACH_SERVICE, &target)
-                })
+            let composition = zone_runtime_handle(&runtime, &zone).await;
+            let composition = composition.lock().await;
+            composition
+                .component_session_driver_for_target(PROCESS_ATTACH_SERVICE, &target)
                 .expect("Process session driver")
         };
         process_driver
@@ -6782,29 +6845,20 @@ mod tests {
 
         drop(process_client);
         for _ in 0..1_000 {
-            if runtime
-                .lock()
-                .await
-                .as_ref()
-                .and_then(|set| set.runtime_for(&zone))
-                .is_some_and(|composition| composition.session_count() == 1)
-            {
+            if zone_session_count(&runtime, &zone).await == Some(1) {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
-        let guard = runtime.lock().await;
-        let composition = guard
-            .as_ref()
-            .and_then(|set| set.runtime_for(&zone))
-            .expect("runtime");
+        let composition = zone_runtime_handle(&runtime, &zone).await;
+        let composition = composition.lock().await;
         assert!(
             composition
                 .component_session_driver_for_target(PROCESS_ATTACH_SERVICE, &target)
                 .is_none(),
             "a disconnected Process source must be removed rather than reused"
         );
-        drop(guard);
+        drop(composition);
         display_server.abort();
         process_server.abort();
         drop(display_listener);
@@ -6830,39 +6884,34 @@ mod tests {
         )
         .await;
         for _ in 0..50 {
-            if runtime
-                .lock()
-                .await
-                .as_ref()
-                .and_then(|set| set.runtime_for(&zone))
-                .is_some_and(|composition| composition.session_count() == 1)
-            {
+            if zone_session_count(&runtime, &zone).await == Some(1) {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
         let target = ResourceRef::parse(&format!("Guest/uid-{uid}")).unwrap();
-        let guard = runtime.lock().await;
+        // An in-flight dispatch of this Zone holds its own composition
+        // handle: the daemon-wide lookup must wait for it rather than report
+        // the enrolled source as absent.
+        let zone_composition = zone_runtime_handle(&runtime, &zone).await;
+        let zone_guard = zone_composition.lock().await;
         let lookup_runtime = Arc::clone(&runtime);
-        // U13: the contended-lookup assertion now drives the async lock
-        // directly (the sync `blocking_lock` seat stays for the sync
-        // dispatch caller at composition.rs:3322); the contention semantics
-        // are unchanged (R13: no timing change).
+        let lookup_target = target.clone();
         let mut lookup = tokio::spawn(async move {
-            let runtime = lookup_runtime.lock().await;
-            runtime
-                .as_ref()
-                .and_then(|runtime| {
-                    runtime.component_session_driver_for_target(PROCESS_ATTACH_SERVICE, &target)
-                })
+            component_session_driver_for_service(
+                &lookup_runtime,
+                PROCESS_ATTACH_SERVICE,
+                &lookup_target,
+            )
+            .await
         });
         assert!(
             tokio::time::timeout(Duration::from_millis(20), &mut lookup)
                 .await
                 .is_err(),
-            "runtime contention must not be reported as an absent source"
+            "a contended Zone must not be reported as an absent source"
         );
-        drop(guard);
+        drop(zone_guard);
         assert!(
             tokio::time::timeout(Duration::from_secs(1), &mut lookup)
                 .await
@@ -7062,6 +7111,27 @@ mod tests {
         runtimes
     }
 
+    /// One identity-bound (committed) composition for a Zone.
+    fn committed_test_interaction_composition(
+        zone: &ZoneId,
+        transport_uid: u32,
+    ) -> InteractionComposition<ProviderSupervisor<Backend>> {
+        test_interaction_composition_with_identity(
+            zone,
+            transport_uid,
+            ResourceRef::parse("Guest/work").unwrap(),
+            ResourceUid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").unwrap(),
+            ResourceRef::parse("Host/host").unwrap(),
+            ResourceRef::parse("User/alice").unwrap(),
+            7,
+            Some(11),
+            Some(13),
+            17,
+            None,
+            None,
+        )
+    }
+
     fn committed_test_interaction_runtime(
         zone: &ZoneId,
         transport_uid: u32,
@@ -7069,22 +7139,115 @@ mod tests {
         let mut runtimes = InteractionRuntimeSet::new();
         runtimes.insert(
             zone.clone(),
-            test_interaction_composition_with_identity(
-                zone,
-                transport_uid,
-                ResourceRef::parse("Guest/work").unwrap(),
-                ResourceUid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").unwrap(),
-                ResourceRef::parse("Host/host").unwrap(),
-                ResourceRef::parse("User/alice").unwrap(),
-                7,
-                Some(11),
-                Some(13),
-                17,
-                None,
-                None,
-            ),
+            committed_test_interaction_composition(zone, transport_uid),
         );
         runtimes
+    }
+
+    /// Two Zones' sessions dispatch concurrently instead of serializing.
+    ///
+    /// A session loop holds only its own Zone's composition for the whole
+    /// request, including its awaits, while the daemon-global slot is already
+    /// released. A second Zone's dispatch therefore reaches its own
+    /// composition and answers while the first Zone's composition is still
+    /// held; under the daemon-global lock it waited behind it.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn zone_dispatches_do_not_serialize_behind_another_zone() {
+        let directory = tempfile::tempdir().unwrap();
+        let uid = nix::unistd::getuid().as_raw();
+        let zone_a = ZoneId::parse("work").unwrap();
+        let zone_b = ZoneId::parse("dev").unwrap();
+        let service = d2b_provider_display_wayland::SERVICE_PACKAGE;
+        let mut runtimes = InteractionRuntimeSet::new();
+        runtimes.insert(
+            zone_a.clone(),
+            committed_test_interaction_composition(&zone_a, uid),
+        );
+        runtimes.insert(
+            zone_b.clone(),
+            committed_test_interaction_composition(&zone_b, uid),
+        );
+        let runtime = Arc::new(AsyncMutex::new(Some(runtimes)));
+
+        let path_a = directory.path().join("work.sock");
+        let listener_a = bind_interaction_listener(&path_a, uid).await.unwrap();
+        let (zone_a_client, zone_a_server) =
+            establish_test_client(&listener_a, &runtime, &zone_a, service, uid, &path_a).await;
+        let path_b = directory.path().join("dev.sock");
+        let listener_b = bind_interaction_listener(&path_b, uid).await.unwrap();
+        let (zone_b_client, zone_b_server) =
+            establish_test_client(&listener_b, &runtime, &zone_b, service, uid, &path_b).await;
+        for zone in [&zone_a, &zone_b] {
+            for _ in 0..50 {
+                if zone_has_service_session(&runtime, zone, service).await {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            assert!(
+                zone_has_service_session(&runtime, zone, service).await,
+                "each Zone admits its own display session"
+            );
+        }
+
+        let spec = |name: &str| {
+            WaylandSessionSpec::new(
+                ResourceRef::parse("Guest/work").unwrap(),
+                ResourceRef::parse("Host/host").unwrap(),
+                ResourceRef::parse("User/alice").unwrap(),
+                ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/display-wayland")
+                    .unwrap(),
+                d2b_provider_display_wayland::DisplayIdentity::new(
+                    name, "#112233", "#223344", "#334455",
+                )
+                .unwrap(),
+                true,
+            )
+            .unwrap()
+        };
+
+        // Zone A's in-flight dispatch owns Zone A's composition.
+        let zone_a_composition = zone_runtime_handle(&runtime, &zone_a).await;
+        let zone_a_dispatch = zone_a_composition.lock().await;
+
+        let zone_b_reconcile = dispatch_test_request(
+            &zone_b_client,
+            service,
+            200,
+            "DisplayService/Reconcile",
+            serde_json::to_vec(&serde_json::json!({"spec": spec("zone-b")})).unwrap(),
+        )
+        .await;
+        assert_eq!(
+            zone_b_reconcile.status().code(),
+            TtrpcCode::OK,
+            "Zone B's dispatch must not wait behind Zone A's in-flight dispatch"
+        );
+        assert!(
+            zone_a_composition.try_lock().is_err(),
+            "Zone A's composition is still held by its in-flight dispatch"
+        );
+
+        drop(zone_a_dispatch);
+        assert!(
+            zone_a_composition.try_lock().is_ok(),
+            "Zone A's composition frees as soon as its dispatch releases it"
+        );
+        let zone_a_reconcile = dispatch_test_request(
+            &zone_a_client,
+            service,
+            201,
+            "DisplayService/Reconcile",
+            serde_json::to_vec(&serde_json::json!({"spec": spec("zone-a")})).unwrap(),
+        )
+        .await;
+        assert_eq!(zone_a_reconcile.status().code(), TtrpcCode::OK);
+
+        zone_a_server.abort();
+        zone_b_server.abort();
+        drop(listener_a);
+        drop(listener_b);
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -7108,14 +7271,8 @@ mod tests {
         )
         .await;
         for _ in 0..50 {
-            if runtime
-                .lock()
+            if zone_has_service_session(&runtime, &zone, d2b_provider_display_wayland::SERVICE_PACKAGE)
                 .await
-                .as_ref()
-                .and_then(|set| set.runtime_for(&zone))
-                .is_some_and(|composition| {
-                    composition.has_service_session(d2b_provider_display_wayland::SERVICE_PACKAGE)
-                })
             {
                 break;
             }
@@ -7141,11 +7298,8 @@ mod tests {
         let session_uid =
             ResourceUid::parse("33333333-3333-4333-8333-333333333333").expect("session uid");
 
-        let mut guard = runtime.lock().await;
-        let composition = guard
-            .as_mut()
-            .and_then(|set| set.runtime_for_mut(&zone))
-            .expect("committed interaction composition");
+        let composition = zone_runtime_handle(&runtime, &zone).await;
+        let mut composition = composition.lock().await;
         let result = composition
             .reconcile_committed_display_for_vm_start("work", &session_ref, &session_uid, &spec)
             .expect("committed display reconciliation");
@@ -7169,7 +7323,7 @@ mod tests {
                 .is_err(),
             "a VM start for a different Guest must not reuse the committed session"
         );
-        drop(guard);
+        drop(composition);
         server.abort();
         drop(listener);
     }
@@ -7416,11 +7570,8 @@ mod tests {
             clients.push((service, path, listener, client, server));
         }
         {
-            let guard = runtime.lock().await;
-            let composition = guard
-                .as_ref()
-                .and_then(|set| set.runtime_for(&zone))
-                .expect("committed interaction composition");
+            let composition = zone_runtime_handle(&runtime, &zone).await;
+            let composition = composition.lock().await;
             let display_route = composition
                 .route_for_service(d2b_provider_display_wayland::SERVICE_PACKAGE)
                 .expect("display route");
@@ -7716,15 +7867,7 @@ mod tests {
         for (_, _, _, _, server) in clients {
             assert!(server.await.unwrap().is_ok());
         }
-        assert_eq!(
-            runtime
-                .lock()
-                .await
-                .as_ref()
-                .and_then(|set| set.runtime_for(&zone))
-                .map_or(0, InteractionComposition::session_count),
-            0
-        );
+        assert_eq!(zone_session_count(&runtime, &zone).await, Some(0));
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -8192,11 +8335,8 @@ mod tests {
         .await;
         assert_eq!(reconcile.status().code(), TtrpcCode::OK);
         {
-            let guard = runtime.lock().await;
-            let composition = guard
-                .as_ref()
-                .and_then(|set| set.runtime_for(&zone))
-                .unwrap();
+            let composition = zone_runtime_handle(&runtime, &zone).await;
+            let composition = composition.lock().await;
             assert!(
                 composition
                     .display
@@ -8456,15 +8596,7 @@ mod tests {
         let finalize = TtrpcResponse::parse_from_bytes(finalize_payload).unwrap();
         assert_eq!(finalize.status().code(), TtrpcCode::OK);
         assert!(server.await.unwrap().is_ok());
-        assert_eq!(
-            runtime
-                .lock()
-                .await
-                .as_ref()
-                .and_then(|set| set.runtime_for(&zone))
-                .map_or(0, InteractionComposition::session_count),
-            0
-        );
+        assert_eq!(zone_session_count(&runtime, &zone).await, Some(0));
 
         let replay_frame = request_frame_for_test(
             d2b_provider_display_wayland::SERVICE_PACKAGE,

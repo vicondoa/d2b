@@ -101,7 +101,7 @@ async fn serve_inspect_network(
         service: NETWORK_EFFECTS_SERVICE.id.to_owned(),
         reason: reason.to_owned(),
     };
-    let bundle = runtime.bundle();
+    let bundle = runtime.bundle().await;
     let installed = bundle
         .installed_generation_identity()
         .ok_or_else(|| declined("inspect-network-installed-generation-unavailable"))?;
@@ -203,7 +203,7 @@ mod tests {
 
     #[async_trait]
     impl NetworkRuntime for ScriptedRuntime {
-        fn bundle(&self) -> std::sync::Arc<d2b_core::bundle_resolver::BundleResolver> {
+        async fn bundle(&self) -> std::sync::Arc<d2b_core::bundle_resolver::BundleResolver> {
             std::sync::Arc::new(self.bundle.clone())
         }
         fn broker_socket_path(&self) -> &std::path::Path {

@@ -214,11 +214,12 @@ pub(crate) struct ProductionSharedProviderEffects {
     /// resolver on every reconcile, finalize, and effect).
     intents: Arc<dyn d2b_provider_network_local::broker::NetworkIntentSource>,
     /// The last verified trusted bundle the runtime facet serves
-    /// ([`NetworkRuntime::bundle`]): `bundle()` reloads the on-disk bundle
-    /// per invocation and falls back to the last verified resolver when
-    /// the load fails, so an unreadable bundle never mints facts while the
-    /// reconcile, finalize, and kernel paths refuse closed. Seeded at
-    /// plane composition, which already verified the same bundle file.
+    /// ([`NetworkRuntime::bundle`]): `bundle()` re-verifies the on-disk
+    /// bundle per invocation on the bundle loader worker and falls back to
+    /// the last verified resolver when the load fails, so an unreadable
+    /// bundle never mints facts while the reconcile, finalize, and kernel
+    /// paths refuse closed. Seeded at plane composition, which already
+    /// verified the same bundle file.
     bundle: tokio::sync::Mutex<Arc<BundleResolver>>,
     /// The authenticated daemon-to-broker origination socket (U14).
     broker_socket: PathBuf,
@@ -343,29 +344,41 @@ impl ProductionSharedProviderEffects {
         let _ = self.gpu_facets.set(gpu_facets);
     }
 
-    fn runtime(&self) -> Result<Arc<ZoneResourceRuntime>, SharedProviderEffectError> {
-        // Synchronous caller on a tokio Mutex (plan U10): the slot's
-        // critical sections are single Assignment/attach operations
-        // (microseconds) and the pre-conversion std Mutex::lock serialized
-        // instead of refusing, so a collision spins on try_lock (lock_sync
-        // pattern, same as the broker rate limiter) rather than failing
-        // closed - concurrent reconcile/attach traffic must be serialized,
-        // never refused.
-        let plane = loop {
-            match self.state.resource_plane.try_lock() {
-                Ok(guard) => break guard,
-                Err(_) => std::hint::spin_loop(),
-            }
-        };
+    /// Resolve this Zone's live resource runtime.
+    ///
+    /// Async seat: the plane slot's critical sections are single
+    /// Assignment/attach operations (microseconds), so concurrent
+    /// reconcile/attach traffic is serialized by awaiting the slot rather
+    /// than by spinning - a worker that spins on the slot stalls every task
+    /// on it, and refusing a collision would turn ordinary traffic into an
+    /// unavailable runtime.
+    async fn runtime(&self) -> Result<Arc<ZoneResourceRuntime>, SharedProviderEffectError> {
+        let plane = self.state.resource_plane.lock().await;
         plane
             .as_ref()
             .and_then(|plane| plane.zone(&self.zone).ok())
             .ok_or(SharedProviderEffectError::Unavailable)
     }
 
+    /// Resolve this Zone's live resource runtime without waiting for the
+    /// plane slot.
+    ///
+    /// Fail-closed seat for the synchronous trait boundaries that cannot
+    /// await ([`GpuRuntime::admit_authority`] and `release_authority`): a
+    /// collision reports the runtime unavailable instead of spinning a lock
+    /// on a thread the executor shares.
+    fn try_runtime(&self) -> Result<Arc<ZoneResourceRuntime>, SharedProviderEffectError> {
+        let plane = self.state.resource_plane.try_lock().ok();
+        plane
+            .as_ref()
+            .and_then(|plane| plane.as_ref())
+            .and_then(|plane| plane.zone(&self.zone).ok())
+            .ok_or(SharedProviderEffectError::Unavailable)
+    }
+
     /// The published v3 plane (manager-backed live rows and status).
-    fn plane(&self) -> Result<Arc<ResourcePlaneV3>, SharedProviderEffectError> {
-        let runtime = self.runtime()?;
+    async fn plane(&self) -> Result<Arc<ResourcePlaneV3>, SharedProviderEffectError> {
+        let runtime = self.runtime().await?;
         runtime
             .v3_plane()
             .map_err(|_| SharedProviderEffectError::Unavailable)
@@ -376,7 +389,7 @@ impl ProductionSharedProviderEffects {
         &self,
         target: &ResourceRef,
     ) -> Result<Option<&'static str>, SharedProviderEffectError> {
-        let plane = self.plane()?;
+        let plane = self.plane().await?;
         let key = ResourceKey::new(
             self.zone.as_str(),
             target.resource_type().as_str(),
@@ -396,7 +409,7 @@ impl ProductionSharedProviderEffects {
         &self,
         target: &ResourceRef,
     ) -> Result<Option<Value>, SharedProviderEffectError> {
-        let plane = self.plane()?;
+        let plane = self.plane().await?;
         let key = ResourceKey::new(
             self.zone.as_str(),
             target.resource_type().as_str(),
@@ -457,7 +470,7 @@ impl ProductionSharedProviderEffects {
     ) -> Result<ResourceGeneration, SharedProviderEffectError> {
         let provider_ref = ResourceRef::parse(kind.provider_ref())
             .map_err(|_| SharedProviderEffectError::InvalidResource)?;
-        let plane = self.plane()?;
+        let plane = self.plane().await?;
         let key = ResourceKey::new(
             self.zone.as_str(),
             provider_ref.resource_type().as_str(),
@@ -1382,7 +1395,7 @@ impl ProductionSharedProviderEffects {
         ),
         SharedProviderEffectError,
     > {
-        let runtime = self.runtime()?;
+        let runtime = self.runtime().await?;
         if runtime.authority_zone_uid().is_none() {
             return Err(SharedProviderEffectError::Unavailable);
         }
@@ -1517,7 +1530,7 @@ impl ProductionSharedProviderEffects {
         let resolver = crate::load_bundle_resolver_on_worker(&self.state)
             .await
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
-        let runtime = self.runtime()?;
+        let runtime = self.runtime().await?;
         let admission = self
             .network_admission(&runtime, request, &spec, &resolver)
             .await?;
@@ -1595,7 +1608,7 @@ impl ProductionSharedProviderEffects {
             return Err(SharedProviderEffectError::InvalidResource);
         }
         let device_ref = key_ref(&request.target)?;
-        let runtime = self.runtime().inspect_err(|_| {
+        let runtime = self.runtime().await.inspect_err(|_| {
             tracing::warn!(
                 device = %device_ref.to_canonical_string(),
                 "TPM device reconcile refused: the Zone resource runtime is not attached",
@@ -1723,7 +1736,7 @@ impl ProductionSharedProviderEffects {
                 SharedProviderEffectPhase::Pending,
             ));
         }
-        let runtime = self.runtime()?;
+        let runtime = self.runtime().await?;
         let services = runtime
             .committed_resources_of_type(
                 d2b_provider_device_usbip::USB_SERVICE_RESOURCE_TYPE,
@@ -1777,7 +1790,7 @@ impl ProductionSharedProviderEffects {
                         SharedProviderEffectPhase::Ready,
                     ));
                 }
-                let runtime = self.runtime()?;
+                let runtime = self.runtime().await?;
                 let (zone_uid, zone_opted_in, mut port) =
                     self.usbip_service_port(&runtime, request).await?;
                 let mut lifecycle = d2b_provider_device_usbip::ServiceLifecycle::new(
@@ -1809,7 +1822,7 @@ impl ProductionSharedProviderEffects {
                         .ok_or(SharedProviderEffectError::InvalidResource)?,
                 )
                 .map_err(|_| SharedProviderEffectError::InvalidResource)?;
-                let runtime = self.runtime()?;
+                let runtime = self.runtime().await?;
                 let zone_uid = runtime
                     .authority_zone_uid()
                     .cloned()
@@ -1945,7 +1958,7 @@ impl ProductionSharedProviderEffects {
         }
         match component {
             SecurityKeyComponent::Service => {
-                let runtime = self.runtime()?;
+                let runtime = self.runtime().await?;
                 let mode = SharedProviderEffectMode::parse(request)?;
                 if mode == SharedProviderEffectMode::Projection {
                     let endpoint_ref = request
@@ -2242,7 +2255,7 @@ impl ProductionSharedProviderEffects {
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
         let device_ref = key_ref(&request.target)?.to_canonical_string();
-        let runtime = self.runtime()?;
+        let runtime = self.runtime().await?;
         let children = runtime
             .committed_resources_of_type(d2b_provider_device_usbip::USB_SERVICE_RESOURCE_TYPE)
             .await
@@ -2264,7 +2277,7 @@ impl ProductionSharedProviderEffects {
         &self,
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
-        let runtime = self.runtime()?;
+        let runtime = self.runtime().await?;
         let service_ref = key_ref(&request.target)?.to_canonical_string();
         let bindings = runtime
             .committed_resources_of_type(
@@ -2286,7 +2299,7 @@ impl ProductionSharedProviderEffects {
         &self,
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
-        let runtime = self.runtime()?;
+        let runtime = self.runtime().await?;
         let device_ref = key_ref(&request.target)?.to_canonical_string();
         let services = runtime
             .committed_resources_of_type(
@@ -2368,7 +2381,7 @@ impl ProductionSharedProviderEffects {
         let resolver = crate::load_bundle_resolver_on_worker(&self.state)
             .await
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
-        let runtime = self.runtime()?;
+        let runtime = self.runtime().await?;
         let admission = self
             .network_admission(&runtime, request, &spec, &resolver)
             .await?;
@@ -2500,7 +2513,7 @@ impl ProductionSharedProviderEffects {
             .and_then(Value::as_str)
             .and_then(|value| ResourceRef::parse(value).ok())
             .unwrap_or_else(|| ResourceRef::parse(HOST_REF).expect("Host ref"));
-        let runtime = self.runtime()?;
+        let runtime = self.runtime().await?;
         let vm_id = VmId::new(holder.name().as_str());
         let migration_intent = BundleOpId::new(format!(
             "{}{}",
@@ -2571,7 +2584,7 @@ impl ProductionSharedProviderEffects {
         &self,
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
-        let runtime = self.runtime()?;
+        let runtime = self.runtime().await?;
         let service_ref = key_ref(&request.target)?.to_canonical_string();
         let bindings = runtime
             .committed_resources_of_type(d2b_provider_device_usbip::USB_BINDING_RESOURCE_TYPE)
@@ -2670,22 +2683,17 @@ impl ProductionSharedProviderEffects {
 // daemon-resolved bundle intents ([`NetworkIntentSource`]).
 #[async_trait]
 impl d2b_provider_network_local::NetworkRuntime for ProductionSharedProviderEffects {
-    fn bundle(&self) -> Arc<d2b_core::bundle_resolver::BundleResolver> {
+    async fn bundle(&self) -> Arc<d2b_core::bundle_resolver::BundleResolver> {
         // Per-invocation freshness, mirroring the retired adapter's per-call
         // reload: re-verify the on-disk bundle before serving any bundle
         // fact, so a replaced bundle is observed without a daemon restart.
         // The owned `Arc` keeps the served resolver valid for the caller's
-        // synchronous read even when a later invocation refreshes the slot.
-        // A bundle that fails verification keeps the last verified resolver
-        // (an unreadable bundle never mints facts), while the reconcile,
+        // read even when a later invocation refreshes the slot. A bundle
+        // that fails verification keeps the last verified resolver (an
+        // unreadable bundle never mints facts), while the reconcile,
         // finalize, and kernel paths refuse closed.
-        let mut slot = loop {
-            match self.bundle.try_lock() {
-                Ok(guard) => break guard,
-                Err(_) => std::hint::spin_loop(),
-            }
-        };
-        if let Ok(resolver) = crate::load_bundle_resolver(&self.state) {
+        let mut slot = self.bundle.lock().await;
+        if let Ok(resolver) = crate::load_bundle_resolver_on_worker(&self.state).await {
             *slot = Arc::new(resolver);
         }
         Arc::clone(&slot)
@@ -2890,7 +2898,7 @@ impl GpuRuntime for ProductionSharedProviderEffects {
     ) -> Result<d2b_core_controller::authority::AuthorityLease, d2b_provider_device_gpu::GpuEffectError>
     {
         let runtime = self
-            .runtime()
+            .try_runtime()
             .map_err(|_| d2b_provider_device_gpu::GpuEffectError::Transient)?;
         crate::drive_sync(&tokio::runtime::Handle::current(), async {
             runtime
@@ -2908,7 +2916,7 @@ impl GpuRuntime for ProductionSharedProviderEffects {
         lease: &d2b_core_controller::authority::AuthorityLease,
     ) -> Result<(), d2b_provider_device_gpu::GpuEffectError> {
         let runtime = self
-            .runtime()
+            .try_runtime()
             .map_err(|_| d2b_provider_device_gpu::GpuEffectError::Transient)?;
         crate::drive_sync(&tokio::runtime::Handle::current(), async {
             runtime
@@ -3019,6 +3027,7 @@ mod tests {
 
         let composed = effects
             .bundle()
+            .await
             .installed_generation_identity()
             .expect("composed bundle generation")
             .as_str()
@@ -3037,6 +3046,7 @@ mod tests {
         write_v3_native_bundle(&state.config.artifacts.bundle_path, "replaced");
         let replaced = effects
             .bundle()
+            .await
             .installed_generation_identity()
             .expect("replaced bundle generation")
             .as_str()
