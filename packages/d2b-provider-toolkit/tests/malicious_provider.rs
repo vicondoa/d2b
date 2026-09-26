@@ -77,7 +77,6 @@ fn controller(component_id: &str) -> ComponentDescriptor {
         1,
         ArtifactDigest::parse(DIGEST).expect("valid digest"),
         [],
-        false,
     )
     .expect("a controller owning one ResourceType is valid")
     .with_execution(ComponentExecution::Launchable {
@@ -115,7 +114,6 @@ fn controller_for_resource(resource_type: &str) -> ComponentDescriptor {
         1,
         ArtifactDigest::parse(DIGEST).expect("valid digest"),
         [],
-        false,
     )
     .expect("a controller owning one ResourceType is valid")
     .with_execution(ComponentExecution::Launchable {
@@ -390,7 +388,6 @@ fn a_worker_cannot_grant_itself_a_dependency_portal_or_a_method_surface() {
             1,
             ArtifactDigest::parse(DIGEST).expect("valid digest"),
             dependencies,
-            false,
         )
     };
     assert_eq!(
@@ -421,7 +418,6 @@ fn a_worker_cannot_grant_itself_a_dependency_portal_or_a_method_surface() {
             1,
             ArtifactDigest::parse(DIGEST).expect("valid digest"),
             [],
-            false,
         ),
         Err(ProviderContractError::ConflictingFields)
     );
@@ -848,7 +844,6 @@ fn a_hostile_identifier_never_reaches_a_diagnostic_surface() {
         1,
         ArtifactDigest::parse(DIGEST).expect("valid digest"),
         [],
-        false,
     )
     .expect("valid component");
     let manifest = manifest_with(

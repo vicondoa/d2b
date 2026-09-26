@@ -3063,7 +3063,6 @@ mod tests {
             8,
             digest(),
             [],
-            false,
         )
         .unwrap()
         .with_execution(ComponentExecution::Launchable {

@@ -238,7 +238,6 @@ fn test_manifest() -> ProviderManifest {
         1,
         digest.clone(),
         [],
-        false,
     )
     .expect("valid component")
     .with_execution(ComponentExecution::Launchable {

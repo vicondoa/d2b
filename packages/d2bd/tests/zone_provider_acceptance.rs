@@ -1428,7 +1428,6 @@ fn u4_controller_descriptor() -> ComponentDescriptor {
         8,
         digest.clone(),
         [],
-        false,
     )
     .unwrap()
     .with_execution(ComponentExecution::Launchable {

@@ -1173,7 +1173,6 @@ fn assignment_manifest() -> ProviderManifest {
         1,
         assignment_digest(),
         [],
-        false,
     )
     .unwrap()
     .with_execution(ComponentExecution::Launchable {

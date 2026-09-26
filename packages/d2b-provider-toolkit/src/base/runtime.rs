@@ -807,7 +807,6 @@ mod tests {
             1,
             digest.clone(),
             [],
-            false,
         )
         .unwrap()
         .with_execution(ComponentExecution::Launchable {
@@ -1133,7 +1132,6 @@ mod tests {
             1,
             ArtifactDigest::parse(format!("sha256:{}", "b".repeat(64))).unwrap(),
             [],
-            false,
         )
         .unwrap();
         assert!(matches!(

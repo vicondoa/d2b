@@ -2447,7 +2447,6 @@ mod tests {
             8,
             digest.clone(),
             [],
-            false,
         )
         .unwrap()
         .with_execution(d2b_contracts_provider::v3::ComponentExecution::Launchable {
