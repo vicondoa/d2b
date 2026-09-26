@@ -14,8 +14,9 @@ use sha2::{Digest, Sha256};
 use crate::{
     AuthenticatedDisplaySession, CleanupState, DependencyState, DisplayController,
     DisplayDependencyProof, DisplayProcessRole, FinalizationDecision, FinalizationInput,
-    GraceState, LaunchGrants, ProcessObservation, StopRequest, VolumeState, WaylandPolicySnapshot,
-    WaylandSessionResourceStatus, WaylandSessionSpec, WorkerState, process::WorkerRestartEvidence,
+    GraceState, LaunchGrants, PrincipalReleaseReceipt, ProcessObservation, StopRequest, VolumeState,
+    WaylandPolicySnapshot, WaylandSessionResourceStatus, WaylandSessionSpec, WorkerState,
+    process::WorkerRestartEvidence,
 };
 
 /// Failure returned by the daemon-owned display effect port.
@@ -228,6 +229,7 @@ pub struct DisplayRuntime<E> {
     observation: ProcessObservation,
     supervision: WorkerRestartEvidence,
     issued_grants: BTreeSet<[u8; 32]>,
+    reconciled_session_key: Option<String>,
     stop_requested: bool,
     authority: CleanupState,
     principal: CleanupState,
@@ -254,6 +256,7 @@ where
             ),
             supervision: WorkerRestartEvidence::from_supervisor(0, None, None, 1),
             issued_grants: BTreeSet::new(),
+            reconciled_session_key: None,
             stop_requested: false,
             authority: CleanupState::Pending,
             principal: CleanupState::Pending,
@@ -366,6 +369,7 @@ where
             );
             return Err(DisplayRuntimeError::SessionMismatch);
         }
+        self.remember_session_key(spec, &authenticated);
         self.effects
             .bind_session(
                 &authenticated,
@@ -568,6 +572,7 @@ where
             );
             return Err(DisplayRuntimeError::SessionMismatch);
         }
+        self.remember_session_key(spec, &authenticated);
         self.effects
             .bind_session(
                 &authenticated,
@@ -740,6 +745,19 @@ where
         Ok(result)
     }
 
+    /// Retain the reconciled session key so finalization can return the
+    /// dynamic principal lease to the controller's bounded pool.
+    fn remember_session_key(
+        &mut self,
+        spec: &WaylandSessionSpec,
+        authenticated: &AuthenticatedDisplaySession,
+    ) {
+        self.reconciled_session_key = Some(crate::controller::session_key(
+            spec,
+            authenticated.controller_generation(),
+        ));
+    }
+
     fn observe_receipt(&mut self, receipt: WorkerLaunchReceipt) {
         let (proxy, frontend) = match receipt.role() {
             DisplayProcessRole::HostProxy => (receipt.state(), self.observation.frontend),
@@ -847,6 +865,19 @@ where
                     tracing::warn!(error = %e, "principal release effect failed during finalization");
                     DisplayRuntimeError::Effect(e)
                 })?;
+            // Both workers are terminal and deleted above, so the dynamic
+            // principal leased by the reconciliation is no longer in use: the
+            // controller returns it to the bounded pool.
+            if let Some(session_key) = self.reconciled_session_key.take()
+                && let Err(error) = self
+                    .controller
+                    .release_session_principal(PrincipalReleaseReceipt::new(session_key))
+            {
+                tracing::debug!(
+                    error = %error,
+                    "controller principal release skipped: no lease for the reconciled session"
+                );
+            }
             self.authority = self
                 .effects
                 .release_authority()
@@ -1160,5 +1191,79 @@ mod tests {
         assert_eq!(second.status.phase, crate::controller::Phase::Pending);
         assert_eq!(runtime.effects.nonce, 1);
         assert_eq!(runtime.effects.launches.len(), 2);
+    }
+
+    fn registered_display() -> (WaylandSessionSpec, WaylandPolicySnapshot) {
+        let spec = WaylandSessionSpec::new(
+            ResourceRef::parse("Guest/test").unwrap(),
+            ResourceRef::parse("Host/test").unwrap(),
+            ResourceRef::parse("User/alice").unwrap(),
+            ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/default").unwrap(),
+            DisplayIdentity::new("test", "#7fc8ff", "#45475a", "#f38ab8").unwrap(),
+            true,
+        )
+        .unwrap();
+        let policy = WaylandPolicySnapshot::from_test_core(
+            spec.policy_ref().clone(),
+            ZoneId::parse("dev").unwrap(),
+            1,
+            FilterInput::default(),
+            FilterInput::default(),
+        )
+        .unwrap();
+        (spec, policy)
+    }
+
+    fn registered_route(reconnect_generation: u64) -> AuthenticatedSessionRouteBinding {
+        AuthenticatedSessionRouteBinding::for_test(
+            Some(ResourceRef::parse(crate::PROVIDER_REF).unwrap()),
+            crate::SERVICE_PACKAGE,
+            reconnect_generation,
+            Some(1),
+            Some(1),
+        )
+    }
+
+    #[test]
+    fn finalize_returns_the_reconciled_principal_to_the_bounded_pool() {
+        let (spec, policy) = registered_display();
+        let effects = Effects {
+            launch_state: Some(WorkerState::Ready { generation: 1 }),
+            ..Effects::default()
+        };
+        // A single-principal pool makes the release observable: while the
+        // reconciled session holds its dynamic lease, no later session can
+        // reach Ready.
+        let mut runtime = DisplayRuntime::new(DisplayController::new(1).unwrap(), effects);
+        let supervision = WorkerRestartEvidence::from_supervisor(1, None, None, 1);
+        let ready = runtime
+            .reconcile_registered(
+                &registered_route(1),
+                &spec,
+                DependencyState::ready(),
+                supervision,
+                &policy,
+            )
+            .unwrap();
+        assert_eq!(ready.status.phase, crate::controller::Phase::Ready);
+        assert!(ready.status.principal.is_some());
+
+        runtime.finalize(GraceState::Active).unwrap();
+
+        let next_spec = spec.with_reconnect_generation(2).unwrap();
+        let next = runtime
+            .reconcile_registered(
+                &registered_route(2),
+                &next_spec,
+                DependencyState::ready(),
+                supervision,
+                &policy,
+            )
+            .unwrap();
+        assert_eq!(next.status.phase, crate::controller::Phase::Ready);
+        assert!(
+            next.status.principal.is_some(),
+            "finalize must have returned the first session's principal to the pool"
+        );
     }
 }
