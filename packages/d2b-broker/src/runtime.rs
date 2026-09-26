@@ -8645,7 +8645,7 @@ async fn build_usbip_explicit_firewall_decision(
         let Some(active_firewall) = resolver.find_usbip_firewall_intent(&firewall_id) else {
             continue;
         };
-        let bus_id = d2b_host::nftables::BusId::new(active_firewall.bus_id.as_str())
+        let bus_id = d2b_host::media::BusId::new(active_firewall.bus_id.as_str())
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
         batch
             .add_usbip_carveout_expr(
@@ -8669,7 +8669,7 @@ async fn build_usbip_explicit_firewall_decision(
         else {
             continue;
         };
-        let bus_id = d2b_host::nftables::BusId::new(active_firewall.bus_id.as_str())
+        let bus_id = d2b_host::media::BusId::new(active_firewall.bus_id.as_str())
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
         batch
             .add_usbip_carveout_expr(
@@ -8689,7 +8689,7 @@ async fn build_usbip_explicit_firewall_decision(
         if !inserted.insert(carveout_id) {
             continue;
         }
-        let bus_id = d2b_host::nftables::BusId::new(explicit_bus_id.as_str())
+        let bus_id = d2b_host::media::BusId::new(explicit_bus_id.as_str())
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
         batch
             .add_usbip_carveout_expr(
@@ -8701,7 +8701,7 @@ async fn build_usbip_explicit_firewall_decision(
     }
 
     // Insert the new explicit carveout last.
-    let bus_id = d2b_host::nftables::BusId::new(bus_id)
+    let bus_id = d2b_host::media::BusId::new(bus_id)
         .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
     crate::ops::usbip_firewall::bind_firewall_rule(batch, &bus_id, rule_body)
         .map_err(|err| BrokerError::LiveHandler(err.to_string()))
@@ -10060,7 +10060,7 @@ async fn build_usbip_firewall_decision(
                 intent_id: firewall_id,
             });
         };
-        let bus_id = d2b_host::nftables::BusId::new(active_firewall.bus_id.as_str())
+        let bus_id = d2b_host::media::BusId::new(active_firewall.bus_id.as_str())
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
         batch
             .add_usbip_carveout_expr(
@@ -10085,7 +10085,7 @@ async fn build_usbip_firewall_decision(
                 intent_id: firewall_id,
             });
         };
-        let bus_id = d2b_host::nftables::BusId::new(active_firewall.bus_id.as_str())
+        let bus_id = d2b_host::media::BusId::new(active_firewall.bus_id.as_str())
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
         batch
             .add_usbip_carveout_expr(
@@ -10096,7 +10096,7 @@ async fn build_usbip_firewall_decision(
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
     }
 
-    let bus_id = d2b_host::nftables::BusId::new(current.bus_id.as_str())
+    let bus_id = d2b_host::media::BusId::new(current.bus_id.as_str())
         .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
     crate::ops::usbip_firewall::bind_firewall_rule(batch, &bus_id, current.nft_rule_body.as_str())
         .map_err(|err| BrokerError::LiveHandler(err.to_string()))

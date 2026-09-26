@@ -51,7 +51,7 @@ static D2BD_GROUP_GID: std::sync::LazyLock<Result<Option<nix::unistd::Gid>, Stri
 pub enum MediaOpError {
     /// The media ref failed [`d2b_host::media::validate_media_ref`].
     InvalidRef(String),
-    /// The USB bus id failed the [`d2b_host::nftables::BusId`] grammar.
+    /// The USB bus id failed the [`d2b_host::media::BusId`] grammar.
     InvalidBusId(String),
     /// The bundle declares no policy for the ref.
     MissingBundlePolicy,
@@ -256,7 +256,7 @@ pub async fn enroll(
 ) -> Result<EnrollOutcome, MediaOpError> {
     d2b_host::media::validate_media_ref(req.media_ref.as_str())
         .map_err(|err| MediaOpError::InvalidRef(err.to_string()))?;
-    let bus_id = d2b_host::nftables::BusId::try_from(req.bus_id.as_str())
+    let bus_id = d2b_host::media::BusId::try_from(req.bus_id.as_str())
         .map_err(|err| MediaOpError::InvalidBusId(err.to_string()))?;
     let source = resolve_physical_source(resolver, req.vm_id.as_str(), req.media_ref.as_str())?;
     let identity =
@@ -454,7 +454,7 @@ pub async fn detach(
     resolver: &BundleResolver,
     req: &QemuMediaHotplugRequest,
 ) -> Result<HotplugOutcome, MediaOpError> {
-    let bus_id = d2b_host::nftables::BusId::try_from(req.bus_id.as_str())
+    let bus_id = d2b_host::media::BusId::try_from(req.bus_id.as_str())
         .map_err(|err| MediaOpError::InvalidBusId(err.to_string()))?;
     let identity =
         read_usb_identity(Path::new("/sys"), Path::new("/dev/disk/by-id"), bus_id.as_str()).await?;
@@ -503,7 +503,7 @@ async fn open_runtime_selector_source<'a>(
     resolver: &'a BundleResolver,
     req: &QemuMediaHotplugRequest,
 ) -> Result<OpenedMedia<'a>, MediaOpError> {
-    let bus_id = d2b_host::nftables::BusId::try_from(req.bus_id.as_str())
+    let bus_id = d2b_host::media::BusId::try_from(req.bus_id.as_str())
         .map_err(|err| MediaOpError::InvalidBusId(err.to_string()))?;
     let identity =
         read_usb_identity(Path::new("/sys"), Path::new("/dev/disk/by-id"), bus_id.as_str()).await?;

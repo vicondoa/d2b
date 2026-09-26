@@ -25,6 +25,7 @@
 //! tests can drive the full coexistence matrix without a live nft
 //! kernel surface.
 
+use crate::media::BusId;
 use d2b_core::host_w3::{CoexistencePolicy, FirewallManager};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256 as Sha256Hasher};
@@ -91,7 +92,7 @@ pub enum NftError {
 
 impl NftError {
     /// Stable kebab-case discriminant for audit logs + the typed-error
-    /// mapping into `d2b-core::error::Error`.
+    /// mapping into `d2b_contracts::error::Error`.
     pub const fn as_kebab_case(&self) -> &'static str {
         match self {
             Self::ForeignNftRuleShadowsD2b { .. } => "foreign-nft-rule-shadows-d2b",
@@ -614,46 +615,6 @@ impl NftBatch {
             }
         }
         Ok(())
-    }
-}
-
-/// USBIP busid newtype. The lexical busid grammar
-/// ([`crate::media::validate_usb_busid`]) is enforced once here, at the
-/// type boundary; consumers never re-validate.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct BusId(String);
-
-impl BusId {
-    /// Validate `s` against the USB busid grammar and wrap it.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::media::BusIdError`] when `s` is not a valid USB
-    /// busid.
-    pub fn new(s: impl Into<String>) -> Result<Self, crate::media::BusIdError> {
-        let s = s.into();
-        crate::media::validate_usb_busid(&s)?;
-        Ok(Self(s))
-    }
-
-    /// Borrow the wrapped busid string.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl TryFrom<&str> for BusId {
-    type Error = crate::media::BusIdError;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::new(value)
-    }
-}
-
-impl fmt::Display for BusId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
     }
 }
 
