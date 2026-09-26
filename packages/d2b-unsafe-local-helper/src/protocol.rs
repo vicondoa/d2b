@@ -7,7 +7,7 @@ use d2b_contracts_control::unsafe_local_wire::{
     HelperHeartbeat, HelperHello, HelperOperationRejected, MAX_HELPER_FRAME_SIZE,
     MAX_HELPER_QUEUE_DEPTH, MIN_EFFECTIVE_HELPER_SOCKET_BUFFER_BYTES,
     UNSAFE_LOCAL_HELPER_PROTOCOL_VERSION, UnsafeLocalHelperToDaemon,
-    unsafe_local_helper_protocol_supported,
+    unsafe_local_helper_protocol_supported, validate_unsafe_local_resource_identity,
 };
 use nix::cmsg_space;
 use nix::libc;
@@ -154,7 +154,7 @@ impl<M: UserScopeManager> HelperClient<M> {
                     )?;
                 }
                 DaemonToUnsafeLocalHelper::Launch(request) => {
-                    if request.validate_bounds().is_err() {
+                    if validate_unsafe_local_resource_identity(&request.workload).is_err() {
                         let rejected = rejection(
                             request.request_id,
                             request.operation_id,

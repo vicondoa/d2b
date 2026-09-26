@@ -209,19 +209,15 @@ tagline sweep (drop "on microvm.nix" from `flake.nix` /
 
 ## `d2b status` output schema (v1.0 vs v1.1 vs v1.1.1)
 
-> **v1.1.1 status note**: v1.1.1 ships the `StatusOutputV3` wire
-> schema (`packages/d2b/src/lib.rs` `StatusServicesOutputV3`
-> + `from_v2` migration shim) per the rename map below. The CLI
-> `d2b status` command still EMITS the v1.0/v1.1
-> `StatusServicesOutputV2` shape at v1.1.1; the emit-side
-> flip to V3 is scheduled for v1.1.2.
+> **v1.1.1 status note**: v1.1.1 keeps emitting the v1.0/v1.1
+> `StatusServicesOutputV2` shape. The V3 wire schema
+> (`StatusServicesOutputV3`) ships with the emit-side flip,
+> scheduled for v1.1.2, per the rename map below.
 >
 > Tooling authors that consume the JSON output should:
 > - At v1.1.1, continue parsing V2 (`microvm`/`snd`/`virtiofsd`).
 > - At v1.1.2+, parse V3 (`hypervisor`/`audio`/`virtiofsd_per_share`/...)
 >   with the documented rename map below.
-> - The `StatusServicesOutputV3::from_v2()` migration shim lives
->   in the public surface so tooling can adopt incrementally.
 
 ### v1.1.1 SHIPPED → CLI-emit at v1.1.2 rename map
 
