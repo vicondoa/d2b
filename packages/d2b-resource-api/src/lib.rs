@@ -21,7 +21,6 @@ pub use adapter::{
     decode_scoped_commit_request, reject_scoped_commit_frame,
 };
 pub use admission::{AdmissionError, AdmittedMutation};
-pub use protobuf;
 pub use authz::{AuthorizationLease, StoreSealHandoffError};
 pub use client::ResourceApiClient;
 pub use d2b_contracts_resource::v3::PreparedStoreMutation;

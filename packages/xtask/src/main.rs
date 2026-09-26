@@ -372,14 +372,17 @@ fn gen_resource_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
 
     let out_file = out_dir.join("d2b_resource_v3_ttrpc.rs");
     sanitize_generated_rust(&out_file)?;
-    // The generated ttrpc surface references `super::d2b_resource_v3::...`
-    // for the message types, so the module file carries the alias beside the
-    // ttrpc module. Generator-owned like the contracts-resource side's
+    // The compiler emits `super::d2b_resource_v3::...` message paths that
+    // used to resolve through an alias module beside the ttrpc module; the
+    // alias is gone, so the paths are rewritten to the canonical
+    // d2b_contracts_resource path (see rewrite_ttrpc_message_paths).
+    // Generator-owned like the contracts-resource side's
     // `write_contract_generated_mod`, so the generated dir has no
     // hand-editable gap.
+    rewrite_ttrpc_message_paths(&out_file)?;
     fs::write(
         out_dir.join("mod.rs"),
-        "// @generated\n\npub mod d2b_resource_v3 {\n    pub use d2b_contracts_resource::resource_proto::*;\n}\n\npub mod d2b_resource_v3_ttrpc;\n",
+        "// @generated\n\npub mod d2b_resource_v3_ttrpc;\n",
     )?;
     Ok(vec![out_file, out_dir.join("mod.rs")])
 }
@@ -472,6 +475,81 @@ fn sanitize_generated_rust(path: &Path) -> Result<(), Box<dyn std::error::Error>
         "// https://github.com/rust-lang/rust-clippy/issues/702\n\n",
         "#![allow(clippy::bool_comparison)]\n#![allow(clippy::derivable_impls)]\n#![allow(clippy::match_like_matches_macro)]\n#![allow(clippy::match_ref_pats)]\n#![allow(clippy::needless_borrow)]\n#![allow(clippy::redundant_static_lifetimes)]\n#![allow(clippy::vec_init_then_push)]\n\n",
     );
+    fs::write(path, generated)?;
+    Ok(())
+}
+
+/// Local stand-in for `::ttrpc::async_request_handler!` (ttrpc 0.9.0) that
+/// takes the full request-type path instead of a module ident: the upstream
+/// macro hardcodes `super::$server::`, which no longer resolves once the
+/// alias module is gone. The body mirrors the upstream macro verbatim.
+const TTRPC_HANDLER_MACRO: &str = r#"macro_rules! async_request_handler {
+    ($class: ident, $ctx: ident, $req: ident, $req_type: path, $req_fn: ident) => {
+        let mut req = <$req_type>::new();
+        {
+            let mut s = CodedInputStream::from_bytes(&$req.payload);
+            req.merge_from(&mut s)
+                .map_err(::ttrpc::err_to_others!(e, ""))?;
+        }
+
+        let mut res = ::ttrpc::Response::new();
+        match $class.service.$req_fn(&$ctx, req).await {
+            Ok(rep) => {
+                res.set_status(::ttrpc::get_status(::ttrpc::Code::OK, "".to_string()));
+                res.payload.reserve(rep.compute_size() as usize);
+                let mut s = protobuf::CodedOutputStream::vec(&mut res.payload);
+                rep.write_to(&mut s)
+                    .map_err(::ttrpc::err_to_others!(e, ""))?;
+                s.flush().map_err(::ttrpc::err_to_others!(e, ""))?;
+            }
+            Err(x) => match x {
+                ::ttrpc::Error::RpcStatus(s) => {
+                    res.set_status(s);
+                }
+                _ => {
+                    res.set_status(::ttrpc::get_status(
+                        ::ttrpc::Code::UNKNOWN,
+                        format!("{:?}", x),
+                    ));
+                }
+            },
+        }
+
+        return Ok(res);
+    };
+}"#;
+
+/// Rewrites the ttrpc-compiler message-module references to the canonical
+/// `d2b_contracts_resource::resource_proto` path.
+///
+/// The compiler emits `super::d2b_resource_v3::...` paths in every method
+/// signature and `::ttrpc::async_request_handler!(..., d2b_resource_v3, ...)`
+/// invocations whose `$server` fragment the ttrpc macro expands to
+/// `super::$server::`. Both assumed a `d2b_resource_v3` alias module beside
+/// the ttrpc module; the alias is gone, so the paths are rewritten to the
+/// canonical message-module path and the invocations are redirected to the
+/// local macro above. The ttrpc protocol bytes are untouched - this is a
+/// Rust path rewrite only.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn rewrite_ttrpc_message_paths(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut generated = fs::read_to_string(path)?;
+    generated = generated.replace(
+        "super::d2b_resource_v3::",
+        "d2b_contracts_resource::resource_proto::",
+    );
+    generated = generated.replace(
+        "::ttrpc::async_request_handler!(self, ctx, req, d2b_resource_v3, ",
+        "async_request_handler!(self, ctx, req, d2b_contracts_resource::resource_proto::",
+    );
+    // macro_rules! must precede its uses textually, so the local handler
+    // macro is injected after the import block. The anchor is load-bearing:
+    // if the compiler stops emitting it, fail instead of silently leaving
+    // the invocations unqualified.
+    const ANCHOR: &str = "use async_trait::async_trait;\n";
+    if !generated.contains(ANCHOR) {
+        return Err("generated ttrpc file lost the import anchor".into());
+    }
+    generated = generated.replace(ANCHOR, &format!("{ANCHOR}\n{TTRPC_HANDLER_MACRO}\n"));
     fs::write(path, generated)?;
     Ok(())
 }
