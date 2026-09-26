@@ -14010,7 +14010,6 @@ fn dispatch_broker_request_as(
         &BrokerRequestEnvelope {
             request,
             caller_role,
-            test_peer_uid: None,
             audit_join: audit_join.clone(),
         },
     )?;
@@ -16898,7 +16897,6 @@ fn dispatch_raw_broker_value_with_timeout(
     let envelope = json!({
         "request": request,
         "callerRole": caller_role,
-        "testPeerUid": Value::Null,
     });
     let remaining = broker_remaining_before_op(deadline, &socket_path)?;
     socket
@@ -17139,7 +17137,6 @@ async fn raw_broker_round_trip_async(
     let envelope = json!({
         "request": request,
         "callerRole": caller_role,
-        "testPeerUid": Value::Null,
     });
     let envelope_bytes = serde_json::to_vec(&envelope).map_err(|err| TypedError::InternalIo {
         context: "serialize raw broker request".to_owned(),
@@ -21589,7 +21586,6 @@ mod public_status_tests {
                 supported_features: Vec::new(),
             }),
             caller_role: caller,
-            test_peer_uid: None,
             audit_join: None,
         };
         let json = serde_json::to_string(&envelope).unwrap();

@@ -106,23 +106,28 @@ fn host_and_guest_instances_keep_separate_runtime_bindings() {
     let envelope = |request| BrokerRequestEnvelope {
         request,
         caller_role: BrokerCallerRole::AdminUid { uid: D2BD_UID },
-        test_peer_uid: Some(D2BD_UID),
         audit_join: None,
     };
     send_json_frame(
         host_client.as_raw_fd(),
-        &envelope(BrokerRequest::Hello(HelloRequest {
-            client_version: "test-0".to_owned(),
-            supported_features: vec![],
-        })),
+        &d2b_broker::runtime::test_peer_uid_frame(
+            envelope(BrokerRequest::Hello(HelloRequest {
+                client_version: "test-0".to_owned(),
+                supported_features: vec![],
+            })),
+            Some(D2BD_UID),
+        ),
     )
     .expect("send host hello");
     send_json_frame(
         guest_client.as_raw_fd(),
-        &envelope(BrokerRequest::Hello(HelloRequest {
-            client_version: "test-0".to_owned(),
-            supported_features: vec![],
-        })),
+        &d2b_broker::runtime::test_peer_uid_frame(
+            envelope(BrokerRequest::Hello(HelloRequest {
+                client_version: "test-0".to_owned(),
+                supported_features: vec![],
+            })),
+            Some(D2BD_UID),
+        ),
     )
     .expect("send guest hello");
 
@@ -214,12 +219,14 @@ fn host_executor_consumes_lifecycle_lease_once_through_the_cell_kernels() {
             });
         send_json_frame(
             client.as_raw_fd(),
-            &BrokerRequestEnvelope {
-                request,
-                caller_role,
-                test_peer_uid: Some(D2BD_UID),
-                audit_join,
-            },
+            &d2b_broker::runtime::test_peer_uid_frame(
+                BrokerRequestEnvelope {
+                    request,
+                    caller_role,
+                    audit_join,
+                },
+                Some(D2BD_UID),
+            ),
         )
         .unwrap_or_else(|error| {
             panic!(

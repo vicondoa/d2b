@@ -204,7 +204,6 @@ fn broker_adopts_socket_activated_fd_and_serves_hello() {
                             supported_features: vec![],
                         }),
                         caller_role: BrokerCallerRole::default(),
-                        test_peer_uid: Some(current_uid),
                         audit_join: None,
                     };
                     client.send_json_frame(&envelope).await?;

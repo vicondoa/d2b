@@ -2871,10 +2871,6 @@ pub struct BrokerRequestEnvelope {
     pub request: BrokerRequest,
     #[serde(default)]
     pub caller_role: BrokerCallerRole,
-    /// Test-only peer uid override; ignored by the production
-    /// broker (which always uses `SO_PEERCRED`).
-    #[serde(default)]
-    pub test_peer_uid: Option<u32>,
     /// Explicit canonical join identities for broker/resource durability.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audit_join: Option<AuditJoinContext>,
@@ -3208,13 +3204,46 @@ mod tests {
                 fd_kinds: vec![FdKind::Any],
             }),
             caller_role: BrokerCallerRole::AdminUid { uid: 1000 },
-            test_peer_uid: None,
             audit_join: None,
         };
         let frame = encode_frame(&env).expect("encodes");
         let parsed: BrokerRequestEnvelope =
             decode_frame("BrokerRequestEnvelope", &frame).expect("decodes");
         assert_eq!(parsed, env);
+    }
+
+    #[test]
+    fn broker_request_envelope_refuses_a_test_only_peer_uid_member() {
+        // RS-0328: the test-only peer-uid override is no longer a member of
+        // the wire contract. The harness frames a `--test-mode` broker
+        // unwraps it from; every other broker refuses it here.
+        let env = BrokerRequestEnvelope {
+            request: BrokerRequest::EnvelopeInvoke(EnvelopeInvokeRequest {
+                operation: "signal-pidfd".to_owned(),
+                zone: "zone-a".to_owned(),
+                payload: serde_json::json!({ "signal": 15 }),
+                chain_root_invocation_id: None,
+                chain_identities: None,
+                fd_indexes: vec![0],
+                fd_kinds: vec![FdKind::Any],
+            }),
+            caller_role: BrokerCallerRole::AdminUid { uid: 1000 },
+            audit_join: None,
+        };
+        let encoded = serde_json::to_value(&env).expect("encodes");
+        assert!(
+            encoded.get("testPeerUid").is_none(),
+            "the production envelope emits no test seam: {encoded}"
+        );
+        let mut frame = encoded.as_object().expect("envelope frame").clone();
+        frame.insert("testPeerUid".to_owned(), serde_json::json!(1000));
+        let error =
+            serde_json::from_value::<BrokerRequestEnvelope>(serde_json::Value::Object(frame))
+                .expect_err("the production envelope must refuse the test-only member");
+        assert!(
+            error.to_string().contains("unknown field `testPeerUid`"),
+            "unexpected refusal: {error}"
+        );
     }
 
     #[test]
@@ -4400,7 +4429,6 @@ mod tests {
                 fd_kinds: vec![],
             }),
             caller_role: BrokerCallerRole::AdminUid { uid: 1000 },
-            test_peer_uid: None,
             audit_join: None,
         };
         let frame = encode_frame(&root).expect("encodes");
