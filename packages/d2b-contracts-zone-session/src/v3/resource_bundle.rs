@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 
+use d2b_contracts::wire_deserialize;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

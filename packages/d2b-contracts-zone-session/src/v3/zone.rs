@@ -6,6 +6,7 @@
 //! that distinction in the type system prevents a caller from smuggling
 //! parent topology, policy, or implementation settings into the self row.
 
+use d2b_contracts::wire_deserialize;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

@@ -15,6 +15,7 @@ use d2b_contracts::foundation_effects::CredentialContractError;
 pub use d2b_contracts::foundation_effects::{
     CredentialLeaseHandle, MAX_AZURE_REF_BYTES, MAX_CREDENTIAL_LEASE_HANDLE_BYTES, OpaqueAzureRef,
 };
+use d2b_contracts::wire_deserialize;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
@@ -282,23 +283,21 @@ impl CredentialScope {
 
 redacted_debug!(CredentialScope);
 
-impl<'de> Deserialize<'de> for CredentialScope {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            execution_ref: Option<ResourceRef>,
-            #[serde(default)]
-            domain_filter: Option<ExecutionDomain>,
-            #[serde(default)]
-            user_ref: Option<ResourceRef>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.execution_ref, wire.domain_filter, wire.user_ref)
-            .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    CredentialScope,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default)]
+        execution_ref: Option<ResourceRef>,
+        #[serde(default)]
+        domain_filter: Option<ExecutionDomain>,
+        #[serde(default)]
+        user_ref: Option<ResourceRef>,
+    },
+    wire,
+    Self::new(wire.execution_ref, wire.domain_filter, wire.user_ref)
+        .map_err(serde::de::Error::custom)
+);
 
 /// Rotation policy class.
 #[derive(
@@ -384,26 +383,24 @@ impl CredentialRotationPolicy {
 
 redacted_debug!(CredentialRotationPolicy);
 
-impl<'de> Deserialize<'de> for CredentialRotationPolicy {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            policy: RotationPolicyClass,
-            #[serde(default)]
-            proactive_window_ms: Option<u64>,
-            #[serde(default)]
-            max_lease_lifetime_ms: u64,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.policy,
-            wire.proactive_window_ms,
-            wire.max_lease_lifetime_ms,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    CredentialRotationPolicy,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        policy: RotationPolicyClass,
+        #[serde(default)]
+        proactive_window_ms: Option<u64>,
+        #[serde(default)]
+        max_lease_lifetime_ms: u64,
+    },
+    wire,
+    Self::new(
+        wire.policy,
+        wire.proactive_window_ms,
+        wire.max_lease_lifetime_ms,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// Compatibility name for the prepared Credential spec field.
 pub type RotationSpec = CredentialRotationPolicy;
@@ -432,18 +429,16 @@ impl ExpirySpec {
 
 redacted_debug!(ExpirySpec);
 
-impl<'de> Deserialize<'de> for ExpirySpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            hard_deadline_ms: u64,
-        }
-        Self::new(Wire::deserialize(deserializer)?.hard_deadline_ms)
-            .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ExpirySpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default)]
+        hard_deadline_ms: u64,
+    },
+    wire,
+    Self::new(wire.hard_deadline_ms).map_err(serde::de::Error::custom)
+);
 
 /// How active leases are treated on a revocation trigger.
 #[derive(
@@ -585,36 +580,34 @@ impl CredentialLeaseStatus {
 
 redacted_debug!(CredentialLeaseStatus);
 
-impl<'de> Deserialize<'de> for CredentialLeaseStatus {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            lease_handle: CredentialLeaseHandle,
-            lease_state: CredentialLeaseState,
-            rotation_generation: u64,
-            source_version: CredentialSourceVersion,
-            expires_at_unix_ms: u64,
-            issued_at_unix_ms: u64,
-            last_refreshed_at: Option<Timestamp>,
-            last_rotated_at: Option<Timestamp>,
-            placement_binding: PlacementBinding,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.lease_handle,
-            wire.lease_state,
-            wire.rotation_generation,
-            wire.source_version,
-            wire.expires_at_unix_ms,
-            wire.issued_at_unix_ms,
-            wire.last_refreshed_at,
-            wire.last_rotated_at,
-            wire.placement_binding,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    CredentialLeaseStatus,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        lease_handle: CredentialLeaseHandle,
+        lease_state: CredentialLeaseState,
+        rotation_generation: u64,
+        source_version: CredentialSourceVersion,
+        expires_at_unix_ms: u64,
+        issued_at_unix_ms: u64,
+        last_refreshed_at: Option<Timestamp>,
+        last_rotated_at: Option<Timestamp>,
+        placement_binding: PlacementBinding,
+    },
+    wire,
+    Self::new(
+        wire.lease_handle,
+        wire.lease_state,
+        wire.rotation_generation,
+        wire.source_version,
+        wire.expires_at_unix_ms,
+        wire.issued_at_unix_ms,
+        wire.last_refreshed_at,
+        wire.last_rotated_at,
+        wire.placement_binding,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// Current state of an optional interactive login ceremony.
 #[derive(
@@ -687,26 +680,24 @@ impl CredentialStatus {
 
 redacted_debug!(CredentialStatus);
 
-impl<'de> Deserialize<'de> for CredentialStatus {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            interaction_state: CredentialInteractionState,
-            login_session_generation: Option<u64>,
-            login_deadline: Option<Timestamp>,
-            credential: Option<CredentialLeaseStatus>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.interaction_state,
-            wire.login_session_generation,
-            wire.login_deadline,
-            wire.credential,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    CredentialStatus,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        interaction_state: CredentialInteractionState,
+        login_session_generation: Option<u64>,
+        login_deadline: Option<Timestamp>,
+        credential: Option<CredentialLeaseStatus>,
+    },
+    wire,
+    Self::new(
+        wire.interaction_state,
+        wire.login_session_generation,
+        wire.login_deadline,
+        wire.credential,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// The Credential ResourceType base spec.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -826,43 +817,41 @@ impl CredentialSpec {
 
 redacted_debug!(CredentialSpec);
 
-impl<'de> Deserialize<'de> for CredentialSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            scope: CredentialScope,
-            audience: AudienceToken,
-            #[serde(default)]
-            consumer_ref: Option<ResourceRef>,
-            allowed_operations: Vec<CredentialOperation>,
-            #[serde(default)]
-            rotation: RotationSpec,
-            #[serde(default)]
-            expiry: ExpirySpec,
-            #[serde(default)]
-            revocation: RevocationSpec,
-            #[serde(default)]
-            identity_guest_ref: Option<ResourceRef>,
-            #[serde(default)]
-            login_endpoint_ref: Option<ResourceRef>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.scope,
-            wire.audience,
-            wire.consumer_ref,
-            wire.allowed_operations,
-            wire.rotation,
-            wire.expiry,
-            wire.revocation,
-            wire.identity_guest_ref,
-            wire.login_endpoint_ref,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    CredentialSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default)]
+        scope: CredentialScope,
+        audience: AudienceToken,
+        #[serde(default)]
+        consumer_ref: Option<ResourceRef>,
+        allowed_operations: Vec<CredentialOperation>,
+        #[serde(default)]
+        rotation: RotationSpec,
+        #[serde(default)]
+        expiry: ExpirySpec,
+        #[serde(default)]
+        revocation: RevocationSpec,
+        #[serde(default)]
+        identity_guest_ref: Option<ResourceRef>,
+        #[serde(default)]
+        login_endpoint_ref: Option<ResourceRef>,
+    },
+    wire,
+    Self::new(
+        wire.scope,
+        wire.audience,
+        wire.consumer_ref,
+        wire.allowed_operations,
+        wire.rotation,
+        wire.expiry,
+        wire.revocation,
+        wire.identity_guest_ref,
+        wire.login_endpoint_ref,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 #[cfg(test)]
 mod tests {

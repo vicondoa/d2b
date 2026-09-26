@@ -17,6 +17,7 @@ use super::{
     resource_status::StatusCode,
     volume::{AttachmentAccess, validate_mount_path},
 };
+use d2b_contracts::wire_deserialize;
 
 /// Canonical standard VolumeBinding ResourceType.
 pub const VOLUME_BINDING_RESOURCE_TYPE: &str = "VolumeBinding";
@@ -113,31 +114,26 @@ impl core::fmt::Debug for VolumeBindingSpec {
     }
 }
 
-impl<'de> Deserialize<'de> for VolumeBindingSpec {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            volume_ref: ResourceRef,
-            execution_ref: ResourceRef,
-            view: String,
-            access: AttachmentAccess,
-            mount_path: String,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.volume_ref,
-            wire.execution_ref,
-            wire.view,
-            wire.access,
-            wire.mount_path,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    VolumeBindingSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        volume_ref: ResourceRef,
+        execution_ref: ResourceRef,
+        view: String,
+        access: AttachmentAccess,
+        mount_path: String,
+    },
+    wire,
+    Self::new(
+        wire.volume_ref,
+        wire.execution_ref,
+        wire.view,
+        wire.access,
+        wire.mount_path,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// The UID / generation / revision fence on readiness evidence.
 ///

@@ -6,6 +6,7 @@
 //! observations.  No parent resource reference, locator, descriptor, or
 //! credential bytes can be represented here.
 
+use d2b_contracts::wire_deserialize;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

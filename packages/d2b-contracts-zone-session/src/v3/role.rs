@@ -4,6 +4,7 @@
 //! sets.  In particular, `relay` is transport forwarding authority and can
 //! never be smuggled into CRUD by treating all verbs as strings.
 
+use d2b_contracts::wire_deserialize;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
