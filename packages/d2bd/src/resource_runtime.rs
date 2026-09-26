@@ -39,6 +39,7 @@ use d2b_contracts_resource::v3::{
     PlacementTargetKind, ResourceBundleGenerationId, ResourceEnvelope, ResourceGeneration,
     ResourceErrorKind, ResourcePhase, ResourceRef, ResourceTypeName, ResourceUid, StateDigest,
     ZoneId, ZoneRevision,
+    host::HOST_RESOURCE_TYPE,
     process::ProcessSpec,
     volume::VolumeSpec,
 };
@@ -63,6 +64,7 @@ use d2b_core_controller::migration::LegacyTpmMigrationDecision;
 use d2b_provider_zone::{
     SystemCoreStatusEmitter, ZoneRuntimeMetadata, ZoneStatusInput,
 };
+use d2b_provider_system_core::HostReconciler;
 use d2b_provider_clipboard_wayland::Policy as ClipboardPolicy;
 use d2b_provider_credential::{
     AgentReadyFuture, CredentialDependencyFacts, CredentialLeaseFacts,
@@ -10008,8 +10010,54 @@ where
     S: d2b_resource_api::ResourceStoreBackend,
 {
     let target = public_target_ref(request)?;
+    // The operator path is the one whose submission can suppress or override
+    // a reconciler-owned field, and it is refused here, before the row is
+    // read. The provider-session dispatch below keeps its own admission: the
+    // reconciler's own publication is the one status that legitimately
+    // carries the posture fields it derived from the spec.
+    admit_operator_status_fields(&target, request)?;
     let current = public_get_resource(client, runtime, &target, operation_id).await?;
     public_update_status_request_from_current(runtime, request, operation_id, &target, current)
+}
+
+/// Refuse an operator-submitted status that names a reconciler-owned field.
+///
+/// R11/AE6 leaves the public Resource API no status write path, so the
+/// daemon's operator admission is the last layer that sees a submission: both
+/// spellings a request may use (`status`, or the nested
+/// `resource.status`) are read here, and this is the enforcement point for
+/// `ADR-046-telemetry-audit-and-support`, section "Host resource status". The
+/// `system-core` reconciler sets `isolationPosture` and
+/// `isolationPostureMessage` on every user-only Host from the spec alone, and
+/// an operator can neither suppress nor override them: a submitted Host
+/// status naming either field is refused outright, whatever its value would
+/// have been - an explicit `null` is as much a suppression attempt as
+/// `"none"` is - and the refusal names the rule, never the submitted value.
+/// A request that submits no status at all is not this rule's case; it is
+/// refused, unchanged, where the status is read.
+fn admit_operator_status_fields(
+    target: &ResourceRef,
+    request: &Value,
+) -> Result<(), ResourceRuntimeError> {
+    if target.resource_type().as_str() != HOST_RESOURCE_TYPE {
+        return Ok(());
+    }
+    let status = request.get("status").or_else(|| {
+        request
+            .get("resource")
+            .and_then(|value| value.get("status"))
+    });
+    let Some(status) = status else {
+        return Ok(());
+    };
+    HostReconciler::reject_operator_status_fields(status).map_err(|error| {
+        tracing::warn!(
+            resource = %target.to_canonical_string(),
+            error = %error,
+            "status submission refused: reconciler-owned Host status field",
+        );
+        ResourceRuntimeError::HostStatusFieldNotOwned
+    })
 }
 
 fn public_update_status_request_from_current(
@@ -11846,6 +11894,61 @@ mod tests {
         assert!(!row_status_failure_is_retryable(&terminal));
         let ready = json!({ "status": { "phase": "Ready", "resource": {} } });
         assert!(!row_status_failure_is_retryable(&ready));
+    }
+
+    /// `ADR-046-telemetry-audit-and-support`, section "Host resource status":
+    /// the `system-core` reconciler owns the user-only Host posture, so the
+    /// daemon refuses an operator-submitted Host status naming either posture
+    /// field before the row is even read - an explicit `null` included, since
+    /// it is as much a suppression attempt as `"none"` is.
+    #[test]
+    fn an_operator_status_naming_a_host_reconciler_owned_field_is_refused() {
+        let host = ResourceRef::parse("Host/host-system").expect("Host ref");
+        for suppressed in [
+            json!({"phase": "Ready", "isolationPosture": "none"}),
+            json!({"phase": "Ready", "isolationPosture": null}),
+            json!({"isolationPostureMessage": "this host is safe"}),
+        ] {
+            let request = json!({"resourceRef": "Host/host-system", "status": suppressed});
+            assert_eq!(
+                admit_operator_status_fields(&host, &request),
+                Err(ResourceRuntimeError::HostStatusFieldNotOwned),
+                "a submitted Host status must not name a reconciler-owned field: {suppressed}",
+            );
+            // The nested spelling carries the same status.
+            let nested = json!({
+                "resourceRef": "Host/host-system",
+                "resource": {"status": suppressed},
+            });
+            assert_eq!(
+                admit_operator_status_fields(&host, &nested),
+                Err(ResourceRuntimeError::HostStatusFieldNotOwned),
+                "the nested spelling of the same submission is the same status",
+            );
+        }
+        assert_eq!(
+            admit_operator_status_fields(
+                &host,
+                &json!({"resourceRef": "Host/host-system", "status": {"phase": "Ready"}}),
+            ),
+            Ok(()),
+            "a Host status naming no reconciler-owned field is not this rule's to refuse",
+        );
+        assert_eq!(
+            admit_operator_status_fields(&host, &json!({"resourceRef": "Host/host-system"})),
+            Ok(()),
+            "a request that submits no status stays with the status read",
+        );
+        // The rule is scoped to Host rows: another type's status is left to
+        // the layers below, which admit no status write at all (R11/AE6).
+        let zone = ResourceRef::parse("Zone/dev").expect("Zone ref");
+        assert_eq!(
+            admit_operator_status_fields(
+                &zone,
+                &json!({"resourceRef": "Zone/dev", "status": {"isolationPosture": "none"}}),
+            ),
+            Ok(()),
+        );
     }
 
     /// U12: the provider controller's custody gate. A manager-served Guest

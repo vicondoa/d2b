@@ -83,7 +83,6 @@ fn current_envelope(request: BrokerRequest) -> BrokerRequestEnvelope {
     BrokerRequestEnvelope {
         request,
         caller_role: BrokerCallerRole::NotAuthorized,
-        test_peer_uid: None,
         audit_join: None,
     }
 }

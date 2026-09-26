@@ -71,24 +71,33 @@ pub enum AzureVmReconcileOutcome {
     },
 }
 
-/// Non-secret controller state required for restart recovery.
+/// Opaque in-flight ARM operation together with its controller-local start
+/// time. The two values are always Some-together/None-together.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InFlightOperation {
+    /// Opaque in-flight ARM operation.
+    pub operation: crate::effect::AzureOperationHandle,
+    /// Controller-local LRO start time.
+    pub started_at: u64,
+}
+
+/// Non-secret controller state required for restart recovery.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AzureVmRecoveryState {
     /// Current lifecycle phase.
     pub phase: AzureVmPhase,
     /// Whether the finalizer remains installed.
     pub finalizer_installed: bool,
-    /// Opaque in-flight ARM operation.
-    pub operation: Option<crate::effect::AzureOperationHandle>,
+    /// Opaque in-flight ARM operation and its start time.
+    pub in_flight_operation: Option<InFlightOperation>,
     /// Deterministic delete operation id, when deletion is pending.
     pub pending_delete_operation_id: Option<String>,
     /// Bootstrap deadline start.
     pub bootstrap_started_at_unix_ms: Option<u64>,
     /// Number of extension delivery attempts.
     pub psk_delivery_attempts: u8,
-    /// Controller-local LRO start time.
-    pub operation_started_at_unix_ms: Option<u64>,
     /// Bootstrap service enrollment state.
     pub bootstrap_service_state: BootstrapServiceState,
     /// Whether the one-time bootstrap extension may still contain PSK data.
@@ -102,6 +111,111 @@ pub struct AzureVmRecoveryState {
     pub bootstrap_deadline_failed: bool,
 }
 
+impl<'de> Deserialize<'de> for AzureVmRecoveryState {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // The record is written by `recovery_state` and read back through
+        // serde. The in-flight operation is one grouped object today, but
+        // records written before the grouping carry the legacy
+        // `operation` + `operationStartedAtUnixMs` pair; both shapes load
+        // and the pair folds into the grouped shape. The fold is total
+        // because the write side always sets or clears both values
+        // together.
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct NewShape {
+            phase: AzureVmPhase,
+            finalizer_installed: bool,
+            in_flight_operation: Option<InFlightOperation>,
+            pending_delete_operation_id: Option<String>,
+            bootstrap_started_at_unix_ms: Option<u64>,
+            psk_delivery_attempts: u8,
+            bootstrap_service_state: BootstrapServiceState,
+            #[serde(default)]
+            bootstrap_extension_present: bool,
+            #[serde(default)]
+            child_cleanup_complete: bool,
+            #[serde(default)]
+            bootstrap_deadline_failed: bool,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct LegacyShape {
+            phase: AzureVmPhase,
+            finalizer_installed: bool,
+            operation: Option<crate::effect::AzureOperationHandle>,
+            pending_delete_operation_id: Option<String>,
+            bootstrap_started_at_unix_ms: Option<u64>,
+            psk_delivery_attempts: u8,
+            operation_started_at_unix_ms: Option<u64>,
+            // The pre-grouping record also carried the pending typed
+            // update. That surface is gone from the record, so the
+            // legacy member is read only to keep sealed records
+            // loadable, and then dropped.
+            #[serde(default)]
+            pending_update: Option<serde::de::IgnoredAny>,
+            bootstrap_service_state: BootstrapServiceState,
+            #[serde(default)]
+            bootstrap_extension_present: bool,
+            #[serde(default)]
+            child_cleanup_complete: bool,
+            #[serde(default)]
+            bootstrap_deadline_failed: bool,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            New(NewShape),
+            Legacy(LegacyShape),
+        }
+
+        Ok(match Repr::deserialize(deserializer)? {
+            Repr::New(shape) => Self {
+                phase: shape.phase,
+                finalizer_installed: shape.finalizer_installed,
+                in_flight_operation: shape.in_flight_operation,
+                pending_delete_operation_id: shape.pending_delete_operation_id,
+                bootstrap_started_at_unix_ms: shape.bootstrap_started_at_unix_ms,
+                psk_delivery_attempts: shape.psk_delivery_attempts,
+                bootstrap_service_state: shape.bootstrap_service_state,
+                bootstrap_extension_present: shape.bootstrap_extension_present,
+                child_cleanup_complete: shape.child_cleanup_complete,
+                bootstrap_deadline_failed: shape.bootstrap_deadline_failed,
+            },
+            Repr::Legacy(shape) => {
+                // The legacy pending-update member has no reader left: the
+                // controller's update surface is gone, and a record whose
+                // pending update was set carries the removed reconfiguration
+                // phase, which the phase decode refuses.
+                let _ = shape.pending_update;
+                Self {
+                    phase: shape.phase,
+                    finalizer_installed: shape.finalizer_installed,
+                    in_flight_operation: match (shape.operation, shape.operation_started_at_unix_ms)
+                    {
+                        (Some(operation), Some(started_at)) => {
+                            Some(InFlightOperation { operation, started_at })
+                        }
+                        (None, None) => None,
+                        // Unreachable: the write side keeps the pair together.
+                        _ => unreachable!("legacy recovery record has a half-Some operation pair"),
+                    },
+                    pending_delete_operation_id: shape.pending_delete_operation_id,
+                    bootstrap_started_at_unix_ms: shape.bootstrap_started_at_unix_ms,
+                    psk_delivery_attempts: shape.psk_delivery_attempts,
+                    bootstrap_service_state: shape.bootstrap_service_state,
+                    bootstrap_extension_present: shape.bootstrap_extension_present,
+                    child_cleanup_complete: shape.child_cleanup_complete,
+                    bootstrap_deadline_failed: shape.bootstrap_deadline_failed,
+                }
+            }
+        })
+    }
+}
 /// Azure VM controller.
 pub struct AzureVmController<E> {
     settings: AzureVmGuestSettings,
@@ -109,7 +223,7 @@ pub struct AzureVmController<E> {
     credentials: Arc<dyn AzureCredentialPort>,
     phase: AzureVmPhase,
     finalizer: bool,
-    operation: Option<crate::effect::AzureOperationHandle>,
+    in_flight_operation: Option<InFlightOperation>,
     vm_handle: Option<AzureVmHandle>,
     expected_tag_digest: TagDigest,
     bootstrap_psk: Option<BootstrapPsk>,
@@ -117,7 +231,6 @@ pub struct AzureVmController<E> {
     pending_delete_operation_id: Option<String>,
     bootstrap_started_at_unix_ms: Option<u64>,
     psk_delivery_attempts: u8,
-    operation_started_at_unix_ms: Option<u64>,
     clock: Arc<dyn Clock>,
     bootstrap_extension_present: bool,
     child_cleanup_complete: bool,
@@ -145,7 +258,7 @@ where
             credentials,
             phase: AzureVmPhase::Absent,
             finalizer: true,
-            operation: None,
+            in_flight_operation: None,
             vm_handle: None,
             expected_tag_digest,
             bootstrap_psk,
@@ -153,7 +266,6 @@ where
             pending_delete_operation_id: None,
             bootstrap_started_at_unix_ms: None,
             psk_delivery_attempts: 0,
-            operation_started_at_unix_ms: None,
             clock: Arc::new(SystemClock),
             bootstrap_extension_present: false,
             child_cleanup_complete: false,
@@ -178,11 +290,10 @@ where
         AzureVmRecoveryState {
             phase: self.phase,
             finalizer_installed: self.finalizer,
-            operation: self.operation.clone(),
+            in_flight_operation: self.in_flight_operation.clone(),
             pending_delete_operation_id: self.pending_delete_operation_id.clone(),
             bootstrap_started_at_unix_ms: self.bootstrap_started_at_unix_ms,
             psk_delivery_attempts: self.psk_delivery_attempts,
-            operation_started_at_unix_ms: self.operation_started_at_unix_ms,
             bootstrap_service_state: self.bootstrap_service.state(),
             bootstrap_extension_present: self.bootstrap_extension_present,
             child_cleanup_complete: self.child_cleanup_complete,
@@ -195,17 +306,16 @@ where
     /// # Errors
     ///
     /// Returns [`AzureVmError::InvalidConfiguration`] when the recovery
-    /// record is internally inconsistent (operation/phase pairing,
+    /// record is internally inconsistent (phase/operation pairing,
     /// finalizer, or identifier bounds).
     pub fn restore_recovery_state(
         mut self,
         recovery: AzureVmRecoveryState,
     ) -> Result<Self, AzureVmError> {
-        if recovery.operation.is_some() != recovery.operation_started_at_unix_ms.is_some()
-            || (matches!(
+        if (matches!(
                 recovery.phase,
                 AzureVmPhase::PskCleaning | AzureVmPhase::ChildCleaning
-            ) && recovery.operation.is_none())
+            ) && recovery.in_flight_operation.is_none())
             || (!recovery.finalizer_installed && recovery.phase != AzureVmPhase::Finalized)
             || recovery.psk_delivery_attempts > MAX_PSK_DELIVERY_ATTEMPTS
             || recovery
@@ -221,11 +331,10 @@ where
         }
         self.phase = recovery.phase;
         self.finalizer = recovery.finalizer_installed;
-        self.operation = recovery.operation;
+        self.in_flight_operation = recovery.in_flight_operation;
         self.pending_delete_operation_id = recovery.pending_delete_operation_id;
         self.bootstrap_started_at_unix_ms = recovery.bootstrap_started_at_unix_ms;
         self.psk_delivery_attempts = recovery.psk_delivery_attempts;
-        self.operation_started_at_unix_ms = recovery.operation_started_at_unix_ms;
         self.bootstrap_service = BootstrapService::from_state(recovery.bootstrap_service_state);
         self.bootstrap_extension_present = recovery.bootstrap_extension_present;
         self.child_cleanup_complete = recovery.child_cleanup_complete;
@@ -264,7 +373,11 @@ where
         if !self.finalizer {
             return Err(AzureVmError::InvalidConfiguration);
         }
-        if let Some(operation) = self.operation.clone() {
+        if let Some(operation) = self
+            .in_flight_operation
+            .as_ref()
+            .map(|in_flight| in_flight.operation.clone())
+        {
             return self.poll_operation(operation).await;
         }
         if self.bootstrap_deadline_failed && self.pending_delete_operation_id.is_none() {
@@ -346,7 +459,9 @@ where
         &mut self,
         operation: crate::effect::AzureOperationHandle,
     ) -> Result<AzureVmReconcileOutcome, AzureVmError> {
-        if self.operation.as_ref() != Some(&operation) {
+        if self.in_flight_operation.as_ref().map(|in_flight| &in_flight.operation)
+            != Some(&operation)
+        {
             tracing::warn!(
                 "poll called with a foreign operation handle"
             );
@@ -486,7 +601,7 @@ where
                 operation_id(zone_uid, guest_uid, generation, "delete")
             })
             .clone();
-        if self.operation.is_some() {
+        if self.in_flight_operation.is_some() {
             if !matches!(
                 self.phase,
                 AzureVmPhase::PskCleaning | AzureVmPhase::ChildCleaning
@@ -645,7 +760,7 @@ where
     }
 
     async fn start_extension_cleanup(&mut self) -> Result<AzureVmReconcileOutcome, AzureVmError> {
-        if self.operation.is_some() {
+        if self.in_flight_operation.is_some() {
             return Ok(AzureVmReconcileOutcome::Progressing { after_ms: 250 });
         }
         let token = self.arm_token().await?;
@@ -665,7 +780,7 @@ where
             self.phase = AzureVmPhase::Finalized;
             return Ok(AzureVmReconcileOutcome::Converged);
         }
-        if self.operation.is_some() {
+        if self.in_flight_operation.is_some() {
             return Ok(AzureVmReconcileOutcome::Progressing { after_ms: 1_000 });
         }
         let operation_id = self
@@ -721,18 +836,19 @@ where
     }
 
     fn set_operation(&mut self, operation: crate::effect::AzureOperationHandle) {
-        self.operation = Some(operation);
-        self.operation_started_at_unix_ms = Some(self.clock.now_unix_ms());
+        self.in_flight_operation = Some(InFlightOperation {
+            operation,
+            started_at: self.clock.now_unix_ms(),
+        });
     }
 
     fn clear_operation(&mut self) {
-        self.operation = None;
-        self.operation_started_at_unix_ms = None;
+        self.in_flight_operation = None;
     }
 
     fn operation_expired(&self) -> bool {
-        self.operation_started_at_unix_ms.is_some_and(|started| {
-            self.clock.now_unix_ms().saturating_sub(started) >= MAX_LRO_AGE_MS
+        self.in_flight_operation.as_ref().is_some_and(|in_flight| {
+            self.clock.now_unix_ms().saturating_sub(in_flight.started_at) >= MAX_LRO_AGE_MS
         })
     }
 

@@ -372,6 +372,15 @@ fn kernel_bundle<'a>(ctx: &'a OperationCtx<'a>) -> Result<&'a BundleResolver, Op
         .ok_or_else(|| OperationFailure::new(KERNEL_SEAM_UNWIRED))
 }
 
+/// Map a trusted-bundle Network spec parse failure onto the family refusal
+/// surface, keeping the manifest-parse-error reason in the detail.
+fn intent_parse_failure(operation: &str, error: d2b_contracts::error::Error) -> OperationFailure {
+    OperationFailure::with_detail(
+        INTENT_MISMATCH,
+        format!("{operation}: trusted bundle Network spec parse failed: {error}"),
+    )
+}
+
 /// The exact Network effect provenance one request's identity tuple names.
 ///
 /// Mirrors the retired arms' provenance derivation: the complete admitted
@@ -518,6 +527,7 @@ impl OperationHandler for ApplyNftablesProjectionHandler {
                 request.bundle_nft_projection_intent_ref.as_str(),
                 &provenance,
             )
+            .map_err(|error| intent_parse_failure("ApplyNftablesProjection", error))?
             .ok_or_else(|| {
                 OperationFailure::with_detail(
                     INTENT_MISMATCH,
@@ -529,6 +539,7 @@ impl OperationHandler for ApplyNftablesProjectionHandler {
             })?;
         let marker = bundle
             .resolve_network_marker_intent(&intent.ownership_marker_intent_ref, &provenance)
+            .map_err(|error| intent_parse_failure("ApplyNftablesProjection", error))?
             .ok_or_else(|| {
                 OperationFailure::with_detail(
                     INTENT_MISMATCH,
@@ -646,6 +657,7 @@ impl OperationHandler for ApplyRouteHandler {
         );
         let intent = bundle
             .resolve_network_route_intent(request.bundle_route_intent_ref.as_str(), &provenance)
+            .map_err(|error| intent_parse_failure("ApplyRoute", error))?
             .ok_or_else(|| {
                 OperationFailure::with_detail(
                     INTENT_MISMATCH,
@@ -691,6 +703,7 @@ impl OperationHandler for ApplySysctlHandler {
         );
         let intent = bundle
             .resolve_network_sysctl_intent(request.bundle_sysctl_intent_ref.as_str(), &provenance)
+            .map_err(|error| intent_parse_failure("ApplySysctl", error))?
             .ok_or_else(|| {
                 OperationFailure::with_detail(
                     INTENT_MISMATCH,
@@ -740,6 +753,7 @@ impl OperationHandler for CreateBridgeHandler {
         );
         let intent = bundle
             .resolve_network_bridge_intent(request.bundle_bridge_intent_ref.as_str(), &provenance)
+            .map_err(|error| intent_parse_failure("CreateBridge", error))?
             .ok_or_else(|| {
                 OperationFailure::with_detail(
                     INTENT_MISMATCH,
@@ -781,6 +795,7 @@ impl OperationHandler for DeleteBridgeHandler {
         );
         let intent = bundle
             .resolve_network_bridge_intent(request.bundle_bridge_intent_ref.as_str(), &provenance)
+            .map_err(|error| intent_parse_failure("DeleteBridge", error))?
             .ok_or_else(|| {
                 OperationFailure::with_detail(
                     INTENT_MISMATCH,
@@ -1000,6 +1015,7 @@ impl OperationHandler for UpdateHostsFileHandler {
                         request.bundle_hosts_intent_ref.as_str(),
                         &provenance,
                     )
+                    .map_err(|error| intent_parse_failure("UpdateHostsFile", error))?
                     .ok_or_else(|| {
                         OperationFailure::with_detail(
                             INTENT_MISMATCH,

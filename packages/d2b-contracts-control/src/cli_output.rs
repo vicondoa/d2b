@@ -3,8 +3,6 @@ use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub use d2b_contracts::audio::LevelPercent;
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
 /// `d2b vm list` output: one row per VM.
@@ -105,11 +103,59 @@ pub struct OpInspectLocalOutputV1 {
 /// One realm's view in `op inspect` output.
 pub struct OpInspectRealmOutputV1 {
     pub realm: String,
-    pub mode: String,
+    pub mode: RealmMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gateway_vm: Option<String>,
-    pub state: String,
+    pub state: RealmGatewayState,
     pub cross_realm_policy: String,
+}
+
+/// How a realm's entrypoint is dispatched.
+///
+/// `mode` used to be a free-form `String`; the realm entrypoint table admits
+/// exactly two modes, so both the wire protocol and the generated CLI schema
+/// carry enum constraints rather than a free-form string. Serde names match
+/// the canonical wire strings exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum RealmMode {
+    /// The realm entrypoint runs on the local daemon.
+    HostResident,
+    /// A gateway guest fronts the realm and owns its policy.
+    GatewayBacked,
+}
+
+/// The gateway-side state of a realm row.
+///
+/// `gateway_state` and `state` used to be free-form `String`s carrying the
+/// gateway guest's lifecycle label; the field is `local-only` for a
+/// host-resident realm, the daemon's lifecycle state for a gateway-backed
+/// realm whose gateway the daemon listed, and the preserved sentinel string
+/// when the daemon did not list the gateway at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum RealmGatewayState {
+    /// The realm has no gateway hop; it is dispatched on this host.
+    LocalOnly,
+    /// The gateway guest is stopped.
+    Stopped,
+    /// The gateway guest is starting.
+    Starting,
+    /// The gateway guest has booted.
+    Booted,
+    /// The gateway guest is running.
+    Running,
+    /// The gateway guest is stopping.
+    Stopping,
+    /// The gateway guest is restarting.
+    Restarting,
+    /// The gateway guest failed its last lifecycle transition.
+    Failed,
+    /// The daemon reported the gateway guest's lifecycle as unknown.
+    Unknown,
+    /// The daemon's list response did not include the gateway VM.
+    #[serde(rename = "not reported by d2bd")]
+    NotReported,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -126,12 +172,12 @@ pub struct OpInspectDegradedOutputV1 {
 /// One realm's policy summary, shared by list and inspect output.
 pub struct RealmPolicyOutputV1 {
     pub realm: String,
-    pub mode: String,
+    pub mode: RealmMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gateway_vm: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gateway_target: Option<String>,
-    pub gateway_state: String,
+    pub gateway_state: RealmGatewayState,
     pub cross_realm_policy: String,
     pub credential_boundary: String,
 }
@@ -256,71 +302,6 @@ pub struct StatusServicesOutputV2 {
     pub video: Option<String>,
     pub snd: Option<String>,
     pub swtpm: Option<String>,
-}
-
-/// Per-VM service-state map (V3) -- broker-spawn-aware status output.
-///
-/// All fields are optional so emitters can omit a role when the VM
-/// doesn't enable it. The wire shape uses camelCase
-/// + `deny_unknown_fields` to keep schema-drift gates honest.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct StatusServicesOutputV3 {
-    /// Cloud Hypervisor runner state (broker-spawned).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hypervisor: Option<String>,
-    /// Per-share virtiofsd state, keyed by share `tag`.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty", default)]
-    pub virtiofsd_per_share: BTreeMap<String, String>,
-    /// crosvm GPU sidecar state (broker-spawned).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub gpu: Option<String>,
-    /// vhost-device-sound audio sidecar state (broker-spawned).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub audio: Option<String>,
-    /// swtpm sidecar state (broker-spawned).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub swtpm: Option<String>,
-    /// Per-VM OtelGuestRelay state (broker-spawned).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub otel_relay: Option<String>,
-    /// Host-scoped OtelHostBridge state (broker-spawned).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub otel_host_bridge: Option<String>,
-    /// Per-env USBIP backend state, keyed by env name.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty", default)]
-    pub usbip_backend_per_env: BTreeMap<String, String>,
-    /// Per-env USBIP proxy state, keyed by env name.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty", default)]
-    pub usbip_proxy_per_env: BTreeMap<String, String>,
-}
-
-impl StatusServicesOutputV3 {
-    /// Conversion shim: takes a V2 record and projects it into V3
-    /// by applying the documented rename map. Used so callers
-    /// consuming the legacy V2 shape can be migrated incrementally
-    /// without breaking the bundle-resolver / status-output contract.
-    pub fn from_v2(v2: &StatusServicesOutputV2) -> Self {
-        let mut virtiofsd_per_share = BTreeMap::new();
-        // V2 had a single `virtiofsd` slot; we expose it under the
-        // synthetic share tag `default` so the V3 consumer can read
-        // it without losing data. v1.1.2+ wire bumps populate the
-        // map per-share via the broker's per-share spawn records.
-        virtiofsd_per_share.insert("default".to_owned(), v2.virtiofsd.clone());
-        Self {
-            hypervisor: Some(v2.microvm.clone()),
-            virtiofsd_per_share,
-            gpu: v2.gpu.clone(),
-            // V3 has no dedicated video field yet; keep V2 authoritative
-            // until a negotiated schema revision adds one.
-            audio: v2.snd.clone(),
-            swtpm: v2.swtpm.clone(),
-            otel_relay: None,
-            otel_host_bridge: None,
-            usbip_backend_per_env: BTreeMap::new(),
-            usbip_proxy_per_env: BTreeMap::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

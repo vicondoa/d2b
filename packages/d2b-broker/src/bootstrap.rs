@@ -9,8 +9,6 @@ pub mod wire {
         pub request: BrokerRequest,
         #[serde(default)]
         pub caller_role: CallerRole,
-        #[serde(default)]
-        pub test_peer_uid: Option<u32>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -246,18 +244,17 @@ pub mod wire {
         }
     }
 
-    pub fn probe_hello(test_peer_uid: Option<u32>) -> RequestEnvelope {
+    pub fn probe_hello() -> RequestEnvelope {
         RequestEnvelope {
             request: BrokerRequest::Hello {
                 client_version: "0.0.0-test".to_owned(),
                 supported_features: vec!["layer1-bootstrap".to_owned()],
             },
             caller_role: CallerRole::NotAuthorized,
-            test_peer_uid,
         }
     }
 
-    pub fn probe_stub(operation: &str, test_peer_uid: Option<u32>) -> Option<RequestEnvelope> {
+    pub fn probe_stub(operation: &str) -> Option<RequestEnvelope> {
         let request = match operation {
             "ApplyNftables" => BrokerRequest::ApplyNftables {
                 opaque_target_id: None,
@@ -357,21 +354,16 @@ pub mod wire {
         Some(RequestEnvelope {
             request,
             caller_role: CallerRole::NotAuthorized,
-            test_peer_uid,
         })
     }
 
-    pub fn probe_export_audit(
-        test_peer_uid: Option<u32>,
-        caller_role: CallerRole,
-    ) -> RequestEnvelope {
+    pub fn probe_export_audit(caller_role: CallerRole) -> RequestEnvelope {
         RequestEnvelope {
             request: BrokerRequest::ExportBrokerAudit {
                 since: None,
                 filter: None,
             },
             caller_role,
-            test_peer_uid,
         }
     }
 

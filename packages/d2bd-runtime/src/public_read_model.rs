@@ -71,12 +71,6 @@ pub struct PublicStatusReadModel {
     status: ArcSwapOption<CachedPublicFrame>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PublicReadModelKind {
-    List,
-    Status,
-}
-
 impl PublicStatusReadModel {
     pub fn new() -> Self {
         Self {
@@ -103,17 +97,16 @@ impl PublicStatusReadModel {
 
     pub fn publish_if_unchanged(
         &self,
-        kind: PublicReadModelKind,
+        kind: public_wire::PublicReadModelKind,
         before: Option<PublicArtifactFingerprint>,
         current: Option<PublicArtifactFingerprint>,
         value: Value,
-        kind_name: &'static str,
     ) -> Value {
         let Some(fingerprint) = before else {
             return value;
         };
         if current.as_ref() == Some(&fingerprint) {
-            self.publish_stable(kind, value, fingerprint, kind_name)
+            self.publish_stable(kind, value, fingerprint)
         } else {
             value
         }
@@ -130,13 +123,12 @@ impl PublicStatusReadModel {
 
     fn publish_stable(
         &self,
-        kind: PublicReadModelKind,
+        kind: public_wire::PublicReadModelKind,
         value: Value,
         fingerprint: PublicArtifactFingerprint,
-        kind_name: &'static str,
     ) -> Value {
         let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
-        let value = attach_read_model_metadata(value, &fingerprint, generation, kind_name);
+        let value = attach_read_model_metadata(value, &fingerprint, generation, kind);
         let mut observed = self.latest_published_generation.load(Ordering::Acquire);
         while generation > observed {
             match self.latest_published_generation.compare_exchange_weak(
@@ -151,8 +143,8 @@ impl PublicStatusReadModel {
                         value: value.clone(),
                     });
                     match kind {
-                        PublicReadModelKind::List => self.list.store(Some(frame)),
-                        PublicReadModelKind::Status => self.status.store(Some(frame)),
+                        public_wire::PublicReadModelKind::List => self.list.store(Some(frame)),
+                        public_wire::PublicReadModelKind::Status => self.status.store(Some(frame)),
                     }
                     return value;
                 }
@@ -160,7 +152,7 @@ impl PublicStatusReadModel {
             }
         }
         tracing::debug!(
-            read_model_kind = kind_name,
+            read_model_kind = ?kind,
             generation,
             latest_generation = observed,
             "skipped stale public read-model publish"
@@ -223,7 +215,7 @@ fn attach_read_model_metadata(
     mut frame: Value,
     fingerprint: &PublicArtifactFingerprint,
     generation: u64,
-    kind: &'static str,
+    kind: public_wire::PublicReadModelKind,
 ) -> Value {
     let metadata = json!({
         "schemaVersion": 1,
@@ -234,7 +226,7 @@ fn attach_read_model_metadata(
         "freshness": "fresh",
         "deepRefresh": "available",
     });
-    if kind == "status"
+    if kind == public_wire::PublicReadModelKind::Status
         && let Some(status) = frame.get_mut("status").and_then(Value::as_object_mut)
     {
         status.insert("readModel".to_owned(), metadata);

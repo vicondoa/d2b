@@ -461,10 +461,9 @@ pub async fn live_usbip_bind(
     bus_id: &str,
     lock_path: &Path,
     vm_name: &str,
-    daemon_uid: u32,
     daemon_gid: u32,
 ) -> Result<(), LiveHandlerError> {
-    crate::ops::usbip_lock::acquire_lock(lock_path, vm_name, daemon_uid, daemon_gid)
+    crate::ops::usbip_lock::acquire_lock(lock_path, vm_name, daemon_gid)
         .map_err(|e| LiveHandlerError::UsbipLock(e.to_string()))?;
     match crate::ops::usbip_host::inspect_usbip_driver_binding(sysfs_root, bus_id)
         .await
@@ -2444,7 +2443,7 @@ impl DeviceWorkerSocketGrant {
     /// `<runtime_root>/vms/<guest>`.
     fn for_guest(runtime_root: &Path, guest: &str) -> Result<Self, String> {
         let directory = crate::ops::device_worker::guest_socket_directory(runtime_root, guest)
-            .map_err(str::to_owned)?;
+            .map_err(|e| e.to_string())?;
         Ok(Self {
             runtime_root: runtime_root.to_path_buf(),
             directory,
@@ -3563,7 +3562,6 @@ mod tests {
         crate::ops::usbip_lock::acquire_lock(
             &lock_path,
             "corp-vm",
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .expect("seed lock");
@@ -3597,7 +3595,6 @@ mod tests {
         crate::ops::usbip_lock::acquire_lock(
             &lock_path,
             "corp-vm",
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .expect("seed session claim");
@@ -3611,7 +3608,6 @@ mod tests {
             "1-2",
             &lock_path,
             "corp-vm",
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .await
@@ -3650,7 +3646,6 @@ mod tests {
             "1-2",
             &lock_path,
             "corp-vm",
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .await
@@ -3689,7 +3684,6 @@ mod tests {
             "invalid/busid",
             &lock_path,
             "corp-vm",
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .await
@@ -3726,7 +3720,6 @@ mod tests {
             "1-2",
             &lock_path,
             "corp-vm",
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .await
@@ -3765,7 +3758,6 @@ mod tests {
             "1-2",
             &lock_path,
             "corp-vm",
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .await
@@ -3798,7 +3790,6 @@ mod tests {
         crate::ops::usbip_lock::acquire_lock(
             &lock_path,
             "corp-vm",
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .expect("seed lock");
@@ -3851,7 +3842,6 @@ mod tests {
         crate::ops::usbip_lock::acquire_lock(
             &lock_path,
             "corp-vm",
-            nix::unistd::Uid::current().as_raw(),
             nix::unistd::Gid::current().as_raw(),
         )
         .expect("seed lock");

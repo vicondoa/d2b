@@ -118,6 +118,18 @@ metadata, paths, environment, or cwd.
 | <a id="unsafe-local-shell-stale-session"></a>`unsafe-local-shell-stale-session` | `77` | Reattach to obtain a fresh opaque public handle. |
 | <a id="unsafe-local-shell-internal"></a>`unsafe-local-shell-internal` | `42` | Retry, then inspect the bounded daemon lifecycle event if it persists. |
 
+### Audio mutation refusals
+
+The public daemon `Audio` request's mutation ops (`setVolume`, `mute`) refuse a
+target before touching audio state, reporting the same per-VM classes the audio
+*status* path reports through `AudioVmError`. These rows are daemon wire kinds,
+not part of the generated CLI catalog above.
+
+| docs anchor / kind | exit | Meaning and remediation |
+| --- | --- | --- |
+| <a id="audio-vm-not-found"></a>`audio-vm-not-found` | `2` | The requested VM is not declared in the public manifest. Verify the VM is declared in the d2b configuration and the bundle is up to date, then retry. |
+| <a id="audio-not-enabled"></a>`audio-not-enabled` | `70` | The VM exists but its manifest entry does not declare audio. Enable `d2b.vms.<vm>.audio.enable`, rebuild the bundle, and retry. |
+
 ## CLI host-verb refusal envelope
 
 The CLI host verbs (`d2b host prepare`, `host destroy`,

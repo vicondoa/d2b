@@ -32,7 +32,6 @@ pub fn dispatch_broker_request_to_socket(
     let envelope = BrokerRequestEnvelope {
         request,
         caller_role,
-        test_peer_uid: None,
         audit_join,
     };
     let Some(timeout) = timeout else {

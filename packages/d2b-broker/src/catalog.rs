@@ -158,11 +158,17 @@ impl DeadlineTier {
     }
 }
 
+/// The operation-name vocabulary the committed row table is typed against.
+///
+/// Re-exported here so a consumer that builds a [`BrokerOperationRow`] names
+/// the field's type through the module that owns the row.
+pub use d2b_contracts_broker::broker_wire::BrokerOperationName;
+
 /// One committed broker operation row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BrokerOperationRow {
     /// The operation name.
-    pub operation: &'static str,
+    pub operation: BrokerOperationName,
     /// The wire discriminant the operation inherits, when it has one.
     pub wire_variant: Option<&'static str>,
     /// The ownership triage result.
@@ -185,7 +191,7 @@ pub struct BrokerOperationRow {
     /// Whether the operation is advertised by `BrokerCapabilities`.
     pub capabilities: bool,
     /// The disposition the operation was triaged under.
-    pub disposition: &'static str,
+    pub disposition: Disposition,
     /// The deferral marker a reserved stub carries, when it is one; the
     /// closed set the generator maps the committed disposition target onto.
     pub stub_target: Option<StubTarget>,
@@ -228,7 +234,7 @@ impl BrokerOperationRow {
     pub fn find(operation: &str) -> Option<&'static Self> {
         BROKER_OPERATION_CATALOG
             .iter()
-            .find(|row| row.operation == operation)
+            .find(|row| row.operation.as_str() == operation)
     }
 
     /// The audit identity one validated payload carries.
@@ -260,6 +266,39 @@ impl BrokerOperationRow {
     /// Whether the operation is reachable through the generic envelope.
     pub fn is_generic(&self) -> bool {
         self.payload_provenance == PayloadProvenance::Request
+    }
+}
+
+/// The disposition one committed operation row was triaged under.
+///
+/// The triage is closed: every row names exactly one disposition, and a
+/// spelling outside this set is not a row. The generator maps each
+/// committed disposition spelling onto the closed set, so the vocabulary
+/// cannot drift into free prose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Disposition {
+    /// The operation is callable but read-only: it may be invoked, and no
+    /// invocation mutates state.
+    CallableReadOnly,
+    /// The operation is promoted to live service.
+    PromotedLive,
+    /// The operation is a reserved stub, not yet implemented; the broker
+    /// serves it with one typed not-implemented refusal.
+    StubbedUnimplemented,
+    /// The operation exists only at compile time: no runtime surface
+    /// serves it.
+    CompileTimeOnly,
+}
+
+impl Disposition {
+    /// The committed disposition spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CallableReadOnly => "callable-read-only",
+            Self::PromotedLive => "promoted-live",
+            Self::StubbedUnimplemented => "stubbed-unimplemented",
+            Self::CompileTimeOnly => "compile-time-only",
+        }
     }
 }
 
@@ -535,20 +574,23 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
     let mut operations = std::collections::BTreeSet::new();
     let mut wire_variants = std::collections::BTreeSet::new();
     for row in rows {
-        if !operations.insert(row.operation) {
+        if !operations.insert(row.operation.as_str()) {
             mismatches.push(missing(
                 "rows",
-                format!("{}: declared twice", row.operation),
+                format!("{}: declared twice", row.operation.as_str()),
             ));
         }
         if let Some(variant) = row.wire_variant {
             if !wire_variants.insert(variant) {
                 mismatches.push(missing("rows", format!("{variant}: two rows inherit it")));
             }
-            if variant != row.operation {
+            if variant != row.operation.as_str() {
                 mismatches.push(missing(
                     "rows",
-                    format!("{}: inherits wire variant {variant}", row.operation),
+                    format!(
+                        "{}: inherits wire variant {variant}",
+                        row.operation.as_str()
+                    ),
                 ));
             }
             if !row.admits_profile(BrokerProfileId::Host) {
@@ -556,7 +598,7 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
                     "rows",
                     format!(
                         "{}: a wire operation no fixed profile admits",
-                        row.operation
+                        row.operation.as_str()
                     ),
                 ));
             }
@@ -566,14 +608,17 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
                 "rows",
                 format!(
                     "{}: family-owned without a declaring provider",
-                    row.operation
+                    row.operation.as_str()
                 ),
             ));
         }
         if row.owner != OperationOwner::Family && row.family.is_some() {
             mismatches.push(missing(
                 "rows",
-                format!("{}: not family-owned but names a family", row.operation),
+                format!(
+                    "{}: not family-owned but names a family",
+                    row.operation.as_str()
+                ),
             ));
         }
         if row.owner != OperationOwner::Family && row.justification.is_none() {
@@ -581,7 +626,7 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
                 "rows",
                 format!(
                     "{}: not family-owned without a recorded justification",
-                    row.operation
+                    row.operation.as_str()
                 ),
             ));
         }
@@ -590,16 +635,16 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
                 "rows",
                 format!(
                     "{}: family-owned but records a justification",
-                    row.operation
+                    row.operation.as_str()
                 ),
             ));
         }
-        if row.disposition == "stubbed-unimplemented" && row.stub_target.is_none() {
+        if row.disposition == Disposition::StubbedUnimplemented && row.stub_target.is_none() {
             mismatches.push(missing(
                 "dispositions",
                 format!(
                     "{}: a reserved stub without a deferral marker",
-                    row.operation
+                    row.operation.as_str()
                 ),
             ));
         }
@@ -608,7 +653,7 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
                 "authz",
                 format!(
                     "{}: no allowed group, so every caller is denied",
-                    row.operation
+                    row.operation.as_str()
                 ),
             ));
         }
@@ -616,7 +661,10 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
             if !views.audit.contains(field) {
                 mismatches.push(missing(
                     "audit",
-                    format!("{field}: declared by {}, not an audit field", row.operation),
+                    format!(
+                        "{field}: declared by {}, not an audit field",
+                        row.operation.as_str()
+                    ),
                 ));
             }
         }
@@ -624,7 +672,7 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
             if join.is_empty() {
                 mismatches.push(missing(
                     "audit-join",
-                    format!("{}: declares an empty join", row.operation),
+                    format!("{}: declares an empty join", row.operation.as_str()),
                 ));
             }
             for field in join {
@@ -633,7 +681,7 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
                         "audit-join",
                         format!(
                             "{field}: {} joins on a field its payload does not require",
-                            row.operation
+                            row.operation.as_str()
                         ),
                     ));
                 }
@@ -692,13 +740,17 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
     sequence_matches(
         "w3",
         &views.w3.clone(),
-        &names(rows.iter().filter(|row| row.w3).map(|row| row.operation)),
+        &names(
+            rows.iter()
+                .filter(|row| row.w3)
+                .map(|row| row.operation.as_str()),
+        ),
         &mut mismatches,
     );
     sequence_matches(
         "authz",
         &views.authz.clone(),
-        &names(rows.iter().map(|row| row.operation)),
+        &names(rows.iter().map(|row| row.operation.as_str())),
         &mut mismatches,
     );
     // The capability advertisement is a set: it is sorted and deduplicated
@@ -708,7 +760,7 @@ pub fn audit(rows: &[BrokerOperationRow], views: &CatalogViews) -> Vec<CatalogMi
     let expected: std::collections::BTreeSet<&str> = rows
         .iter()
         .filter(|row| row.capabilities)
-        .map(|row| row.operation)
+        .map(|row| row.operation.as_str())
         .collect();
     for name in expected.difference(&declared) {
         mismatches.push(missing(
@@ -744,8 +796,14 @@ mod tests {
     fn live_views() -> CatalogViews {
         CatalogViews {
             wire: WIRE_VARIANTS.to_vec(),
-            host: HOST_OPERATION_CATALOG.to_vec(),
-            guest: GUEST_OPERATION_CATALOG.to_vec(),
+            host: HOST_OPERATION_CATALOG
+                .iter()
+                .map(|operation| operation.as_str())
+                .collect(),
+            guest: GUEST_OPERATION_CATALOG
+                .iter()
+                .map(|operation| operation.as_str())
+                .collect(),
             w3: W3BrokerOperation::all()
                 .iter()
                 .map(|operation| operation.wire_tag())
@@ -777,15 +835,15 @@ mod tests {
     fn every_reserved_stub_names_a_closed_deferral_marker() {
         let stubs = BROKER_OPERATION_CATALOG
             .iter()
-            .filter(|row| row.disposition == "stubbed-unimplemented")
+            .filter(|row| row.disposition == Disposition::StubbedUnimplemented)
             .count();
         assert!(stubs > 0, "the triage records reserved operations");
         for row in BROKER_OPERATION_CATALOG {
             assert_eq!(
-                stub_target(row.operation).is_some(),
-                row.disposition == "stubbed-unimplemented",
+                stub_target(row.operation.as_str()).is_some(),
+                row.disposition == Disposition::StubbedUnimplemented,
                 "{}: the deferral marker and the disposition disagree",
-                row.operation
+                row.operation.as_str()
             );
         }
     }
@@ -795,7 +853,7 @@ mod tests {
         let mut rows = BROKER_OPERATION_CATALOG.to_vec();
         let stub = rows
             .iter_mut()
-            .find(|row| row.disposition == "stubbed-unimplemented")
+            .find(|row| row.disposition == Disposition::StubbedUnimplemented)
             .expect("the catalog reserves at least one operation");
         stub.stub_target = None;
         let mismatches = audit(&rows, &live_views());
@@ -853,7 +911,7 @@ mod tests {
     #[test]
     fn a_mismatched_row_fails_the_gate() {
         let mut rows = BROKER_OPERATION_CATALOG.to_vec();
-        rows[0].operation = "RenamedOperation";
+        rows[0].operation = BrokerOperationName::PublishTrustedContext;
         let mismatches = audit(&rows, &live_views());
         assert!(
             mismatches
@@ -891,10 +949,11 @@ mod tests {
 
     #[test]
     fn every_wire_variant_resolves_to_its_row() {
-        for name in HOST_OPERATION_CATALOG {
+        for operation in HOST_OPERATION_CATALOG {
+            let name = operation.as_str();
             let row = BrokerOperationRow::find(name)
                 .unwrap_or_else(|| panic!("{name} has no committed row"));
-            assert_eq!(row.wire_variant, Some(*name));
+            assert_eq!(row.wire_variant, Some(name));
         }
     }
 
@@ -913,7 +972,10 @@ mod tests {
             "Hello",
         );
         assert_eq!(wire_variant_name(&request), name);
-        assert_eq!(wire_row(&request).map(|row| row.operation), Some(name));
+        assert_eq!(
+            wire_row(&request).map(|row| row.operation.as_str()),
+            Some(name)
+        );
     }
 
     #[test]
@@ -934,7 +996,7 @@ mod tests {
         let rows: Vec<BrokerOperationRow> = BROKER_OPERATION_CATALOG
             .iter()
             .copied()
-            .filter(|row| row.operation != "Hello")
+            .filter(|row| row.operation != BrokerOperationName::Hello)
             .collect();
         let mismatches = audit(&rows, &live_views());
         assert!(
@@ -956,7 +1018,7 @@ mod tests {
             .iter_mut()
             .find(|row| row.owner != OperationOwner::Family)
             .expect("a committed row the broker or a transport concern owns");
-        let operation = non_provider.operation;
+        let operation = non_provider.operation.as_str();
         assert!(non_provider.justification.is_some());
         non_provider.justification = None;
         let mismatches = audit(&rows, &live_views());

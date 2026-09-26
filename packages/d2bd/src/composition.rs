@@ -48,7 +48,8 @@ use d2b_contracts_broker::kernel_client::{
 };
 use d2b_resource_types::{KernelCaller, RunnerLookup};
 use d2b_contracts_control::public_wire::{
-    self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability,
+    self, AuthRole, AuthStatusResponse, DeniedCommandHint, PublicReadModelKind,
+    QemuMediaRegistryState, QemuMediaRunnerState, SocketReachability,
 };
 use d2b_contracts_resource::resource_proto as resource_wire;
 use d2b_contracts_resource::v3::identity::ReconnectGeneration;
@@ -118,8 +119,7 @@ use d2bd_runtime::public_projection::{
     qemu_media_unix_socket_listening, resolve_vm_filter_target, serde_kebab_string,
 };
 pub use d2bd_runtime::public_read_model::{
-    PublicArtifactFingerprint, PublicReadModelKind, PublicStatusReadModel,
-    request_invalidates_public_status_model,
+    PublicArtifactFingerprint, PublicStatusReadModel, request_invalidates_public_status_model,
 };
 #[cfg(test)]
 pub(crate) use d2bd_runtime::readiness::wait_for_readiness;
@@ -5403,8 +5403,7 @@ impl d2bd_runtime::autostart::VmStarter for BrokerVmStarter {
         let request = public_wire::VmLifecycleRequest {
             vm: vm.to_owned(),
             flags: public_wire::MutationFlags {
-                apply: true,
-                dry_run: false,
+                mode: public_wire::MutationMode::Apply,
                 json: true,
             },
             force: false,
@@ -6950,19 +6949,12 @@ fn dispatch_guest_lifecycle_resource_request(
             });
         }
     };
-    let flags = public_wire::MutationFlags {
-        dry_run: request
-            .get("dryRun")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        apply: request
-            .get("apply")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        json: false,
-    };
     let verb = format!("guest {}", method.to_ascii_lowercase());
-    if let Some(response) = mutating_verb_preflight(&verb, &flags, Some(target.name().as_str())) {
+    let mode = match mutation_mode_from_request(request, &verb) {
+        Ok(mode) => mode,
+        Err(response) => return Ok(response),
+    };
+    if let Some(response) = mutating_verb_preflight(&verb, mode, Some(target.name().as_str())) {
         return Ok(response);
     }
     let caller_role = broker_caller_role_for_peer(peer);
@@ -7151,19 +7143,12 @@ fn dispatch_process_lifecycle_resource_request(
             });
         }
     };
-    let flags = public_wire::MutationFlags {
-        dry_run: request
-            .get("dryRun")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        apply: request
-            .get("apply")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        json: false,
-    };
     let verb = format!("process {}", method.to_ascii_lowercase());
-    if let Some(response) = mutating_verb_preflight(&verb, &flags, Some(target.name().as_str())) {
+    let mode = match mutation_mode_from_request(request, &verb) {
+        Ok(mode) => mode,
+        Err(response) => return Ok(response),
+    };
+    if let Some(response) = mutating_verb_preflight(&verb, mode, Some(target.name().as_str())) {
         return Ok(response);
     }
     let base_operation_id =
@@ -7317,17 +7302,11 @@ fn dispatch_device_usb_resource_request(
         .ok_or_else(|| TypedError::WireInvalidFrame {
             detail: "Device USB request requires busId".to_owned(),
         })?;
-    let flags = public_wire::MutationFlags {
-        dry_run: request
-            .get("dryRun")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        apply: request
-            .get("apply")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        json: false,
+    let mode = match mutation_mode_from_request(request, verb) {
+        Ok(mode) => mode,
+        Err(response) => return Ok(response),
     };
+    let flags = public_wire::MutationFlags { mode, json: false };
     match method {
         "DeviceUsbAttach" => dispatch_broker_usbip_bind(
             state,
@@ -7349,6 +7328,18 @@ fn dispatch_device_usb_resource_request(
         ),
         _ => unreachable!("closed Device USB method match"),
     }
+}
+
+/// Map a trusted-bundle Network spec parse failure onto the resource
+/// runtime refusal surface, logging the manifest-parse-error reason.
+fn network_intent_parse_error(
+    error: d2b_contracts::error::Error,
+) -> resource_runtime::ResourceRuntimeError {
+    tracing::warn!(
+        error = %error,
+        "Network effect context could not resolve a trusted bundle intent"
+    );
+    resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
 }
 
 pub(crate) fn resolve_network_effect_context(
@@ -7397,15 +7388,18 @@ pub(crate) fn resolve_network_effect_context(
     );
     if resolver
         .resolve_network_bridge_intent(&bridge_id, &provenance)
+        .map_err(network_intent_parse_error)?
         .is_none()
         || resolver
             .resolve_network_bridge_intent(&uplink_bridge_id, &provenance)
+            .map_err(network_intent_parse_error)?
             .is_none()
     {
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
     let projection = resolver
         .resolve_network_projection_intent(&projection_id, &provenance)
+        .map_err(network_intent_parse_error)?
         .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
     let nm_id = intent_id_nm_unmanaged_host();
     if resolver.find_nm_unmanaged_intent(&nm_id).is_none() {
@@ -7418,6 +7412,7 @@ pub(crate) fn resolve_network_effect_context(
     );
     if resolver
         .resolve_network_hosts_intent(&hosts_id, &provenance)
+        .map_err(network_intent_parse_error)?
         .is_none()
     {
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
@@ -7432,12 +7427,14 @@ pub(crate) fn resolve_network_effect_context(
             ))
         })
         .collect::<Vec<_>>();
-    if route_ids.iter().any(|id| {
-        resolver
+    for id in &route_ids {
+        if resolver
             .resolve_network_route_intent(id.as_str(), &provenance)
+            .map_err(network_intent_parse_error)?
             .is_none()
-    }) {
-        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+        {
+            return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+        }
     }
     let sysctl_ids = ["lan", "uplink"]
         .into_iter()
@@ -7458,12 +7455,14 @@ pub(crate) fn resolve_network_effect_context(
                 })
         })
         .collect::<Vec<_>>();
-    if sysctl_ids.iter().any(|id| {
-        resolver
+    for id in &sysctl_ids {
+        if resolver
             .resolve_network_sysctl_intent(id.as_str(), &provenance)
+            .map_err(network_intent_parse_error)?
             .is_none()
-    }) {
-        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+        {
+            return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+        }
     }
     let generation = resolver
         .installed_generation_identity()
@@ -9392,12 +9391,6 @@ fn dispatch_broker_usbip_bind(
     request: public_wire::UsbipBindCliRequest,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "usb attach";
-    if !request.flags.dry_run && !request.flags.apply {
-        return Ok(
-            mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
-                .expect("missing mutation flags produce a preflight response"),
-        );
-    }
     let resolver = load_bundle_resolver(state)?;
     ensure_manifest_entry_runtime_capability(
         resolver.manifest().vms.get(&request.vm),
@@ -9407,7 +9400,7 @@ fn dispatch_broker_usbip_bind(
     )?;
     if vm_is_qemu_media(state, &resolver, &request.vm)? {
         if let Some(response) =
-            mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
+            mutating_verb_preflight(VERB, request.flags.mode, Some(request.vm.as_str()))
         {
             return Ok(response);
         }
@@ -9434,12 +9427,6 @@ fn dispatch_broker_usbip_unbind(
     request: public_wire::UsbipUnbindCliRequest,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "usb detach";
-    if !request.flags.dry_run && !request.flags.apply {
-        return Ok(
-            mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
-                .expect("missing mutation flags produce a preflight response"),
-        );
-    }
     let resolver = load_bundle_resolver(state)?;
     ensure_manifest_entry_runtime_capability(
         resolver.manifest().vms.get(&request.vm),
@@ -9449,7 +9436,7 @@ fn dispatch_broker_usbip_unbind(
     )?;
     if vm_is_qemu_media(state, &resolver, &request.vm)? {
         if let Some(response) =
-            mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
+            mutating_verb_preflight(VERB, request.flags.mode, Some(request.vm.as_str()))
         {
             return Ok(response);
         }
@@ -10243,44 +10230,67 @@ fn qemu_media_probe_entry(
     }
 }
 
+/// The mutating mode of a raw public request frame.
+///
+/// These frames never pass through the typed
+/// [`d2b_contracts_control::public_wire::MutationFlags`] admission, so the
+/// `dryRun`/`apply` pair is parsed here. A frame that selects neither mode has
+/// no mode: it keeps the documented `invalid-request` refusal envelope instead
+/// of a decode failure.
+fn mutation_mode_from_request(
+    request: &Value,
+    verb: &str,
+) -> Result<d2b_contracts_control::public_wire::MutationMode, Value> {
+    let dry_run = request
+        .get("dryRun")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let apply = request
+        .get("apply")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    d2b_contracts_control::public_wire::MutationMode::from_flags(dry_run, apply).map_err(|_| {
+        invalid_request_response(
+            verb,
+            format!("d2b {verb} requires either --dry-run or --apply"),
+        )
+    })
+}
+
+/// One mutating-verb preflight response: the daemon-side plan for a dry run,
+/// or `None` for an apply request that proceeds to dispatch.
+///
+/// The mode is closed, so the "neither flag set" refusal the pair used to need
+/// has no case here; raw request frames are refused at
+/// [`mutation_mode_from_request`].
 fn mutating_verb_preflight(
     verb: &str,
-    flags: &d2b_contracts_control::public_wire::MutationFlags,
+    mode: d2b_contracts_control::public_wire::MutationMode,
     target_vm: Option<&str>,
 ) -> Option<Value> {
-    use d2b_contracts_control::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
+    use d2b_contracts_control::public_wire::{
+        MutationMode, MutatingVerbOutcome, MutatingVerbResponse,
+    };
 
-    if !flags.dry_run && !flags.apply {
-        return Some(d2bd_runtime::wire::mutating_verb_response(
-            MutatingVerbResponse {
-                verb: verb.to_owned(),
-                outcome: MutatingVerbOutcome::InvalidRequest,
-                target_wave: None,
-                summary: None,
-                remediation: Some(format!("d2b {verb} requires either --dry-run or --apply")),
-                api_ready: None,
-            },
-        ));
+    match mode {
+        MutationMode::Apply => None,
+        MutationMode::DryRun => {
+            let summary = match target_vm {
+                Some(vm) => format!("d2b {verb} --dry-run: daemon-side plan for vm '{vm}'"),
+                None => format!("d2b {verb} --dry-run: daemon-side plan"),
+            };
+            Some(d2bd_runtime::wire::mutating_verb_response(
+                MutatingVerbResponse {
+                    verb: verb.to_owned(),
+                    outcome: MutatingVerbOutcome::DryRunPlanned,
+                    target_wave: None,
+                    summary: Some(summary),
+                    remediation: None,
+                    api_ready: None,
+                },
+            ))
+        }
     }
-
-    if flags.dry_run {
-        let summary = match target_vm {
-            Some(vm) => format!("d2b {verb} --dry-run: daemon-side plan for vm '{vm}'"),
-            None => format!("d2b {verb} --dry-run: daemon-side plan"),
-        };
-        return Some(d2bd_runtime::wire::mutating_verb_response(
-            MutatingVerbResponse {
-                verb: verb.to_owned(),
-                outcome: MutatingVerbOutcome::DryRunPlanned,
-                target_wave: None,
-                summary: Some(summary),
-                remediation: None,
-                api_ready: None,
-            },
-        ));
-    }
-
-    None
 }
 
 pub(crate) fn broker_socket_path(state: &ServerState) -> PathBuf {
@@ -14074,7 +14084,6 @@ fn dispatch_broker_request_as(
         &BrokerRequestEnvelope {
             request,
             caller_role,
-            test_peer_uid: None,
             audit_join: audit_join.clone(),
         },
     )?;
@@ -16966,7 +16975,6 @@ fn dispatch_raw_broker_value_with_timeout(
     let envelope = json!({
         "request": request,
         "callerRole": caller_role,
-        "testPeerUid": Value::Null,
     });
     let remaining = broker_remaining_before_op(deadline, &socket_path)?;
     socket
@@ -17210,7 +17218,6 @@ async fn raw_broker_round_trip_async(
     let envelope = json!({
         "request": request,
         "callerRole": caller_role,
-        "testPeerUid": Value::Null,
     });
     let envelope_bytes = serde_json::to_vec(&envelope).map_err(|err| TypedError::InternalIo {
         context: "serialize raw broker request".to_owned(),
@@ -18750,7 +18757,7 @@ fn dispatch_broker_vm_start_as(
 ) -> Result<Value, TypedError> {
     const VERB: &str = "vm start";
 
-    if let Some(response) = mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
+    if let Some(response) = mutating_verb_preflight(VERB, request.flags.mode, Some(request.vm.as_str()))
     {
         return Ok(response);
     }
@@ -19080,12 +19087,11 @@ fn next_provider_lifecycle_operation_id(
     operation: &str,
     request: &public_wire::VmLifecycleRequest,
 ) -> String {
+    let (dry_run, apply) = request.flags.mode.to_flags();
     let fingerprint = format!(
-        "force={};no_wait_api={};dry_run={};apply={};json={}",
+        "force={};no_wait_api={};dry_run={dry_run};apply={apply};json={}",
         request.force,
         request.no_wait_api,
-        request.flags.dry_run,
-        request.flags.apply,
         request.flags.json
     );
     provider_registry::next_lifecycle_operation_id(operation, &request.vm, &fingerprint)
@@ -19898,7 +19904,7 @@ fn dispatch_broker_vm_stop_with_timeout_as(
 ) -> Result<Value, TypedError> {
     const VERB: &str = "vm stop";
 
-    if let Some(response) = mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
+    if let Some(response) = mutating_verb_preflight(VERB, request.flags.mode, Some(request.vm.as_str()))
     {
         return Ok(response);
     }
@@ -20126,7 +20132,7 @@ fn dispatch_broker_vm_restart_as(
 ) -> Result<Value, TypedError> {
     const VERB: &str = "vm restart";
 
-    if let Some(response) = mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
+    if let Some(response) = mutating_verb_preflight(VERB, request.flags.mode, Some(request.vm.as_str()))
     {
         return Ok(response);
     }
@@ -20157,7 +20163,7 @@ fn dispatch_broker_host_prepare_as(
 ) -> Result<Value, TypedError> {
     const VERB: &str = "host prepare";
 
-    if let Some(response) = mutating_verb_preflight(VERB, &request.flags, None) {
+    if let Some(response) = mutating_verb_preflight(VERB, request.flags.mode, None) {
         return Ok(response);
     }
     // U12: the retired typed ApplyNftables arm's core is the
@@ -20238,7 +20244,7 @@ fn dispatch_broker_host_destroy_as(
 ) -> Result<Value, TypedError> {
     const VERB: &str = "host destroy";
 
-    if let Some(response) = mutating_verb_preflight(VERB, &request.flags, None) {
+    if let Some(response) = mutating_verb_preflight(VERB, request.flags.mode, None) {
         return Ok(response);
     }
     // U12: the retired typed ApplyNmUnmanaged / ApplyNftables arms' cores
@@ -20313,7 +20319,7 @@ fn dispatch_broker_host_reconcile_as(
 ) -> Result<Value, TypedError> {
     const VERB: &str = "host reconcile";
 
-    if let Some(response) = mutating_verb_preflight(VERB, &request.flags, None) {
+    if let Some(response) = mutating_verb_preflight(VERB, request.flags.mode, None) {
         return Ok(response);
     }
     if !request.network {
@@ -20593,7 +20599,7 @@ fn dispatch_broker_activation(
     mode: DaemonActivationMode,
     caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
-    if let Some(response) = mutating_verb_preflight(verb, &request.flags, Some(request.vm.as_str()))
+    if let Some(response) = mutating_verb_preflight(verb, request.flags.mode, Some(request.vm.as_str()))
     {
         return Ok(response);
     }
@@ -21045,7 +21051,6 @@ fn dispatch_list(
             PublicReadModelKind::List,
             before,
             frame,
-            "list",
         ));
     }
     Ok(frame)
@@ -21135,7 +21140,6 @@ fn build_public_list(
                             runtime_kind.as_deref(),
                             host,
                             process_vm,
-                            &services,
                         ),
                         "services": services,
                     });
@@ -21180,7 +21184,6 @@ fn dispatch_status_as(
             PublicReadModelKind::Status,
             before,
             frame,
-            "status",
         ));
     }
     Ok(frame)
@@ -21191,14 +21194,12 @@ fn publish_public_frame_if_stable(
     kind: PublicReadModelKind,
     before: Option<PublicArtifactFingerprint>,
     frame: Value,
-    kind_name: &'static str,
 ) -> Value {
     state.public_status_read_model.publish_if_unchanged(
         kind,
         before,
         public_artifact_fingerprint(state).ok(),
         frame,
-        kind_name,
     )
 }
 
@@ -21265,7 +21266,6 @@ fn build_public_status(
                             runtime_kind.as_deref(),
                             host,
                             process_vm,
-                            &services,
                         ),
                         "usb": usb_resolver
                             .and_then(|resolver| {
@@ -21454,7 +21454,6 @@ fn public_qemu_media_status(
     runtime_kind: Option<&str>,
     host: Option<&HostJson>,
     process_vm: Option<&d2b_core::processes::VmProcessDag>,
-    services: &Value,
 ) -> Option<Value> {
     if runtime_kind != Some("qemu-media") {
         return None;
@@ -21466,17 +21465,10 @@ fn public_qemu_media_status(
             .find(|node| node.role == ProcessRole::QemuMediaRunner)
     });
     let qmp_socket = runner.and_then(qemu_media_qmp_socket);
-    let state_text = services
-        .get("qemuMedia")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .unwrap_or_else(|| {
-            d2bd_runtime::public_projection::public_pidfd_role_state(
-                &state.pidfd_table,
-                vm,
-                RunnerRole::QemuMedia.as_str(),
-            )
-        });
+    let runner_state = d2bd_runtime::public_projection::public_qemu_media_runner_state(
+        &state.pidfd_table,
+        vm,
+    );
     let qemu_media_host = host.and_then(|host| host.qemu_media.as_ref());
     let media = qemu_media_host
         .map(|contract| {
@@ -21491,21 +21483,21 @@ fn public_qemu_media_status(
     let qmp_readiness = qmp_socket.as_deref().map(|path| {
         if qemu_media_unix_socket_listening(path) {
             "ready".to_owned()
-        } else if state_text == "running" {
+        } else if runner_state == QemuMediaRunnerState::Running {
             "pending".to_owned()
         } else {
             "not-started".to_owned()
         }
     });
     let pre_cont_progress = match qmp_readiness.as_deref() {
-        Some("ready") if state_text == "running" => "paused-before-cont",
-        Some("pending") if state_text == "running" => "waiting-for-qmp",
+        Some("ready") if runner_state == QemuMediaRunnerState::Running => "paused-before-cont",
+        Some("pending") if runner_state == QemuMediaRunnerState::Running => "waiting-for-qmp",
         _ => "not-started",
     };
     Some(json!({
         "firmwareMode": "none",
         "runner": {
-            "state": state_text,
+            "state": runner_state,
             "role": RunnerRole::QemuMedia.as_str(),
             "preContProgress": pre_cont_progress,
             "qmpReadiness": qmp_readiness,
@@ -21530,9 +21522,11 @@ fn qemu_media_source_status(source: &QemuMediaSourceIntent) -> Value {
     status
 }
 
-fn qemu_media_registry_state(source: &QemuMediaSourceIntent) -> (String, Option<String>) {
+fn qemu_media_registry_state(
+    source: &QemuMediaSourceIntent,
+) -> (QemuMediaRegistryState, Option<String>) {
     if serde_kebab_string(&source.source_kind) != "physical-usb" {
-        return ("direct-config".to_owned(), None);
+        return (QemuMediaRegistryState::DirectConfig, None);
     }
     let records = qemu_media_probe_registry_records();
     let Some(record) = records
@@ -21540,7 +21534,7 @@ fn qemu_media_registry_state(source: &QemuMediaSourceIntent) -> (String, Option<
         .find(|record| record.vm == source.vm && record.media_ref == source.media_ref)
     else {
         return (
-            "missing".to_owned(),
+            QemuMediaRegistryState::Missing,
             Some(format!(
                 "declare the boot-drive physical USB source for vm `{}` in config, then run `d2b usb probe` to verify the runtime selector for `{}` before starting or attaching this media",
                 source.vm, source.media_ref
@@ -21555,10 +21549,10 @@ fn qemu_media_registry_state(source: &QemuMediaSourceIntent) -> (String, Option<
         && record.format == expected_format
         && record.read_only == source.read_only
     {
-        ("present".to_owned(), None)
+        (QemuMediaRegistryState::Present, None)
     } else {
         (
-            "stale".to_owned(),
+            QemuMediaRegistryState::Stale,
             Some(
                 "registry entry does not match the current declaration; update qemu-media config if needed, then run `d2b usb probe`"
                     .to_owned(),
@@ -21696,7 +21690,6 @@ mod public_status_tests {
                 supported_features: Vec::new(),
             }),
             caller_role: caller,
-            test_peer_uid: None,
             audit_join: None,
         };
         let json = serde_json::to_string(&envelope).unwrap();
@@ -22232,11 +22225,23 @@ mod public_status_tests {
             Some(&dag),
         );
         let runtime = public_runtime_summary(&lifecycle, &manifest_entry);
+        let qemu = public_qemu_media_status(
+            &state,
+            "installer",
+            Some("qemu-media"),
+            None,
+            Some(&dag),
+        )
+        .expect("qemu media status");
 
         assert_eq!(lifecycle_state(&lifecycle), "Running");
         assert_eq!(
             runtime.get("kind").and_then(Value::as_str),
             Some("qemu-media")
+        );
+        assert_eq!(
+            qemu.pointer("/runner/state").and_then(Value::as_str),
+            Some("running")
         );
         assert_eq!(
             services.get("microvm").and_then(Value::as_str),
@@ -22286,21 +22291,13 @@ mod public_status_tests {
     #[test]
     fn qemu_media_status_reports_manual_runtime_and_missing_registry() {
         let (state, _dir) = test_state();
-        let manifest_entry = qemu_media_manifest_entry();
         let dag = qemu_media_process_dag();
-        let services = d2bd_runtime::public_projection::public_service_states(
-            &state.pidfd_table,
-            "installer",
-            &manifest_entry,
-            Some(&dag),
-        );
         let qemu = public_qemu_media_status(
             &state,
             "installer",
             Some("qemu-media"),
             None,
             Some(&dag),
-            &services,
         )
         .expect("qemu media status");
 
@@ -22311,6 +22308,10 @@ mod public_status_tests {
         assert_eq!(
             qemu.pointer("/runner/role").and_then(Value::as_str),
             Some("qemu-media")
+        );
+        assert_eq!(
+            qemu.pointer("/runner/state").and_then(Value::as_str),
+            Some("stopped")
         );
         assert_eq!(
             qemu.pointer("/runner/qmpSocket").and_then(Value::as_str),
@@ -22655,7 +22656,6 @@ mod public_status_tests {
             PublicReadModelKind::Status,
             Some(before),
             stale_frame.clone(),
-            "status",
         );
 
         assert_eq!(returned, stale_frame);
@@ -22913,7 +22913,10 @@ mod public_status_tests {
             state: &state,
             request: public_wire::VmLifecycleRequest {
                 vm: "vm-a".to_owned(),
-                flags: public_wire::MutationFlags::default(),
+                flags: public_wire::MutationFlags {
+                    mode: public_wire::MutationMode::Apply,
+                    json: false,
+                },
                 force: false,
                 no_wait_api: false,
             },
@@ -23042,12 +23045,11 @@ fn dispatch_audit(
     )?;
     match response {
         BrokerResponse::ExportBrokerAudit(payload) => {
-            serde_json::to_value(d2bd_runtime::wire::audit_response(payload)).map_err(|err| {
-                TypedError::InternalIo {
-                    context: "serialize audit response".to_owned(),
-                    detail: err.to_string(),
-                    source: error_source(err),
-                }
+            let frame = d2bd_runtime::wire::audit_response(payload)?;
+            serde_json::to_value(frame).map_err(|err| TypedError::InternalIo {
+                context: "serialize audit response".to_owned(),
+                detail: err.to_string(),
+                source: error_source(err),
             })
         }
         BrokerResponse::Error(error) => Err(TypedError::InternalBrokerUnavailable {
@@ -24360,7 +24362,7 @@ mod broker_dispatch_tests {
     };
     use d2b_contracts_control::public_wire;
     use d2b_contracts_control::public_wire::{
-        ActivationRequest, HostDestroyRequest, HostPrepareRequest, MutationFlags,
+        ActivationRequest, HostDestroyRequest, HostPrepareRequest, MutationFlags, MutationMode,
         ShellSessionState, VmLifecycleRequest,
     };
     use d2b_contracts_resource::v3::{ResourceGeneration, ResourceUid};
@@ -24373,6 +24375,7 @@ mod broker_dispatch_tests {
     use serde::Serialize;
     use serde_json::{Value, json};
 
+    use super::mutation_mode_from_request;
     use super::provider_effects::LifecycleAuthorization;
     use super::provider_shutdown::GracefulVmShutdown;
     use super::{
@@ -24400,6 +24403,32 @@ mod broker_dispatch_tests {
     use d2bd_runtime::typed_error::TypedError;
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn raw_mutating_verb_frames_keep_the_documented_mode_refusal() {
+        let bare = json!({"type": "resourceRequest", "method": "Start"});
+        let refusal = mutation_mode_from_request(&bare, "guest start")
+            .expect_err("a frame that selects no mode is refused");
+        assert_eq!(
+            refusal.get("outcome").and_then(Value::as_str),
+            Some("invalid-request")
+        );
+        assert_eq!(
+            refusal.get("remediation").and_then(Value::as_str),
+            Some("d2b guest start requires either --dry-run or --apply")
+        );
+
+        assert_eq!(
+            mutation_mode_from_request(&json!({"dryRun": true}), "guest start")
+                .expect("dryRun selects a mode"),
+            MutationMode::DryRun
+        );
+        assert_eq!(
+            mutation_mode_from_request(&json!({"apply": true}), "guest start")
+                .expect("apply selects a mode"),
+            MutationMode::Apply
+        );
+    }
 
     // Serializes tests that must read-modify-write process env vars so parallel
     // test threads don't observe each other's transient env state.
@@ -25343,8 +25372,8 @@ mod broker_dispatch_tests {
                 d2bd_runtime::wire::Request::VmStart(VmLifecycleRequest {
                     vm: "vm-a".to_owned(),
                     flags: MutationFlags {
-                        dry_run: true,
-                        ..MutationFlags::default()
+                        mode: MutationMode::DryRun,
+                        json: false,
                     },
                     force: false,
                     no_wait_api: false,
@@ -25355,8 +25384,8 @@ mod broker_dispatch_tests {
                 d2bd_runtime::wire::Request::VmStop(VmLifecycleRequest {
                     vm: "vm-a".to_owned(),
                     flags: MutationFlags {
-                        dry_run: true,
-                        ..MutationFlags::default()
+                        mode: MutationMode::DryRun,
+                        json: false,
                     },
                     force: false,
                     no_wait_api: false,
@@ -25367,8 +25396,8 @@ mod broker_dispatch_tests {
                 d2bd_runtime::wire::Request::VmRestart(VmLifecycleRequest {
                     vm: "vm-a".to_owned(),
                     flags: MutationFlags {
-                        dry_run: true,
-                        ..MutationFlags::default()
+                        mode: MutationMode::DryRun,
+                        json: false,
                     },
                     force: false,
                     no_wait_api: false,
@@ -25380,8 +25409,8 @@ mod broker_dispatch_tests {
                     vm: "vm-a".to_owned(),
                     to_generation: None,
                     flags: MutationFlags {
-                        dry_run: true,
-                        ..MutationFlags::default()
+                        mode: MutationMode::DryRun,
+                        json: false,
                     },
                 }),
             ),
@@ -25391,8 +25420,8 @@ mod broker_dispatch_tests {
                     vm: "vm-a".to_owned(),
                     to_generation: None,
                     flags: MutationFlags {
-                        dry_run: true,
-                        ..MutationFlags::default()
+                        mode: MutationMode::DryRun,
+                        json: false,
                     },
                 }),
             ),
@@ -25402,8 +25431,8 @@ mod broker_dispatch_tests {
                     vm: "vm-a".to_owned(),
                     to_generation: None,
                     flags: MutationFlags {
-                        dry_run: true,
-                        ..MutationFlags::default()
+                        mode: MutationMode::DryRun,
+                        json: false,
                     },
                 }),
             ),
@@ -25413,8 +25442,8 @@ mod broker_dispatch_tests {
                     vm: "vm-a".to_owned(),
                     to_generation: None,
                     flags: MutationFlags {
-                        dry_run: true,
-                        ..MutationFlags::default()
+                        mode: MutationMode::DryRun,
+                        json: false,
                     },
                 }),
             ),
@@ -25425,8 +25454,8 @@ mod broker_dispatch_tests {
                         vm: "vm-a".to_owned(),
                         bus_id: "1-1".to_owned(),
                         flags: MutationFlags {
-                            dry_run: true,
-                            ..MutationFlags::default()
+                            mode: MutationMode::DryRun,
+                            json: false,
                         },
                     },
                 ),
@@ -25438,8 +25467,8 @@ mod broker_dispatch_tests {
                         vm: "vm-a".to_owned(),
                         bus_id: "1-1".to_owned(),
                         flags: MutationFlags {
-                            dry_run: true,
-                            ..MutationFlags::default()
+                            mode: MutationMode::DryRun,
+                            json: false,
                         },
                     },
                 ),
@@ -25448,8 +25477,8 @@ mod broker_dispatch_tests {
                 "hostPrepare",
                 d2bd_runtime::wire::Request::HostPrepare(HostPrepareRequest {
                     flags: MutationFlags {
-                        dry_run: true,
-                        ..MutationFlags::default()
+                        mode: MutationMode::DryRun,
+                        json: false,
                     },
                 }),
             ),
@@ -25457,8 +25486,8 @@ mod broker_dispatch_tests {
                 "hostDestroy",
                 d2bd_runtime::wire::Request::HostDestroy(HostDestroyRequest {
                     flags: MutationFlags {
-                        dry_run: true,
-                        ..MutationFlags::default()
+                        mode: MutationMode::DryRun,
+                        json: false,
                     },
                 }),
             ),
@@ -25715,8 +25744,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: "vm-a".to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -25921,8 +25950,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: "vm-a".to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -26251,8 +26280,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: "vm-a".to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -26553,8 +26582,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: "vm-a".to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -26599,8 +26628,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: "vm-a".to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -26638,8 +26667,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: "vm-a".to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -27380,8 +27409,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: "vm-a".to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -27426,8 +27455,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: "vm-a".to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -27570,8 +27599,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: vm.to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -27706,8 +27735,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: vm.to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -27847,8 +27876,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: vm.to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -27954,8 +27983,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: vm.to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -27969,8 +27998,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: vm.to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -28006,8 +28035,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: vm.to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -28060,8 +28089,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: vm.to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -28098,8 +28127,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: vm.to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -28137,8 +28166,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: vm.to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -28188,8 +28217,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: vm.to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -28299,8 +28328,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: vm.to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -28502,8 +28531,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: "vm-a".to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
                 force: false,
                 no_wait_api: false,
@@ -28528,8 +28557,8 @@ mod broker_dispatch_tests {
             &state,
             HostPrepareRequest {
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
             },
             BrokerCallerRole::AdminUid { uid: state.daemon_uid },
@@ -28660,8 +28689,8 @@ mod broker_dispatch_tests {
             &state,
             HostPrepareRequest {
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
             },
             BrokerCallerRole::AdminUid { uid: state.daemon_uid },
@@ -28864,8 +28893,8 @@ mod broker_dispatch_tests {
             &state,
             HostDestroyRequest {
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
             },
             BrokerCallerRole::AdminUid { uid: state.daemon_uid },
@@ -28908,8 +28937,8 @@ mod broker_dispatch_tests {
             &state,
             HostDestroyRequest {
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
             },
             BrokerCallerRole::AdminUid { uid: state.daemon_uid },
@@ -30127,8 +30156,8 @@ mod broker_dispatch_tests {
             VmLifecycleRequest {
                 vm: "obs".to_owned(),
                 flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+                    mode: MutationMode::Apply,
+                    json: false,
                 },
                 force: false,
                 // Bypass the readiness gate entirely: no degraded field must

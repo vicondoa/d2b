@@ -1383,9 +1383,9 @@ impl GuestEffectsService {
                     .map_err(|_| GuestEffectError::Unavailable)?;
             }
             GuestRuntimeController::AzureVm { controller } => {
-                if let Some(operation) = controller.recovery_state().operation {
+                if let Some(in_flight) = controller.recovery_state().in_flight_operation {
                     controller
-                        .poll_operation(operation)
+                        .poll_operation(in_flight.operation)
                         .await
                         .map_err(|_| GuestEffectError::Unavailable)?;
                 }
@@ -1925,8 +1925,8 @@ mod tests {
         }
         assert_eq!(controller.phase(), azure_vm_runtime::AzureVmPhase::Ready);
         for _ in 0..8 {
-            if let Some(operation) = controller.recovery_state().operation {
-                controller.poll_operation(operation).await.unwrap();
+            if let Some(in_flight) = controller.recovery_state().in_flight_operation {
+                controller.poll_operation(in_flight.operation).await.unwrap();
             }
             let outcome = controller
                 .finalize("work", "123e4567-e89b-42d3-a456-426614174000", 1)

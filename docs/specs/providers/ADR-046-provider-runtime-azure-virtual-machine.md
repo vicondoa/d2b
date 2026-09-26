@@ -465,6 +465,13 @@ No ARM poll URL, ARM resource URI, or ARM endpoint appears anywhere in
 resources, status, or this Volume; `AzureEffectPort` holds that mapping in
 process memory.
 
+The controller's sealed restart-recovery record (`AzureVmRecoveryState`)
+serializes the in-flight ARM operation as one grouped `inFlightOperation`
+object. Records written before that grouping carry the legacy
+`operation` + `operationStartedAtUnixMs` pair; the read path accepts both
+shapes and folds the legacy pair into `inFlightOperation`, so sealed records
+written by older controllers still load unchanged.
+
 ### Bootstrap-service state
 
 The `azure-vm-bootstrap-svc` service declares **no** Provider state Volume. Its

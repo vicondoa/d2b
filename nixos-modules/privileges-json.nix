@@ -22,7 +22,7 @@ let
     "allowedGroups": [
       "any-local-client"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "no",
     "auditMode": "deny-only"
@@ -34,7 +34,7 @@ let
     "allowedGroups": [
       "any-local-client"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "no",
     "auditMode": "deny-only"
@@ -46,7 +46,7 @@ let
     "allowedGroups": [
       "any-local-client"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "no",
     "auditMode": "deny-only"
@@ -59,7 +59,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "metadata-only",
     "brokerRequired": "no",
     "auditMode": "yes"
@@ -72,7 +72,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "metadata-only",
     "brokerRequired": "conditional",
     "auditMode": "yes"
@@ -85,7 +85,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "no",
     "auditMode": "errors"
@@ -97,7 +97,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "metadata-only",
     "brokerRequired": "conditional",
     "auditMode": "yes"
@@ -110,7 +110,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "conditional",
     "auditMode": "yes"
@@ -123,7 +123,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "metadata-only",
     "brokerRequired": "no",
     "auditMode": "yes"
@@ -136,7 +136,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "conditional",
     "auditMode": "yes"
@@ -149,7 +149,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "metadata-only",
     "brokerRequired": "no",
     "auditMode": "yes"
@@ -162,7 +162,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "metadata-only",
     "brokerRequired": "no",
     "auditMode": "errors"
@@ -175,7 +175,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "no",
     "auditMode": "errors"
@@ -188,7 +188,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "no",
     "auditMode": "errors"
@@ -201,7 +201,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "no",
     "auditMode": "errors"
@@ -214,7 +214,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "no",
     "auditMode": "errors"
@@ -227,7 +227,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "no",
     "auditMode": "yes"
@@ -240,7 +240,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "no",
     "auditMode": "yes"
@@ -253,7 +253,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "no",
     "auditMode": "yes"
@@ -266,7 +266,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "no-mutation",
     "auditMode": "yes"
@@ -279,7 +279,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "no-mutation",
     "auditMode": "yes"
@@ -291,7 +291,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "no-mutation",
     "auditMode": "yes"
@@ -303,7 +303,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "no-mutation",
     "auditMode": "yes"
@@ -315,7 +315,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "no-mutation",
     "auditMode": "yes"
@@ -327,7 +327,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "no-mutation",
     "auditMode": "yes"
@@ -339,7 +339,7 @@ let
     "allowedGroups": [
       "host-shutdown"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -351,7 +351,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "possible-paths-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -363,7 +363,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "metadata-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -375,7 +375,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "possible-paths-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -388,7 +388,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "conditional",
     "auditMode": "yes"
@@ -401,7 +401,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "conditional",
     "auditMode": "yes"
@@ -414,7 +414,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "conditional",
     "auditMode": "yes"
@@ -427,7 +427,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "no",
     "auditMode": "yes"
@@ -440,7 +440,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "no",
     "auditMode": "yes"
@@ -453,7 +453,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "conditional",
     "auditMode": "yes"
@@ -466,7 +466,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "no",
     "auditMode": "yes"
@@ -479,7 +479,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "no",
     "auditMode": "yes"
@@ -491,7 +491,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "no",
     "auditMode": "yes"
@@ -503,7 +503,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "no",
     "auditMode": "yes"
@@ -515,7 +515,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "metadata-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -527,7 +527,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "metadata-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -539,7 +539,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "metadata-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -551,7 +551,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "metadata-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -563,7 +563,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -575,7 +575,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -587,7 +587,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "public-key-only",
     "brokerRequired": "no",
     "auditMode": "yes"
@@ -599,7 +599,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "public-key-only",
     "brokerRequired": "no",
     "auditMode": "yes"
@@ -611,7 +611,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "read-write",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -623,7 +623,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "host-key-metadata",
     "brokerRequired": "conditional",
     "auditMode": "yes"
@@ -635,7 +635,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "host-key-metadata",
     "brokerRequired": "conditional",
     "auditMode": "yes"
@@ -648,7 +648,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "no",
     "auditMode": "errors"
@@ -661,7 +661,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "no",
     "auditMode": "errors"
@@ -674,7 +674,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -687,7 +687,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -700,7 +700,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -713,7 +713,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -726,7 +726,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -738,7 +738,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "redacted-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -750,7 +750,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -763,7 +763,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -776,7 +776,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -788,7 +788,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "redacted-only",
     "brokerRequired": "no-mutation",
     "auditMode": "yes"
@@ -800,7 +800,7 @@ let
     "allowedGroups": [
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "metadata-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -817,7 +817,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -829,7 +829,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -841,7 +841,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -853,7 +853,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "metadata-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -865,7 +865,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -877,7 +877,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "read-write",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -889,7 +889,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "host-key-metadata",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -901,7 +901,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "host-key-metadata",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -913,7 +913,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -925,7 +925,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -937,7 +937,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "metadata-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -949,7 +949,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "metadata-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -961,7 +961,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -973,7 +973,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -985,7 +985,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -997,7 +997,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1009,7 +1009,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1021,7 +1021,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1033,7 +1033,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1045,7 +1045,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1057,7 +1057,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1069,7 +1069,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1081,7 +1081,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1093,7 +1093,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1105,7 +1105,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1117,7 +1117,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1129,7 +1129,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1141,7 +1141,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1153,7 +1153,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1165,7 +1165,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1177,7 +1177,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1189,7 +1189,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1201,7 +1201,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1213,7 +1213,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1225,7 +1225,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1237,7 +1237,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1249,7 +1249,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "read-write",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1261,7 +1261,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "read-write",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1273,7 +1273,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "read-write",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1285,7 +1285,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "redacted-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1297,7 +1297,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1309,7 +1309,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1321,7 +1321,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1333,7 +1333,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1345,7 +1345,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1357,7 +1357,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "metadata-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1369,7 +1369,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1381,7 +1381,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "redacted-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1393,7 +1393,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "redacted-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1405,7 +1405,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "redacted-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1417,7 +1417,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "metadata-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1429,7 +1429,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "metadata-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1441,7 +1441,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "redacted-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1453,7 +1453,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "redacted-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1465,7 +1465,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "redacted-only",
     "brokerRequired": "yes",
     "auditMode": "errors"
@@ -1477,7 +1477,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "redacted-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1489,7 +1489,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "redacted-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1501,7 +1501,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1514,7 +1514,7 @@ let
       "d2b-launcher",
       "d2b-admin"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1526,7 +1526,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "metadata-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1538,7 +1538,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1550,7 +1550,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1562,7 +1562,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1574,7 +1574,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1586,7 +1586,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "metadata-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1598,7 +1598,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "metadata-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1610,7 +1610,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1622,7 +1622,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1634,7 +1634,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1646,7 +1646,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1658,7 +1658,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1670,7 +1670,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "metadata-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1682,7 +1682,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1694,7 +1694,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "metadata-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1706,7 +1706,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1718,7 +1718,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1730,7 +1730,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "metadata-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1742,7 +1742,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "metadata-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1754,7 +1754,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": false,
+    "destructive": "no",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
@@ -1766,7 +1766,7 @@ let
     "allowedGroups": [
       "d2bd"
     ],
-    "destructive": true,
+    "destructive": "yes",
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"

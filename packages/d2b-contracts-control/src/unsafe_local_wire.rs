@@ -131,7 +131,7 @@ impl HelperSnapshot {
     /// Returns [`HelperFailureCode::InvalidRequest`] when the generation is
     /// zero, the scope count exceeds the bound, or a workload identity is
     /// not a helper-owned resource type.
-    pub fn validate(&self) -> Result<(), HelperFailureCode> {
+    pub(crate) fn validate(&self) -> Result<(), HelperFailureCode> {
         if self.generation == 0 {
             return Err(HelperFailureCode::InvalidRequest);
         }
@@ -204,7 +204,7 @@ impl HelperLaunchRequest {
     ///
     /// Returns [`HelperFailureCode::InvalidRequest`] when the workload is
     /// not a helper-owned resource type.
-    pub fn validate_bounds(&self) -> Result<(), HelperFailureCode> {
+    pub(crate) fn validate_bounds(&self) -> Result<(), HelperFailureCode> {
         validate_unsafe_local_resource_identity(&self.workload)
     }
 }

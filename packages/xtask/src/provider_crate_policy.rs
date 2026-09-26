@@ -2953,12 +2953,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (observability-otel)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-contracts-control/src/cli_output.rs",
-        token: "otel",
-        family: "observability-otel",
-        retires_with: "U10-U12 family rollout (observability-otel)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/process_provider_runtime.rs",
         token: "cloud_hypervisor",
         family: "runtime-cloud-hypervisor",

@@ -901,6 +901,7 @@ Stable Credential-specific error codes:
 | `credential-invariant-failure` | Provider returned a response failing invariant checks |
 | `credential-schema-invalid` | Spec field fails validation at create/update |
 | `credential-queue-pressure` | Provider lease table at capacity; retry after backpressure |
+| `credential-already-running` | The same Credential is already being handled by this controller |
 
 All error messages are bounded (max 240 UTF-8 chars), stripped of control
 characters, and must not contain token bytes, URLs, UUIDs, provider diagnostics,
