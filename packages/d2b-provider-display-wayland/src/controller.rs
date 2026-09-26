@@ -686,6 +686,14 @@ pub struct PrincipalReleaseReceipt {
     session_key: String,
 }
 
+impl PrincipalReleaseReceipt {
+    /// Bind one release receipt to a session key reconciled by this
+    /// controller.
+    pub(crate) fn new(session_key: String) -> Self {
+        Self { session_key }
+    }
+}
+
 impl core::fmt::Debug for PrincipalReleaseReceipt {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("PrincipalReleaseReceipt(REDACTED)")
@@ -1422,7 +1430,7 @@ impl core::fmt::Debug for DisplayController {
     }
 }
 
-fn session_key(spec: &WaylandSessionSpec, controller_generation: u64) -> String {
+pub(crate) fn session_key(spec: &WaylandSessionSpec, controller_generation: u64) -> String {
     format!(
         "{}|{}|{}|{}|{}",
         spec.guest_ref().to_canonical_string(),

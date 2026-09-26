@@ -26,9 +26,9 @@ pub use policy::{
 pub use principal::{PrincipalLease, PrincipalPool, PrincipalPoolError};
 pub use process::DisplayLaunchBinding;
 pub use process::{
-    AttachmentGrantHandle, DisplayProcessRole, LaunchGrants, LaunchTicket, ProcessObservation,
-    VolumeState, WorkerAction, WorkerRestartEvidence, WorkerState, WorkerSupervisor,
-    WorkerSupervisorError,
+    AttachmentGrantHandle, DisplayProcessRole, LaunchError, LaunchGrants, LaunchTicket,
+    ProcessObservation, VolumeState, WorkerAction, WorkerRestartEvidence, WorkerState,
+    WorkerSupervisor, WorkerSupervisorError,
 };
 pub use runtime::{
     DisplayProcessEffectPort, DisplayRuntime, DisplayRuntimeError, FinalizationReport,
