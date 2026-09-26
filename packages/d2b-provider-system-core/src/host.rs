@@ -12,9 +12,11 @@
 //! requires that an operator can neither suppress nor override them. That
 //! is two obligations, and both are met here: the posture is derived only
 //! from the spec, and a submitted status carrying either field is rejected
-//! rather than merged. A Host with any other execution policy carries no
-//! posture at all, which is why the field is optional rather than defaulted
-//! to a "has isolation" value.
+//! rather than merged, by [`HostReconciler::reject_operator_status_fields`] -
+//! which the daemon's operator status admission calls before it reads the
+//! row. A Host with any other execution policy carries no posture at all,
+//! which is why the field is optional rather than defaulted to a "has
+//! isolation" value.
 //!
 //! Adapted from the unsafe-local workload contract that this Host resource
 //! succeeds (`packages/d2b-core/src/unsafe_local_workloads.rs` and the
