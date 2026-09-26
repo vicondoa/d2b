@@ -167,6 +167,7 @@
           cp -r ${./packages/d2b-provider-zone} $out/packages/d2b-provider-zone
           cp -r ${./packages/d2b-provider-zone-link} $out/packages/d2b-provider-zone-link
           cp -r ${./packages/d2b-resource-api} $out/packages/d2b-resource-api
+          cp -r ${./packages/d2b-resource-client} $out/packages/d2b-resource-client
           cp -r ${./packages/d2b-resource-types} $out/packages/d2b-resource-types
           cp -r ${./packages/d2b-resource-runtime} $out/packages/d2b-resource-runtime
           cp -r ${./packages/d2b-session} $out/packages/d2b-session
