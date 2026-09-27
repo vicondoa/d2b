@@ -29,6 +29,15 @@
 #                          hardlink farm, so the state disk is dropped, the
 #                          root drive replaces it with an unsafe cache, and
 #                          the node boots through a bootloader.
+#
+# A check whose assertions have been ported to Rust has no fixture left to
+# declare its guest in, so it is named in `portedCheckNodes` at the bottom of
+# this file instead: one entry per ported check, built from one of the shapes
+# above. The two ways of declaring a guest are the same declaration - the node
+# module - read from the two places a check can be written down. `shapeNodes`
+# names the two reusable shapes themselves, which is also how a fixture-less
+# image that is neither a shape nor a ported check is refused rather than
+# quietly served the default node.
 { self, lib }:
 
 let
@@ -200,4 +209,51 @@ rec {
       inherit extra;
       writableStore = true;
     };
+
+  # The guest `daemon-smoke` boots: the reusable daemon node plus the JSON
+  # reader its assertions read the daemon's answers with.
+  #
+  # The node is a plain module here rather than a shape constructor, because
+  # there is nothing left to parameterise: the check's fixture declared
+  # `d2bDaemonNode` with this one package on top, and the check's port retires
+  # that fixture, so the declaration has to live where the reusable nodes do.
+  d2bDaemonSmokeNode = d2bDaemonNode {
+    extra = { pkgs, ... }: {
+      environment.systemPackages = [ pkgs.jq ];
+    };
+  };
+
+  # The guest each fixture-less image evaluates, by the name the image action
+  # asks for. A check's own guest is read out of the check's fixture; these are
+  # the guests with no fixture to be read out of - the two reusable shapes the
+  # lane's own images boot, and one entry per check whose assertions have moved
+  # to the lane's own Rust and whose fixture is therefore gone.
+  #
+  # Naming an image that is in neither table is an error rather than a silent
+  # fallback to the default node: a check that boots a guest nobody declared is
+  # a check asserting against something no declaration describes. The tables
+  # are also what keeps the two shape images and the ported checks apart, so a
+  # mistyped check name cannot quietly become a shape-only image the lane skips.
+  #
+  #   shapeNodes        the reusable shapes, by name.
+  #   portedCheckNodes  a ported check's guest, by the check's own name - the
+  #                     name the lane reports it under and the name its image
+  #                     is built for. `testName` is the name its fixture was
+  #                     booted under, kept because that is the alias a
+  #                     contributor filtering the lane may have read.
+  #
+  # One entry reaches one guest. A check that ports adds its node to
+  # `portedCheckNodes` and takes its fixture away; nothing else in the lane has
+  # to learn the check's name.
+  shapeNodes = {
+    daemon = d2bDaemonNode { };
+    writable-store = d2bCloudHypervisorNode { };
+  };
+
+  portedCheckNodes = {
+    daemon-smoke = {
+      node = d2bDaemonSmokeNode;
+      testName = "d2b-daemon-smoke";
+    };
+  };
 }

@@ -15,16 +15,17 @@
 //! `bazel/checks/vm` names its clippy targets and its guest-boot targets
 //! directly, so it is still linted and still run by the repository's gates.
 
+pub mod checks;
 pub mod error;
 pub mod guest;
 pub mod host;
+pub mod legacy;
 pub mod manifest;
 pub mod monitor;
-pub mod legacy;
 
 pub use error::{HarnessError, Result, UnsnapshottableDevice};
 pub use guest::{ActiveGuest, GuestSpec, RestoreTarget, SnapshotPoint, boot, report, reserve_loopback_port};
 pub use legacy::{LegacyCheck, LegacyError, LegacyGuest, LegacyOutcome};
 pub use host::{Capability, HostFacts, require_this_host};
-pub use manifest::{CheckRecord, EphemeralDrive, Footprint, GuestManifest, PoolBudget};
+pub use manifest::{Assertions, CheckRecord, EphemeralDrive, Footprint, GuestManifest, PoolBudget};
 pub use monitor::{BlockDevice, Cache, Monitor};

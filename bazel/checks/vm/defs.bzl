@@ -254,6 +254,12 @@ guest_image = rule(
         # layout and its assertions are all read out of that file during the
         # evaluation, so the lane carries no list of which check wants which
         # guest: the only place a check's guest is declared is the check.
+        #
+        # Left empty for a check whose assertions are the lane's own Rust: its
+        # fixture is gone, so there is nothing to read a guest out of, and the
+        # evaluation reads the check's node from the reusable node module's
+        # table of ported checks instead - by the `node_shape` this target
+        # declares, which is the check's own name.
         "check": attr.string(),
         # The name this guest reports on its console. With a `check` it is
         # the check's own name, which is what makes a launcher that booted

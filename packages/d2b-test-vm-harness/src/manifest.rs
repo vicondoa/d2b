@@ -97,12 +97,34 @@ pub struct CheckRecord {
     /// it.
     pub name: String,
     /// The name the check's own fixture gave it, which is what appears in a
-    /// driver log line.
+    /// driver log line. A check whose fixture is gone keeps the name it was
+    /// booted under, because that is the alias a contributor filtering the
+    /// lane has read.
     pub test_name: String,
     /// Whether this guest runs a guest of its own. A member that has is
     /// retired rather than restored, because restoring a guest with a live
     /// guest inside it is not defined behaviour.
     pub nested_guest: bool,
+    /// Where this check's assertions are.
+    pub assertions: Assertions,
+}
+
+/// Where a check's assertions live.
+///
+/// A check that has not been ported is an evaluated `testScript`, carried
+/// beside its guest as `check.py` and run through the lane's legacy
+/// guest-control surface. A ported check's assertions are the lane's own Rust
+/// (`crate::checks`) and its image carries no script at all - so this is the
+/// field that lets a guest built without a fixture still be a check the lane
+/// knows how to run, and to report a check whose side of the lane is missing
+/// rather than to look for a script that was never written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Assertions {
+    /// The fixture's evaluated `testScript`, as `check.py`.
+    Python,
+    /// The lane's own Rust, in `crate::checks`.
+    Rust,
 }
 
 /// What one pool member costs the host, in the three currencies the pool is
@@ -445,7 +467,7 @@ mod tests {
       "system": "x86_64-linux",
       "nodeShape": "daemon",
       "image": {"disk": "disk.qcow2", "diskFormat": "qcow2", "diskSizeMib": 8192, "systemImage": null},
-      "check": {"name": "daemon-smoke", "testName": "d2b-daemon-smoke", "nestedGuest": false},
+      "check": {"name": "daemon-smoke", "testName": "d2b-daemon-smoke", "nestedGuest": false, "assertions": "rust"},
       "footprint": {"memorySizeMib": 3072, "cores": 3, "workingDirectoryMib": 8192},
       "pool": {
         "memoryShareNumerator": 2, "memoryShareDenominator": 3,
@@ -487,6 +509,11 @@ mod tests {
         assert_eq!(manifest.drives[0].file, "disk.qcow2");
         assert!(!manifest.uses_bootloader());
         assert_eq!(manifest.activation.marker, "D2B_LANE_READY");
+        assert_eq!(
+            manifest.check.as_ref().map(|check| check.assertions),
+            Some(Assertions::Rust),
+            "the side of the lane a check asserts on survives into the manifest"
+        );
         assert_eq!(
             manifest.networking_options,
             vec![

@@ -107,11 +107,13 @@ guest_image(
     tags = _IMAGE_TAGS,
 )
 
-# One guest per check, built from that check's own fixture.
+# One guest per check, built from that check's own fixture - or, for a check
+# whose assertions have moved to the lane's own Rust, from the node the
+# reusable node module declares for it by name.
 #
-# The list is the lane's check inventory and nothing else: each entry names
-# the fixture the guest is read out of, and the guest's memory, vCPU count,
-# disk, drives, device options and assertions all come out of that file
+# The list is the lane's check inventory and nothing else: an unported entry
+# names the fixture the guest is read out of, and the guest's memory, vCPU
+# count, disk, drives, device options and assertions all come out of that file
 # during the evaluation. Three of these checks boot a plain NixOS node with
 # no d2b daemon host at all, two turn nftables on, two install acceptance
 # artifacts, and two boot a nested guest on the writable-store shape; that
@@ -135,10 +137,25 @@ _CHECKS = [
     "wayland-proxy",
 ]
 
+# The checks that assert in Rust. Each one's fixture is retired in the same
+# change as its port, so there is no fixture left to read its guest out of:
+# the node it boots is declared with the reusable nodes
+# (`nix/test-support/host-integration-node.nix`), and the image carries no
+# `check.py` - the lane runs the Rust module the check is declared in. Moving
+# a check here and deleting its fixture is the whole of what a port costs this
+# list; the image is built from the check's name, which is the shape its node
+# is declared under.
+_PORTED_CHECKS = [
+    "daemon-smoke",
+]
+
 [
     guest_image(
         name = "guest_image_" + check,
-        check = "tests/host-integration/%s.nix" % check,
+        # An unported check's guest and assertions are read out of its own
+        # fixture; a ported check has no fixture left, and the evaluation finds
+        # the node the check boots in the reusable node module instead.
+        check = "" if check in _PORTED_CHECKS else "tests/host-integration/%s.nix" % check,
         srcs = _GUEST_SOURCES,
         cloud_hypervisor_controller = _CONTROLLER,
         flake = "//:flake.nix",

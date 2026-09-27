@@ -8,6 +8,14 @@
 //! fixtures interpolate as well, so a check's failure reads the same before
 //! and after its port.
 //!
+//! A check that *has* been ported asserts in Rust (`crate::checks`), against
+//! this same surface rather than against a second one: the operations, their
+//! bounds, their wording, and the diagnostics the prelude prints are the
+//! ones here, so one check's port moves its assertions and nothing else. An
+//! unported check reaches them through the bridge; a ported one calls them
+//! directly, and [`LegacyGuest::run_ported`] reports it the way
+//! [`LegacyGuest::run`] reports a script.
+//!
 //! The shape of the surface is the driver's, deliberately. Every operation a
 //! fixture calls is here with the driver's semantics: `execute` runs a
 //! command under `set -euo pipefail` with the bound the check declared,
@@ -53,6 +61,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
+    checks::Assertions,
     error::{HarnessError, Result},
     guest::{ActiveGuest, CONSOLE_ID, report},
 };
@@ -91,6 +100,24 @@ const RETRY_INTERVAL: Duration = Duration::from_secs(1);
 /// Python side resolves the same default for the calls it forwards, and two
 /// declarations of the driver's default would be two chances to disagree.
 const EXECUTE_DEFAULT_TIMEOUT: u64 = 900;
+
+/// The bound one diagnostic command gets, the prelude's own. Diagnostics are
+/// read on the failure path, so they are bounded twice over: by this, and by
+/// the `timeout` the prelude wraps the zone explanation in.
+const DIAGNOSTIC_TIMEOUT: u64 = 120;
+
+/// The zone and the linux user a failure's composed explanation is read
+/// through. Every fixture drives one zone as one user through the same public
+/// socket, so `d2b debug` explains the whole zone without the failing stage
+/// listing the rows it asserted on; these are the prelude's `_diag_zone` and
+/// `_diag_user`, restated in the one place a ported check's diagnostics read
+/// them from.
+const DIAG_ZONE: &str = "work";
+const DIAG_USER: &str = "alice";
+
+/// One row a stage was asserting on: the label it is reported under, and the
+/// command that dumps it.
+pub type DiagRow<'a> = (&'a str, &'a str);
 
 /// How often a check's connection to the harness is looked for, while
 /// refusing to block on a check that has already exited.
@@ -485,9 +512,51 @@ fn accept(listener: &UnixListener, mut check: Option<&mut Child>) -> Result<Unix
 pub struct GuestControl {
     console: Console,
     notes: String,
+    diagnostics: Diagnostics,
+}
+
+/// Where a check's diagnostics stand: the stage it is in, and the moment its
+/// lines are timed against.
+///
+/// The prelude keeps the same two facts in its own module state, because an
+/// unported check's script is the thing being timed. A ported check's
+/// assertions are this surface's calls, so the two live here instead, and a
+/// check starts them with [`GuestControl::begin_check`] - a check's lines are
+/// timed from the check's own beginning, the way the prelude's are timed from
+/// the script's.
+struct Diagnostics {
+    stage: String,
+    started: Instant,
+}
+
+impl Diagnostics {
+    fn new() -> Self {
+        Self {
+            stage: "startup".to_owned(),
+            started: Instant::now(),
+        }
+    }
+
+    /// The elapsed time, rendered the way the prelude renders it.
+    fn elapsed(&self) -> String {
+        format!("{:.1}s", self.started.elapsed().as_secs_f64())
+    }
 }
 
 impl GuestControl {
+    /// The surface over one console, with nothing reported yet.
+    ///
+    /// The console is the only thing that has to be supplied: the report a
+    /// check accumulates is empty until it starts, and so are the diagnostics
+    /// that time it.
+    fn new(console: Console) -> Self {
+        Self {
+            console,
+            notes: String::new(),
+            diagnostics: Diagnostics::new(),
+        }
+    }
+
     /// Run a command in the guest.
     ///
     /// `timeout` is the bound the command's own execution gets, in seconds;
@@ -626,6 +695,98 @@ impl GuestControl {
         Ok(())
     }
 
+    /// Announce the stage a check is in.
+    ///
+    /// A ported check calls this where its fixture called the prelude's
+    /// `stage`, so a failure names the phase it happened in, in the line the
+    /// fixture's failure named it in, timed from the check's own start.
+    pub fn stage(&mut self, name: &str) {
+        self.diagnostics.stage = name.to_owned();
+        let line = format!("[d2b] stage={name} t={}", self.diagnostics.elapsed());
+        self.announce(&line);
+    }
+
+    /// Run a diagnostic command and report what it wrote.
+    ///
+    /// Diagnostics only, exactly as the prelude's `diag` is: the status is
+    /// returned rather than asserted on, and a diagnostic that could not run
+    /// at all is reported as the prelude reported it rather than becoming an
+    /// error of its own - a failure that happened before the guest could
+    /// answer must still print its own stage.
+    pub fn diag(&mut self, command: &str, label: &str) -> i32 {
+        match self.execute(command, Some(DIAGNOSTIC_TIMEOUT)) {
+            Err(error) => {
+                let stage = self.diagnostics.stage.clone();
+                let line = format!(
+                    "[d2b] stage={stage} t={} {label}: diagnostic command failed: {error}",
+                    self.diagnostics.elapsed(),
+                );
+                self.announce(&line);
+                -1
+            }
+            Ok(result) => {
+                let stage = self.diagnostics.stage.clone();
+                let head = format!(
+                    "[d2b] stage={stage} t={} {label} (exit {}):",
+                    self.diagnostics.elapsed(),
+                    result.status,
+                );
+                self.announce(&head);
+                self.announce(command);
+                for line in result.output.trim_end().lines() {
+                    self.announce(&format!("    {line}"));
+                }
+                result.status
+            }
+        }
+    }
+
+    /// Wait for a unit, and report everything that explains a wait that did
+    /// not finish.
+    ///
+    /// The wait itself is [`Self::wait_for_unit`] with no user and the
+    /// check's own bound, which is what the prelude's `diag_unit` was. What
+    /// this adds is the failure path: the stage it was in, the unit's status
+    /// dump, the unit's own journal, and the zone's composed explanation, in
+    /// the prelude's own order and wording.
+    pub fn diag_unit(&mut self, stage: &str, unit: &str, bound: Duration) -> LegacyResult<()> {
+        self.stage(stage);
+        match self.wait_for_unit(unit, None, bound) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let label = format!("{unit} status");
+                let dump = format!("systemctl status {unit} --no-pager 2>&1 | tail -n 40 || true");
+                self.explain_failure(stage, None, &[(label.as_str(), dump.as_str())], &[(unit, "")], &error);
+                Err(error)
+            }
+        }
+    }
+
+    /// Wait for a command to succeed, and report the same explanation on
+    /// failure, with the wait itself named.
+    ///
+    /// `rows` are the resource rows the stage was asserting on and `explain`
+    /// are the journal sources that explain them, as `(unit, token)` - an
+    /// empty unit is the whole journal and an empty token is no filter - which
+    /// is the prelude's `diag_wait` shape.
+    pub fn diag_wait(
+        &mut self,
+        stage: &str,
+        command: &str,
+        bound: Duration,
+        rows: &[DiagRow<'_>],
+        explain: &[DiagRow<'_>],
+    ) -> LegacyResult<String> {
+        self.stage(stage);
+        match self.wait_until_succeeds(command, bound) {
+            Ok(output) => Ok(output),
+            Err(error) => {
+                self.explain_failure(stage, Some(command), rows, explain, &error);
+                Err(error)
+            }
+        }
+    }
+
     /// Whether a unit is active, and the two states that end a wait early.
     fn unit_is_active(&mut self, unit: &str, user: Option<&str>) -> LegacyResult<bool> {
         let state = self.unit_property(unit, "ActiveState", user)?;
@@ -757,6 +918,79 @@ impl GuestControl {
         self.notes.push('\n');
     }
 
+    /// Report one diagnostics line, into the lane's report and into this
+    /// check's own record.
+    ///
+    /// The prelude's lines went to the check's own stdout, which the lane
+    /// reports as it arrives and files under that check's result; these go to
+    /// the same two places under the same wording, so a reader of a ported
+    /// check's failure reads what the fixture's failure printed.
+    fn announce(&mut self, line: &str) {
+        report(line);
+        self.notes.push_str(line);
+        self.notes.push('\n');
+    }
+
+    /// Start a check's diagnostics: the stage and the clock its lines are
+    /// timed against are the check's own, the way the prelude's are the
+    /// script's.
+    fn begin_check(&mut self) {
+        self.diagnostics = Diagnostics::new();
+    }
+
+    /// Report everything that explains a diagnostic wait that did not finish:
+    /// the stage it was in, the rows it was asserting on, the journal lines
+    /// that explain them, and the zone's composed explanation.
+    ///
+    /// Diagnostics only, and in the prelude's own order: the failing stage
+    /// first, then each row's dump, then each explanation's journal, then the
+    /// zone - so the reader of a failed lane has the row set before the lines
+    /// that explain it. None of it can refuse: a dump that fails is reported
+    /// as a failed diagnostic, which is why the wait's own error is the one
+    /// that travels.
+    fn explain_failure(
+        &mut self,
+        stage: &str,
+        failing_wait: Option<&str>,
+        rows: &[DiagRow<'_>],
+        explain: &[DiagRow<'_>],
+        error: &LegacyError,
+    ) {
+        let labels = rows
+            .iter()
+            .map(|(label, _)| *label)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let labels = if labels.is_empty() {
+            "none".to_owned()
+        } else {
+            labels
+        };
+        let failing = if failing_wait.is_some() {
+            format!(" wait={stage}")
+        } else {
+            String::new()
+        };
+        let head = format!(
+            "[d2b] FAIL stage={stage} t={}{failing} rows=[{labels}]: {error}",
+            self.diagnostics.elapsed(),
+        );
+        self.announce(&head);
+        if let Some(command) = failing_wait {
+            self.announce(&format!("[d2b] failing wait: {command}"));
+        }
+        for (label, dump) in rows.iter().copied() {
+            self.diag(dump, &format!("row dump: {label}"));
+        }
+        for (unit, token) in explain.iter().copied() {
+            self.diag(
+                &journal_command(unit, token),
+                &journal_label(unit, token),
+            );
+        }
+        self.diag(&zone_explanation_command(), "zone explanation");
+    }
+
     /// The closing line of a logged operation, timed as the driver timed it
     /// and reported only when the operation did not refuse.
     fn finished(&mut self, message: &str, started: Instant) {
@@ -840,6 +1074,50 @@ impl GuestControl {
     }
 }
 
+/// The journal dump one explanation prints, in the prelude's own words and
+/// bounds.
+///
+/// An empty unit is the whole journal; an empty token is no filter, and the
+/// filter is a fixed-string match because a token is a token, not a pattern.
+fn journal_command(unit: &str, token: &str) -> String {
+    let scope = if unit.is_empty() {
+        String::new()
+    } else {
+        format!("-u {unit} ")
+    };
+    let select = if token.is_empty() {
+        String::new()
+    } else {
+        format!("| grep -F -- '{token}' ")
+    };
+    format!(
+        "journalctl {scope}--no-pager -o cat -b -n 4000 2>/dev/null {select}| tail -n 60 || true"
+    )
+}
+
+/// What a journal dump is reported under.
+fn journal_label(unit: &str, token: &str) -> String {
+    let mut label = format!("journal {}", if unit.is_empty() { "all" } else { unit });
+    if !token.is_empty() {
+        label.push_str(&format!(" lines matching '{token}'"));
+    }
+    label
+}
+
+/// The composed `d2b debug` report the prelude prints for a failing stage:
+/// the zone's ownership tree, the row that is not settled, and the structured
+/// failure behind it.
+///
+/// Non-fatal by construction - the command ends in `|| true` and is bounded -
+/// so a failure that happened before the daemon was reachable prints its own
+/// stage rather than a diagnostic error.
+fn zone_explanation_command() -> String {
+    format!(
+        "runuser -u {DIAG_USER} -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock \
+         timeout 60 d2b --zone {DIAG_ZONE} debug {DIAG_ZONE} 2>&1 || true"
+    )
+}
+
 /// A guest a check's script can be run against, and the surface that runs it.
 pub struct LegacyGuest {
     control: GuestControl,
@@ -853,10 +1131,7 @@ impl LegacyGuest {
         let console = Console::attach(guest)?;
         let work_dir = console.work_dir.clone();
         Ok(Self {
-            control: GuestControl {
-                console,
-                notes: String::new(),
-            },
+            control: GuestControl::new(console),
             work_dir,
         })
     }
@@ -904,6 +1179,35 @@ impl LegacyGuest {
             name: check.name.clone(),
             passed: status.success(),
             detail,
+        })
+    }
+
+    /// Run one ported check's assertions against this guest.
+    ///
+    /// A ported check's assertions are the lane's own Rust: the same
+    /// operations, in the same order, with the same bounds its fixture made,
+    /// so there is no interpreter between an assertion and the guest it
+    /// asserts against. What is reported is what [`Self::run`] reports for a
+    /// script - the surface's own log lines, and the check's failure - which
+    /// is what makes a check's diagnostics readable the same way before and
+    /// after its port.
+    pub fn run_ported(
+        &mut self,
+        name: &str,
+        assertions: Assertions,
+    ) -> Result<LegacyOutcome> {
+        self.control.begin_check();
+        let passed = match assertions(&mut self.control) {
+            Ok(()) => true,
+            Err(error) => {
+                self.control.note(&format!("check failed: {error}"));
+                false
+            }
+        };
+        Ok(LegacyOutcome {
+            name: name.to_owned(),
+            passed,
+            detail: self.control.take_notes(),
         })
     }
 
@@ -1226,10 +1530,7 @@ mod tests {
         let (surface, console) = UnixStream::pair().expect("a console socket pair");
         thread::scope(|scope| {
             let asked = scope.spawn(move || guest(console, answers));
-            let mut control = GuestControl {
-                console: Console::serving(surface, PathBuf::from("/dev/null")),
-                notes: String::new(),
-            };
+            let mut control = GuestControl::new(Console::serving(surface, PathBuf::from("/dev/null")));
             let outcome = body(&mut control);
             let notes = std::mem::take(&mut control.notes);
             let (asked, statuses) = asked.join().expect("the scripted guest");
@@ -1450,10 +1751,7 @@ mod tests {
         let (surface, console) = UnixStream::pair().expect("a console socket pair");
         let mut writer = console;
         let _ = writer.write_all(b"connecting to host...\n");
-        let mut control = GuestControl {
-            console: Console::serving(surface, PathBuf::from("/dev/null")),
-            notes: String::new(),
-        };
+        let mut control = GuestControl::new(Console::serving(surface, PathBuf::from("/dev/null")));
         let error = control
             .console
             .await_shell(Duration::from_millis(50))
@@ -1466,10 +1764,7 @@ mod tests {
     #[test]
     fn a_guest_console_that_closes_mid_command_is_reported() {
         let (surface, console) = UnixStream::pair().expect("a console socket pair");
-        let mut control = GuestControl {
-            console: Console::serving(surface, PathBuf::from("/dev/null")),
-            notes: String::new(),
-        };
+        let mut control = GuestControl::new(Console::serving(surface, PathBuf::from("/dev/null")));
         drop(console);
         let error = control
             .console
@@ -1483,10 +1778,7 @@ mod tests {
         let (surface, console) = UnixStream::pair().expect("a console socket pair");
         thread::scope(|scope| {
             let _asked = scope.spawn(move || guest(console, vec![(1, block(""))]));
-            let mut control = GuestControl {
-                console: Console::serving(surface, PathBuf::from("/dev/null")),
-                notes: String::new(),
-            };
+            let mut control = GuestControl::new(Console::serving(surface, PathBuf::from("/dev/null")));
             let request = request("succeed", json!(["test -e /nope"]));
             let reply = control.dispatch(&request);
             assert!(!reply.ok);
@@ -1498,10 +1790,7 @@ mod tests {
     #[test]
     fn an_operation_the_surface_does_not_carry_is_named_rather_than_ignored() {
         let (surface, _console) = UnixStream::pair().expect("a console socket pair");
-        let mut control = GuestControl {
-            console: Console::serving(surface, PathBuf::from("/dev/null")),
-            notes: String::new(),
-        };
+        let mut control = GuestControl::new(Console::serving(surface, PathBuf::from("/dev/null")));
         let reply = control.dispatch(&request("wait_for_open_port", json!(["22"])));
         assert!(!reply.ok);
         assert!(!reply.assertion, "a missing operation is the lane's, not the check's");
@@ -1525,10 +1814,7 @@ mod tests {
                     vec![(0, block("first\n")), (0, block("second\n"))],
                 )
             });
-            let mut control = GuestControl {
-                console: Console::serving(surface, PathBuf::from("/dev/null")),
-                notes: String::new(),
-            };
+            let mut control = GuestControl::new(Console::serving(surface, PathBuf::from("/dev/null")));
             let mut kwargs = BTreeMap::new();
             kwargs.insert("check_output".to_owned(), Value::Bool(false));
             let mut quiet = request("execute", json!(["systemctl restart d2bd.service"]));

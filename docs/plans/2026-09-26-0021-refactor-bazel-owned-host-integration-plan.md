@@ -15,8 +15,8 @@ execution: code
 
 - **Objective:** The d2b host-integration lane runs as Bazel tests, so a contributor gets check selection, results in the Bazel graph, and a faster local loop, and the repository stops maintaining two build systems for one test tier.
 - **Means:** Bazel owns the lane end to end; nix is reduced to a hermetic build action that produces the guest image.
-- **Product authority:** This Product Contract owns behavior and scope. `tests/AGENTS.md` owns the type-10 classification; root `AGENTS.md` owns the profile and changelog rules. `docs/plans/2026-08-24-001-refactor-bazel-backed-host-integration-binaries-plan.md` is superseded on its R3, which reserved VM orchestration to nix. The cutover amends the repository instruction sentences that R3 reverses — the host-lane binary-injection rule in root `AGENTS.md`, the type-10 tier rows and host-lane bundle handoff in `tests/AGENTS.md`, and the handoff descriptions in `docs/contributing/critical-subsystems.md`, `docs/contributing/gates-and-lints.md`, `docs/reference/compatibility.md`, and `docs/reference/support-matrix.md` — in the same change that removes the handoff. The heavy-gate rule those files also describe is not carried forward: the guard was deleted and R16 does not require it.
-- **Product Contract preservation:** changed at planning time — R3, R5, R6, R7, R9, R16, R17, F1, AE2, AE10. The two user-directed changes are the single lane test target and dropping the heavy-gate semaphore; the rest are research corrections to a snapshot-capability premise, a missing host precondition, the disk layout those two assume, and two contradictions a document review found between requirements that planning-time evidence resolved.
+- **Product authority:** This Product Contract owns behavior and scope. `tests/AGENTS.md` owns the type-10 classification; root `AGENTS.md` owns the profile and changelog rules. `docs/plans/2026-08-24-001-refactor-bazel-backed-host-integration-binaries-plan.md` is superseded on its R3, which reserved VM orchestration to nix. The cutover amends the repository instruction sentences that R3 reverses - the host-lane binary-injection rule in root `AGENTS.md`, the type-10 tier rows and host-lane bundle handoff in `tests/AGENTS.md`, and the handoff descriptions in `docs/contributing/critical-subsystems.md`, `docs/contributing/gates-and-lints.md`, `docs/reference/compatibility.md`, and `docs/reference/support-matrix.md` - in the same change that removes the handoff. The heavy-gate rule those files also describe is not carried forward: the guard was deleted and R16 does not require it.
+- **Product Contract preservation:** changed at planning time - R3, R5, R6, R7, R9, R16, R17, F1, AE2, AE10. The two user-directed changes are the single lane test target and dropping the heavy-gate semaphore; the rest are research corrections to a snapshot-capability premise, a missing host precondition, the disk layout those two assume, and two contradictions a document review found between requirements that planning-time evidence resolved.
 - **Execution profile:** Deep, local-only, delivered as a port of one check at a time rather than a single cutover. Within the port the branch stays green because each unported check keeps executing its existing assertions.
 - **Stop conditions:** Stop if the guest's attached writable devices prove not snapshot-capable, before the pool is built; if a restored run costs at least as much as a fresh boot for the same check; or, at the point in the cutover where the deferred check is retired, if no retained check is found to carry the host isolation from Gateway relay credentials it asserts.
 
@@ -50,7 +50,7 @@ The cost of the carve-out is structural rather than episodic. The lane has no Ba
 - R7. The lane must require `/dev/kvm`, nested virtualization, and nested-state save support on the host; a host missing any of them must stop with a clear message instead of falling back to emulation.
 - R8. The pool's aggregate guest footprint must stay within a stated host budget covering memory, vCPU count, and the lane working directory, sized per guest shape with the pool size derived during Planning; checks assigned to one guest run sequentially while the pool itself runs concurrently.
 - R9. A contributor must be able to run one named check by filtering the lane target, without booting the checks that were not selected.
-- R10. The lane must reproduce each check's emulator invocation — its memory, vCPU count, disk size, the drive layout including the writable-store root drive, and any per-check device options such as the vsock device — rather than booting a single uniform guest shape.
+- R10. The lane must reproduce each check's emulator invocation - its memory, vCPU count, disk size, the drive layout including the writable-store root drive, and any per-check device options such as the vsock device - rather than booting a single uniform guest shape.
 
 **Assertion layer**
 
@@ -71,14 +71,14 @@ The cost of the carve-out is structural rather than episodic. The lane has no Ba
 
 ### Key Decisions
 
-- **Bazel owns the lane end to end.** (session-settled: user-directed — chosen over wrapping the existing nix lane and over consuming a prebuilt guest from outside the lane: one build system, not two.) Governs R1, R4, R14.
-- **Nix is reduced to a hermetic guest-image build action.** (session-settled: user-directed — chosen over fetching a published guest image: the guest has to track source changes inside the Bazel graph.) Governs R1, R2, R3.
-- **The lane stays contributor-local.** (session-settled: user-directed — chosen over a required PR gate on BuildBuddy: the lane is a local pre-PR surface, which is also what makes the virtualization precondition assertable rather than negotiable.) Governs R7, R8, R18.
-- **A small pool of guests is reused through snapshot and restore.** (session-settled: user-directed — chosen over a guest per check and over a single sequential guest: cut total boots from one-per-check to one-per-pool-member while keeping a parallel wave.) Governs R5, R6, R8.
-- **Virtualization is a precondition, not a fallback.** (session-settled: user-directed — the lane runs on the contributor's own machine, so emulation is a silent degradation rather than a needed capability.) Governs R7.
-- **Assertions port to Rust one check at a time.** (session-settled: user-directed — chosen over keeping the Python testScripts permanently and over porting all eleven in one cutover: the lane is Bazel-native from day one without a coverage cliff.) Governs R11, R12, R13.
-- **The pool runs concurrently; one guest runs its checks sequentially.** (session-settled: user-directed — chosen over a single sequential guest: snapshot and restore mutates one guest, so parallelism has to come from the pool.) Governs R8.
-- **A check that cannot be snapshot-restored gets a single-use guest.** (session-settled: user-directed — chosen over leaving it on the legacy lane and over deciding at a de-risking spike: its coverage is preserved and the migration never blocks on proving snapshot safety.) Governs R5.
+- **Bazel owns the lane end to end.** (session-settled: user-directed - chosen over wrapping the existing nix lane and over consuming a prebuilt guest from outside the lane: one build system, not two.) Governs R1, R4, R14.
+- **Nix is reduced to a hermetic guest-image build action.** (session-settled: user-directed - chosen over fetching a published guest image: the guest has to track source changes inside the Bazel graph.) Governs R1, R2, R3.
+- **The lane stays contributor-local.** (session-settled: user-directed - chosen over a required PR gate on BuildBuddy: the lane is a local pre-PR surface, which is also what makes the virtualization precondition assertable rather than negotiable.) Governs R7, R8, R18.
+- **A small pool of guests is reused through snapshot and restore.** (session-settled: user-directed - chosen over a guest per check and over a single sequential guest: cut total boots from one-per-check to one-per-pool-member while keeping a parallel wave.) Governs R5, R6, R8.
+- **Virtualization is a precondition, not a fallback.** (session-settled: user-directed - the lane runs on the contributor's own machine, so emulation is a silent degradation rather than a needed capability.) Governs R7.
+- **Assertions port to Rust one check at a time.** (session-settled: user-directed - chosen over keeping the Python testScripts permanently and over porting all eleven in one cutover: the lane is Bazel-native from day one without a coverage cliff.) Governs R11, R12, R13.
+- **The pool runs concurrently; one guest runs its checks sequentially.** (session-settled: user-directed - chosen over a single sequential guest: snapshot and restore mutates one guest, so parallelism has to come from the pool.) Governs R8.
+- **A check that cannot be snapshot-restored gets a single-use guest.** (session-settled: user-directed - chosen over leaving it on the legacy lane and over deciding at a de-risking spike: its coverage is preserved and the migration never blocks on proving snapshot safety.) Governs R5.
 
 ### How This Work Fits Together
 
@@ -86,10 +86,10 @@ The cost of the carve-out is structural rather than episodic. The lane has no Ba
 
 This plan covers the type-10 VM lane only. That split is the current understanding, not a committed roadmap.
 
-- Remote execution of the lane on BuildBuddy, an executor pool, or in CI as a required gate — *Deferred*: a later plan may take it up once the lane has a stable local run and the virtualization precondition is settled.
-- The type-9 container lane and the live-host scripts — *Can proceed independently of* this plan; they share the Make facade but not the VM harness.
-- Porting the checks to Rust — in scope for this plan and sequenced inside it: the boot layer lands first, each check then ports per F2, and cutover fires when the last check asserts in Rust.
-- Bumping the pinned nixpkgs Bazel ruleset — *Can proceed independently of* this plan; this work stays inside the existing pin.
+- Remote execution of the lane on BuildBuddy, an executor pool, or in CI as a required gate - *Deferred*: a later plan may take it up once the lane has a stable local run and the virtualization precondition is settled.
+- The type-9 container lane and the live-host scripts - *Can proceed independently of* this plan; they share the Make facade but not the VM harness.
+- Porting the checks to Rust - in scope for this plan and sequenced inside it: the boot layer lands first, each check then ports per F2, and cutover fires when the last check asserts in Rust.
+- Bumping the pinned nixpkgs Bazel ruleset - *Can proceed independently of* this plan; this work stays inside the existing pin.
 
 ### Key Flows
 
@@ -189,7 +189,7 @@ flowchart TB
 
 - AE10. A guest built from the current disk layout
   - **Covers:** R5, R6.
-  - **Given:** a guest whose attached writable devices — the root drive and the shared state disk — are in a snapshot-capable configuration, and whose in-guest writable-store images are files inside that guest rather than attached devices.
+  - **Given:** a guest whose attached writable devices - the root drive and the shared state disk - are in a snapshot-capable configuration, and whose in-guest writable-store images are files inside that guest rather than attached devices.
   - **When:** the lane boots that guest and restores it between checks.
   - **Then:** the guest boots and restores, and the suite proceeds on the reused pool rather than the single-use tier.
 
@@ -221,7 +221,7 @@ flowchart TB
 ### Dependencies / Assumptions
 
 - The contributor's host provides `/dev/kvm` with nested virtualization and nested-state save support, which the nested cloud-hypervisor check requires of the guest and which snapshotting an outer guest requires.
-- The guest-image action needs a nix build that realizes the system closure into a Bazel-declared output from label inputs. The repository's existing nix-inside-Bazel test harness does not provide this — it runs against the host store over a working-tree flake reference inside an uncacheable, unsandboxed test action — and no nix Bazel ruleset version provides a cacheable nix-build action, so the action is authored here. The substitute reachability the current recipe's cache preflight and closure upload provide must be carried into the action, and the flake must arrive as a declared input rather than a working-tree reference, before R1 can hold.
+- The guest-image action needs a nix build that realizes the system closure into a Bazel-declared output from label inputs. The repository's existing nix-inside-Bazel test harness does not provide this - it runs against the host store over a working-tree flake reference inside an uncacheable, unsandboxed test action - and no nix Bazel ruleset version provides a cacheable nix-build action, so the action is authored here. The substitute reachability the current recipe's cache preflight and closure upload provide must be carried into the action, and the flake must arrive as a declared input rather than a working-tree reference, before R1 can hold.
 - The guest's attached writable devices are already in a snapshot-capable configuration: the root drive is qcow2 and the shared state disk is attached with a writable overlay. This is a property to verify, not a conversion to perform; the two writable-store ext4 images are files inside the guest, not attached devices, and a single raw attached device would fail the snapshot outright.
 
 ### Outstanding Questions
@@ -234,22 +234,22 @@ flowchart TB
 
 ### Sources / Research
 
-- `tests/AGENTS.md:12-15, 23, 68` — the type-10 classification and the "push coverage down toward type 1" rule.
-- Root `AGENTS.md:209-215, 229-230` — the no-profile-override rule that R18 answers, and the existing requirement that the guest consume Bazel-built binaries.
-- `Makefile:8-10, 11-22, 158-159, 178-361` — the one-class-per-target dispatcher invariant, the lane's membership in the local-target class, the canned Bazel alias, and the serial default at `:295`.
-- `flake.nix:606-681` — the `vmChecks` output, the non-recursive fixture discovery, and the two `builtins.getEnv` bundle reads at `:610-612`.
-- `tests/host-integration/lib.nix:519-641, 653-796` — the shared node configuration and the diagnostics prelude the Rust assertion layer must reproduce, and the split between reusable configuration and driver-coupled diagnostics.
-- `tests/host-integration/lib.nix:529-536, 627-630` — the shared state disk, attached with a writable overlay.
-- `runtime-cloud-hypervisor-guest-preflight.nix:637-644` — the in-guest virtualization and vhost-net assertions behind the single-use tier.
-- `bazel/checks/fixtures/defs.bzl:1-63` — the one existing Starlark rule that runs nix as a cacheable build action; the model for the guest-image action.
-- `bazel/checks/nix/defs.bzl:3-9, 81-125` — the existing nix-inside-Bazel test harness, whose tags establish the non-cacheable convention the lane follows.
-- `tests/unit/meta/rust-main-packages-suite-guard.sh:150-173` — the guard that force-registers any crate carrying a test aggregate and forbids positive tags on such aggregates; the reason the lane's targets live outside the main package suite.
-- `nixos-modules/base.nix:67-68` and `nixos-modules/lib.nix:322, 421-429` — sshd enabled by default in the guest base, the guest's ssh capability, and the repository's existing QMP readiness vocabulary.
-- `CHANGELOG.md:1086-1088` and commit `2c2f8149b` — the deletion of the heavy-gate orchestration, which R16 and four documentation sites previously described as current.
-- `docs/plans/2026-08-24-001-refactor-bazel-backed-host-integration-binaries-plan.md` — the superseded plan; its R3 and its "Bazel does not become the scheduler for the NixOS VM test" boundary are what this contract reverses.
-- `docs/plans/2026-08-19-002-refactor-build-test-ownership-cleanup-plan.md:266, 269-270` — the direction that tests expose Bazel only and receive binaries from Bazel rather than building at test runtime.
+- `tests/AGENTS.md:12-15, 23, 68` - the type-10 classification and the "push coverage down toward type 1" rule.
+- Root `AGENTS.md:209-215, 229-230` - the no-profile-override rule that R18 answers, and the existing requirement that the guest consume Bazel-built binaries.
+- `Makefile:8-10, 11-22, 158-159, 178-361` - the one-class-per-target dispatcher invariant, the lane's membership in the local-target class, the canned Bazel alias, and the serial default at `:295`.
+- `flake.nix:606-681` - the `vmChecks` output, the non-recursive fixture discovery, and the two `builtins.getEnv` bundle reads at `:610-612`.
+- `tests/host-integration/lib.nix:519-641, 653-796` - the shared node configuration and the diagnostics prelude the Rust assertion layer must reproduce, and the split between reusable configuration and driver-coupled diagnostics.
+- `tests/host-integration/lib.nix:529-536, 627-630` - the shared state disk, attached with a writable overlay.
+- `runtime-cloud-hypervisor-guest-preflight.nix:637-644` - the in-guest virtualization and vhost-net assertions behind the single-use tier.
+- `bazel/checks/fixtures/defs.bzl:1-63` - the one existing Starlark rule that runs nix as a cacheable build action; the model for the guest-image action.
+- `bazel/checks/nix/defs.bzl:3-9, 81-125` - the existing nix-inside-Bazel test harness, whose tags establish the non-cacheable convention the lane follows.
+- `tests/unit/meta/rust-main-packages-suite-guard.sh:150-173` - the guard that force-registers any crate carrying a test aggregate and forbids positive tags on such aggregates; the reason the lane's targets live outside the main package suite.
+- `nixos-modules/base.nix:67-68` and `nixos-modules/lib.nix:322, 421-429` - sshd enabled by default in the guest base, the guest's ssh capability, and the repository's existing QMP readiness vocabulary.
+- `CHANGELOG.md:1086-1088` and commit `2c2f8149b` - the deletion of the heavy-gate orchestration, which R16 and four documentation sites previously described as current.
+- `docs/plans/2026-08-24-001-refactor-bazel-backed-host-integration-binaries-plan.md` - the superseded plan; its R3 and its "Bazel does not become the scheduler for the NixOS VM test" boundary are what this contract reverses.
+- `docs/plans/2026-08-19-002-refactor-build-test-ownership-cleanup-plan.md:266, 269-270` - the direction that tests expose Bazel only and receive binaries from Bazel rather than building at test runtime.
 - Planning research dossiers, kept at `/tmp/compound-engineering-1000/ce-plan-research/d57f3743/`: repository patterns, QEMU and nix best practices, framework documentation, and flow analysis.
-- Emulator snapshot semantics from the research dossier: internal snapshots are supported only by the qcow2 format, a single writable non-snapshot-capable device fails the whole snapshot, and restoring a guest that has a live nested guest is documented undefined behavior on one vendor while working on another — which is why a member that has run a nested guest is retired rather than restored.
+- Emulator snapshot semantics from the research dossier: internal snapshots are supported only by the qcow2 format, a single writable non-snapshot-capable device fails the whole snapshot, and restoring a guest that has a live nested guest is documented undefined behavior on one vendor while working on another - which is why a member that has run a nested guest is retired rather than restored.
 - Bazel execution model from the research dossier: a test action reaches a resource created outside it only by opting out of the sandbox or by an explicit mount pair, a sandboxed test's only writable surface is its own temporary directory, a test result defaults to replaying a cached verdict, and the current Bazel release no longer exposes the host temporary directory to sandboxed actions.
 - Measured on the contributor's host: a hardware-virtualized boot reaches a running d2b daemon in 13.6s, against 84.0s under emulation, a 6.2x difference on the same guest image. This is the basis for treating virtualization as a precondition. It does not price the refactor, and it does not describe the whole suite: it is a single boot of the default guest shape, while the two writable-store checks replace the root drive with a bootable one and the repository's own comment says that path adds many minutes to startup and can hang. Both the speed criterion and the restore stop condition are therefore measured per guest shape, and the writable-store shape's cold-boot cost is recorded before the pool is sized.
 
@@ -259,10 +259,10 @@ flowchart TB
 
 ### Key Technical Decisions
 
-- KTD1. The heavy-gate semaphore is not reinstated. (session-settled: user-directed — chosen over rebuilding the guard: the repository deleted it deliberately and six documentation sites still describe it as current, so correcting the contract is cheaper than reviving dead infrastructure.) Lane-local teardown and the lane's own stop conditions cover the self-race the guard used to prevent, and the two normative sites that record a `RETAIN` disposition for the semaphore namespace are a different edit class from a prose refresh and need a named owner in U8. Governs R16.
-- KTD2. One lane-level test target owns the whole pool lifecycle, and the make target stays in the local class with a one-line recipe that names the repository-committed build profile itself rather than inheriting whatever profile a caller exported, the way the generate target already pins its own. (session-settled: user-directed — chosen over per-check targets with a facade that boots the pool first: the Make dispatcher expands a target to exactly one canned Bazel call under a one-class-per-target invariant, so a two-command facade would break that convention.) Governs R4, R9, R17, R18.
-- KTD3. The guest image is built by a rule authored in this repository, modeled on the existing fixture rule, and the emulator is taken from the repository's own pinned nix package set rather than a new third-party Bazel ruleset. (session-settled: user-approved — no nix Bazel ruleset provides a cacheable nix-build action at the pinned or the current version, and the rules that do exist keep realization in the repository-fetch phase; taking the emulator from the same pinned set as the guest avoids adding an external module and keeps emulator and guest at one nixpkgs revision.) Governs R1, R2.
-- KTD4. The guest-image action and the lane target both run unsandboxed and local, and hermeticity comes from nix's own configuration rather than Bazel's isolation. (session-settled: user-approved — nix cannot build inside a sandboxed action because its own sandbox requires root, and the fallback degrades silently rather than failing.) Governs R1, R7.
+- KTD1. The heavy-gate semaphore is not reinstated. (session-settled: user-directed - chosen over rebuilding the guard: the repository deleted it deliberately and six documentation sites still describe it as current, so correcting the contract is cheaper than reviving dead infrastructure.) Lane-local teardown and the lane's own stop conditions cover the self-race the guard used to prevent, and the two normative sites that record a `RETAIN` disposition for the semaphore namespace are a different edit class from a prose refresh and need a named owner in U8. Governs R16.
+- KTD2. One lane-level test target owns the whole pool lifecycle, and the make target stays in the local class with a one-line recipe that names the repository-committed build profile itself rather than inheriting whatever profile a caller exported, the way the generate target already pins its own. (session-settled: user-directed - chosen over per-check targets with a facade that boots the pool first: the Make dispatcher expands a target to exactly one canned Bazel call under a one-class-per-target invariant, so a two-command facade would break that convention.) Governs R4, R9, R17, R18.
+- KTD3. The guest image is built by a rule authored in this repository, modeled on the existing fixture rule, and the emulator is taken from the repository's own pinned nix package set rather than a new third-party Bazel ruleset. (session-settled: user-approved - no nix Bazel ruleset provides a cacheable nix-build action at the pinned or the current version, and the rules that do exist keep realization in the repository-fetch phase; taking the emulator from the same pinned set as the guest avoids adding an external module and keeps emulator and guest at one nixpkgs revision.) Governs R1, R2.
+- KTD4. The guest-image action and the lane target both run unsandboxed and local, and hermeticity comes from nix's own configuration rather than Bazel's isolation. (session-settled: user-approved - nix cannot build inside a sandboxed action because its own sandbox requires root, and the fallback degrades silently rather than failing.) Governs R1, R7.
 - KTD5. Guests are snapshotted and restored in-process, and a pool member that has run a nested guest is retired rather than restored. The rejected path is live migration: it rolls back memory and device state but not block content, and block migration was removed from the current emulator, so it cannot deliver the rollback the pool needs. It stays the fallback if restore turns out to cost more than a fresh boot. Governs R5.
 - KTD6. The lane target's result is never cacheable, and the lane never runs with streamed test output, which would serialize it. Governs R9, R17.
 - KTD7. Per-check guest configuration moves out of the runNixOSTest fixtures into a module the lane evaluates, before any fixture is deleted. Governs R10, R14.
@@ -323,7 +323,7 @@ Two invariants hold across every transition. No guest is ever snapshotted or res
 
 ### Sequencing
 
-The guest-image rule and the guest-configuration re-homing come first because the harness cannot spawn anything without them. The legacy driver guest-control surface lands before the lane test target is registered, because at that boundary the make target would otherwise point at a lane no check can run — a coverage hole R12 forbids. Only then do the pool and reporting layer, then the ports.
+The guest-image rule and the guest-configuration re-homing come first because the harness cannot spawn anything without them. The legacy driver guest-control surface lands before the lane test target is registered, because at that boundary the make target would otherwise point at a lane no check can run - a coverage hole R12 forbids. Only then do the pool and reporting layer, then the ports.
 
 ### Alternative Approaches Considered
 
@@ -357,7 +357,7 @@ Three boundaries meet at this lane, each owned by a different authority, and the
 
 ### Sources & Research
 
-Planning research dossiers are kept at `/tmp/compound-engineering-1000/ce-plan-research/d57f3743/` — repository patterns, emulator and nix best practices, framework documentation, and flow analysis. The grounding dossier from the brainstorm phase is at `/tmp/compound-engineering-1000/ce-brainstorm/20260925-hostint-bazel/grounding.md`. The Sources section under the Product Contract carries the per-claim citations both phases rely on.
+Planning research dossiers are kept at `/tmp/compound-engineering-1000/ce-plan-research/d57f3743/` - repository patterns, emulator and nix best practices, framework documentation, and flow analysis. The grounding dossier from the brainstorm phase is at `/tmp/compound-engineering-1000/ce-brainstorm/20260925-hostint-bazel/grounding.md`. The Sources section under the Product Contract carries the per-claim citations both phases rely on.
 
 ---
 
@@ -368,7 +368,7 @@ Planning research dossiers are kept at `/tmp/compound-engineering-1000/ce-plan-r
 - **Goal:** A rule that evaluates the guest's NixOS configuration from declared label inputs and emits the guest artifacts as a cacheable graph output, replacing the environment-variable handoff.
 - **Requirements:** R1, R2, R3.
 - **Dependencies:** none.
-- **Files:** `bazel/checks/vm/defs.bzl` (new), `bazel/checks/vm/BUILD.bazel` (new), `nix/test-support/guest-image.nix` (new), `nix/test-support/bazel-host-tools.nix` (modify), `flake.nix` (modify — add the guest evaluation as a declared entry point, keeping the two environment reads until U4), `Makefile` (modify — move the substituter preflight into the action's inputs), `.bazelrc` (add the committed guest-build profile), `MODULE.bazel` (modify — add the emulator as an entry on the existing nix package extension), `MODULE.bazel.lock` (modify — the repository's lockfile mode errors rather than regenerating), `changelog.d/` (add).
+- **Files:** `bazel/checks/vm/defs.bzl` (new), `bazel/checks/vm/BUILD.bazel` (new), `nix/test-support/guest-image.nix` (new), `nix/test-support/bazel-host-tools.nix` (modify), `flake.nix` (modify - add the guest evaluation as a declared entry point, keeping the two environment reads until U4), `Makefile` (modify - move the substituter preflight into the action's inputs), `.bazelrc` (add the committed guest-build profile), `MODULE.bazel` (modify - add the emulator as an entry on the existing nix package extension), `MODULE.bazel.lock` (modify - the repository's lockfile mode errors rather than regenerating), `changelog.d/` (add).
 - **Approach:**
   1. Model the rule on the repository's one existing cacheable nix action rather than on the nix test harness, which is a test wrapper with a different shape.
   2. Declare the flake and its lock as label inputs so the action's key reflects the source, not a working-tree reference.
@@ -392,12 +392,12 @@ Planning research dossiers are kept at `/tmp/compound-engineering-1000/ce-plan-r
 - **Goal:** Move the reusable NixOS node configuration out of the runNixOSTest fixtures into a module the lane evaluates, so a fixture can be deleted when its check ports without taking its guest declaration with it.
 - **Requirements:** R10, R14.
 - **Dependencies:** U1.
-- **Files:** `tests/host-integration/lib.nix` (modify — split), `nix/test-support/host-integration-node.nix` (new), one `tests/host-integration/*.nix` file per check (modify), `changelog.d/` (add).
+- **Files:** `tests/host-integration/lib.nix` (modify - split), `nix/test-support/host-integration-node.nix` (new), one `tests/host-integration/*.nix` file per check (modify), `changelog.d/` (add).
 - **Approach:**
   1. Separate the shared node configuration and the per-check module contributions from the driver-coupled diagnostics prelude, keeping each side intact.
   2. Give the re-homed module a stable interface the lane's harness can evaluate per check, independent of any test driver.
   3. Leave every fixture's assertion body untouched so the lane stays green through this unit.
-- **Test expectation:** none — a pure relocation that adds no test target. The unit's evidence is the existing lane staying green and the U1 image build covering the re-homed module; the scenarios below are what an implementer checks by hand, not gated coverage.
+- **Test expectation:** none - a pure relocation that adds no test target. The unit's evidence is the existing lane staying green and the U1 image build covering the re-homed module; the scenarios below are what an implementer checks by hand, not gated coverage.
 - **Patterns to follow:** the configuration half of `tests/host-integration/lib.nix:519-641` as the source of truth for what moves.
 - **Test scenarios:**
   - The re-homed module evaluates to the same guest configuration as the fixture's inline configuration for every check.
@@ -407,18 +407,18 @@ Planning research dossiers are kept at `/tmp/compound-engineering-1000/ce-plan-r
 
 ### U3. Author the guest-spawning harness
 
-- **Goal:** A harness that reproduces each check's emulator invocation, boots its guest, waits for activation, and tears it down — the half of the lane that replaces the nix driver's boot responsibility.
+- **Goal:** A harness that reproduces each check's emulator invocation, boots its guest, waits for activation, and tears it down - the half of the lane that replaces the nix driver's boot responsibility.
 - **Requirements:** R4, R6, R7, R10.
 - **Dependencies:** U1, U2.
-- **Files:** `packages/d2b-vm-harness/` (new crate — pool-free first pass), `Cargo.toml` (modify — workspace member; without it the crate has no generated dependency defs and cannot be built at all), `Cargo.lock` (modify — both clippy gates run locked), `BUILD.bazel` (modify — the packages filegroup enumerates every crate), `packages/xtask/src/provider_crate_policy.rs` (modify — committed-scope row, or the crate-layout gate fails), `packages/xtask/data/blocking-census-baseline.json` (modify, or the established allow-attribute convention — a harness that spawns processes and sleeps trips the blocking census), `bazel/checks/vm/BUILD.bazel` (modify — including the lane suite naming the harness's clippy targets, so the crate is linted by the unit that creates it), `MODULE.bazel` (modify if the dependency set grows), `MODULE.bazel.lock` (modify, if that manifest changes), `changelog.d/` (add).
+- **Files:** `packages/d2b-vm-harness/` (new crate - pool-free first pass), `Cargo.toml` (modify - workspace member; without it the crate has no generated dependency defs and cannot be built at all), `Cargo.lock` (modify - both clippy gates run locked), `BUILD.bazel` (modify - the packages filegroup enumerates every crate), `packages/xtask/src/provider_crate_policy.rs` (modify - committed-scope row, or the crate-layout gate fails), `packages/xtask/data/blocking-census-baseline.json` (modify, or the established allow-attribute convention - a harness that spawns processes and sleeps trips the blocking census), `bazel/checks/vm/BUILD.bazel` (modify - including the lane suite naming the harness's clippy targets, so the crate is linted by the unit that creates it), `MODULE.bazel` (modify if the dependency set grows), `MODULE.bazel.lock` (modify, if that manifest changes), `changelog.d/` (add).
 - **Approach:**
   1. Consume the emulator binary and its runtime data from the pinned nix package set as runfile labels, the shape the existing nix-inside-Bazel harness already uses for the nix binary, so the emulator is at the same nixpkgs revision the guest image is realized from; select the accelerator explicitly instead of relying on a default that falls back to emulation.
-  2. Reproduce the per-check invocation shape — memory, vCPU count, disk size, drive layout, and per-check device options — from the re-homed configuration rather than from a single uniform guest.
+  2. Reproduce the per-check invocation shape - memory, vCPU count, disk size, drive layout, and per-check device options - from the re-homed configuration rather than from a single uniform guest.
   3. Wait for activation through a readiness signal the repository already has vocabulary for, and treat a guest that never activates as a lane failure rather than a hang.
   4. Assert the host's virtualization capabilities up front, including nested-state save support, and fail with a message naming what is missing.
   5. Verify at boot that every attached writable device supports internal snapshots, so a non-snapshot-capable device fails the lane before any check runs.
   6. Hold no test aggregate on the crate, which is what keeps the repository's test census from force-registering it into the main package suite. The suite that would normally carry it is the lane's own, which names the harness's clippy targets directly, so the harness is still linted by the repository's Rust gates without an aggregate.
-  7. Give every reusable-pool guest a machine-identity device and a hardware random source, and take the snapshot only once the guest reports its random pool is initialised — a guest restored before that point comes back with a different identity and a colder random pool than the checks were written against.
+  7. Give every reusable-pool guest a machine-identity device and a hardware random source, and take the snapshot only once the guest reports its random pool is initialised - a guest restored before that point comes back with a different identity and a colder random pool than the checks were written against.
 - **Execution note:** Prove the readiness and teardown paths against a real guest before adding snapshot support, so a boot failure is never confused with a restore failure.
 - **Patterns to follow:** the readiness vocabulary in `nixos-modules/lib.nix:421-429`; the accelerator and device handling already written in the qemu-media provider's process builder.
 - **Test scenarios:**
@@ -433,10 +433,10 @@ Planning research dossiers are kept at `/tmp/compound-engineering-1000/ce-plan-r
 
 ### U4. Add snapshot and restore pool management and the lane test target
 
-- **Goal:** The lane test target that boots the pool once, restores per selected check, retires members that cannot be reused, and reports per-check results — the unit that makes the lane a Bazel test.
+- **Goal:** The lane test target that boots the pool once, restores per selected check, retires members that cannot be reused, and reports per-check results - the unit that makes the lane a Bazel test.
 - **Requirements:** R4, R5, R8, R9, R16, R17.
 - **Dependencies:** U3, U5.
-- **Files:** `packages/d2b-vm-harness/src/pool.rs` (new), `packages/d2b-vm-harness/src/report.rs` (new), `bazel/checks/vm/BUILD.bazel` (modify — add the pool target to the lane suite), `bazel/checks/BUILD.bazel` (modify — register the lane suite), `Makefile` (modify — collapse the shell recipe to the single target, keeping the target in the local class, pinning the committed build profile in the recipe, and keeping the non-x86_64 skip as a guard on the lane target), `tests/AGENTS.md` (modify — the type-10 tier row only), `changelog.d/` (add).
+- **Files:** `packages/d2b-vm-harness/src/pool.rs` (new), `packages/d2b-vm-harness/src/report.rs` (new), `bazel/checks/vm/BUILD.bazel` (modify - add the pool target to the lane suite), `bazel/checks/BUILD.bazel` (modify - register the lane suite), `Makefile` (modify - collapse the shell recipe to the single target, keeping the target in the local class, pinning the committed build profile in the recipe, and keeping the non-x86_64 skip as a guard on the lane target), `tests/AGENTS.md` (modify - the type-10 tier row only), `changelog.d/` (add).
 - **Approach:**
   1. Register one lane test target that owns the pool for its whole run, and make the make target a thin invocation of it.
   2. Take the snapshot after activation completes and before any check runs, so a restored guest is always one no check has touched.
@@ -465,9 +465,9 @@ Planning research dossiers are kept at `/tmp/compound-engineering-1000/ce-plan-r
 - **Goal:** Re-provide the guest-control helpers and the diagnostics prelude the unported checks call, so every check keeps gating the lane unchanged until its own port.
 - **Requirements:** R12, R13.
 - **Dependencies:** U3.
-- **Files:** `packages/d2b-vm-harness/src/legacy.rs` (new), `tests/host-integration/lib.nix` (modify — extract the diagnostics prelude so both surfaces share it), `tests/host-integration/*.nix` (modify — point at the shared prelude), `changelog.d/` (add).
+- **Files:** `packages/d2b-vm-harness/src/legacy.rs` (new), `tests/host-integration/lib.nix` (modify - extract the diagnostics prelude so both surfaces share it), `tests/host-integration/*.nix` (modify - point at the shared prelude), `changelog.d/` (add).
 - **Approach:**
-  1. Implement the full set of guest-control helpers the fixtures call — command execution with a bounded timeout, service-state waiting, file waiting, retrying command success, and explicit success and failure assertions — against the lane's own guest.
+  1. Implement the full set of guest-control helpers the fixtures call - command execution with a bounded timeout, service-state waiting, file waiting, retrying command success, and explicit success and failure assertions - against the lane's own guest.
   2. Port the diagnostics prelude to the same surface so a failing unported check reports the same stage, rows, journals, and zone debug as today.
   3. Keep the guest's ssh capability and the fixtures' use of it unchanged, so assertion bodies need no edits.
   4. Keep the prelude in one place so the ported Rust assertions and the legacy surface report identically.
@@ -505,7 +505,7 @@ Planning research dossiers are kept at `/tmp/compound-engineering-1000/ce-plan-r
 - **Goal:** Port the remaining checks one at a time and complete the cutover once the last one asserts in Rust.
 - **Requirements:** R11, R12, R13, R14, R15, R16, R17.
 - **Dependencies:** U6.
-- **Files:** `packages/d2b-vm-harness/tests/*.rs` (new, one per remaining check), `tests/host-integration/*.nix` (delete as each check ports), `tests/host-integration/deferred/host-zone-gateway-isolation.nix` (delete), `flake.nix` (modify — remove the `vmChecks` output), `changelog.d/` (add). The make target's recipe was already collapsed to the single target in U4, so the cutover here is the flake output and the fixtures, not the recipe.
+- **Files:** `packages/d2b-vm-harness/tests/*.rs` (new, one per remaining check), `tests/host-integration/*.nix` (delete as each check ports), `tests/host-integration/deferred/host-zone-gateway-isolation.nix` (delete), `flake.nix` (modify - remove the `vmChecks` output), `changelog.d/` (add). The make target's recipe was already collapsed to the single target in U4, so the cutover here is the flake output and the fixtures, not the recipe.
 - **Approach:**
   1. Port one check per change, retiring its fixture in the same change, keeping the lane green throughout.
   2. Port the nested guest check last, and give it a single-use guest that is retired after the run.
@@ -526,13 +526,13 @@ Planning research dossiers are kept at `/tmp/compound-engineering-1000/ce-plan-r
 - **Goal:** Make the repository's own documents match the shipped lane, including the guard that no longer exists.
 - **Requirements:** R14, R16.
 - **Dependencies:** U1, U7.
-- **Files:** `AGENTS.md` (modify — the host-lane binary-injection rule), `tests/AGENTS.md` (modify — prose only; U4 owns the type-10 tier row), `tests/README.md`, `docs/contributing/gates-and-lints.md`, `docs/contributing/critical-subsystems.md`, `docs/reference/compatibility.md`, `docs/reference/support-matrix.md`, `packages/d2b-provider-device-usbip/integration/README.md` (modify — describes the semaphore as current), `docs/specs/providers/ADR-046-provider-volume-local.md`, `docs/specs/providers/ADR-046-provider-runtime-cloud-hypervisor.md`, `docs/specs/ADR-046-current-code-migration-map.md` (modify — carries a `RETAIN` disposition for the semaphore namespace, a different edit class that needs a named owner rather than a prose refresh), `specs/001-adr046-d2b3-completion/plan.md` (modify — states the semaphore contract), `CHANGELOG.md` (modify), `changelog.d/` (add).
+- **Files:** `AGENTS.md` (modify - the host-lane binary-injection rule), `tests/AGENTS.md` (modify - prose only; U4 owns the type-10 tier row), `tests/README.md`, `docs/contributing/gates-and-lints.md`, `docs/contributing/critical-subsystems.md`, `docs/reference/compatibility.md`, `docs/reference/support-matrix.md`, `packages/d2b-provider-device-usbip/integration/README.md` (modify - describes the semaphore as current), `docs/specs/providers/ADR-046-provider-volume-local.md`, `docs/specs/providers/ADR-046-provider-runtime-cloud-hypervisor.md`, `docs/specs/ADR-046-current-code-migration-map.md` (modify - carries a `RETAIN` disposition for the semaphore namespace, a different edit class that needs a named owner rather than a prose refresh), `specs/001-adr046-d2b3-completion/plan.md` (modify - states the semaphore contract), `CHANGELOG.md` (modify), `changelog.d/` (add).
 - **Approach:**
   1. Replace the environment-variable handoff description with the declared-input handoff in every site that states it as current.
   2. Stop describing the heavy-gate semaphore as current and record its deletion rather than leaving the next reader to rediscover it.
   3. Update the contributor-facing description of the lane: filter-based check selection, the virtualization precondition, and the loss of the emulation fallback.
   4. Move the type-10 tier out of the description that keeps Layer-2 surfaces outside the Bazel scheduler, since the lane is now in that graph.
-- **Test expectation:** none — documentation only. The grep scenario below is the check.
+- **Test expectation:** none - documentation only. The grep scenario below is the check.
 - **Test scenarios:**
   - A repository-wide grep for the removed environment variables, the `vmChecks` output, and the heavy-gate semaphore returns nothing outside the changelog, the fragment directory, this plan, the audits and explanations, the specifications, and third-party trees, which legitimately keep a record of the removed names.
   - Each documentation site that described the handoff now describes the declared-input handoff consistently.
@@ -543,9 +543,9 @@ Planning research dossiers are kept at `/tmp/compound-engineering-1000/ce-plan-r
 
 ## Verification Contract
 
-- `make check` — the full Layer-1 aggregate. Must stay green at every unit boundary, since the port's premise is that the branch is always releasable.
-- `make test-host-integration` — the lane. Before U1, this is the current nix recipe and is the baseline; from U4, it is the lane test target.
-- `make check-tier0` — the fast policy and source-hygiene subset, for the units that only touch build wiring.
+- `make check` - the full Layer-1 aggregate. Must stay green at every unit boundary, since the port's premise is that the branch is always releasable.
+- `make test-host-integration` - the lane. Before U1, this is the current nix recipe and is the baseline; from U4, it is the lane test target.
+- `make check-tier0` - the fast policy and source-hygiene subset, for the units that only touch build wiring.
 - The recorded wall-clock baselines compared against the lane's full-suite and single-check runs.
 - The restored-versus-fresh-boot measurement, taken before the pool grows past one member, and the marker-based equivalence gate that proves a restored guest matches a fresh boot on a member of every distinct invocation.
 - The repository-wide grep gate over the removed environment variables, the `vmChecks` output, and the heavy-gate semaphore.

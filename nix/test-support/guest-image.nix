@@ -23,6 +23,15 @@
 # There is no list here of which check wants which guest, because there is
 # nowhere for such a list to disagree with a fixture.
 #
+# A check whose assertions have moved to the lane's own Rust has no fixture
+# left, so it has no file here to read a guest out of either: the node comes
+# from the reusable node module's own table of ported checks, by the name the
+# image was asked for, and the image carries no `check.py` - the manifest says
+# the assertions are the lane's Rust. Such a check keeps its name, its guest,
+# and its result in the lane. A fixture-less image that is in neither that
+# table nor the module's table of reusable shapes is refused rather than served
+# the default node.
+#
 # The output is one store path holding the guest's system closure, the root
 # disk in the shape's own format, and a manifest of what a launcher needs to
 # boot it: the machine size, the drive layout, the boot method with its
@@ -32,7 +41,8 @@
 # renders it and never restates a number the node declared. It carries the
 # two things the lane's pool needs that a boot cannot tell it - what one
 # member costs the host, and the bound the pool is sized against - and, for
-# a check's own guest, the check's evaluated assertions.
+# a check's own guest, which side of the lane carries that check's assertions:
+# the evaluated script a fixture is, or the lane's own Rust.
 { pkgs, self, bazelHostTools, rawBundle, extraModules ? [ ], nodeShape ? "daemon" }:
 
 let
@@ -160,15 +170,41 @@ let
         }
       else
         loaded;
-  # The fixture's own name for the check, which is the name the lane reports
-  # it under and the name a contributor filters it by: the `vmChecks`
+  # The check this image was built for, in either of the two ways a check can
+  # be declared: a fixture file - which carries the check's guest *and* its
+  # assertions - or, for a check whose assertions have moved to the lane's own
+  # Rust and whose fixture is therefore gone, an entry in the node module's own
+  # table of ported checks, by the name the image was asked for. A ported check
+  # still needs its name, its guest, and its result in the lane; what it no
+  # longer needs is a `check.py`.
+  #
+  # A fixture's own name is the lane's name for the check: the `vmChecks`
   # attribute name is the fixture's file stem, and that is what the make
   # target's selection variables carry.
-  checkName =
+  fixtureCheckName =
     if checkFixture == null then
       null
     else
       lib.removeSuffix ".nix" (builtins.baseNameOf (builtins.head extraModules));
+  # A fixture-less image is one of three things, and the node module says
+  # which: a shape the lane's own images boot, a ported check's guest, or
+  # nothing this tree declares - which is an error rather than a fallback,
+  # because a check that boots a guest nobody declared asserts against
+  # something no declaration describes, and a check the lane quietly skips is a
+  # coverage hole nothing reports.
+  shapeNode = d2bNode.shapeNodes.${nodeShape} or null;
+  portedNode =
+    if extraModules != [ ] then
+      null
+    else
+      d2bNode.portedCheckNodes.${nodeShape} or null;
+  checkName =
+    if extraModules != [ ] then
+      fixtureCheckName
+    else if portedNode != null then
+      nodeShape
+    else
+      null;
   checkNodes = if checkFixture == null then [ ] else lib.attrValues (checkFixture.nodes or { });
   checkScript =
     if checkFixture == null then
@@ -225,13 +261,16 @@ let
   # rather than rebuilding it here is what lets one lane carry checks that
   # declared three different shapes of guest.
   guestNode =
-    if checkNodes == [ ] then
-      # `d2bCloudHypervisorNode` is `d2bDaemonNode` with the writable store
-      # opted into, so the two shapes are one declaration read two ways and
-      # cannot drift apart.
-      d2bNode.d2bDaemonNode { writableStore = nodeShape == "writable-store"; }
+    if checkNodes != [ ] then
+      builtins.head checkNodes
+    else if portedNode != null then
+      # A ported check has no fixture to read a node out of. The node it boots
+      # is the one the reusable node module declares for it by the check's own
+      # name, so the guest survives the fixture exactly as the shape-only
+      # guests survive theirs.
+      portedNode.node
     else
-      builtins.head checkNodes;
+      shapeNode;
 
   # The node's own name inside the fixture - `nodes.machine`, in every
   # fixture in the tree today - which the guest has to answer for.
@@ -252,6 +291,10 @@ let
   checkNodeName =
     if lib.length checkNodes == 1 then
       builtins.head (lib.attrNames (checkFixture.nodes or { }))
+    else if portedNode != null then
+      # A ported check's guest is the `nodes.machine` its fixture declared, so
+      # it answers for the same name the framework would have bound.
+      "machine"
     else
       null;
   evaluated = import (pkgs.path + "/nixos/lib/eval-config.nix") {
@@ -401,10 +444,13 @@ let
       else
         {
           name = checkName;
-          # The fixture's own name for the check, kept because it is what
+          # The name the check is booted under, kept because it is what
           # appears in a `vmChecks` derivation and in a driver log line, and
-          # a reader comparing the two should not have to know they differ.
-          testName = checkFixture.name or checkName;
+          # a reader comparing the two should not have to know they differ. A
+          # fixture named it for an unported check; the node module carries it
+          # for a check whose fixture is gone.
+          testName =
+            if portedNode == null then checkFixture.name or checkName else portedNode.testName;
           # `useBootLoader` is the writable-store shape: the root drive is a
           # writable overlay on an installed system image, which is the
           # shape the Cloud Hypervisor checks boot their nested guest on.
@@ -413,6 +459,12 @@ let
           # one is read off the node rather than off a list of check names
           # the lane maintains.
           nestedGuest = useBootLoader;
+          # Which side of the lane carries this check's assertions. A check
+          # with a fixture carries its evaluated `testScript` beside its guest
+          # as `check.py`, and the lane runs it through the legacy
+          # guest-control surface; a ported check's assertions are the lane's
+          # own Rust, and its image carries no script at all.
+          assertions = if portedNode != null then "rust" else "python";
         };
     # What one pool member costs the host, in the three currencies R8 names.
     # Read off the node's own declared fields so the pool's bound cannot
@@ -680,6 +732,16 @@ else if checkNodes != [ ] && lib.length checkNodes != 1 then
     d2b guest image: the fixture for check '${checkName}' declares
     ${toString (lib.length checkNodes)} nodes, and a guest is one node.
       nodes: ${lib.concatStringsSep " " (lib.attrNames (checkFixture.nodes or { }))}
+  ''
+else if checkFixture == null && shapeNode == null && portedNode == null then
+  throw ''
+    d2b guest image: the image action asked for '${nodeShape}', which is neither one
+    of the reusable shapes nor a check the node module declares a guest for
+    (nix/test-support/host-integration-node.nix).
+      shapes:   ${lib.concatStringsSep " " (lib.attrNames d2bNode.shapeNodes)}
+      ported:   ${lib.concatStringsSep " " (lib.attrNames d2bNode.portedCheckNodes)}
+    A check whose fixture is gone carries no guest declaration of its own, so its
+    node has to be declared in that module's table of ported checks.
   ''
 else if missing != [ ] || unexpected != [ ] then
   throw ''

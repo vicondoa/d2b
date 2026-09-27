@@ -25,8 +25,8 @@ use std::{
 };
 
 use d2b_test_vm_harness::{
-    ActiveGuest, Footprint, GuestSpec, HarnessError, HostFacts, LegacyCheck, LegacyGuest,
-    SnapshotPoint, boot, host, manifest::GuestManifest, report,
+    ActiveGuest, Assertions, Footprint, GuestSpec, HarnessError, HostFacts, LegacyCheck,
+    LegacyGuest, SnapshotPoint, boot, checks, host, manifest::GuestManifest, report,
 };
 use serde_json::json;
 
@@ -115,6 +115,9 @@ struct LaneGuest {
     manifest: GuestManifest,
     name: String,
     nested_guest: bool,
+    /// Where this check's assertions are: the lane's own Rust, or the
+    /// evaluated script its fixture is.
+    assertions: Assertions,
     footprint: Footprint,
 }
 
@@ -414,6 +417,7 @@ fn read_guests(selected: &[String]) -> Result<Vec<LaneGuest>, HarnessError> {
             footprint: manifest.footprint,
             name: check.name.clone(),
             nested_guest: check.nested_guest,
+            assertions: check.assertions,
             manifest,
         });
     }
@@ -702,13 +706,27 @@ fn run_check_inner(
         "{}: second restore onto the same snapshot took {second:.1}s and wrote a layer of its own",
         guest.name
     ));
-    let script = fs::read_to_string(guest.image_dir.join("check.py")).map_err(|error| {
-        HarnessError::io(
-            format!("reading the assertions of check '{}'", guest.name),
-            error,
-        )
-    })?;
-    let outcome = surface.run(&LegacyCheck::new(&guest.name, script))?;
+    let outcome = match guest.assertions {
+        Assertions::Rust => {
+            let assertions = checks::assertions(&guest.name).ok_or_else(|| {
+                HarnessError::Configuration(format!(
+                    "the guest image for check '{}' says its assertions are the lane's own, and \
+                     the lane has no module that carries them",
+                    guest.name
+                ))
+            })?;
+            surface.run_ported(&guest.name, assertions)?
+        }
+        Assertions::Python => {
+            let script = fs::read_to_string(guest.image_dir.join("check.py")).map_err(|error| {
+                HarnessError::io(
+                    format!("reading the assertions of check '{}'", guest.name),
+                    error,
+                )
+            })?;
+            surface.run(&LegacyCheck::new(&guest.name, script))?
+        }
+    };
     let seconds = started.elapsed().as_secs_f64();
     report_line(&format!(
         "{}: {} after the restore ({seconds:.1}s total on this member)",
