@@ -320,9 +320,16 @@ export D2B_TEST_VM_HARNESS_WORK_ROOT="{work_root}"
 exec "$runfiles/__HARNESS__" "$@"
 """
 
+# `no-cache` is the one that says a verdict is never replayed. Without it the
+# lane's results are cached locally like any other test's, so a second
+# invocation of an unchanged graph returns the first invocation's pass
+# instead of running the checks - which is exactly what a test whose verdict
+# depends on what the host did while it ran must never do. It was described
+# in `lane_test`'s contract and missing from this list.
 _LANE_TAGS = [
     "exclusive",
     "local",
+    "no-cache",
     "no-remote-cache",
     "no-remote-exec",
     "no-sandbox",
