@@ -154,6 +154,7 @@ _PORTED_CHECKS = [
     "privilege-oracle",
     "resource-operator-activation",
     "state-posture-contract",
+    "virtiofsd-volume-runtime",
     "wayland-proxy",
 ]
 

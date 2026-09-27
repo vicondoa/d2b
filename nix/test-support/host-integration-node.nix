@@ -993,6 +993,249 @@ rec {
       };
     };
 
+  # The guest `virtiofsd-volume-runtime` boots: the reusable daemon node
+  # plus the fixture's own contributions.
+  #
+  # The fixture declared no machine size, disk or device of its own - the shape
+  # carries those - so what moves here is its `let` bindings (the Volume
+  # acceptance artifact and the acceptance host runtime) and the extra module
+  # that turns nftables on, installs the host runtime, declares the two zones
+  # and their rows, and adds `jq` and `procps`.
+  d2bVirtiofsdVolumeRuntimeNode =
+    d2bDaemonNode {
+      extra =
+        { lib, pkgs, ... }:
+        let
+      d2bLib = import ../../tests/host-integration/lib.nix {
+        inherit self;
+        inherit lib;
+        hostToolBundle =
+          if self.lib ? d2bHostToolBundle then self.lib.d2bHostToolBundle else null;
+      };
+      volumeProviderArtifact = d2bLib.mkVolumeProviderArtifact pkgs;
+      artifacts = {
+        volume-acceptance-provider = {
+          inherit (volumeProviderArtifact) package type catalog;
+        };
+      };
+      hostRuntime = pkgs.writeText "d2b-acceptance-host-runtime.json" (builtins.toJSON {
+        schemaVersion = "v1";
+        bundleVersion = 1;
+        generatedAt = "1970-01-01T00:00:00.000Z";
+        nftAppliedHash = null;
+        ifnames = [ ];
+      });
+        in
+        {
+          networking.nftables.enable = true;
+          networking.nftables.ruleset = lib.mkAfter ''
+            table inet d2b {}
+          '';
+          systemd.tmpfiles.rules = [
+            "d /etc/NetworkManager/conf.d 0755 root root -"
+          ];
+          environment.etc."d2b/acceptance-host-runtime.json".source = hostRuntime;
+          d2b.site.adminUsers = [ "alice" ];
+          systemd.services.d2bd.serviceConfig.ExecStartPre = lib.mkAfter [
+            "+${pkgs.writeShellScript "d2b-acceptance-hosts-prep" ''
+              if [ -L /etc/hosts ]; then
+                ${pkgs.coreutils}/bin/cat /etc/hosts > /run/d2b-acceptance-hosts
+                ${pkgs.coreutils}/bin/rm -f /etc/hosts
+                ${pkgs.coreutils}/bin/install -o root -g root -m 0644 \
+                  /run/d2b-acceptance-hosts /etc/hosts
+              fi
+            ''}"
+            "+${pkgs.writeShellScript "d2b-acceptance-host-runtime-prep" ''
+              ${pkgs.coreutils}/bin/install -D -o root -g d2bd -m 0640 \
+                /etc/d2b/acceptance-host-runtime.json \
+                /var/lib/d2b/runtime/host-runtime.json
+            ''}"
+          ];
+          d2b.artifacts = artifacts;
+          d2b.zones.local-root.trustedPublishers.d2b-volume-acceptance.signingKey =
+            volumeProviderArtifact.trustedPublisher.signingKey;
+        d2b.zones.work.parentZone = "local-root";
+        d2b.zones.work.trustedPublishers.d2b-volume-acceptance.signingKey =
+          volumeProviderArtifact.trustedPublisher.signingKey;
+        d2b.zones.work.resources = {
+          alice = {
+            type = "User";
+            spec = {
+              displayName = "Alice";
+              groups = [ ];
+              osUsername = "alice";
+            };
+          };
+          d2bd = {
+            type = "User";
+            spec = {
+              displayName = "d2bd";
+              groups = [ ];
+              osUsername = "d2bd";
+            };
+          };
+          volume-operator = {
+            type = "Role";
+            spec.rules = [
+              {
+                resourceTypes = [
+                  "Endpoint"
+                  "Host"
+                  "Process"
+                  "Provider"
+                  "Volume"
+                  "VolumeBinding"
+                ];
+                verbs = [ "get" "list" ];
+                subresources = [ ];
+                resourceNames = [ ];
+                zones = [ "work" ];
+                executionRefs = [ ];
+                sessionVerbs = [ "connect" "invoke" ];
+              }
+              {
+                resourceTypes = [ "Volume" ];
+                verbs = [ "delete" ];
+                subresources = [ ];
+                resourceNames = [ "state" ];
+                zones = [ "work" ];
+                executionRefs = [ ];
+                sessionVerbs = [ "connect" "invoke" ];
+              }
+            ];
+          };
+          volume-operator-binding = {
+            type = "RoleBinding";
+            spec = {
+              roleRef = "Role/volume-operator";
+              subjects = [ "User/alice" ];
+              externalPrincipalSelector = null;
+              scopeNarrowing = null;
+            };
+          };
+          # The attachment execution target. The Nix bundle validation requires
+          # attachment refs to resolve to a same-Zone Host or Guest; the
+          # virtiofs serving path is host-side (the binding mints its socket
+          # under /run/d2b/vms/<guest>/), so this fixture asserts the Volume
+          # chain only - the Guest row itself stays declared input (KTD1).
+          acceptance-guest = {
+            type = "Guest";
+            spec = {
+              defaultDomain = "system";
+              providerRef = "Provider/volume-virtiofs";
+              budget = { };
+              networkAttachments = [ ];
+              deviceAttachments = [ ];
+              volumeAttachmentDefaults = [ ];
+            };
+          };
+          host-system = {
+            type = "Host";
+            spec = {
+              providerRef = "Provider/system-core";
+              defaultDomain = "system";
+              allowedDomains = [ "system" ];
+              budget = { };
+              networkAttachments = [ ];
+              deviceAttachments = [ ];
+              volumeAttachmentDefaults = [ ];
+            };
+          };
+          # The fixed daemon-owned Volume owner: volume-local is the only
+          # Provider a Volume may select (U7 driver contract).
+          volume-local = {
+            type = "Provider";
+            spec = {
+              artifactId = "volume-acceptance-provider";
+              config = {
+                controllerExecutionRef = "Host/host-system";
+                sourcePolicies = [
+                  {
+                    id = "daemon-state";
+                    class = "local-path";
+                    volumeKinds = [ "durable" "state" "cache" ];
+                  }
+                ];
+              };
+            };
+          };
+          # The serving Provider the derived VolumeBinding rows select and
+          # whose signed virtiofsd-worker template the worker launch resolves.
+          volume-virtiofs = {
+            type = "Provider";
+            spec = {
+              artifactId = "volume-acceptance-provider";
+              config.controllerExecutionRef = "Host/host-system";
+            };
+          };
+          state = {
+            type = "Volume";
+            spec = {
+              providerRef = "Provider/volume-local";
+              kind = "state";
+              source = {
+                executionRef = "Host/host-system";
+                settings = {
+                  kind = "local-path";
+                  sourcePolicyId = "daemon-state";
+                };
+              };
+              layout = [{
+                path = "state";
+                type = "directory";
+                # Daemon-owned so the unprivileged daemon can provision the
+                # local-path layout inline.
+                ownerRef = "User/d2bd";
+                groupRef = "User/d2bd";
+                mode = "0700";
+                target = null;
+                accessAcl = [ ];
+                defaultAcl = [ ];
+                foreignChildPolicy = "preserve";
+                noFollow = true;
+                recursive = false;
+                sensitivity = "private";
+                createPolicy = "create-if-never-provisioned";
+                repairPolicy = "exact-owner";
+                cleanupPolicy = "owner-controlled";
+                adoptionPolicy = "quarantine-on-ambiguity";
+                restartPolicy = "preserve-across-controller-restart";
+                leaseClass = "none";
+                invariants = [ "no-symlink" ];
+              }];
+              views.controller = {
+                path = "";
+                rights = [ "read" "write" "traverse" ];
+              };
+              # KTD1: the attachment stays declared input only. The Volume side
+              # mints the durable VolumeBinding at reconcile; the deterministic
+              # binding identity is derived from (volume, execution target,
+              # view, mount path) - the fixture asserts that exact identity.
+              attachments = [{
+                executionRef = "Guest/acceptance-guest";
+                transport = "virtiofs";
+                view = "controller";
+                access = "read-only";
+                mountPath = "/state";
+                settings = {
+                  posixAcl = false;
+                  xattr = false;
+                  cache = "auto";
+                  inodeFileHandles = "never";
+                  threadPoolSize = null;
+                  socketGroup = null;
+                };
+              }];
+            };
+          };
+        };
+        environment.systemPackages = with pkgs; [
+          jq
+          procps
+        ];
+    };
+  };
+
   # The guest `device-worker-launch` boots: the reusable daemon node
   # plus the fixture's own contributions.
   #
@@ -1542,6 +1785,13 @@ rec {
       node = d2bStatePostureContractNode;
       testName = "d2b-state-posture-contract";
     };
-
+    virtiofsd-volume-runtime = {
+      node = d2bVirtiofsdVolumeRuntimeNode;
+      testName = "d2b-virtiofsd-volume-runtime";
+    };
+    wayland-proxy = {
+      node = d2bWaylandProxyNode;
+      testName = "d2b-wayland-proxy";
+    };
   };
 }

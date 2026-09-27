@@ -31,6 +31,7 @@ pub mod guest_shell_service;
 pub mod privilege_oracle;
 pub mod state_posture_contract;
 pub mod resource_operator_activation;
+pub mod virtiofsd_volume_runtime;
 pub mod wayland_proxy;
 
 use crate::legacy::{GuestControl, LegacyResult};
@@ -66,6 +67,10 @@ const PORTED: &[(&str, Assertions)] = &[
     (
         "state-posture-contract",
         state_posture_contract::assertions,
+    ),
+    (
+        "virtiofsd-volume-runtime",
+        virtiofsd_volume_runtime::assertions,
     ),
     ("wayland-proxy", wayland_proxy::assertions),
 ];
