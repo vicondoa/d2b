@@ -1394,6 +1394,26 @@ impl ZoneVolumeRootResolver {
         d2b_provider_volume_local::VolumeLocalError::SourceUnresolved
     }
 
+    /// [`Self::source_unresolved`] carrying the provider's own error code.
+    /// Constructing the anchored root reports through `?` without a stage, so
+    /// without this the error code that distinguishes "the root would not
+    /// stat" from "the marker root would not stat" never reaches a log.
+    fn source_unresolved_err(
+        &self,
+        stage: &'static str,
+        volume_uid: &d2b_contracts_resource::v3::ResourceUid,
+        error: d2b_provider_volume_local::VolumeLocalError,
+    ) -> d2b_provider_volume_local::VolumeLocalError {
+        tracing::warn!(
+            zone = %self.zone.as_str(),
+            volume = %volume_uid.as_str(),
+            stage,
+            error = ?error,
+            "v3 Volume source resolution failed"
+        );
+        error
+    }
+
     /// [`Self::source_unresolved`] for an anchored open that failed with a
     /// concrete OS error. The errno is the only evidence that distinguishes a
     /// farm that does not exist yet, a mode/ownership denial, and a mount
@@ -1589,8 +1609,15 @@ impl d2b_provider_volume_local::VolumeRootResolver for ZoneVolumeRootResolver {
        .map_err(|_| self.source_unresolved("storage-subdir-open", &anchor.volume_name))?;
         let marker_file = open_anchored_directory(&self.marker_root)
            .map_err(|_| self.source_unresolved("marker-root", &anchor.volume_name))?;
-        d2b_provider_volume_local::ResolvedVolumeRoot::new(file, volume_uid.clone())?
-           .with_marker_root(marker_file)
+        // Every other refusal in this function names its stage through
+        // `source_unresolved`, but these two propagate bare. A root that will
+        // not construct reached the driver as a plain "a provider layout
+        // effect failed" with no stage at all, so it was indistinguishable
+        // from a layout entry that would not provision.
+        d2b_provider_volume_local::ResolvedVolumeRoot::new(file, volume_uid.clone())
+            .map_err(|error| self.source_unresolved_err("volume-root-construct", volume_uid, error))?
+            .with_marker_root(marker_file)
+            .map_err(|error| self.source_unresolved_err("marker-root-construct", volume_uid, error))
     }
 
     fn resolve_principal(

@@ -1049,7 +1049,7 @@ fn row_dumps() -> Vec<(String, String)> {
             // line limit rolls past it, which is what made this look like
             // "no failure recorded" on runs that plainly had one.
             "journalctl -u d2bd.service --no-pager -o cat -b ",
-            "| grep -E 'Volume source resolution failed|volume layout effect failed|volume layout step failed|marker publish' ",
+            "| grep -E 'Volume source resolution failed|volume layout effect failed|volume layout step failed|volume reconcile step failed|marker publish' ",
             "|| echo 'no Volume source resolution failure recorded'; true",
         )
         .to_owned(),

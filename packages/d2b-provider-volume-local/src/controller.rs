@@ -203,7 +203,25 @@ impl<S: VolumeSourceEffectPort, L: VolumeLayoutEffectPort> VolumeLocalController
         volume_uid: &ResourceUid,
         spec: &VolumeSpec,
     ) -> Result<VolumeStatusReport, VolumeLocalError> {
-        let kind = self.validate_spec(spec)?;
+        // Name the step on the way out for every call that can refuse: each
+        // of these reports through `?`, so a failure reached the driver as a
+        // bare error code with nothing to say which one gave up. The step is
+        // the whole diagnosis - the entry and the volume are already known
+        // from the driver failure itself.
+        macro_rules! layout_step {
+            ($what:literal, $call:expr) => {
+                $call.map_err(|error| {
+                    tracing::warn!(
+                        volume = %volume_uid.as_str(),
+                        step = $what,
+                        error = ?error,
+                        "volume reconcile step failed"
+                    );
+                    error
+                })?
+            };
+        }
+        let kind = layout_step!("validate_spec", self.validate_spec(spec));
         let attachments = admit_attachments(spec, self.profile.supports_shared_write())?;
 
         let root = self
@@ -215,9 +233,9 @@ impl<S: VolumeSourceEffectPort, L: VolumeLayoutEffectPort> VolumeLocalController
                 kind,
             )
             .await?;
-        self.assert_quota(spec, &root).await?;
+        layout_step!("assert_quota", self.assert_quota(spec, &root).await);
 
-        let marker = self.layout.marker_state(&root).await?;
+        let marker = layout_step!("marker_state", self.layout.marker_state(&root).await);
         let mut phase = LayoutPhase::Pending;
         let mut conditions = Vec::new();
 
@@ -232,7 +250,7 @@ impl<S: VolumeSourceEffectPort, L: VolumeLayoutEffectPort> VolumeLocalController
 
         for declared in ordered_entries {
             let entry = EntryRequest::resolve(volume_uid, declared)?;
-            let observed = self.layout.observe(&root, &entry).await?;
+            let observed = layout_step!("observe", self.layout.observe(&root, &entry).await);
             let plan = plan_entry(&entry, &observed, marker);
             if let Some(condition) = plan.condition {
                 match condition.severity {
