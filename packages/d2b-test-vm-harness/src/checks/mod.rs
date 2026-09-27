@@ -26,6 +26,7 @@
 pub mod bridge_isolation;
 pub mod daemon_smoke;
 pub mod guest_agent_cap_confinement;
+pub mod guest_shell_service;
 
 use crate::legacy::{GuestControl, LegacyResult};
 
@@ -47,6 +48,7 @@ const PORTED: &[(&str, Assertions)] = &[
         "guest-agent-cap-confinement",
         guest_agent_cap_confinement::assertions,
     ),
+    ("guest-shell-service", guest_shell_service::assertions),
 ];
 
 /// The assertions of one ported check, or `None` for a check that has not
