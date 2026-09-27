@@ -28,6 +28,7 @@ pub mod daemon_smoke;
 pub mod guest_agent_cap_confinement;
 pub mod guest_shell_service;
 pub mod privilege_oracle;
+pub mod resource_operator_activation;
 pub mod wayland_proxy;
 
 use crate::legacy::{GuestControl, LegacyResult};
@@ -52,6 +53,10 @@ const PORTED: &[(&str, Assertions)] = &[
     ),
     ("guest-shell-service", guest_shell_service::assertions),
     ("privilege-oracle", privilege_oracle::assertions),
+    (
+        "resource-operator-activation",
+        resource_operator_activation::assertions,
+    ),
     ("wayland-proxy", wayland_proxy::assertions),
 ];
 

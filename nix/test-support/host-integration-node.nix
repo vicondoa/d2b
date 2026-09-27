@@ -440,6 +440,143 @@ rec {
     system.stateVersion = "25.11";
   };
 
+  # The guest `resource-operator-activation` boots: the reusable daemon node
+  # plus the fixture's own contributions - nftables on, the acceptance
+  # provider artifact and its publisher key, the two zones and their rows,
+  # the `alice` and `bob` users, and `jq` for the CLI's answers.
+  #
+  # The `let` bindings the fixture carried move with the node, so the guest
+  # survives the fixture exactly as the shape-only guests do.
+  d2bResourceOperatorActivationNode =
+    d2bDaemonNode {
+      extra =
+        { lib, pkgs, ... }:
+        let
+          d2bLib = import ../../tests/host-integration/lib.nix {
+              inherit self;
+            inherit lib;
+            hostToolBundle =
+              if self.lib ? d2bHostToolBundle then self.lib.d2bHostToolBundle else null;
+          };
+          providerArtifact = d2bLib.mkAcceptanceProviderArtifact pkgs;
+          acceptancePublisherKey = providerArtifact.trustedPublisher.signingKey;
+          artifacts = {
+            acceptance-provider = {
+              inherit (providerArtifact) package type catalog;
+            };
+          };
+          hostRuntime = pkgs.writeText "d2b-acceptance-host-runtime.json" (builtins.toJSON {
+            schemaVersion = "v1";
+            bundleVersion = 1;
+            generatedAt = "1970-01-01T00:00:00.000Z";
+            nftAppliedHash = null;
+            ifnames = [ ];
+          });
+        in
+        {
+          networking.nftables.enable = true;
+          networking.nftables.ruleset = lib.mkAfter ''
+            table inet d2b {}
+          '';
+          systemd.tmpfiles.rules = [
+            "d /etc/NetworkManager/conf.d 0755 root root -"
+          ];
+          environment.etc."d2b/acceptance-host-runtime.json".source = hostRuntime;
+          d2b.site.adminUsers = [ "alice" ];
+          systemd.services.d2bd.serviceConfig.ExecStartPre = lib.mkAfter [
+            "+${pkgs.writeShellScript "d2b-acceptance-hosts-prep" ''
+              if [ -L /etc/hosts ]; then
+                ${pkgs.coreutils}/bin/cat /etc/hosts > /run/d2b-acceptance-hosts
+                ${pkgs.coreutils}/bin/rm -f /etc/hosts
+                ${pkgs.coreutils}/bin/install -o root -g root -m 0644 \
+                  /run/d2b-acceptance-hosts /etc/hosts
+              fi
+            ''}"
+            "+${pkgs.writeShellScript "d2b-acceptance-host-runtime-prep" ''
+              ${pkgs.coreutils}/bin/install -D -o root -g d2bd -m 0640 \
+                /etc/d2b/acceptance-host-runtime.json \
+                /var/lib/d2b/runtime/host-runtime.json
+            ''}"
+          ];
+          users.users.bob = {
+            isNormalUser = true;
+            uid = 1001;
+          };
+          d2b.artifacts = artifacts;
+          d2b.zones.local-root.trustedPublishers.d2b-u20-acceptance.signingKey =
+            acceptancePublisherKey;
+        d2b.zones.work.parentZone = "local-root";
+        d2b.zones.work.trustedPublishers.d2b-u20-acceptance.signingKey =
+          acceptancePublisherKey;
+        d2b.zones.work.resources = {
+          alice = {
+            type = "User";
+            spec = {
+              displayName = "Alice";
+              groups = [ ];
+              osUsername = "alice";
+            };
+          };
+          d2bd = {
+            type = "User";
+            spec = {
+              displayName = "d2bd";
+              groups = [ ];
+              osUsername = "d2bd";
+            };
+          };
+          operator-reader = {
+            type = "Role";
+            spec.rules = [
+              {
+                resourceTypes = [
+                  "Host"
+                  "Process"
+                  "Provider"
+                  "User"
+                ];
+                verbs = [ "get" "list" ];
+                subresources = [ ];
+                resourceNames = [ ];
+                zones = [ "work" ];
+                executionRefs = [ ];
+                sessionVerbs = [ "connect" "invoke" ];
+              }
+            ];
+          };
+          operator-reader-binding = {
+            type = "RoleBinding";
+            spec = {
+              roleRef = "Role/operator-reader";
+              subjects = [ "User/alice" ];
+              externalPrincipalSelector = null;
+              scopeNarrowing = null;
+            };
+          };
+          host-system = {
+              type = "Host";
+              spec = {
+                providerRef = "Provider/system-core";
+                defaultDomain = "system";
+                allowedDomains = [ "system" ];
+              budget = { };
+              networkAttachments = [ ];
+              deviceAttachments = [ ];
+              volumeAttachmentDefaults = [ ];
+            };
+          };
+            network-local = {
+              type = "Provider";
+              spec = {
+                artifactId = "acceptance-provider";
+                config.controllerExecutionRef = "Host/host-system";
+              };
+            };
+          };
+          environment.systemPackages = [ pkgs.jq ];
+        };
+    };
+
   # The guest each fixture-less image evaluates, by the name the image action
   # asks for. A check's own guest is read out of the check's fixture; these are
   # the guests with no fixture to be read out of - the two reusable shapes the
@@ -487,6 +624,10 @@ rec {
     privilege-oracle = {
       node = d2bDaemonNode { };
       testName = "d2b-privilege-oracle";
+    };
+    resource-operator-activation = {
+      node = d2bResourceOperatorActivationNode;
+      testName = "d2b-resource-operator-activation";
     };
     wayland-proxy = {
       node = d2bWaylandProxyNode;
