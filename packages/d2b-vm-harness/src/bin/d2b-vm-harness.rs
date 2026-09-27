@@ -25,8 +25,8 @@ use std::{
 };
 
 use d2b_vm_harness::{
-    Footprint, GuestSpec, HarnessError, HostFacts, LegacyCheck, LegacyGuest, boot, host,
-    manifest::GuestManifest, report,
+    ActiveGuest, Footprint, GuestSpec, HarnessError, HostFacts, LegacyCheck, LegacyGuest,
+    SnapshotPoint, boot, host, manifest::GuestManifest, report,
 };
 use serde_json::json;
 
@@ -107,10 +107,6 @@ const IMAGES: &str = "D2B_VM_HARNESS_IMAGES";
 /// The checks a contributor selected, as the existing selection variables
 /// carry them: a whitespace- or comma-separated list of check names.
 const CHECKS: &str = "D2B_VM_CHECK";
-
-/// The snapshot tag one member is restored from. The emulator's tags live in
-/// the guest's own directory, so a member only ever has to name its own.
-const SNAPSHOT_TAG: &str = "lane-base";
 
 /// One check, its own guest, and what that guest costs.
 #[derive(Clone)]
@@ -598,59 +594,96 @@ fn run_check_inner(
         optional_u64(ACTIVATION_TIMEOUT, 1800)?,
     );
     let mut active = boot(&spec)?;
-    // The declared pass said this guest can be snapshotted; the running
-    // guest's own block graph is the authority, and it is asked before the
-    // snapshot rather than at the first restore.
+    // The declared pass said this guest's drives can be snapshotted; the
+    // running guest's own block graph is the authority, and it is asked
+    // before the snapshot rather than at the first restore.
     active.require_snapshottable()?;
+    let mut point = SnapshotPoint::new(&spec)?;
+    let marker = guest.manifest.activation.marker.clone();
+    let activation_bound = spec.activation_timeout;
 
     let mut surface = LegacyGuest::attach(&mut active)?;
-    let marker = surface
+    let fresh = surface
         .run(&LegacyCheck::new(format!("{}-marker", guest.name), EQUIVALENCE_MARKER))
         .map_err(|error| {
             HarnessError::Configuration(format!(
                 "the equivalence marker could not be read from the fresh guest: {error}"
             ))
         })?;
-    if !marker.passed {
+    if !fresh.passed {
         return Err(HarnessError::Configuration(format!(
             "the equivalence marker failed against a freshly booted guest, so it cannot say \
              anything about a restored one:\n{}",
-            marker.detail
+            fresh.detail
         )));
     }
-    active.save_snapshot(SNAPSHOT_TAG)?;
-    active.restore(SNAPSHOT_TAG)?;
-    let restored = surface
+    // The member's snapshot, taken here: the guest has activated, every
+    // writable device has been proven restorable, and no check has run.
+    active.take_snapshot(&mut point)?;
+    report_line(&format!(
+        "{}: snapshot taken against every writable device, the guest's own disks underneath",
+        guest.name
+    ));
+
+    // The gate. What it proves is narrower than a RAM+disk restore could have
+    // proved, and it says so: the restore is disk-only, so what is compared
+    // is a guest *booted from the snapshot-restored disk* against the fresh
+    // boot the check's assertions were written against - same units, same
+    // mounts, same host tools, same random pool, reported by the guest
+    // itself.
+    let restored = restore_and_measure(
+        &mut active,
+        &mut surface,
+        &mut point,
+        &guest.name,
+        &marker,
+        activation_bound,
+    )?;
+    let restored_marker = surface
         .run(&LegacyCheck::new(format!("{}-marker", guest.name), EQUIVALENCE_MARKER))
         .map_err(|error| {
             HarnessError::Configuration(format!(
                 "the equivalence marker could not be read from the restored guest: {error}"
             ))
         })?;
-    if !restored.passed {
+    if !restored_marker.passed {
         return Err(HarnessError::Configuration(format!(
-            "the equivalence marker failed against a restored guest:\n{}",
-            restored.detail
+            "the equivalence marker failed against a guest booted from the restored disk:\n{}",
+            restored_marker.detail
         )));
     }
-    let fresh_text = marker_text(&marker.detail);
-    let restored_text = marker_text(&restored.detail);
+    let fresh_text = marker_text(&fresh.detail);
+    let restored_text = marker_text(&restored_marker.detail);
     if fresh_text != restored_text {
         return Err(HarnessError::Configuration(format!(
-            "a restored guest is not the fresh boot its check was written against\n--- fresh boot\n{}\n--- restored\n{}",
+            "a guest booted from the snapshot-restored disk is not the fresh boot its check was \
+             written against\n--- fresh boot\n{}\n--- booted from the restored disk\n{}",
             fresh_text, restored_text
         )));
     }
     report_line(&format!(
-        "{}: the restored guest matches the fresh boot on every marker ({} bytes)",
+        "{}: a guest booted from the restored disk matches the fresh boot on every marker \
+         ({} bytes); the restore itself took {restored:.1}s",
         guest.name,
         fresh_text.len()
     ));
 
-    // The check runs on a restored guest: the marker gate above left the
-    // member where its snapshot was taken, and the gate is not part of what
-    // the check is being handed.
-    active.restore(SNAPSHOT_TAG)?;
+    // The check runs on a guest that was handed back by a restore, never on
+    // the one the gate read its markers from: the marker runs are themselves
+    // writes, and a check that inherited them would be a check handed state
+    // no fresh member would have had.
+    let second = restore_and_measure(
+        &mut active,
+        &mut surface,
+        &mut point,
+        &guest.name,
+        &marker,
+        activation_bound,
+    )?;
+    report_line(&format!(
+        "{}: second restore onto the same snapshot took {second:.1}s and wrote a layer of its own",
+        guest.name
+    ));
     let script = fs::read_to_string(guest.image_dir.join("check.py")).map_err(|error| {
         HarnessError::io(
             format!("reading the assertions of check '{}'", guest.name),
@@ -665,14 +698,18 @@ fn run_check_inner(
         if guest.nested_guest {
             "ran a nested guest; this member is retired rather than restored"
         } else {
-            "restored from the pool's snapshot"
+            "ran against a guest booted from the member's snapshot"
         },
     ));
     if guest.nested_guest {
         // Retired, not restored. A guest with a live guest inside it has no
         // defined restored state, and a member that has run a nested guest
         // is torn down here rather than handed to the next check.
-        let _ = active.discard_snapshot(SNAPSHOT_TAG);
+        report_line(&format!(
+            "{}: retired without another restore; every layer it wrote is removed with its \
+             working directory",
+            guest.name
+        ));
     }
     active.shutdown()?;
     Ok(CheckResult {
@@ -682,6 +719,42 @@ fn run_check_inner(
         seconds,
         detail: outcome.detail,
     })
+}
+
+/// Put the member back on its snapshot, wait for the guest to boot from the
+/// restored disk, and hand the command channel to the guest's new shell.
+///
+/// The console resynchronisation is the part that is easy to get wrong: the
+/// channel is one connection for the life of the emulator process, so the
+/// bytes the guest wrote while it was shutting down are still in it when the
+/// new guest comes up. Reading a command's output from that position decodes
+/// whatever the old guest left behind.
+///
+/// Two durations are reported, because they are two different costs and only
+/// one of them is the pool's: the restore is the lane's own block-graph work
+/// on the host, and the wait is the guest rebooting onto the disk it was
+/// handed. A pool whose member is restored between checks pays both, so a
+/// measurement that stopped at the first would compare a restore against a
+/// fresh boot and leave out the boot.
+fn restore_and_measure(
+    active: &mut ActiveGuest,
+    surface: &mut LegacyGuest,
+    point: &mut SnapshotPoint,
+    name: &str,
+    marker: &str,
+    bound: Duration,
+) -> Result<f64, HarnessError> {
+    let seen = active.activations(marker);
+    let seconds = active.restore(point)?.as_secs_f64();
+    let waiting = Instant::now();
+    active.await_reactivation(seen, bound, marker)?;
+    let reactivation = waiting.elapsed().as_secs_f64();
+    surface.resync()?;
+    report_line(&format!(
+        "{name}: restored onto the snapshot in {seconds:.1}s, and the guest activated again \
+         {reactivation:.1}s after that"
+    ));
+    Ok(seconds)
 }
 
 /// The marker lines out of a check's own output, with the lane's own log

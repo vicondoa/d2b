@@ -191,6 +191,28 @@ pub struct Drive {
     pub interface: String,
 }
 
+/// A drive the guest node attached through its option list and asked the
+/// emulator to shadow with a throwaway overlay.
+///
+/// The node declares one of these as a rendered `-drive` with `snapshot=on`
+/// rather than as a drive of its own, so it arrives as text rather than as
+/// structure. What the lane needs from it is the store image the overlay
+/// sits on, because that image is what a member's snapshot restores the
+/// device to: the overlay the emulator created is named after the emulator's
+/// own temporary directory and is gone on the next run, while the store
+/// image behind it is the same for every member and every check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EphemeralDrive {
+    /// The store image the overlay sits on.
+    pub file: String,
+    /// The format that image is in.
+    pub format: String,
+    /// The cache mode the node declared for the drive.
+    pub cache: String,
+    /// The bus the device is attached to.
+    pub interface: String,
+}
+
 /// One host directory the guest mounts over 9p.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -364,6 +386,53 @@ impl GuestManifest {
             }
         }
         refused
+    }
+
+    /// The drives the node attached through its option list rather than
+    /// through its drive list, as drives the lane can reason about.
+    ///
+    /// The state disk the re-homed node mounts at `/var/lib/d2b` is declared
+    /// exactly this way: a `-drive` rendered by the VM module with
+    /// `snapshot=on`, which asks the emulator for a throwaway overlay over
+    /// the store image. That overlay is a real device with a real node, and a
+    /// member's snapshot has to cover it: `/var/lib/d2b` holds the daemon's
+    /// store, so a snapshot that left it out would hand the second check on a
+    /// member the first check's rows.
+    pub fn ephemeral_drives(&self) -> Vec<EphemeralDrive> {
+        let mut drives = Vec::new();
+        for (index, option) in self.extra_options.iter().enumerate() {
+            if !option.starts_with("file=")
+                || !self
+                    .extra_options
+                    .get(index.wrapping_sub(1))
+                    .is_some_and(|previous| previous == "-drive")
+            {
+                continue;
+            }
+            if !option.contains("snapshot=on") {
+                continue;
+            }
+            let read = |key: &str| {
+                option
+                    .split(',')
+                    .find_map(|field| field.strip_prefix(&format!("{key}=")))
+                    .map(str::to_owned)
+            };
+            let (Some(file), Some(format)) = (read("file"), read("format")) else {
+                continue;
+            };
+            drives.push(EphemeralDrive {
+                file,
+                format,
+                cache: read("cache").unwrap_or_else(|| "writeback".to_owned()),
+                interface: match read("if").as_deref() {
+                    Some("scsi") => "scsi".to_owned(),
+                    Some("ide") => "ide".to_owned(),
+                    _ => "virtio".to_owned(),
+                },
+            });
+        }
+        drives
     }
 }
 

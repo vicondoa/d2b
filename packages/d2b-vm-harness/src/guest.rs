@@ -38,9 +38,16 @@ use std::{
 
 use crate::{
     error::{HarnessError, Result, UnsnapshottableDevice},
-    manifest::GuestManifest,
-    monitor::Monitor,
+    manifest::{Drive, GuestManifest},
+    monitor::{BlockDevice, Cache, Monitor},
 };
+
+/// How long the guest has to acknowledge that a device was detached. The
+/// guest is running when this happens - a paused guest never reads the
+/// machine's hotplug registers, so the unplug would never complete - and an
+/// unplug it does not complete in seconds is an unplug it is not going to
+/// complete at all.
+const DETACH_BOUND: Duration = Duration::from_secs(60);
 
 /// The longest a guest's own directory may be while still carrying a Unix
 /// socket. The limit is 108 bytes; the headroom covers the socket name the
@@ -244,24 +251,33 @@ impl GuestSpec {
         push("-rtc");
         push("base=utc,clock=vm");
 
+        // The drives the guest node declared are attached as block *nodes*
+        // rather than as drives. It is the same device to the guest - the
+        // same model, the same serial, the same boot order, the same file -
+        // and it is what a restore needs: a drive holds a reference to
+        // whichever node is on top of it, and the emulator drops an unused
+        // drive's whole chain, so a restore could not take the device off a
+        // dirty layer and put it on a clean one. A node holds nothing but
+        // the device, so dropping the device drops exactly the layer.
         for (index, drive) in manifest.drives.iter().enumerate() {
             let file = self.drive_file(drive.file.as_str(), &work_dir);
-            let drive_id = format!("lane_drive_{index}");
-            let mut drive_options = vec![
-                ("index".to_owned(), index.to_string()),
-                ("id".to_owned(), drive_id.clone()),
-                ("if".to_owned(), "none".to_owned()),
-                ("file".to_owned(), file),
-            ];
-            if let Some(format) = &drive.format {
-                drive_options.push(("format".to_owned(), format.clone()));
-            }
-            drive_options.push(("cache".to_owned(), drive.cache.clone()));
-            drive_options.push(("werror".to_owned(), drive.werror.clone()));
-            push("-drive");
-            push(&render_options(&drive_options));
+            // The node name and the device id are not the same budget: the
+            // emulator caps a block node name at `NODE_NAME_LIMIT` and a
+            // device id at 127 characters, so the node is shortened and the
+            // id - which is what a reader sees in `query-block` and what
+            // `device_del` names - keeps the check's own name.
+            let node = declared_node(&self.name, index);
+            let device_id = declared_device_id(&self.name, index);
+            push("-blockdev");
+            push(&render_blockdev(
+                &node,
+                &drive_format(manifest, drive),
+                &file,
+                &drive.cache,
+                &drive.werror,
+            )?);
 
-            let mut device_options = vec![("drive".to_owned(), drive_id)];
+            let mut device_options = vec![("drive".to_owned(), node.clone()), ("id".to_owned(), device_id.clone())];
             if let Some(boot_index) = &drive.boot_index {
                 device_options.push(("bootindex".to_owned(), boot_index.clone()));
             }
@@ -421,6 +437,125 @@ fn render_options(options: &[(String, String)]) -> String {
         .join(",")
 }
 
+/// The image format one declared drive is opened as.
+///
+/// A drive the guest node attached to a store path declares its own format;
+/// the guest's own root disk is the image the guest-image action produced,
+/// and the format is the image's.
+fn drive_format(manifest: &GuestManifest, drive: &Drive) -> String {
+    match &drive.format {
+        Some(format) => format.clone(),
+        None if Path::new(&drive.file).is_absolute() => "raw".to_owned(),
+        None => manifest.image.disk_format.clone(),
+    }
+}
+
+/// The longest block node name the emulator accepts, in bytes.
+///
+/// The pinned emulator refuses a longer one at the point the node is created,
+/// with `Node name too long`, which for a member the lane has already booted
+/// is the snapshot it was about to take. A check's own name can exceed this by
+/// itself - `runtime-cloud-hypervisor-guest-preflight` is longer than the
+/// whole budget - so every name the lane gives the emulator is built to fit.
+const NODE_NAME_LIMIT: usize = 31;
+
+/// The prefix a member's block node names carry.
+///
+/// The emulator's budget does not hold a check's name plus anything else, so
+/// what the emulator sees is a prefix of it. The check's whole name is still
+/// what the lane reports, what the member's working directory is called, and
+/// what the member's device ids carry - the names a reader looks at.
+fn member_token(member: &str) -> String {
+    member
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' {
+                character
+            } else {
+                '-'
+            }
+        })
+        .take(12)
+        .collect()
+}
+
+/// A block node name, held to the emulator's own limit.
+///
+/// Every name the lane hands the emulator goes through here rather than
+/// through a comment: a name that outgrows the budget is a member that boots
+/// and then fails at its first snapshot, which is the failure this is cheap
+/// to prevent and expensive to read.
+fn bounded_node_name(name: String) -> String {
+    debug_assert!(
+        name.len() <= NODE_NAME_LIMIT,
+        "the block node name {name:?} is {} bytes, past the emulator's {NODE_NAME_LIMIT}",
+        name.len()
+    );
+    name
+}
+
+/// The block node a member's own declared drive is attached as.
+///
+/// The launch declares this node and the snapshot finds it again by this
+/// name, so the two share one spelling rather than each building it.
+fn declared_node(member: &str, index: usize) -> String {
+    bounded_node_name(format!("{}-d{index}", member_token(member)))
+}
+
+/// The device id a member's own declared drive is attached with.
+///
+/// Shared for the same reason as the node name, and for one more: a device
+/// the launch attached with a node-backed drive is reported by `query-block`
+/// with no id at all - the emulator fills that field for a `-drive` and not
+/// for a `-blockdev` - so a restore that asked the report what to call the
+/// device again would re-attach it under a device *path*, which is not a
+/// name the emulator accepts. The id is the launch's own, and it is what the
+/// restore attaches the device back with.
+fn declared_device_id(member: &str, index: usize) -> String {
+    format!("{member}-device-{index}")
+}
+
+/// One block node, as the launch declares it.
+///
+/// The spelling is the emulator's own `-blockdev` JSON, because the restore
+/// has to name the same options when it re-opens the frozen image: a node
+/// re-opened with different caching is a different device to the guest than
+/// the one it stands in for.
+///
+/// The caching is spelled as the cache object's own keys rather than as the
+/// `-drive` mode name, because the blockdev cache object has no `writeback`
+/// key and the pinned emulator refuses the whole command line over one -
+/// `Parameter 'cache.writeback' is unexpected`. The four `-drive` modes map
+/// onto the two keys it does accept: `no-flush` for the two that ignore
+/// flushes, `direct` for the one that bypasses the host's write cache.
+///
+/// `werror` is not spelled at all, because `-blockdev` has no such option:
+/// it belongs to the legacy `-drive` form, and the pinned emulator refuses a
+/// node carrying one at the top level, on the file child, and in the
+/// option-string form alike (`Parameter 'werror' is unexpected`). A block
+/// node's I/O error action is the `-drive` default, `report`, so a node that
+/// declared `report` - which is every node in the lane - is already the
+/// device it asked for and needs nothing on the command line. A node that
+/// declared anything else cannot have it, and running it as `report` anyway
+/// would hand the guest a different device than its configuration
+/// described, so it is refused here rather than dropped.
+fn render_blockdev(node: &str, format: &str, file: &str, cache: &str, werror: &str) -> Result<String> {
+    if werror != "report" {
+        return Err(HarnessError::Configuration(format!(
+            "the guest declares the drive error action werror={werror:?}, which a block node \
+             cannot carry: -blockdev has no werror, and a block node's I/O error action is always \
+             the report default"
+        )));
+    }
+    Ok(serde_json::json!({
+        "node-name": node,
+        "driver": format,
+        "file": { "driver": "file", "filename": file },
+        "cache": Cache::parse(cache)?.as_options(),
+    })
+    .to_string())
+}
+
 /// A host directory the guest shares over 9p, with the VM module's
 /// `TMPDIR`-relative sources resolved against the working directory the lane
 /// owns.
@@ -486,6 +621,235 @@ pub struct ActiveGuest {
     shut_down: bool,
 }
 
+/// What a restore puts back: the frozen image, and the device that has to be
+/// attached to a fresh layer over it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoreTarget {
+    /// The image the member's snapshot froze.
+    pub file: PathBuf,
+    /// The format that image is in.
+    pub format: String,
+    /// The caching mode it was written with.
+    pub cache: Cache,
+    /// The model the guest's configuration attached it as.
+    pub model: String,
+    /// The id the device is attached with, which a restore attaches it back
+    /// under.
+    ///
+    /// The emulator does not report one for a node-backed drive, so it cannot
+    /// be read back out of `query-block`: it is the launch's own id, carried
+    /// here, and a device the node attached through its own option list -
+    /// which the launch gave no id at all - is given one of the member's.
+    pub device_id: String,
+    /// The properties that device was declared with.
+    pub properties: Vec<(String, String)>,
+    /// A short, stable label for this device within its member.
+    ///
+    /// The node names a restore builds are named after this rather than after
+    /// the device's file, because a device's file name does not fit the
+    /// emulator's block-node limit: the state disk is a store path whose
+    /// basename alone can run past it. Two devices of one member differ in
+    /// their label, and a device keeps its label for the member's whole life.
+    pub label: String,
+}
+
+/// A member's snapshot, and the state a restore of it is assembled from.
+///
+/// One member has one snapshot for its whole run, and every device it
+/// attached is in it. The devices come from two places and are matched
+/// differently, because that is how the guest's own configuration declares
+/// them: a drive the node declared is attached as a named block node, and a
+/// drive it attached through its option list rides an overlay the emulator
+/// created over a store path, which the lane finds by the store image
+/// underneath it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotPoint {
+    /// Where this member's overlays live.
+    work_dir: PathBuf,
+    /// The name overlays and their frozen images are named under, which has
+    /// to be unique across the members a run holds at once.
+    member: String,
+    /// Declared drives, by the node the launch attached them as.
+    declared: Vec<(String, RestoreTarget)>,
+    /// Ephemeral drives, by the store image the emulator put an overlay
+    /// over.
+    ephemeral: Vec<(String, RestoreTarget)>,
+    /// How many layers this member has taken. Every restore's layer is a
+    /// file of its own, so a restore cannot inherit the writes of the
+    /// restore before it.
+    generation: u64,
+}
+
+impl SnapshotPoint {
+    /// Read a member's snapshot out of the guest configuration it will boot.
+    pub fn new(spec: &GuestSpec) -> Result<Self> {
+        let work_dir = spec.work_dir();
+        let declared = spec
+            .manifest
+            .drives
+            .iter()
+            .enumerate()
+            .map(|(index, drive)| -> Result<(String, RestoreTarget)> {
+                let mut properties = Vec::new();
+                if let Some(boot_index) = &drive.boot_index {
+                    properties.push(("bootindex".to_owned(), boot_index.clone()));
+                }
+                if let Some(serial) = &drive.serial {
+                    properties.push(("serial".to_owned(), serial.clone()));
+                }
+                Ok((
+                    declared_node(&spec.name, index),
+                    RestoreTarget {
+                        file: PathBuf::from(spec.drive_file(&drive.file, &work_dir)),
+                        format: drive_format(&spec.manifest, drive),
+                        cache: Cache::parse(&drive.cache)?,
+                        model: device_model(&drive.interface).to_owned(),
+                        device_id: declared_device_id(&spec.name, index),
+                        properties,
+                        label: format!("d{index}"),
+                    },
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let ephemeral = spec
+            .manifest
+            .ephemeral_drives()
+            .into_iter()
+            .enumerate()
+            .map(|(index, drive)| -> Result<(String, RestoreTarget)> {
+                Ok((
+                    drive.file.clone(),
+                    RestoreTarget {
+                        file: PathBuf::from(&drive.file),
+                        format: drive.format,
+                        cache: Cache::parse(&drive.cache)?,
+                        // The VM module attaches an ephemeral drive with
+                        // `if=virtio` and nothing else, which is a virtio-blk
+                        // device with no serial and no boot order.
+                        model: device_model(&drive.interface).to_owned(),
+                        device_id: format!("{}-e{index}-device", spec.name),
+                        properties: Vec::new(),
+                        label: format!("e{index}"),
+                    },
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            work_dir,
+            member: spec.name.clone(),
+            declared,
+            ephemeral,
+            generation: 0,
+        })
+    }
+
+    /// The image one device's snapshot is frozen in.
+    ///
+    /// A device the launch attached as a named node is that node's. A device
+    /// riding an overlay the emulator created is the store image underneath
+    /// it, read off the block graph rather than guessed at: the emulator
+    /// names the overlay itself, and that name changes every time the
+    /// emulator starts.
+    fn target_for(&self, monitor: &mut Monitor, device: &BlockDevice) -> Result<&RestoreTarget> {
+        // The node the launch declared, for a device no snapshot has touched
+        // yet.
+        if let Some((_, target)) = self.declared.iter().find(|(node, _)| *node == device.node) {
+            return Ok(target);
+        }
+        // A layer this member has taken since: a snapshot puts the lane's own
+        // overlay on top of the node the launch declared, and every restore
+        // puts a fresh one there, so after the first snapshot the device is
+        // named by a layer the lane built rather than by the launch's name.
+        // The layer is named off the target's label, so it is read back the
+        // same way.
+        let token = member_token(&self.member);
+        let layered = self.declared.iter().find(|(_, target)| {
+            (0..=self.generation).any(|generation| {
+                format!("{token}.{}.l{generation}", target.label) == device.node
+            })
+        });
+        if let Some((_, target)) = layered {
+            return Ok(target);
+        }
+        // A device riding an overlay the emulator created - the state disk a
+        // node attaches through its own option list - is found by the image
+        // underneath instead, which is the file the guest's configuration
+        // declared: the emulator names that overlay itself, and the name
+        // changes every time the emulator starts. The base file is read the
+        // same way for a device the launch declared, because it is what both
+        // kinds of device have in common whatever is on top of them.
+        let backing = monitor.backing_files(&device.node)?;
+        let matched = self
+            .declared
+            .iter()
+            .chain(self.ephemeral.iter())
+            .find(|(_, target)| {
+                let file = target.file.to_string_lossy();
+                backing.iter().any(|backing| backing == file.as_ref())
+            });
+        if let Some((_, target)) = matched {
+            return Ok(target);
+        }
+        Err(HarnessError::Configuration(format!(
+            "the guest attached the writable device {} on {}, which the member's snapshot does \
+             not account for, so a restore could not put it back",
+            device.describe(),
+            device.file
+        )))
+    }
+
+    /// The layer one device's next writes go into.
+    pub fn overlay_for(&self, target: &RestoreTarget) -> PathBuf {
+        self.work_dir.join(format!(
+            "{}.layer-{}.qcow2",
+            Self::stem(&target.file),
+            self.generation
+        ))
+    }
+
+    /// The node name one device's next layer is opened as.
+    pub fn overlay_node(&self, target: &RestoreTarget) -> String {
+        bounded_node_name(format!(
+            "{}.{}.l{}",
+            member_token(&self.member),
+            target.label,
+            self.generation
+        ))
+    }
+
+    /// The node name one device's frozen image is re-opened as.
+    pub fn frozen_node(&self, target: &RestoreTarget) -> String {
+        bounded_node_name(format!(
+            "{}.{}.f{}",
+            member_token(&self.member),
+            target.label,
+            self.generation
+        ))
+    }
+
+    /// Start the next layer.
+    pub fn next_layer(&mut self) {
+        self.generation += 1;
+    }
+
+    /// A short, unique-enough name for one image's layers.
+    fn stem(file: &Path) -> String {
+        let name = file
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        name.chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || character == '-' {
+                    character
+                } else {
+                    '-'
+                }
+            })
+            .collect()
+    }
+}
+
 impl ActiveGuest {
     /// The guest's monitor, for the pool's snapshot and restore work.
     pub fn monitor(&mut self) -> Option<&mut Monitor> {
@@ -522,7 +886,7 @@ impl ActiveGuest {
     }
 
     /// Refuse a guest whose attached writable devices cannot carry an
-    /// internal snapshot.
+    /// external snapshot.
     ///
     /// This runs at boot, before any check does, because the alternative is
     /// discovering it at the first restore - after a suite has already run
@@ -533,58 +897,173 @@ impl ActiveGuest {
             .as_mut()
             .ok_or_else(|| HarnessError::Configuration("the guest has no monitor".to_owned()))?
             .block_devices()?;
-        let unsnapshottable: Vec<UnsnapshottableDevice> = devices
+        let refused: Vec<UnsnapshottableDevice> = devices
             .iter()
-            .filter(|device| !device.snapshottable)
+            .filter(|device| !device.rotatable)
             .map(|device| UnsnapshottableDevice {
-                device: device.id.clone(),
+                device: device.describe(),
                 file: device.file.clone(),
                 format: device.format.clone(),
             })
             .collect();
-        if unsnapshottable.is_empty() {
+        if refused.is_empty() {
             Ok(())
         } else {
-            Err(HarnessError::NotSnapshottable {
-                devices: unsnapshottable,
-            })
+            Err(HarnessError::NotSnapshottable { devices: refused })
         }
     }
 
-    /// Take the pool's snapshot of this guest, under a tag of the lane's
-    /// choosing.
+    /// Take the member's snapshot: an external overlay per writable device,
+    /// with the state the guest has reached frozen underneath it.
     ///
-    /// This is the point the pool snapshots at: after activation has
-    /// completed, after every attached writable device has been proven to
-    /// carry a snapshot, and before any check has touched the guest. A
-    /// snapshot taken later would be a snapshot of whatever the last check
-    /// left behind.
-    pub fn save_snapshot(&mut self, tag: &str) -> Result<()> {
-        self.monitor_mut()?.save_snapshot(tag)
-    }
-
-    /// Restore this guest from a snapshot it took itself.
+    /// This is the point the member snapshots at: after activation has
+    /// completed, after every attached writable device has been proven
+    /// restorable, and before any check has touched the guest. A snapshot
+    /// taken later would be a snapshot of whatever the last check left
+    /// behind.
     ///
-    /// The guest's command channel survives the restore. An internal
-    /// snapshot captures the guest's memory and its devices, not the host
-    /// socket at the far end of the guest's console, and the emulator is the
-    /// same process across the restore - so the connection the launcher
-    /// accepted before the boot is still the connection the guest's root
-    /// shell is reading from afterwards. That is also why the snapshot is
-    /// taken with the channel idle: bytes already in the console are not
-    /// part of what a restore rolls back.
-    pub fn restore(&mut self, tag: &str) -> Result<()> {
-        self.monitor_mut()?.load_snapshot(tag)
+    /// Every writable device the guest attached is covered, not only the
+    /// ones the guest node declared. The state disk the node attached
+    /// through its option list rides an overlay the emulator put over a raw
+    /// store path, and `/var/lib/d2b` lives on it: a snapshot that left it
+    /// out would hand the second check on this member the first check's
+    /// daemon store, which is exactly the state a member's snapshot exists
+    /// to prevent.
+    pub fn take_snapshot(&mut self, point: &mut SnapshotPoint) -> Result<()> {
+        for device in self.rotatable_devices()? {
+            let target = point.target_for(self.monitor_mut()?, &device)?.clone();
+            self.monitor_mut()?.take_overlay(
+                &device,
+                &point.overlay_for(&target),
+                &point.overlay_node(&target),
+            )?;
+        }
+        Ok(())
     }
 
-    /// Whether this guest currently holds a snapshot under a tag.
-    pub fn holds_snapshot(&mut self, tag: &str) -> Result<bool> {
-        Ok(self.monitor_mut()?.snapshot_tags()?.iter().any(|held| held == tag))
+    /// Return every writable device to the member's snapshot and restart the
+    /// guest on it.
+    ///
+    /// The restore is disk-only, and deliberately so. An internal snapshot
+    /// would roll the guest's memory back with its disk, but the emulator
+    /// refuses to take one while a VirtFS export is mounted in the guest -
+    /// and every lane guest mounts one, because it is booted from a host
+    /// store path and panics at activation without it. So what is restored is
+    /// the disk, and the guest is *restarted onto it*, which is what makes
+    /// the restored disk the state the guest is actually running on: a reset
+    /// discards the page cache, the mounted filesystems and every service's
+    /// state, all of which belong to the check that ran before.
+    ///
+    /// Each device is taken off its dirty layer, the layer is dropped, a
+    /// fresh one is taken over the frozen image, and the device is put back on
+    /// it. The sequence is per device and explicit because the emulator offers
+    /// no single command for it: a block node cannot be re-pointed while a
+    /// device is attached to it, and a device can only be attached to a node
+    /// by name - which is why the launch declares the guest's own drives as
+    /// nodes rather than as drives.
+    ///
+    /// The second restore of a member is the one that has to be right: it
+    /// takes its fresh layer over the same frozen image rather than over
+    /// whatever the first restore left behind, so a check never sees the check
+    /// before it. That is what the layer generation is for - every restore
+    /// writes a layer and a node name of its own, because the emulator refuses
+    /// to open a node twice or to write over a file that holds an open
+    /// image.
+    pub fn restore(&mut self, point: &mut SnapshotPoint) -> Result<Duration> {
+        let started = Instant::now();
+        let devices = self.rotatable_devices()?;
+        let mut targets = Vec::with_capacity(devices.len());
+        for device in &devices {
+            let target = point.target_for(self.monitor_mut()?, device)?.clone();
+            self.monitor_mut()?.detach_device(device, DETACH_BOUND)?;
+            targets.push((device.clone(), target));
+        }
+        point.next_layer();
+        for (device, _) in &targets {
+            // The layer the check that ran on this member wrote into, freed
+            // before a fresh one is taken over the frozen image. It is
+            // usually gone already: the detach above took the last device off
+            // it, and the emulator drops an unused node's chain.
+            self.monitor_mut()?.drop_node_if_present(&device.node)?;
+        }
+        for (device, target) in &targets {
+            self.monitor_mut()?.add_frozen_image(
+                &point.frozen_node(target),
+                &target.file,
+                &target.format,
+                target.cache,
+            )?;
+            let frozen = BlockDevice {
+                node: point.frozen_node(target),
+                ..device.clone()
+            };
+            self.monitor_mut()?.take_overlay(
+                &frozen,
+                &point.overlay_for(target),
+                &point.overlay_node(target),
+            )?;
+        }
+        for (_, target) in &targets {
+            self.monitor_mut()?.add_overlay_node(
+                &point.overlay_node(target),
+                &point.overlay_for(target),
+                target.cache,
+            )?;
+            self.monitor_mut()?.attach_device(
+                &target.model,
+                &point.overlay_node(target),
+                &target.device_id,
+                &target.properties,
+            )?;
+        }
+        self.monitor_mut()?.reset_machine()?;
+        Ok(started.elapsed())
     }
 
-    /// Drop a snapshot, which is what retiring a member frees.
-    pub fn discard_snapshot(&mut self, tag: &str) -> Result<()> {
-        self.monitor_mut()?.delete_snapshot(tag)
+    /// Wait for the guest to report activation again, after a restore reset
+    /// it.
+    ///
+    /// The wait counts markers rather than looking for one: the console is
+    /// a file the emulator appends to for the life of the process, so the
+    /// marker the first boot wrote is still in it, and a wait that looked
+    /// for a marker would be satisfied by a guest that had not re-activated
+    /// at all.
+    pub fn await_reactivation(&mut self, seen: usize, bound: Duration, marker: &str) -> Result<()> {
+        let console = self.work_dir.join("console.log");
+        let deadline = Instant::now() + bound;
+        loop {
+            if read_console(&console).matches(marker).count() > seen {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(HarnessError::NotActivated {
+                    bound,
+                    marker: marker.to_owned(),
+                    console_tail: activation_failure_tail(&read_console(&console)),
+                });
+            }
+            sleep(CONSOLE_POLL);
+        }
+    }
+
+    /// How many times the guest has reported activation on its console.
+    pub fn activations(&self, marker: &str) -> usize {
+        read_console(&self.work_dir.join("console.log"))
+            .matches(marker)
+            .count()
+    }
+
+    /// The guest's writable devices, as the emulator's own block graph
+    /// reports them.
+    fn rotatable_devices(&mut self) -> Result<Vec<BlockDevice>> {
+        Ok(self
+            .monitor
+            .as_mut()
+            .ok_or_else(|| HarnessError::Configuration("the guest has no monitor".to_owned()))?
+            .block_devices()?
+            .into_iter()
+            .filter(|device| device.rotatable)
+            .collect())
     }
 
     fn monitor_mut(&mut self) -> Result<&mut Monitor> {
@@ -1081,12 +1560,29 @@ mod tests {
         let argv = argv(&bigger);
         assert_eq!(value_of(&argv, "-m"), "16384");
         assert_eq!(value_of(&argv, "-smp"), "8");
-        let drive = value_of(&argv, "-drive");
+        let node = value_of(&argv, "-blockdev");
         assert!(
-            drive.contains("file=/run/lane/work/lane-member-0/disk.qcow2"),
-            "the root drive is the guest's own writable copy: {drive}"
+            node.contains(r#""filename":"/run/lane/work/lane-member-0/disk.qcow2""#),
+            "the root drive is the guest's own writable copy: {node}"
         );
-        assert!(!drive.contains("format="), "the node pinned no format: {drive}");
+        assert!(
+            !node.contains("\"format\""),
+            "the node pinned no format, so the image's own is used: {node}"
+        );
+        // The node is bound to the device by name rather than through a
+        // drive, which is what lets a restore take the device off its dirty
+        // layer and put it on a clean one. The name is the one the restore
+        // finds the node by again, so the two are asserted against each other
+        // rather than against a spelling either of them could drift from.
+        let bound = value_of(&argv, "-blockdev");
+        let node: serde_json::Value = serde_json::from_str(bound).expect("a block node is JSON");
+        let name = node["node-name"].as_str().expect("a block node is named");
+        assert!(
+            argv.iter()
+                .any(|argument| argument.contains("virtio-blk-pci,")
+                    && argument.contains(&format!("drive={name}"))),
+            "the device is attached to the node {name:?}: {argv:?}"
+        );
     }
 
     #[test]
@@ -1152,7 +1648,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("{needle} is on the command line: {argv:?}"))
         };
         assert!(position("virtio-rng-pci") < position("-net"));
-        assert!(position("-net") < position("-drive"));
+        assert!(position("-net") < position("-blockdev"));
     }
 
     #[test]
@@ -1191,6 +1687,60 @@ mod tests {
         assert!(argv
             .windows(2)
             .any(|pair| pair == ["-device", "vhost-vsock-pci,guest-cid=3"]));
+    }
+
+    #[test]
+    fn every_block_node_name_the_emulator_is_handed_fits_its_limit() {
+        // The longest name the lane runs under and the longest device file it
+        // attaches: `runtime-cloud-hypervisor-guest-preflight` is longer than
+        // the emulator's whole budget for a block node by itself, and the
+        // state disk is a store path whose basename is longer again. Both are
+        // named on the launch and named again on every restore, and the
+        // emulator refuses a longer one with `Node name too long` at the
+        // point the node is created - which is a member that booted and then
+        // failed at its first snapshot.
+        let mut declared = manifest(3, 3072, &[]);
+        declared.extra_options = vec![
+            "-drive".to_owned(),
+            "file=/nix/store/0123456789bcdefghijklmnopqrstuv-d2b-state.img,format=raw,if=virtio,snapshot=on"
+                .to_owned(),
+        ];
+        let spec = GuestSpec::new(
+            declared,
+            "/run/lane/image",
+            "/nix/store/qemu/bin/qemu-kvm",
+            "/run/lane/work",
+            "runtime-cloud-hypervisor-guest-preflight",
+        );
+
+        for pair in argv(&spec).windows(2).filter(|pair| pair[0] == "-blockdev") {
+            let node: serde_json::Value =
+                serde_json::from_str(&pair[1]).expect("a block node is JSON");
+            let name = node["node-name"].as_str().expect("a block node is named");
+            assert!(name.len() <= NODE_NAME_LIMIT, "the launch declares {name:?}");
+        }
+
+        let point = SnapshotPoint::new(&spec).expect("the member's snapshot reads out of its spec");
+        for (node, _) in &point.declared {
+            assert!(node.len() <= NODE_NAME_LIMIT, "the launch declares {node:?}");
+        }
+        let targets: Vec<&RestoreTarget> = point
+            .declared
+            .iter()
+            .chain(point.ephemeral.iter())
+            .map(|(_, target)| target)
+            .collect();
+        assert_eq!(targets.len(), 2, "the root disk and the state disk");
+        for target in &targets {
+            for name in [point.overlay_node(target), point.frozen_node(target)] {
+                assert!(name.len() <= NODE_NAME_LIMIT, "a restore declares {name:?}");
+            }
+        }
+        assert_ne!(
+            point.overlay_node(targets[0]),
+            point.overlay_node(targets[1]),
+            "two devices of one member are two nodes"
+        );
     }
 
     #[test]
@@ -1238,8 +1788,13 @@ mod tests {
         let argv = argv(&spec(declared));
         assert!(!argv.iter().any(|argument| argument == "-kernel"));
         assert!(!argv.iter().any(|argument| argument == "-append"));
-        let drive = value_of(&argv, "-drive");
-        assert!(drive.contains("cache=unsafe"), "{drive}");
+        let node = value_of(&argv, "-blockdev");
+        assert!(node.contains("\"no-flush\":true"), "cache=unsafe: {node}");
+        assert!(node.contains("\"direct\":false"), "cache=unsafe: {node}");
+        // `-blockdev` has no `werror` and refuses the whole command line
+        // over one, so a node that declared the report default carries
+        // nothing for it. See `render_blockdev`.
+        assert!(!node.contains("werror"), "{node}");
         let device = argv
             .iter()
             .find(|argument| argument.starts_with("virtio-blk-pci,"))

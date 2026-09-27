@@ -64,13 +64,42 @@ fail() {
   echo "guest-image $label: $1" >&2
   exit 1
 }
+
+# How this action reaches the store, decided once because it decides both the
+# flags and whether realizing the closure escalates at all.
+#
+# A `local` store writes into the store directory itself, so it is only
+# available where that directory is writable. A daemon that reports this user
+# as trusted builds and adds the paths itself, which is the multi-user answer
+# to the same question - and it is the one that must not be paired with a
+# `local` store, because that store bypasses the daemon and would then need a
+# write permission the user does not have. Only the third case, a store this
+# process cannot write and a daemon that does not trust it, escalates. A
+# Bazel action has no terminal, so an escalation that cannot proceed fails
+# here - naming what is missing - rather than blocking on a password prompt
+# that nothing will answer.
+store_options=""
+escalate=0
+if [ -w "$store_dir" ]; then
+  store_options="--option store local?store=$store_dir"
+elif "$nix_bin" store ping --json 2>/dev/null | grep -q '"trusted":true'; then
+  # The daemon is the store: no override, and no escalation. The probe reads
+  # the machine output, which is the one on stdout: the human rendering of
+  # `store ping` goes to stderr, so a probe that discards stderr would read
+  # nothing at all and an escalated action would look untrusted.
+  :
+elif [ -n "$sudo_bin" ]; then
+  store_options="--option store local?store=$store_dir"
+  escalate=1
+else
+  fail "the nix store is not writable and the nix daemon does not trust this user, so the guest closure cannot be realized on this host"
+fi
+
 nix_run() {
-  if [ -w "$store_dir" ]; then
-    "$@"
-  elif [ -n "$sudo_bin" ]; then
+  if [ "$escalate" -eq 1 ]; then
     "$sudo_bin" -E "$@"
   else
-    fail "the nix store is not writable and no sudo is available, so the guest closure cannot be realized on this host"
+    "$@"
   fi
 }
 
@@ -139,7 +168,7 @@ system="$("$nix_bin" eval --raw --impure --expr builtins.currentSystem)" || fail
 expr="(builtins.getFlake \\"path:$root\\").guestImage.\\"$system\\" { rawBundle = \\"$bundle\\"; rawCloudHypervisorController = $controller_argument; extraModules = $check_argument; nodeShape = \\"$node_shape\\"; }"
 echo "guest-image $label: realizing the guest from declared inputs" >&2
 image="$(nix_run "$nix_bin" build \\
-  --option store "local?store=$store_dir" \\
+  $store_options \\
   --option substituters "$substituters" \\
   --option build-users-group "" \\
   --option sandbox true \\

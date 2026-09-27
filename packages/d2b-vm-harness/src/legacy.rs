@@ -370,6 +370,13 @@ impl Console {
         )))
     }
 
+    /// Wait for the guest's shell to announce itself again, discarding
+    /// whatever the console is holding.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    fn resync(&mut self, bound: Duration) -> Result<()> {
+        self.await_shell(bound)
+    }
+
     /// Run one command in the guest and read back its status and output.
     ///
     /// The wire form is the driver's, unchanged: the command is run under
@@ -898,6 +905,20 @@ impl LegacyGuest {
             passed: status.success(),
             detail,
         })
+    }
+
+    /// Take the console back after the guest was restarted onto a restored
+    /// disk.
+    ///
+    /// The channel is one connection for the life of the emulator process, so
+    /// the bytes the previous guest wrote as it shut down are still in it when
+    /// the new guest's shell greets. Reading a command's output from that
+    /// position decodes the old guest's leftovers as the new one's answer -
+    /// which reads as a command that returned nonsense, not as a console that
+    /// needed resynchronising. Waiting for the greeting again is what puts
+    /// the reader back on a command boundary.
+    pub fn resync(&mut self) -> Result<()> {
+        self.control.console.resync(SHELL_GREETING_TIMEOUT)
     }
 
     /// The working directory this guest's check scripts are written to.
