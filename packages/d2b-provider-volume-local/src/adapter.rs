@@ -868,12 +868,28 @@ impl<R: VolumeRootResolver> AnchoredVolumeEffectAdapter<R> {
                 return Ok(());
             }
             let mut store = FdMarkerStore::new(root)?;
-            provision_marker(
-                &mut store,
-                root.marker_binding()
-                    .ok_or(VolumeLocalError::EffectFailed)?,
-            )
-            .map_err(|_| VolumeLocalError::EffectFailed)
+            // The two steps below both collapsed into a bare EffectFailed,
+            // so a marker that would not publish reported only "a provider
+            // layout effect failed" and never which step or why. Name both.
+            let binding = match root.marker_binding() {
+                Some(binding) => binding,
+                None => {
+                    tracing::warn!(
+                        volume = ?root.volume_uid(),
+                        state = ?root,
+                        "marker publish refused: the resolved root carries no marker binding"
+                    );
+                    return Err(VolumeLocalError::EffectFailed);
+                }
+            };
+            provision_marker(&mut store, binding).map_err(|error| {
+                tracing::warn!(
+                    volume = ?root.volume_uid(),
+                    error = ?error,
+                    "marker publish failed"
+                );
+                VolumeLocalError::EffectFailed
+            })
         })
     }
 
