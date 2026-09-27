@@ -247,8 +247,8 @@ const OUTCOME_FLUSH_ROW: &str = concat!(
 /// The launch evidence the fixture prints from the daemon journal.
 const LAUNCH_REFUSAL_LINES: &str = concat!(
     "journalctl -u d2bd.service --no-pager -o cat -b -n 4000 ",
-    "| grep -E 'device-worker|process-resolution-refused|",
-    "provider-ticket|swtpm|w1-gpu' | tail -n 40 || true",
+    "| grep -E 'device-worker|process-resolution-refused|provider-ticket|swtpm|",
+    "w1-gpu|volume-local|layout-effect|PrepareVolume' | tail -n 60 || true",
 );
 
 /// The flush outcome projection the fixture prints.
