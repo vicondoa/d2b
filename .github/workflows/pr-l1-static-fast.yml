@@ -11,6 +11,12 @@ permissions:
 
 env:
   BAZEL_SH: /bin/bash
+  # Inline the log of every failing test. Without this a red Bazel target
+  # reports only its test.log path under the runner's cache, so diagnosing a
+  # failure means a second round trip into the runner, which is not available
+  # from the PR. `errors` keeps passing tests quiet and prints the full log of
+  # the ones that failed.
+  D2B_BAZEL_TEST_OUTPUT: "errors"
 
 defaults:
   run:

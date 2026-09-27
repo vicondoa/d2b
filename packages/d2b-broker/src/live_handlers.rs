@@ -3129,17 +3129,6 @@ async fn maybe_harden_swtpm_dir(
         let identity = resource_backed.ok_or_else(|| {
             hardening_refusal(plan, crate::ops::swtpm_dir::reasons::DERIVATION_FAILED)
         })?;
-        // The state Volume that owns `<root>/<volume-name>` is not
-        // provisioned on this path, so the launch creates the directory it
-        // has just been fenced against. This is not ownership: the trusted
-        // root is shared by every Device of the host, and the derivation
-        // below has already proved the path is exactly the one the Device's
-        // own state Volume names. The Volume-side provisioning is tracked
-        // separately - this is the launch-side stopgap, not the fix.
-        let state_dir = crate::ops::swtpm_dir::trusted_state_dir(identity);
-        tokio::fs::create_dir_all(&state_dir)
-            .await
-            .map_err(|_| hardening_refusal(plan, crate::ops::swtpm_dir::reasons::DERIVATION_FAILED))?;
         crate::ops::swtpm_dir::derive_resource_backed_paths(plan, identity)
             .map_err(|reason| hardening_refusal(plan, reason))?;
         // The long-lived worker (`--tpmstate dir=...`) opens its state
