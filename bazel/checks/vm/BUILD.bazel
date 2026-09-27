@@ -152,6 +152,7 @@ _PORTED_CHECKS = [
     "guest-agent-cap-confinement",
     "guest-shell-service",
     "privilege-oracle",
+    "wayland-proxy",
 ]
 
 [

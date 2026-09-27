@@ -418,6 +418,28 @@ rec {
         ];
     };
 
+  # The guest `wayland-proxy` boots: a plain NixOS node with the `alice` user
+  # the proxy runs as, a Python interpreter for the fake compositor and the
+  # client that drives it, and the proxy itself.
+  #
+  # The proxy is resolved through `self.packages`, which is how the fixture
+  # resolved it: under the lane's handoff that package is the Bazel-built
+  # host-tool bundle, so the guest runs the binary this build produces rather
+  # than a second copy nix built.
+  d2bWaylandProxyNode = { pkgs, ... }: {
+    users.users.alice = {
+      isNormalUser = true;
+      uid = 1000;
+    };
+
+    environment.systemPackages = [
+      pkgs.python3
+      self.packages.${pkgs.stdenv.hostPlatform.system}.d2b-wayland-proxy
+    ];
+
+    system.stateVersion = "25.11";
+  };
+
   # The guest each fixture-less image evaluates, by the name the image action
   # asks for. A check's own guest is read out of the check's fixture; these are
   # the guests with no fixture to be read out of - the two reusable shapes the
@@ -466,6 +488,9 @@ rec {
       node = d2bDaemonNode { };
       testName = "d2b-privilege-oracle";
     };
-
+    wayland-proxy = {
+      node = d2bWaylandProxyNode;
+      testName = "d2b-wayland-proxy";
+    };
   };
 }

@@ -28,6 +28,7 @@ pub mod daemon_smoke;
 pub mod guest_agent_cap_confinement;
 pub mod guest_shell_service;
 pub mod privilege_oracle;
+pub mod wayland_proxy;
 
 use crate::legacy::{GuestControl, LegacyResult};
 
@@ -51,6 +52,7 @@ const PORTED: &[(&str, Assertions)] = &[
     ),
     ("guest-shell-service", guest_shell_service::assertions),
     ("privilege-oracle", privilege_oracle::assertions),
+    ("wayland-proxy", wayland_proxy::assertions),
 ];
 
 /// The assertions of one ported check, or `None` for a check that has not
