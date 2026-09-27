@@ -1,7 +1,7 @@
 # Gates and lints
 
-Reference for the heavy-lane semaphore and policy lints whose exemptions are
-easy to get wrong. The binding summary and enforcing/advisory rule live under
+Reference for the contributor validation lanes and policy lints whose
+exemptions are easy to get wrong. The binding summary and enforcing/advisory rule live under
 [worktree, validation, and landing rules](../../AGENTS.md#worktree-validation-and-landing-rules);
 read that first. This file covers the parts needing more than a rule.
 
@@ -327,64 +327,35 @@ and `d2b-provider-guest`'s `tests/registration.rs` - declare
 them silently; run those crates with `--features test-support` (or
 `--all-features`) when working through cargo instead of the Bazel layer.
 
-## Heavy lanes
+## Layer-2 and manual lanes
 
-Every Layer-2, host-integration, hardware, live, and perf-heavy command
-runs through **one** semaphore, invoked from the repository root through the
-Bazel-built `bazel-bin/packages/xtask/xtask heavy-gate` facade. It grants
-two slots per uid via open file description locks so concurrent heavy lanes
-cannot oversubscribe the shared Nix store, Bazel output tree, or KVM
-device. Do not add a second lock file, sleep-and-retry loop, or per-crate
-guard.
+Layer-2 container, VM, live-host, hardware, and performance surfaces remain
+conditional or manual and are not part of the Bazel Layer-1 scheduler. Run the
+public interfaces directly:
 
-The slot namespace is fixed at `/run/d2b-heavy-gates/uid-<uid>/`. The root
-and per-uid directory are root-owned and non-writable by unprivileged users;
-the two `slot-*` files are pre-created for the target uid at mode `0600`.
-No runtime-directory or temporary-directory fallback. The NixOS
-module provisions the root with systemd-tmpfiles, then activation provisions
-directories and slots for configured lifecycle users that NSS can resolve.
-An unavailable network-backed user is deferred rather than failing
-activation; after that user logs in, run `make heavy-gate-provision`. Use
-the same target on a host that does not consume the module. Because `/run`
-is a tmpfs, run it once per boot when the gate requests it. An absent or
-malformed namespace is an environment error with that provisioning
-remediation, never permission to create a weaker pool. In particular,
-`/run/user/<uid>` is rejected because its owner can rename slot names or
-their parent and create an independent pool.
+- `make test-integration` runs the container rollup
+  `bash tests/test-integration.sh`.
+- `make test-host-integration` runs the type-10 host-integration lane as one
+  Bazel test invocation of `//bazel/checks/vm:host_integration_lane_run`,
+  described above under "Build and validate, in detail". It is a local pre-PR
+  x86_64-linux lane and declares `/dev/kvm` as a precondition with no
+  emulation fallback.
+- `make perf` invokes the advisory Bazel facade suite
+  `//bazel/checks:test-performance-budgets`.
+- `make pre-tag` and `make smoke-lite` run the full and lite live-VM smoke
+  scripts.
+- For an individual live-host script, set its required opt-in variables such
+  as `D2B_LIVE=1` and invoke the script explicitly. These scripts retain their
+  own safety checks and cleanup behavior.
 
-The structure is public-lane-plus-guarded-internal:
+The heavy-gate semaphore that used to serialize these lanes - with its
+`D2B_HEAVY_GATE` re-exec guard, `/run/d2b-heavy-gates` slot namespace, and
+`make heavy-gate-provision` step - was removed, and nothing replaces it:
+concurrent heavy lanes on one host are the caller's responsibility.
 
-- **Public lane targets** (`make test-integration`,
-  `make test-host-integration`, `make perf`) acquire
-  a slot and then delegate to a guarded internal `heavy-lane-*` target.
-  Run these.
-- **Internal `heavy-lane-*` targets** hold the raw work and fail closed
-  through `heavy-lane-guard` if invoked outside the gate (the gate exports
-  `D2B_HEAVY_GATE` across its re-exec). Do not run them directly.
-- **Convenience wrappers** `make heavy-check`, `make heavy-flake-check`, and
-  the `heavy-test-*` aliases run a Layer-1
-  gate, the Rust suite, the building flake check, or a public lane under
-  the same semaphore.
-
-Run a heavy lane through its public target (or, for an arbitrary command,
-`make heavy-gate-build && bazel-bin/packages/xtask/xtask heavy-gate --
-<command>`) whenever another heavy lane might be running; do not invoke the
-internal targets directly. Live-host
-tests obey the same rule: use the gated live-VM smoke entrypoints (`make
-pre-tag` for the full gate, `make smoke-lite` for the lite gate) or wrap a
-raw live script with the Bazel-built xtask artifact.
-
-The repository-root `Cargo.toml` and `Cargo.lock` are rules_rs metadata
-authority. The Bazel-built xtask label is the only supported gate entrypoint;
-do not add a direct Cargo compatibility wrapper.
-
-Invoking a live script directly is safe but not the documented path: each
-one verifies the inherited slot and re-executes itself through the semaphore
-exactly once when no genuine slot is held. A bare `D2B_HEAVY_GATE` value is
-not trusted, so it cannot bypass the sole-use invariant.
-**A new live, hardware, or performance entrypoint must carry that same
-self-guard block**, or the fail-closed inventory guard
-(`every_live_and_heavy_entrypoint_routes_through_the_gate`) rejects it.
+The repository-root `Cargo.toml` and `Cargo.lock` remain rules_rs metadata
+authority. Bazel remains the sole Layer-1 scheduler; do not add local
+fan-out, scheduling, or wrapper machinery to Layer-2/manual lanes.
 
 For where tests live, when to add or retire each kind of test, and
 which pins/ledgers to update, read [`tests/AGENTS.md`](../../tests/AGENTS.md).

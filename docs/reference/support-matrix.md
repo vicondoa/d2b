@@ -41,8 +41,10 @@ Cloud Hypervisor boot. U20 must also run both public integration lanes:
 `make test-host-integration` and `make test-integration`. They may run
 alongside the real-host testing, but neither lane is U19 evidence. An
 unavailable host prerequisite blocks that acceptance lane rather than becoming
-a pass. `make test-host-integration` must use the existing Bazel-built
-`D2B_HOST_TOOL_BUNDLE` handoff; Nix must not rebuild the injected d2b binaries.
+a pass. `make test-host-integration` runs the Bazel lane
+`//bazel/checks/vm:host_integration_lane_run`, which passes the Bazel-built
+host tools to the guest-image action as declared label inputs; Nix must not
+rebuild the injected d2b binaries.
 
 See [the compatibility policy](./compatibility.md),
 [the daemon lifecycle](../explanation/daemon-lifecycle.md), and

@@ -53,7 +53,7 @@ Use this index, then open the focused document instead of expanding this file.
 | Worktrees, review, PRs, merge, and disk hygiene | [`docs/contributing/workflow.md`](./docs/contributing/workflow.md), especially the [reviewed-head lifecycle](./docs/contributing/workflow.md#reviewed-head-pr-lifecycle) |
 | Changelog or commit grammar | [`docs/contributing/changelog-and-commits.md`](./docs/contributing/changelog-and-commits.md) |
 | Codegraph MCP server and agent usage | [`.omp/mcp.json`](./.omp/mcp.json) wires the server; see [Codegraph (MCP code intelligence)](#codegraph-mcp-code-intelligence) below for per-checkout init and tool guidance |
-| Gates, heavy lanes, and build profiles | [`docs/contributing/gates-and-lints.md`](./docs/contributing/gates-and-lints.md) |
+| Gates, validation lanes, and build profiles | [`docs/contributing/gates-and-lints.md`](./docs/contributing/gates-and-lints.md) |
 | Architecture and per-Guest/provider features | [`docs/contributing/architecture.md`](./docs/contributing/architecture.md) and [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md) |
 | Critical subsystem invariants | [`docs/contributing/critical-subsystems.md`](./docs/contributing/critical-subsystems.md) |
 | Contributor orchestration and host distribution | [`d2b-gascity`](https://github.com/vicondoa/d2b-gascity) for orchestration and [`gascity.nix`](https://github.com/vicondoa/gascity.nix) for NixOS distribution and installation |
@@ -224,10 +224,12 @@ settings or claim atomic base binding.
   `make test-host-integration`. They may run alongside the `/etc/nixos`
   real-host switch, d2b startup, and Cloud Hypervisor Guest boot. U19
   converges their declarations and current inputs but does not run host
-  acceptance. The host-integration lane must inject its Bazel-built
-  `d2b`, `d2bd`, `d2b-broker`, activation/helper, resource-compiler, and
-  Wayland-proxy binaries through `D2B_HOST_TOOL_BUNDLE`; it must not rebuild
-  those binaries through Nix.
+  acceptance. The host-integration lane passes its Bazel-built `d2b`,
+  `d2bd`, `d2b-broker`, activation/helper, resource-compiler, and
+  Wayland-proxy binaries to the guest-image action as declared Bazel label
+  inputs; Nix must realize the guest closure around those binaries rather
+  than rebuild them. The lane is `//bazel/checks/vm:host_integration_lane_run`,
+  invoked by `make test-host-integration`.
 - Every code change ships a valid changelog entry or a fragment under
   [`changelog.d/`](./changelog.d/).
 - The retired repository-local contributor runtime has no ordinary-work
