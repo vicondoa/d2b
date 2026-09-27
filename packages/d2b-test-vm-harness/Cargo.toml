@@ -1,5 +1,5 @@
 [package]
-name = "d2b-vm-harness"
+name = "d2b-test-vm-harness"
 version = "0.0.0-bootstrap"
 edition = "2024"
 publish = false
@@ -28,5 +28,5 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [[bin]]
-name = "d2b-vm-harness"
-path = "src/bin/d2b-vm-harness.rs"
+name = "d2b-test-vm-harness"
+path = "src/bin/d2b-test-vm-harness.rs"

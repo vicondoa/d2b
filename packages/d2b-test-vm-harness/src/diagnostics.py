@@ -13,7 +13,7 @@
 #
 # The helpers are diagnostics only: no assertion and no timeout declared
 # here changes any of them. The lane's guest-control surface
-# (`packages/d2b-vm-harness/src/legacy.rs`) owns what `machine.*` means, and
+# (`packages/d2b-test-vm-harness/src/legacy.rs`) owns what `machine.*` means, and
 # the failure path below is what makes a failed check legible - the stage it
 # was in, the rows it was asserting on, the journal lines that explain them,
 # and the zone's own account of the row that did not settle.

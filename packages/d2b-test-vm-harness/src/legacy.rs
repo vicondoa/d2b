@@ -100,7 +100,7 @@ const ACCEPT_POLL: Duration = Duration::from_millis(20);
 /// under, for a lane that wants a specific one. The lane's test target sets
 /// it to the interpreter declared as a runfile; without it the interpreter is
 /// resolved from the runfiles tree, and failing that from `PATH`.
-const PYTHON: &str = "D2B_VM_HARNESS_PYTHON";
+const PYTHON: &str = "D2B_TEST_VM_HARNESS_PYTHON";
 
 /// The smallest read bound the console is given while it waits for its
 /// shell. A bound of zero is not a bound at all on a socket: it means wait

@@ -24,7 +24,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use d2b_vm_harness::{
+use d2b_test_vm_harness::{
     ActiveGuest, Footprint, GuestSpec, HarnessError, HostFacts, LegacyCheck, LegacyGuest,
     SnapshotPoint, boot, host, manifest::GuestManifest, report,
 };
@@ -32,16 +32,16 @@ use serde_json::json;
 
 /// The image the lane was pointed at. Supplied by the Bazel test target as a
 /// runfile path.
-const IMAGE: &str = "D2B_VM_HARNESS_IMAGE";
+const IMAGE: &str = "D2B_TEST_VM_HARNESS_IMAGE";
 /// The emulator binary, from the pinned nix package set the guest closure was
 /// realized from.
-const EMULATOR: &str = "D2B_VM_HARNESS_EMULATOR";
+const EMULATOR: &str = "D2B_TEST_VM_HARNESS_EMULATOR";
 /// The lane's working directory, which outlives each individual guest.
-const WORK_ROOT: &str = "D2B_VM_HARNESS_WORK_ROOT";
+const WORK_ROOT: &str = "D2B_TEST_VM_HARNESS_WORK_ROOT";
 /// How long the guest has to activate.
-const ACTIVATION_TIMEOUT: &str = "D2B_VM_HARNESS_ACTIVATION_TIMEOUT_SECS";
+const ACTIVATION_TIMEOUT: &str = "D2B_TEST_VM_HARNESS_ACTIVATION_TIMEOUT_SECS";
 /// How many boot and teardown cycles to run.
-const CYCLES: &str = "D2B_VM_HARNESS_CYCLES";
+const CYCLES: &str = "D2B_TEST_VM_HARNESS_CYCLES";
 
 /// The block-graph node name the boot-time snapshot-capability proof attaches
 /// its unsnapshottable device under.
@@ -103,7 +103,7 @@ fn main() -> ExitCode {
 //     restored.
 
 /// The image list the lane's target generated, one guest image per line.
-const IMAGES: &str = "D2B_VM_HARNESS_IMAGES";
+const IMAGES: &str = "D2B_TEST_VM_HARNESS_IMAGES";
 /// The checks a contributor selected, as the existing selection variables
 /// carry them: a whitespace- or comma-separated list of check names.
 const CHECKS: &str = "D2B_VM_CHECK";

@@ -26,7 +26,7 @@ exports_files(
 )
 
 d2b_rust_library(
-    name = "d2b_vm_harness",
+    name = "d2b_test_vm_harness",
     srcs = glob(
         ["src/**/*.rs"],
         exclude = ["src/bin/**/*.rs"],
@@ -47,17 +47,17 @@ d2b_rust_library(
 )
 
 d2b_rust_binary(
-    name = "d2b-vm-harness",
-    srcs = ["src/bin/d2b-vm-harness.rs"],
+    name = "d2b-test-vm-harness",
+    srcs = ["src/bin/d2b-test-vm-harness.rs"],
     compile_data = ["Cargo.toml"],
     deps = [
-        ":d2b_vm_harness",
+        ":d2b_test_vm_harness",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 d2b_rust_test(
-    name = "d2b_vm_harness_test",
-    crate = ":d2b_vm_harness",
+    name = "d2b_test_vm_harness_test",
+    crate = ":d2b_test_vm_harness",
     compile_data = ["Cargo.toml"],
     deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )

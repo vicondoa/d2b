@@ -95,7 +95,7 @@ members = [
     "packages/d2b-provider-command",
     "packages/d2b-provider-operation",
     "packages/d2b-provider-seccomp-profile",
-    "packages/d2b-vm-harness",
+    "packages/d2b-test-vm-harness",
 ]
 
 [workspace.package]

@@ -39,7 +39,7 @@ _GUEST_SOURCES = [
     "//tests/fixtures:fixture_sources",
     # The diagnostics prelude the fixtures interpolate and the lane's own
     # guest-control surface embeds, read out of the tree by both.
-    "//packages/d2b-vm-harness:src/diagnostics.py",
+    "//packages/d2b-test-vm-harness:src/diagnostics.py",
     # The provider manifests the acceptance fixtures sign their artifacts
     # against, read by path out of the tree by the fixtures' own helpers.
     "//packages/d2b-provider-guest-cloud-hypervisor:provider-manifest.json",
@@ -162,7 +162,7 @@ _CHECK_IMAGES = [":guest_image_" + check for check in _CHECKS]
 _EMULATOR = "@qemu_kvm//:bin/qemu-kvm"
 
 # The lane's harness, which is the thing that spawns a guest.
-_HARNESS = "//packages/d2b-vm-harness:d2b-vm-harness"
+_HARNESS = "//packages/d2b-test-vm-harness:d2b-test-vm-harness"
 
 guest_boot_test(
     name = "guest_boot_daemon",
@@ -199,9 +199,9 @@ lane_test(
 test_suite(
     name = "host_integration_lane",
     tests = [
-        "//packages/d2b-vm-harness:d2b-vm-harness_clippy",
-        "//packages/d2b-vm-harness:d2b_vm_harness_clippy",
-        "//packages/d2b-vm-harness:d2b_vm_harness_test",
+        "//packages/d2b-test-vm-harness:d2b-test-vm-harness_clippy",
+        "//packages/d2b-test-vm-harness:d2b_test_vm_harness_clippy",
+        "//packages/d2b-test-vm-harness:d2b_test_vm_harness_test",
         ":guest_boot_daemon",
         ":guest_boot_writable_store",
         ":host_integration_lane_run",

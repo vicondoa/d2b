@@ -509,14 +509,14 @@ rec {
   # timeout is passed through unchanged.
   #
   # The text itself lives with the lane's own assertion surface, in
-  # `packages/d2b-vm-harness/src/diagnostics.py`, and is read from there
+  # `packages/d2b-test-vm-harness/src/diagnostics.py`, and is read from there
   # rather than kept here. The Bazel lane runs these very same evaluated
   # scripts, so a check that has not been ported yet reports its failure
   # through this text under either lane; a second copy of it would be a
   # second dialect of the same diagnostics, and the two would drift the first
   # time one of them gained a helper the other did not.
   fixtureDiagnostics =
-    builtins.readFile ../../packages/d2b-vm-harness/src/diagnostics.py;
+    builtins.readFile ../../packages/d2b-test-vm-harness/src/diagnostics.py;
 
   # Re-exported so tests can assert against the shared declaration.
   inherit mkGuestSystem mkRuntimeCloudHypervisorArtifact

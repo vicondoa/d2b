@@ -302,14 +302,14 @@ set -eu
 # assumed - a wrong guess here is a guest that never boots, with a path error
 # instead of a boot error.
 runfiles="$(CDPATH= cd -- "$(dirname -- "$0")/../../../.." && pwd -P)"
-export D2B_VM_HARNESS_CYCLES="{cycles}"
-export D2B_VM_HARNESS_EMULATOR="$runfiles/__EMULATOR__"
-export D2B_VM_HARNESS_IMAGE="$runfiles/__IMAGE__"
+export D2B_TEST_VM_HARNESS_CYCLES="{cycles}"
+export D2B_TEST_VM_HARNESS_EMULATOR="$runfiles/__EMULATOR__"
+export D2B_TEST_VM_HARNESS_IMAGE="$runfiles/__IMAGE__"
 # A lane-scoped working directory that outlives each individual guest, and is
 # this test's own rather than the sandboxed temporary directory the current
 # Bazel release does not expose to a sandboxed action. The harness resolves a
 # relative one against its own working directory.
-export D2B_VM_HARNESS_WORK_ROOT="{work_root}"
+export D2B_TEST_VM_HARNESS_WORK_ROOT="{work_root}"
 
 exec "$runfiles/__HARNESS__" "$@"
 """
@@ -404,23 +404,23 @@ set -eu
 # instead of a boot error.
 runfiles="$(CDPATH= cd -- "$(dirname -- "$0")/../../../.." && pwd -P)"
 
-export D2B_VM_HARNESS_EMULATOR="$runfiles/__EMULATOR__"
-export D2B_VM_HARNESS_IMAGES="$runfiles/__IMAGES__"
+export D2B_TEST_VM_HARNESS_EMULATOR="$runfiles/__EMULATOR__"
+export D2B_TEST_VM_HARNESS_IMAGES="$runfiles/__IMAGES__"
 # A check that has not been ported yet is a Python script, and the
 # interpreter it runs under is part of what the lane is. Left to itself the
 # surface resolves whatever `python3` a developer's shell happens to find, so
 # the interpreter is a declared runfile from the same pinned nix package set
 # as the guest it drives.
-export D2B_VM_HARNESS_PYTHON="$runfiles/__PYTHON__"
+export D2B_TEST_VM_HARNESS_PYTHON="$runfiles/__PYTHON__"
 # A lane-scoped working directory that outlives each individual guest, and is
 # this test's own rather than the sandboxed temporary directory the current
 # Bazel release does not expose to a sandboxed action. The harness resolves a
 # relative one against its own working directory.
-export D2B_VM_HARNESS_WORK_ROOT="d2b-vm-lane-work/{name}"
+export D2B_TEST_VM_HARNESS_WORK_ROOT="d2b-vm-lane-work/{name}"
 
 # The harness is asked for the `lane` subcommand rather than being left to its
 # own default. With no argument it runs the single-guest self-check, which is
-# the other target's job and which asks for `D2B_VM_HARNESS_IMAGE` - a variable
+# the other target's job and which asks for `D2B_TEST_VM_HARNESS_IMAGE` - a variable
 # the lane has no reason to set, because the lane reads the whole image list
 # instead. Anything a contributor passes on the command line reaches the
 # lane's own selection, which reads `--check`.
