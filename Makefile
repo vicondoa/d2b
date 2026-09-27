@@ -17,7 +17,8 @@ D2B_MAKE_BAZEL_TARGETS := \
 	test-flake-realized test-flake-aarch64 test-flake-x86 test-nix-unit \
 	test-performance-budgets test-drift test-policy test-changelog
 D2B_MAKE_LOCAL_TARGETS := \
-	check-clippy check-ci test-integration test-host-integration perf \
+	check-clippy check-ci check-integration \
+	test-integration test-host-integration perf \
 	pre-tag smoke-lite heavy-check heavy-flake-check check-async-gate check-census \
 	check-dead-code
 # Meta helpers that invoke Bazel directly but are not Layer-1 test aliases.
@@ -71,7 +72,7 @@ else
 SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
 
 .PHONY: pre-tag smoke-lite \
-        check check-clippy check-ci check-fast check-tier0 \
+        check check-clippy check-ci check-integration check-fast check-tier0 \
         bazel-check \
         test-unit \
         test-lint test-rust test-rust-main \
@@ -85,6 +86,7 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
         test-flake-aarch64 test-flake-x86 test-nix-unit \
         test-performance-budgets \
         test-drift test-policy test-changelog \
+        check-integration \
         test-integration test-host-integration perf \
         heavy-check heavy-flake-check check-async-gate check-census \
         check-dead-code \
@@ -100,7 +102,12 @@ SYSTEM ?= $(shell nix eval --extra-experimental-features 'nix-command flakes' \
 # Test interface. Every Bazel-backed target below dispatches to the matching
 # public suite in bazel/checks/BUILD.bazel.
 #
-#   make check          complete Bazel Layer-1 gate.
+#   make check          complete Bazel Layer-1 gate. Hermetic by design: it
+#                       runs no integration lane, so it stays runnable on a
+#                       hosted CI runner and on a host with neither a
+#                       container runtime nor /dev/kvm.
+#   make check-integration  check + both integration lanes; the local
+#                       NixOS/KVM pre-PR aggregate that `check` excludes.
 #   make check-ci       check + test-integration for local/manual compatibility.
 #   make test-<layer>   focused Bazel suite.
 #   make test-integration  type-9 container integration; local host/manual pre-PR.
@@ -152,6 +159,16 @@ check-dead-code:
 check-ci: check-clippy
 	$(D2B_BAZEL_TEST) //bazel/checks:check
 	$(MAKE) test-integration
+
+## check-integration - run the integration lanes, which `check` deliberately
+## leaves out. `check` stays the hermetic Layer-1 gate: the two integration
+## lanes need a container runtime (test-integration) and a KVM-capable NixOS
+## host (test-host-integration), so folding them in would make the fast gate
+## unrunnable on CI's hosted runners and on a laptop without /dev/kvm. This
+## is the pre-PR aggregate: the Layer-1 gate, then both lanes.
+check-integration: check
+	$(MAKE) test-integration
+	$(MAKE) test-host-integration
 
 ## check-fast - compatibility alias for check; check-tier0 is the fast subset.
 
