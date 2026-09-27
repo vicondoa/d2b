@@ -1005,6 +1005,27 @@ fn row_dumps() -> Vec<(String, String)> {
         )
         .to_owned(),
     ));
+    // The two accounts the journal and the row dumps between them could not
+    // give. The swtpm storage rows above filter on `swtpm`, which by
+    // construction cannot show the per-guest runtime dir a device worker
+    // binds its socket under - so a guest that has that row and a guest that
+    // does not read identically here. And the broker's audit log records the
+    // spawn decisions the journal only summarises, so when the row sits
+    // Pending with `w1-swtpm` matching nothing in the journal, this is what
+    // says whether the swtpm-dir fence and the spawn plan ran at all.
+    dumps.push((
+        "per-guest runtime dir storage row and the broker's spawn audit".to_owned(),
+        concat!(
+            "jq -c '[.paths[] | select(.id | test(\"vm-run\")) | {id, scope, ",
+            "pathTemplate, mode, owner, group, creator}]' /etc/d2b/storage.json ",
+            "|| echo 'no vm-run row in the storage contract'; echo '--- audit ---'; ",
+            "grep -hoE '\"(event|op|kind)\":\"[^\"]*\"' /var/lib/d2b/audit/broker-*.jsonl ",
+            "2>/dev/null | sort | uniq -c | sort -rn | head -25; echo '--- swtpm audit ---'; ",
+            "grep -h 'swtpm\\|SpawnRunner\\|PrepareSwtpm' /var/lib/d2b/audit/broker-*.jsonl ",
+            "2>/dev/null | tail -20 || echo 'no swtpm record in the broker audit log'; true",
+        )
+        .to_owned(),
+    ));
     dumps.push((
         "site artifact".to_owned(),
         "cat /etc/d2b/site.json 2>/dev/null || echo 'no site.json'".to_owned(),
