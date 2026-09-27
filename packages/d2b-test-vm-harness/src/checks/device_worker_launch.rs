@@ -1026,6 +1026,31 @@ fn row_dumps() -> Vec<(String, String)> {
         )
         .to_owned(),
     ));
+    // The state Volume is what the swtpm fence waits on, and its reconcile
+    // record carries the layout effect's own failure. The swtpm audit grep
+    // above cannot match it - the volume's records name the volume, not the
+    // runner - so dump them separately rather than inferring from the row.
+    dumps.push((
+        "tpm-state Volume reconcile audit".to_owned(),
+        concat!(
+            "grep -h 'tpm-state\\|Volume\\|layout' /var/lib/d2b/audit/broker-*.jsonl ",
+            "2>/dev/null | tail -20 ",
+            "|| echo 'no Volume record in the broker audit log'; true",
+        )
+        .to_owned(),
+    ));
+    // ZoneVolumeRootResolver names the exact stage that failed (storage-path-open,
+    // storage-subdir-create, marker-root, ...) and logs it at WARN. Match on the
+    // message so the failing stage is never again inferred from the row.
+    dumps.push((
+        "Volume source resolution stage".to_owned(),
+        concat!(
+            "journalctl -u d2bd.service --no-pager -o cat -b -n 4000 ",
+            "| grep -E 'Volume source resolution failed' | tail -20 ",
+            "|| echo 'no Volume source resolution failure recorded'; true",
+        )
+        .to_owned(),
+    ));
     dumps.push((
         "site artifact".to_owned(),
         "cat /etc/d2b/site.json 2>/dev/null || echo 'no site.json'".to_owned(),
