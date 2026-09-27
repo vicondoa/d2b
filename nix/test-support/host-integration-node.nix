@@ -359,7 +359,6 @@ rec {
         PY
       '';
     in
-    { lib, pkgs, ... }:
     {
       imports = [
           ../../nixos-modules/component-session.nix
