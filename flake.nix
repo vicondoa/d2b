@@ -641,66 +641,16 @@
           in builtins.listToAttrs (map mkImage imageFiles)
         else { });
 
-      # Type-G runNixOSTest integration tests (the additive real-kernel
-      # coverage layer). Each test boots a real NixOS VM with the d2b
-      # daemon surface and asserts live broker/daemon/host-posture behaviour
-      # (socket activation, SO_PEERCRED, bridge isolation, state-dir ACLs,
-      # broker privilege posture) that the fake-backed native Rust canaries and
-      # pure-eval gates cannot exercise. This is the hermetic, non-destructive
-      # successor to the `D2B_LIVE`-against-the-real-host bash scripts.
-      #
-      # Exposed under `vmChecks`, NOT `checks`, so the Layer-1 `nix flake check
-      # --no-build --all-systems` never realizes a VM. Selected explicitly by
-      # `make test-host-integration` (`nix build .#vmChecks.<system>.<name>`),
-      # which needs KVM (a local NixOS host; TCG fallback otherwise).
-      #
-      # Auto-discovered from tests/host-integration/*.nix (excluding lib.nix): each test is
-      # `{ pkgs, self }: pkgs.testers.runNixOSTest { ... }`, so adding a VM test
-      # is one new file - no edit here. x86_64-linux only: a runNixOSTest VM is
-      # built + booted for the builder's own system, and the hosted CI runners
-      # are x86_64 - aarch64 VM coverage needs an aarch64 builder.
-      vmChecks = forAllSystems (system:
-        if system == "x86_64-linux" then
-          let
-            pkgs = nixpkgsFor.${system};
-            # The two environment reads are the legacy handoff. The
-            # Bazel-owned lane reaches the same package from the guest
-            # image action's declared label inputs; these reads stay until
-            # that lane replaces the recipe.
-            hostToolBundleEnv = builtins.getEnv "D2B_HOST_TOOL_BUNDLE";
-            cloudHypervisorControllerBundleEnv =
-              builtins.getEnv "D2B_CH_CONTROLLER_BUNDLE";
-            handoff =
-              if hostToolBundleEnv == "" then
-                null
-              else
-                mkBazelHostTools system hostToolBundleEnv
-                  (if cloudHypervisorControllerBundleEnv == "" then
-                    null
-                  else
-                    cloudHypervisorControllerBundleEnv);
-            testSelf =
-              if handoff == null then self else handoff.hostSelf;
-            bazelHostTools =
-              if handoff == null then null else handoff.tools;
-            testDir = ./tests/host-integration;
-            testFiles = if builtins.pathExists testDir
-              then builtins.attrNames (nixpkgs.lib.filterAttrs
-                (name: type:
-                  type == "regular"
-                  && nixpkgs.lib.hasSuffix ".nix" name
-                  && name != "lib.nix")
-                (builtins.readDir testDir))
-              else [ ];
-            mkTest = file: {
-              name = nixpkgs.lib.removeSuffix ".nix" file;
-              value = import (testDir + "/${file}") {
-                inherit pkgs;
-                self = testSelf;
-              };
-            };
-          in builtins.listToAttrs (map mkTest testFiles)
-        else { });
+      # The type-10 host-integration lane moved to Bazel: the lane test
+      # target (`//bazel/checks/vm:host_integration_lane_run`) builds one guest
+      # image per check as a declared-input action, boots a pool from them,
+      # and runs each check's assertions against a snapshot-restored copy of
+      # its guest. `make test-host-integration` invokes that target. The
+      # `vmChecks` flake output, its `D2B_HOST_TOOL_BUNDLE` /
+      # `D2B_CH_CONTROLLER_BUNDLE` environment handoff, and the runNixOSTest
+      # fixtures are gone with it; the one file kept under
+      # `tests/host-integration/` is `lib.nix`, which the ported checks' guest
+      # declarations still read for their provider-artifact builders.
 
       # The guest image for the Bazel-owned host-integration lane. It is a
       # function, not a package: the lane's guest-image action calls it
