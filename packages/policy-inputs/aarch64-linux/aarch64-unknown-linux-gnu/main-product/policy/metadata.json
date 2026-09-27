@@ -2,8 +2,8 @@
   "authority": "cargo-locked-metadata",
   "defaultFeatures": true,
   "features": [],
-  "lockSha256": "c81d3e88744fa28916db65e5d3efa094ec0a58abddbe3dfaf9b0daffad5ff082",
-  "policyPackageCount": 395,
+  "lockSha256": "b2560e727ac6b3aec69c37e31456f3093616ced8e607f82d1d69d0fd87108765",
+  "policyPackageCount": 396,
   "policyPackageIds": [
     "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
     "aead@0.5.2#registry+https://github.com/rust-lang/crates.io-index",
@@ -154,6 +154,7 @@
     "d2b-session@0.0.0-bootstrap#path",
     "d2b-sk-frontend@0.0.0-bootstrap#path",
     "d2b-telemetry@0.0.0-bootstrap#path",
+    "d2b-test-vm-harness@0.0.0-bootstrap#path",
     "d2b-unsafe-local-helper@0.0.0-bootstrap#path",
     "d2b-zone-routing@0.0.0-bootstrap#path",
     "d2b@0.0.0-bootstrap#path",
@@ -401,8 +402,8 @@
     "zvariant_derive@5.15.0#registry+https://github.com/rust-lang/crates.io-index",
     "zvariant_utils@4.2.0#registry+https://github.com/rust-lang/crates.io-index"
   ],
-  "productionPackageCount": 395,
-  "resolveNodeCount": 413,
+  "productionPackageCount": 396,
+  "resolveNodeCount": 414,
   "roots": [
     "d2b",
     "d2b-audit",
@@ -492,6 +493,7 @@
     "d2b-session-unix",
     "d2b-sk-frontend",
     "d2b-telemetry",
+    "d2b-test-vm-harness",
     "d2b-unsafe-local-helper",
     "d2b-zone-routing"
   ],
