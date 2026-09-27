@@ -223,6 +223,23 @@ rec {
     };
   };
 
+  # The guest `bridge-isolation` boots: a plain NixOS node with the two
+  # userspace tools its assertions drive the bridge and its namespaces with.
+  #
+  # The check never wanted the d2b daemon host - it configures a bridge as
+  # root inside the guest and asserts the kernel's port-isolation semantics
+  # on it - so this node is not built on `d2bDaemonNode`. It declared these
+  # two packages and its `stateVersion`; the machine size, the disk, and the
+  # emulator invocation are the QEMU VM module's defaults, which the lane
+  # reads back off the image's manifest rather than restating here.
+  d2bBridgeIsolationNode = { pkgs, ... }: {
+    environment.systemPackages = [
+      pkgs.iproute2
+      pkgs.iputils
+    ];
+    system.stateVersion = "25.11";
+  };
+
   # The guest each fixture-less image evaluates, by the name the image action
   # asks for. A check's own guest is read out of the check's fixture; these are
   # the guests with no fixture to be read out of - the two reusable shapes the
@@ -251,9 +268,14 @@ rec {
   };
 
   portedCheckNodes = {
+    bridge-isolation = {
+      node = d2bBridgeIsolationNode;
+      testName = "d2b-bridge-isolation";
+    };
     daemon-smoke = {
       node = d2bDaemonSmokeNode;
       testName = "d2b-daemon-smoke";
     };
+
   };
 }

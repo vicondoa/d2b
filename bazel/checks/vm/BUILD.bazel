@@ -131,6 +131,7 @@ _CHECKS = [
     "guest-shell-service",
     "privilege-oracle",
     "resource-operator-activation",
+    "state-posture-contract",
     "runtime-cloud-hypervisor-guest-preflight",
     "state-posture-contract",
     "virtiofsd-volume-runtime",
@@ -146,6 +147,7 @@ _CHECKS = [
 # list; the image is built from the check's name, which is the shape its node
 # is declared under.
 _PORTED_CHECKS = [
+    "bridge-isolation",
     "daemon-smoke",
 ]
 

@@ -23,6 +23,7 @@
 //! [`GuestControl::diag_wait`]: crate::legacy::GuestControl::diag_wait
 //! [`GuestControl`]: crate::legacy::GuestControl
 
+pub mod bridge_isolation;
 pub mod daemon_smoke;
 
 use crate::legacy::{GuestControl, LegacyResult};
@@ -38,7 +39,10 @@ pub type Assertions = fn(&mut GuestControl) -> LegacyResult<()>;
 /// whether it holds an evaluated script), so a check whose image says it is
 /// ported and which has no entry here is a lane failure rather than a check
 /// that quietly does not run.
-const PORTED: &[(&str, Assertions)] = &[("daemon-smoke", daemon_smoke::assertions)];
+const PORTED: &[(&str, Assertions)] = &[
+    ("bridge-isolation", bridge_isolation::assertions),
+    ("daemon-smoke", daemon_smoke::assertions),
+];
 
 /// The assertions of one ported check, or `None` for a check that has not
 /// been ported.
