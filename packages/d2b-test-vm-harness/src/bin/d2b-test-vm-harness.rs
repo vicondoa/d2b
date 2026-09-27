@@ -280,8 +280,8 @@ fn run_lane(arguments: Vec<String>) -> Result<(), HarnessError> {
     }
 
     let groups = group_by_invocation(guests);
-    let admitted = admit(&groups, &work_root)?;
-    for group in &admitted {
+    let (admitted, deferred) = admit(&groups, &work_root)?;
+    for group in admitted.iter().chain(deferred.iter()) {
         report_line(&format!(
             "pool: {} ({} vCPU, {} MiB, {} MiB of working directory) <- {}",
             group.names(),
@@ -292,23 +292,48 @@ fn run_lane(arguments: Vec<String>) -> Result<(), HarnessError> {
         ));
     }
 
-    let outcomes: Vec<std::result::Result<CheckResult, (String, HarnessError)>> =
-        thread::scope(|scope| {
-            let emulator = emulator.as_path();
-            let work_root = work_root.as_path();
-            let handles: Vec<_> = admitted
+    // Two waves, not one. A group the host cannot hold alongside the others
+    // is deferred to a second wave, never dropped: dropping it left the lane
+    // reporting green over a subset of its own checks, with the log
+    // promising a second wave that nothing ever performed.
+    let mut outcomes = run_wave(&admitted, &emulator, &work_root);
+    if !deferred.is_empty() {
+        report_line(&format!(
+            "pool: second wave, {} now that the first wave's members have finished",
+            deferred
                 .iter()
-                .map(|group| scope.spawn(move || run_group(group, emulator, work_root)))
-                .collect();
-            handles
-                .into_iter()
-                .flat_map(|handle| {
-                    handle
-                        .join()
-                        .unwrap_or_else(|_| panic!("a pool group thread panicked"))
-                })
-                .collect()
-        });
+                .map(|group| group.names())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        outcomes.extend(run_wave(&deferred, &emulator, &work_root));
+    }
+
+/// Run one wave of groups concurrently, and hand back what each reported.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+fn run_wave(
+    groups: &[InvocationGroup],
+    emulator: &Path,
+    work_root: &Path,
+) -> Vec<std::result::Result<CheckResult, (String, HarnessError)>> {
+    if groups.is_empty() {
+        return Vec::new();
+    }
+    thread::scope(|scope| {
+        let handles: Vec<_> = groups
+            .iter()
+            .map(|group| scope.spawn(move || run_group(group, emulator, work_root)))
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|_| panic!("a pool group thread panicked"))
+            })
+            .collect()
+    })
+}
 
 /// One invocation group's checks, in the order they were selected.
 ///
@@ -505,10 +530,11 @@ fn group_by_invocation(guests: Vec<LaneGuest>) -> Vec<InvocationGroup> {
 /// cannot hold even the cheapest group is a host that cannot run the lane at
 /// all, which is worth saying plainly rather than booting a guest that
 /// cannot get the memory its node declared.
+/// The groups that fit the budget now, and the ones deferred to a second wave.
 fn admit(
     groups: &[InvocationGroup],
     work_root: &Path,
-) -> Result<Vec<InvocationGroup>, HarnessError> {
+) -> Result<(Vec<InvocationGroup>, Vec<InvocationGroup>), HarnessError> {
     let first = groups
         .first()
         .ok_or_else(|| HarnessError::Configuration("the lane has no checks to run".to_owned()))?;
@@ -552,6 +578,7 @@ fn admit(
     let mut cores_used: u64 = 0;
     let mut directory_used: u64 = 0;
     let mut admitted = Vec::new();
+    let mut deferred: Vec<InvocationGroup> = Vec::new();
     for (index, group) in groups.iter().enumerate() {
         let cost = group.footprint();
         let fits_memory = memory_used + cost.memory_size_mib <= memory_budget;
@@ -574,9 +601,11 @@ fn admit(
         }
         if !(fits_memory && fits_cores && fits_directory) {
             report_line(&format!(
-                "pool: {} does not fit the budget and will run after a member finishes",
+                "pool: {} does not fit the budget yet and will run in a second wave once the \
+                 first wave's members have finished",
                 group.names()
             ));
+            deferred.push(group.clone());
             continue;
         }
         memory_used += cost.memory_size_mib;
@@ -599,7 +628,7 @@ fn admit(
             work_root.display()
         ));
     }
-    Ok(admitted)
+    Ok((admitted, deferred))
 }
 /// Boot one check's own guest, prove the restore against it, and run the
 /// check on a restored copy of it.
