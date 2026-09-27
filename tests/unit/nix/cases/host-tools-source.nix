@@ -19,6 +19,7 @@ let
     builtins.readFile (flakeRoot + "/nixos-modules/vm-evaluator.nix");
   flakeSource = builtins.readFile (flakeRoot + "/flake.nix");
   makeSource = builtins.readFile (flakeRoot + "/Makefile");
+  laneBuildSource = builtins.readFile (flakeRoot + "/bazel/checks/vm/BUILD.bazel");
   bazelHostToolsSource =
     builtins.readFile (flakeRoot + "/nix/test-support/bazel-host-tools.nix");
   hostIntegrationLibSource =
@@ -109,10 +110,16 @@ in
         ''"d2b-provider-test-controller"''
         "inventoryShell"
       ]
-      && lib.all (needle: lib.hasInfix needle makeSource) [
+      # The host tools reach the guest as declared Bazel label inputs to the
+      # guest-image action. This case used to assert the `D2B_HOST_TOOL_BUNDLE`
+      # staging the retired nix recipe did in the Makefile; the intent is
+      # unchanged - Nix realizes the guest closure around binaries Bazel
+      # built, and does not rebuild them - so it now asserts the declaration
+      # that replaced it rather than a recipe that no longer runs.
+      && lib.all (needle: lib.hasInfix needle laneBuildSource) [
+        "_HOST_TOOLS"
         "//packages/d2b-provider-test-controller:d2b-provider-test-controller"
-        "stage_tool packages/d2b-provider-test-controller/d2b-provider-test-controller d2b-provider-test-controller"
-        ''D2B_HOST_TOOL_BUNDLE="$$stage"''
+        "//packages/d2b:d2b"
       ]
       && orderedUnique acceptanceControllerBlock [
         "controller = if hostToolBundle == null then"
