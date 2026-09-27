@@ -47,7 +47,7 @@ const AGENT_UP: Duration = Duration::from_secs(60);
 const HOST_NAMESPACE_CAPABILITIES: &str = concat!(
     "host_ns=$(readlink /proc/1/ns/net); ",
     "for status in /proc/[0-9]*/status; do ",
-    "pid='${status#/proc/}'; pid='${pid%/status}'; ",
+    "pid=${status#/proc/}; pid=${pid%/status}; ",
     "ns=$(readlink /proc/$pid/ns/net 2>/dev/null) || continue; ",
     "test \"$ns\" = \"$host_ns\" || continue; ",
     "cap=$(while IFS=: read -r key value; do ",

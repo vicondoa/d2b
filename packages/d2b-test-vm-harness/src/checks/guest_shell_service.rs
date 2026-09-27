@@ -41,6 +41,10 @@ const LISTENER_BOUND: Duration = Duration::from_secs(60);
 /// The unit whose journal both greps read.
 const GUEST_DAEMON_UNIT: &str = "d2bd-guest.service";
 
+/// The label the row is reported under, the fixture's own: the prelude's
+/// `unit_dumps` labels its dump `"<unit> status"`.
+const GUEST_DAEMON_STATUS_LABEL: &str = "d2bd-guest.service status";
+
 /// The row the listener wait explains itself with, the fixture's own: the
 /// unit's status, dumped the way the prelude's `unit_dumps` dumped it.
 const GUEST_DAEMON_STATUS: &str = "systemctl status d2bd-guest.service --no-pager 2>&1 | tail -n 40 || true";
@@ -63,7 +67,7 @@ pub fn assertions(control: &mut GuestControl) -> LegacyResult<()> {
     control.diag_unit("guest-daemon", GUEST_DAEMON_UNIT, GUEST_DAEMON)?;
     control.succeed(&["systemctl is-active --quiet d2bd-guest.service"], None)?;
 
-    let rows: [DiagRow<'_>; 1] = [(GUEST_DAEMON_UNIT, GUEST_DAEMON_STATUS)];
+    let rows: [DiagRow<'_>; 1] = [(GUEST_DAEMON_STATUS_LABEL, GUEST_DAEMON_STATUS)];
     let explain = [("d2bd-guest.service", "")];
     control.diag_wait(
         "guest-listener-bound",
