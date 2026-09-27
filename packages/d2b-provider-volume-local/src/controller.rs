@@ -254,17 +254,36 @@ impl<S: VolumeSourceEffectPort, L: VolumeLayoutEffectPort> VolumeLocalController
                 conditions.push(condition);
                 phase = phase.worse(severity_phase(condition));
             }
+            // Each mutation below reports through `?`, so a failure reached
+            // the driver as a bare error code with no step attached. Name the
+            // step and the entry on the way out: the step is the only thing
+            // that distinguishes a cleanup that cannot address the volume
+            // root from a provision or ACL pass that could not.
+            macro_rules! layout_step {
+                ($what:literal, $call:expr) => {
+                    $call.map_err(|error| {
+                        tracing::warn!(
+                            volume = %volume_uid.as_str(),
+                            entry = %declared.path(),
+                            step = $what,
+                            error = ?error,
+                            "volume layout step failed"
+                        );
+                        error
+                    })?
+                };
+            }
             if plan.recreate {
-                self.layout.cleanup(&root, &entry).await?;
+                layout_step!("cleanup", self.layout.cleanup(&root, &entry).await);
             }
             if plan.provision {
-                self.layout.provision(&root, &entry).await?;
+                layout_step!("provision", self.layout.provision(&root, &entry).await);
             }
             if !plan.repair.is_empty() {
-                self.layout.repair(&root, &entry, &plan.repair).await?;
+                layout_step!("repair", self.layout.repair(&root, &entry, &plan.repair).await);
             }
             if plan.apply_acl {
-                self.layout.apply_acl(&root, &entry).await?;
+                layout_step!("apply_acl", self.layout.apply_acl(&root, &entry).await);
             }
             if plan.condition.is_none() {
                 phase = phase.worse(LayoutPhase::Ready);
