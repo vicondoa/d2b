@@ -25,6 +25,7 @@
 
 pub mod bridge_isolation;
 pub mod daemon_smoke;
+pub mod device_worker_launch;
 pub mod guest_agent_cap_confinement;
 pub mod guest_shell_service;
 pub mod privilege_oracle;
@@ -48,6 +49,10 @@ pub type Assertions = fn(&mut GuestControl) -> LegacyResult<()>;
 const PORTED: &[(&str, Assertions)] = &[
     ("bridge-isolation", bridge_isolation::assertions),
     ("daemon-smoke", daemon_smoke::assertions),
+    (
+        "device-worker-launch",
+        device_worker_launch::assertions,
+    ),
     (
         "guest-agent-cap-confinement",
         guest_agent_cap_confinement::assertions,

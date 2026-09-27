@@ -993,6 +993,495 @@ rec {
       };
     };
 
+  # The guest `device-worker-launch` boots: the reusable daemon node
+  # plus the fixture's own contributions.
+  #
+  # The fixture declared no machine size, disk or device of its own - the shape
+  # carries those - so what moves here is its `let` bindings (the swtpm and GPU
+  # device-worker artifacts, the crosvm stand-in shim, the Cloud Hypervisor
+  # configuration and the declared artifacts) and the extra module that declares
+  # the provider rows and the Devices whose worker rows the check launches.
+  d2bDeviceWorkerLaunchNode =
+    d2bDaemonNode {
+      extra =
+        { lib, pkgs, ... }:
+        let
+      hostToolBundle =
+        if self.lib ? d2bHostToolBundle then self.lib.d2bHostToolBundle else null;
+      d2bLib = import ../../tests/host-integration/lib.nix {
+        inherit self;
+        inherit lib;
+        inherit hostToolBundle;
+      };
+      cloudHypervisorArtifact = d2bLib.mkRuntimeCloudHypervisorArtifact pkgs;
+      volumeProviderArtifact = d2bLib.mkVolumeProviderArtifact pkgs;
+
+      # A Provider artifact that packages the Device worker executables the
+      # declared rows name. Shape mirrors `mkVolumeProviderArtifact`: a signed
+      # manifest whose executable set is computed from the packaged `bin/` files,
+      # a Device-exporting catalog entry, and a deterministic publisher key.
+      mkDeviceWorkerProviderArtifact =
+        { artifactId
+        , publisher
+        , binaries
+        , controllerBinary
+        }:
+        let
+          signer = pkgs.python3.withPackages
+            (pythonPackages: [ pythonPackages.cryptography ]);
+          manifest = ../../tests/fixtures/provider-acceptance/provider-manifest.json;
+          schema = ../../tests/fixtures/provider-acceptance/config-schema.json;
+          controller = if hostToolBundle == null then
+            "${self.packages.${pkgs.stdenv.hostPlatform.system}.d2b-provider-test-controller}/bin/d2b-provider-test-controller"
+          else
+            "${hostToolBundle}/bin/d2b-provider-test-controller";
+          package = pkgs.runCommand "d2b-${artifactId}" {
+            nativeBuildInputs = [ pkgs.coreutils signer ];
+          } ''
+            mkdir -p "$out/bin"
+            ${lib.concatStringsSep "\n" (lib.mapAttrsToList
+              (name: path: ''
+                cp "${path}" "$out/bin/${name}"
+                chmod 0755 "$out/bin/${name}"
+              '')
+              binaries)}
+            cp "${controller}" "$out/bin/${controllerBinary}"
+            chmod 0755 "$out/bin/${controllerBinary}"
+            ${signer}/bin/python3 - "${manifest}" "$out" \
+              "${artifactId}" "${publisher}" "${controllerBinary}" \
+              ${lib.escapeShellArg (lib.concatStringsSep " " (lib.attrNames binaries))} <<'PY'
+            import hashlib
+            import json
+            import pathlib
+            import sys
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+                Ed25519PrivateKey,
+            )
+
+            (
+                manifest_path,
+                output_path,
+                artifact_id,
+                publisher,
+                controller_binary,
+                binary_names,
+            ) = sys.argv[1:]
+            output = pathlib.Path(output_path)
+            manifest = json.loads(pathlib.Path(manifest_path).read_text())
+            # The executable set the compiler recomputes covers every regular file
+            # in bin/: the controller binary plus the declared worker binaries.
+            names = sorted(set(binary_names.split()) | {controller_binary})
+
+            # Device-only manifest: the declared Device worker rows are the only
+            # rows this artifact's Provider serves in this fixture.
+            resource_types = {"Device"}
+            manifest["apiBindings"] = [
+                binding
+                for binding in manifest.get("apiBindings", [])
+                if binding.get("resourceType") in resource_types
+            ]
+            for component in manifest.get("components", []):
+                component["exportedResourceTypes"] = [
+                    resource_type
+                    for resource_type in component.get("exportedResourceTypes", [])
+                    if resource_type in resource_types
+                ]
+
+            manifest["artifactId"] = artifact_id
+            manifest["trust"]["publisher"] = publisher
+            executable_map = json.dumps(
+                {
+                    name: "sha256:" + hashlib.sha256(
+                        (output / "bin" / name).read_bytes()
+                    ).hexdigest()
+                    for name in names
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+            first = hashlib.sha256(
+                b"d2b:v3:provider-executable-set\0" + executable_map
+            ).digest()
+            executable_digest = "sha256:" + hashlib.sha256(first).hexdigest()
+            controller_digest = "sha256:" + hashlib.sha256(
+                (output / "bin" / controller_binary).read_bytes()
+            ).hexdigest()
+            manifest["digests"]["executable"] = executable_digest
+            for component in manifest.get("components", []):
+                for capability in component.get("targetCapabilities", []):
+                    capability["artifactDigest"] = controller_digest
+            manifest_bytes = json.dumps(
+                manifest,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+            seed = hashlib.sha256(
+                b"d2b-u17-device-worker-provider-signing-key-v1"
+                + artifact_id.encode()
+            ).digest()
+            private_key = Ed25519PrivateKey.from_private_bytes(seed)
+            public_key = private_key.public_key().public_bytes(
+                serialization.Encoding.PEM,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+            metadata = output / "share/d2b/provider"
+            metadata.mkdir(parents=True)
+            (metadata / "provider-manifest.json").write_bytes(manifest_bytes)
+            (metadata / "provider-manifest.json.sig").write_bytes(
+                private_key.sign(manifest_bytes)
+            )
+            (metadata / "config-schema.json").write_bytes(
+                pathlib.Path("${schema}").read_bytes()
+            )
+            (output / "publisher-public-key.pem").write_bytes(public_key)
+            (output / "executable-set-digest").write_text(executable_digest)
+            (output / "manifest-digest").write_text(
+                "sha256:" + hashlib.sha256(manifest_bytes).hexdigest()
+            )
+            PY
+          '';
+          packageDigestPath = pkgs.runCommand
+            "d2b-${artifactId}-nar-digest" {
+              nativeBuildInputs = [ pkgs.nix ];
+            } ''
+              printf 'sha256:%s' \
+                "$(${pkgs.nix}/bin/nix --extra-experimental-features nix-command \
+                  hash path --type sha256 --base16 "${package}")" > "$out"
+            '';
+          baseManifest = builtins.fromJSON (builtins.readFile manifest);
+          catalog = {
+            providerName = artifactId;
+            packageName = "d2b-${artifactId}";
+            version = "0.0.0";
+            systems = [ pkgs.stdenv.hostPlatform.system ];
+            platform = pkgs.stdenv.hostPlatform.system;
+            apiCompatibility = "d2b.zone.v3";
+            serviceCompatibility = "d2bd.resource";
+            signature = { signatureId = "default"; };
+            rootEpoch = 1;
+            revocationStatus = "clear";
+            denyStatus = "clear";
+            provenanceEvidence = "accepted";
+            sbomEvidence = "accepted";
+            licenseEvidence = "accepted";
+            vulnerabilityEvidence = "accepted";
+            conformanceAttestation = "accepted";
+            supportChannel = "stable";
+            supportContact = "d2b-u17-device-worker@localhost";
+            publisher = publisher;
+            packageDigest = lib.removeSuffix "\n"
+              (builtins.readFile packageDigestPath);
+            executableDigest = lib.removeSuffix "\n"
+              (builtins.readFile "${package}/executable-set-digest");
+            manifestDigest = lib.removeSuffix "\n"
+              (builtins.readFile "${package}/manifest-digest");
+            componentDigest = "sha256:${builtins.hashString
+              "sha256" (builtins.toJSON baseManifest.components)}";
+            descriptorDigest = "sha256:${builtins.hashString
+              "sha256" (builtins.toJSON baseManifest.apiBindings)}";
+            configDigest = "sha256:${builtins.hashString
+              "sha256" (builtins.readFile schema)}";
+          };
+        in {
+          inherit package catalog;
+          type = "provider";
+          trustedPublisher = {
+            publisherRef = publisher;
+            signingKey = builtins.readFile "${package}/publisher-public-key.pem";
+          };
+        };
+
+      # The GPU artifact's crosvm stand-in: a real ELF (via the shim) so the
+      # artifact validates as a Provider executable set, whose behavior is to
+      # record its argv and refuse. The fixture never asks a GPU worker to serve.
+      crosvmStandIn = self.lib.buildProviderElfShim {
+        inherit pkgs;
+        name = "crosvm";
+        interpreterPkg = pkgs.bash;
+        interpreterPath = "bin/bash";
+        program = pkgs.writeText "d2b-u17-crosvm-stand-in.sh" ''
+          # Fixture stand-in for the GPU Provider's crosvm. It must never run in
+          # a passing fixture (the launch path is proved up to the broker's own
+          # refusal); if it does run, it records the argv the Process controller
+          # composed and refuses, so a fabricated success is impossible.
+          set -eu
+          log="/run/d2b/u17-device-worker-standin.argv"
+          if [ -d /run/d2b ]; then
+            printf '%s\n' "crosvm-stand-in:$*" >> "$log" 2>/dev/null || true
+          fi
+          printf 'd2b-u17: crosvm stand-in invoked with %s\n' "$*" >&2
+          exit 79
+        '';
+      };
+
+      # One artifact serves both Device Providers: a Provider artifact exports its
+      # ResourceTypes, and two artifacts both exporting `Device` collide in one
+      # Zone (`provider-resourcetype-collision`).
+      deviceWorkerArtifact = mkDeviceWorkerProviderArtifact {
+        artifactId = "device-worker-acceptance-provider";
+        publisher = "d2b-u17-device-worker";
+        controllerBinary = "acceptance-controller";
+        binaries = {
+          swtpm = "${pkgs.swtpm}/bin/swtpm";
+          swtpm-ioctl = "${pkgs.swtpm}/bin/swtpm_ioctl";
+          crosvm = "${crosvmStandIn}/bin/crosvm";
+        };
+      };
+
+      cloudHypervisorConfig = {
+        controllerExecutionRef = "Host/host-system";
+        defaultVcpus = 2;
+        defaultMemoryMb = 512;
+        defaultMachineType = "microvm";
+        watchdog = true;
+        adoptionWindowMs = 30000;
+        healthCheckIntervalMs = 5000;
+        healthCheckTimeoutMs = 1000;
+        healthCheckFailureThreshold = 3;
+        startupDeadlineMs = 120000;
+      };
+
+      artifacts = {
+        runtime-cloud-hypervisor = {
+          inherit (cloudHypervisorArtifact) package type catalog;
+        };
+        volume-acceptance-provider = {
+          inherit (volumeProviderArtifact) package type catalog;
+        };
+        device-worker-acceptance-provider = {
+          inherit (deviceWorkerArtifact) package type catalog;
+        };
+      };
+        in
+        {
+        d2b.site.adminUsers = [ "alice" ];
+        environment.systemPackages = with pkgs; [
+          jq
+          procps
+          util-linux
+          acl
+          iproute2
+          # The fixture binds its stale video socket from the VM side; python3
+          # is the smallest reliable AF_UNIX binder available in the VM.
+          python3
+        ];
+        d2b.artifacts = artifacts;
+        d2b.zones.local-root.resources.host-system = {
+          type = "Host";
+          spec = {
+            providerRef = "Provider/system-core";
+            defaultDomain = "system";
+            allowedDomains = [ "system" ];
+            budget = { };
+            networkAttachments = [ ];
+            deviceAttachments = [ ];
+            volumeAttachmentDefaults = [ ];
+          };
+        };
+        d2b.zones.work.parentZone = "local-root";
+        # Every Zone the host compiles a bundle for declares the publishers of
+        # the artifacts its rows select; `local-root` is a compiled Zone too
+        # (the other Cloud Hypervisor fixtures declare the same pair there).
+        d2b.zones.local-root.trustedPublishers.d2b-cloud-hypervisor.signingKey =
+          cloudHypervisorArtifact.trustedPublisher.signingKey;
+        d2b.zones.local-root.trustedPublishers.d2b-volume-acceptance.signingKey =
+          volumeProviderArtifact.trustedPublisher.signingKey;
+        d2b.zones.local-root.trustedPublishers.d2b-u17-device-worker.signingKey =
+          deviceWorkerArtifact.trustedPublisher.signingKey;
+        d2b.zones.work.trustedPublishers.d2b-cloud-hypervisor.signingKey =
+          cloudHypervisorArtifact.trustedPublisher.signingKey;
+        d2b.zones.work.trustedPublishers.d2b-volume-acceptance.signingKey =
+          volumeProviderArtifact.trustedPublisher.signingKey;
+        d2b.zones.work.trustedPublishers.d2b-u17-device-worker.signingKey =
+          deviceWorkerArtifact.trustedPublisher.signingKey;
+        d2b.zones.work.resources = {
+          alice = {
+            type = "User";
+            spec = {
+              displayName = "Alice";
+              groups = [ ];
+              osUsername = "alice";
+            };
+          };
+          d2bd = {
+            type = "User";
+            spec = {
+              displayName = "d2bd";
+              groups = [ ];
+              osUsername = "d2bd";
+            };
+          };
+          device-operator = {
+            type = "Role";
+            spec.rules = [
+              {
+                resourceTypes = [
+                  "Device"
+                  "Endpoint"
+                  "EphemeralProcess"
+                  "Guest"
+                  "Host"
+                  "Process"
+                  "Provider"
+                  "Volume"
+                ];
+                verbs = [ "get" "list" ];
+                subresources = [ ];
+                resourceNames = [ ];
+                zones = [ "work" ];
+                executionRefs = [ ];
+                sessionVerbs = [ "connect" "invoke" ];
+              }
+              {
+                resourceTypes = [ "Device" ];
+                verbs = [ "delete" ];
+                subresources = [ ];
+                resourceNames = [ "tpm0" ];
+                zones = [ "work" ];
+                executionRefs = [ ];
+                sessionVerbs = [ "connect" "invoke" ];
+              }
+            ];
+          };
+          device-operator-binding = {
+            type = "RoleBinding";
+            spec = {
+              roleRef = "Role/device-operator";
+              subjects = [ "User/alice" ];
+              externalPrincipalSelector = null;
+              scopeNarrowing = null;
+            };
+          };
+          host-system = {
+            type = "Host";
+            spec = {
+              providerRef = "Provider/system-core";
+              defaultDomain = "system";
+              allowedDomains = [ "system" ];
+              budget = { };
+              networkAttachments = [ ];
+              deviceAttachments = [ ];
+              volumeAttachmentDefaults = [ ];
+            };
+          };
+          # The Device owners. The Guest stays declared input and is never
+          # booted: the Device worker rows are bundle-declared `Process` rows of
+          # the Process controller, and no guest system artifact is declared, so
+          # no VMM is ever launched here. Its name is the VM identity of the
+          # Devices it owns (`Device.metadata.ownerRef`).
+          acceptance-guest = {
+            type = "Guest";
+            spec = {
+              providerRef = "Provider/volume-virtiofs";
+              executionRef = "Host/host-system";
+              defaultDomain = "system";
+              allowedDomains = [ "system" ];
+              budget = { };
+              volumeAttachmentDefaults = [ ];
+              networkAttachments = [ ];
+              deviceAttachments = [ ];
+            };
+          };
+          volume-local = {
+            type = "Provider";
+            spec = {
+              artifactId = "volume-acceptance-provider";
+              config = {
+                controllerExecutionRef = "Host/host-system";
+                sourcePolicies = [
+                  {
+                    id = "daemon-state";
+                    class = "local-path";
+                    volumeKinds = [ "durable" "state" "cache" ];
+                  }
+                  # The TPM state Volume's source policy
+                  # (`build_tpm_state_volume_spec`, opaque policy id).
+                  {
+                    id = "tpm-state";
+                    class = "local-path";
+                    volumeKinds = [ "state" ];
+                  }
+                ];
+              };
+            };
+          };
+          volume-virtiofs = {
+            type = "Provider";
+            spec = {
+              artifactId = "volume-acceptance-provider";
+              config.controllerExecutionRef = "Host/host-system";
+            };
+          };
+          runtime-cloud-hypervisor = {
+            type = "Provider";
+            spec = {
+              artifactId = "runtime-cloud-hypervisor";
+              config = cloudHypervisorConfig;
+            };
+          };
+          device-tpm = {
+            type = "Provider";
+            spec = {
+              artifactId = "device-worker-acceptance-provider";
+              config.controllerExecutionRef = "Host/host-system";
+            };
+          };
+          device-gpu = {
+            type = "Provider";
+            spec = {
+              artifactId = "device-worker-acceptance-provider";
+              config.controllerExecutionRef = "Host/host-system";
+            };
+          };
+          # The Device under test: an emulated TPM claimed by the Guest. The
+          # Provider's projection declares `Process/swtpm-tpm0`,
+          # `EphemeralProcess/swtpm-flush-tpm0`, `Endpoint/tpm-tpm0` and
+          # `Endpoint/tpm-ctrl-tpm0` as this Device's children.
+          tpm0 = {
+            type = "Device";
+            metadata.ownerRef = "Guest/acceptance-guest";
+            spec = {
+              providerRef = "Provider/device-tpm";
+              deviceClass = "emulated";
+              arbitration = "exclusive";
+              maxConcurrentClaims = 1;
+              inventory.selector = { };
+            };
+          };
+          # The GPU/video Devices: a full GPU with its video sidecar
+          # (`gpu-worker` + `video-worker` rows) and a render-node-only Device
+          # (`gpu-render-node` row, the shape whose render node the broker
+          # pre-opens itself). Both are physical DRM Devices by declaration; the
+          # VM has no GPU, which is exactly what the fixture measures.
+          gpu0 = {
+            type = "Device";
+            metadata.ownerRef = "Guest/acceptance-guest";
+            spec = {
+              providerRef = "Provider/device-gpu";
+              deviceClass = "physical";
+              arbitration = "exclusive";
+              maxConcurrentClaims = 1;
+              inventory.selector = { busClass = "drm"; label = "u17-gpu0"; };
+            };
+          };
+          gpu1 = {
+            type = "Device";
+            metadata.ownerRef = "Guest/acceptance-guest";
+            spec = {
+              providerRef = "Provider/device-gpu";
+              deviceClass = "physical";
+              arbitration = "exclusive";
+              maxConcurrentClaims = 1;
+              inventory.selector = { busClass = "drm"; label = "u17-gpu1"; };
+            };
+          };
+        };
+    };
+  };
+
   # The guest each fixture-less image evaluates, by the name the image action
   # asks for. A check's own guest is read out of the check's fixture; these are
   # the guests with no fixture to be read out of - the two reusable shapes the
@@ -1029,6 +1518,10 @@ rec {
       node = d2bDaemonSmokeNode;
       testName = "d2b-daemon-smoke";
     };
+    device-worker-launch = {
+      node = d2bDeviceWorkerLaunchNode;
+      testName = "d2b-device-worker-launch";
+    };
     guest-agent-cap-confinement = {
       node = d2bGuestAgentCapConfinementNode;
       testName = "d2b-guest-agent-cap-confinement";
@@ -1049,9 +1542,6 @@ rec {
       node = d2bStatePostureContractNode;
       testName = "d2b-state-posture-contract";
     };
-    wayland-proxy = {
-      node = d2bWaylandProxyNode;
-      testName = "d2b-wayland-proxy";
-    };
+
   };
 }

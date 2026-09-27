@@ -133,7 +133,6 @@ _CHECKS = [
     "resource-operator-activation",
     "state-posture-contract",
     "runtime-cloud-hypervisor-guest-preflight",
-    "state-posture-contract",
     "virtiofsd-volume-runtime",
     "wayland-proxy",
 ]
@@ -149,6 +148,7 @@ _CHECKS = [
 _PORTED_CHECKS = [
     "bridge-isolation",
     "daemon-smoke",
+    "device-worker-launch",
     "guest-agent-cap-confinement",
     "guest-shell-service",
     "privilege-oracle",
