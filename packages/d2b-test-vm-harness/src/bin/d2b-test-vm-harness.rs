@@ -177,6 +177,23 @@ struct CheckResult {
 /// mounted where it mounted it, and the guest's random pool is out of its
 /// initialising state. A restore that drops any of those is a restore that
 /// would break a check, and that is the failure worth catching.
+///
+/// The guest's block devices are among them, by the name the guest's kernel
+/// gave each one and its size: the kernel names a disk by the order the
+/// devices were created, so a restore that put this member's disks back in
+/// the emulator's report order rather than the launch's would hand the guest
+/// a different `/dev/vda` than the fresh boot it is compared with - and every
+/// fact a check anchors to a device identity (a volume-local marker anchors
+/// its root by `(device, inode)`, and an inode means nothing without the
+/// device it was read from) would be read against the wrong disk.
+///
+/// What this gate does *not* prove, and must not be read as proving: it
+/// observes the guest's configuration surface as a booted guest reports it,
+/// so it says nothing about RAM or in-flight state. The restore is disk-only -
+/// an internal snapshot is refused while a VirtFS export is mounted in the
+/// guest, and every lane guest mounts one - so a guest restored onto its disk
+/// and reset is compared against the fresh boot at the same surface, not
+/// across the memory each had.
 const EQUIVALENCE_MARKER: &str = r#"
 import subprocess
 import sys
@@ -208,6 +225,7 @@ report("hostTools", "ls /run/d2b-host-tools 2>/dev/null || ls /nix/var/nix/profi
 report("activation", "systemctl show d2b-lane-activation --property=ActiveState --property=Result --no-pager")
 report("crng", "journalctl -b --no-pager -o cat | grep -c 'crng init done' || true")
 report("backdoor", "systemctl is-active backdoor.service")
+report("blockDevices", "for device in /sys/block/vd*; do printf '%s=%s ' \"$(basename \"$device\")\" \"$(cat \"$device/size\")\"; done; echo")
 print("d2b-lane-marker complete")
 "#;
 

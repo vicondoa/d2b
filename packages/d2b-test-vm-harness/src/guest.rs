@@ -798,6 +798,54 @@ impl SnapshotPoint {
         )))
     }
 
+    /// Where one device sits in the order the launch attached it.
+    ///
+    /// The drives the node declared come first, in the order it declared
+    /// them, then the drives the node attached through its own option list.
+    /// That is the order the launch creates the devices in, and the guest's
+    /// kernel names a block device by the order the devices are created: the
+    /// same fleet attached in a different order is a different set of
+    /// `/dev/vd*` names. A device the launch never attached sorts after both,
+    /// and the sort that consumes this ranking is stable, so such a device
+    /// keeps the emulator's own order among its peers.
+    fn launch_rank(&self, target: &RestoreTarget) -> usize {
+        if let Some(index) = self
+            .declared
+            .iter()
+            .position(|(_, declared)| declared.label == target.label)
+        {
+            return index;
+        }
+        if let Some(index) = self
+            .ephemeral
+            .iter()
+            .position(|(_, ephemeral)| ephemeral.label == target.label)
+        {
+            return self.declared.len() + index;
+        }
+        usize::MAX
+    }
+
+    /// The devices a restore puts back, in the order the launch attached
+    /// them.
+    ///
+    /// The devices arrive as the emulator reported them - `query-block`
+    /// order, which is not the launch's - and leave in the order the launch
+    /// created them, which is the order the guest's kernel names its disks
+    /// in. The sort is stable, so two devices the launch never attached keep
+    /// the emulator's order among themselves.
+    pub fn reattachment_order(
+        &self,
+        devices: Vec<(BlockDevice, RestoreTarget)>,
+    ) -> Vec<(BlockDevice, RestoreTarget)> {
+        let mut ranked: Vec<(usize, (BlockDevice, RestoreTarget))> = devices
+            .into_iter()
+            .map(|device| (self.launch_rank(&device.1), device))
+            .collect();
+        ranked.sort_by_key(|(rank, _)| *rank);
+        ranked.into_iter().map(|(_, device)| device).collect()
+    }
+
     /// The layer one device's next writes go into.
     pub fn overlay_for(&self, target: &RestoreTarget) -> PathBuf {
         self.work_dir.join(format!(
@@ -969,14 +1017,34 @@ impl ActiveGuest {
     /// writes a layer and a node name of its own, because the emulator refuses
     /// to open a node twice or to write over a file that holds an open
     /// image.
+    ///
+    /// The devices go back in the order the launch attached them, not in the
+    /// order the emulator reports them. The guest's kernel names a block
+    /// device by the order the devices are created, so a fleet re-attached in
+    /// a different order hands the guest a different `/dev/vda`: a check that
+    /// recorded a device identity - a volume-local marker anchors its root by
+    /// `(device, inode)`, and an inode is only meaningful on the device it
+    /// was read from - would then be run against a guest whose disks are
+    /// named differently than they were on the fresh boot it is compared
+    /// with.
     pub fn restore(&mut self, point: &mut SnapshotPoint) -> Result<Duration> {
         let started = Instant::now();
         let devices = self.rotatable_devices()?;
         let mut targets = Vec::with_capacity(devices.len());
-        for device in &devices {
-            let target = point.target_for(self.monitor_mut()?, device)?.clone();
+        for device in devices {
+            let target = point.target_for(self.monitor_mut()?, &device)?.clone();
+            targets.push((device, target));
+        }
+        // The devices go back on in the order the launch attached them: the
+        // guest's kernel names a block device by the order the devices are
+        // created, so the emulator's own report order hands it a different
+        // `/dev/vda`, and a check that recorded a device identity - a
+        // volume-local marker anchors its root by `(device, inode)` - would
+        // then run against a guest whose disks are named differently than on
+        // the fresh boot it is compared with.
+        let targets = point.reattachment_order(targets);
+        for (device, _) in &targets {
             self.monitor_mut()?.detach_device(device, DETACH_BOUND)?;
-            targets.push((device.clone(), target));
         }
         point.next_layer();
         for (device, _) in &targets {
@@ -1740,6 +1808,90 @@ mod tests {
             point.overlay_node(targets[0]),
             point.overlay_node(targets[1]),
             "two devices of one member are two nodes"
+        );
+    }
+
+    #[test]
+    fn a_restore_orders_the_devices_the_launch_declared_them() {
+        // The launch attaches the node's declared drives first and the drives
+        // the node attached through its own option list after, and the
+        // guest's kernel names a block device by the order the devices are
+        // created. A restore that re-attached in the emulator's own report
+        // order instead handed the guest a different `/dev/vda` - the root
+        // disk and the state disk swapped - and the volume-local marker
+        // anchored to the root's `(device, inode)` then failed closed for the
+        // rest of the run.
+        let mut declared = manifest(3, 3072, &[]);
+        declared.extra_options = vec![
+            "-drive".to_owned(),
+            "file=/nix/store/0123456789bcdefghijklmnopqrstuv-d2b-state.img,format=raw,if=virtio,snapshot=on"
+                .to_owned(),
+        ];
+        let spec = GuestSpec::new(
+            declared,
+            "/run/lane/image",
+            "/nix/store/qemu/bin/qemu-kvm",
+            "/run/lane/work",
+            "device-worker-launch",
+        );
+        let point = SnapshotPoint::new(&spec).expect("the member's snapshot reads out of its spec");
+
+        assert_eq!(point.declared.len(), 1, "the node declared one drive");
+        assert_eq!(point.ephemeral.len(), 1, "the node attached one state disk");
+        let root = &point.declared[0].1;
+        let state = &point.ephemeral[0].1;
+        assert_eq!(point.launch_rank(root), 0, "the declared drive launches first");
+        assert_eq!(
+            point.launch_rank(state),
+            point.declared.len(),
+            "the node's own option drives follow the declared ones"
+        );
+        assert!(
+            point.launch_rank(root) < point.launch_rank(state),
+            "the root disk is /dev/vda on the launch and must be again on a restore"
+        );
+    }
+
+    #[test]
+    fn a_restore_puts_the_devices_back_in_the_order_the_launch_attached_them() {
+        // The report comes back in `query-block` order - the state disk the
+        // node attached through its own option list first, the root drive the
+        // launch declared second - and the restore has to hand the emulator
+        // the opposite order, because that is the order the fresh boot
+        // created the devices in and therefore the order the guest's kernel
+        // named them in. Under the defect this is the swap that made every
+        // volume-local marker mismatch its own root.
+        let mut declared = manifest(3, 3072, &[]);
+        declared.extra_options = vec![
+            "-drive".to_owned(),
+            "file=/nix/store/0123456789bcdefghijklmnopqrstuv-d2b-state.img,format=raw,if=virtio,snapshot=on"
+                .to_owned(),
+        ];
+        let point = SnapshotPoint::new(&spec(declared)).expect("the member's snapshot reads out of its spec");
+        let device = |id: &str, node: &str| BlockDevice {
+            id: id.to_owned(),
+            qdev: format!("/machine/peripheral-anon/{id}"),
+            node: node.to_owned(),
+            file: format!("/run/lane/{id}.qcow2"),
+            format: "qcow2".to_owned(),
+            read_only: false,
+            rotatable: true,
+        };
+        let declared_target = point.declared[0].1.clone();
+        let (ephemeral_node, ephemeral) = point.ephemeral[0].clone();
+        let reported = vec![
+            (device("state", &ephemeral_node), ephemeral),
+            (device("root", &point.declared[0].0), declared_target.clone()),
+        ];
+        let ordered = point.reattachment_order(reported);
+        assert_eq!(
+            ordered.iter().map(|(device, _)| device.id.as_str()).collect::<Vec<_>>(),
+            vec!["root", "state"],
+            "the launched-first drive is attached first whatever order the report came in"
+        );
+        assert_eq!(
+            ordered[0].1, declared_target,
+            "the first device back on is the node's own declared drive"
         );
     }
 

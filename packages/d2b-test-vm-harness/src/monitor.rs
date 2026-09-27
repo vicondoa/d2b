@@ -590,6 +590,13 @@ mod tests {
     /// command the lane writes: a reply the canned side sends proves nothing
     /// about which node an overlay was taken of, or how a device was
     /// re-attached.
+    ///
+    /// A request that outruns the list is not a failure, it is a block: the
+    /// lane reads the socket for a line the canned side will never write. So
+    /// every command the code under test writes needs a reply of its own, in
+    /// the order the lane reads them - its handshake's, then one per command,
+    /// with any event the command is supposed to deliver after the reply that
+    /// command's own `execute` consumes.
     fn monitor_answering(replies: &'static [&'static str]) -> Wired {
         let (lane_end, emulator_end) = UnixStream::pair().expect("a socket pair");
         let requests: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
@@ -796,7 +803,14 @@ mod tests {
 
     #[test]
     fn detaching_a_device_waits_for_the_emulator_to_finish_it() {
+        // The replies in the order the lane reads them: the handshake's, the
+        // detach's own ack, and then the poll that carries the event. The ack
+        // is not optional - without it `device_del` reads the event as its
+        // own reply across an empty `return` and the wait that follows has
+        // nothing left to poll, which is a test that blocks rather than
+        // fails.
         let mut monitor = monitor_answering(&[
+            r#"{"return": {}}"#,
             r#"{"return": {}}"#,
             r#"{"event": "DEVICE_DELETED", "data": {"device": "/machine/peripheral-anon/device[4]"}}"#,
             r#"{"return": {"status": "running"}}"#,
@@ -813,6 +827,45 @@ mod tests {
         monitor
             .detach_device(&device, Duration::from_secs(5))
             .expect("the event arrives with the next command's reply");
+    }
+
+    #[test]
+    fn an_event_a_previous_detach_left_behind_does_not_confirm_this_one() {
+        // The emulator's events are a stream, and the DEVICE_DELETED a
+        // previous detach left on it arrives while this detach's own reply is
+        // on its way. The wait matches an event by its *name* - a
+        // DEVICE_DELETED is a DEVICE_DELETED - so that stale one would satisfy
+        // it without this device having moved at all, and the restore after it
+        // would re-attach a device the emulator still holds. Discarding what
+        // was on the stream before the wait began is what keeps them apart,
+        // and this is the case that pins it: the wait sees the stale event
+        // read, drops it, and goes on to poll until the bound trips.
+        let mut monitor = monitor_answering(&[
+            r#"{"return": {}}"#,
+            r#"{"event": "DEVICE_DELETED", "data": {"device": "/machine/peripheral-anon/device[9]"}}"#,
+            r#"{"return": {}}"#,
+            r#"{"return": {"status": "running"}}"#,
+            r#"{"return": {"status": "running"}}"#,
+            r#"{"return": {"status": "running"}}"#,
+        ]);
+        let device = BlockDevice {
+            id: "lane_drive_0".to_owned(),
+            qdev: "/machine/peripheral-anon/device[4]".to_owned(),
+            node: "lane_root.overlay".to_owned(),
+            file: "/run/lane/lane_root.overlay.qcow2".to_owned(),
+            format: "qcow2".to_owned(),
+            read_only: false,
+            rotatable: true,
+        };
+        let error = monitor
+            .detach_device(&device, Duration::from_millis(300))
+            .expect_err("another device's event is not confirmation of this unplug");
+        let rendered = error.to_string();
+        assert!(rendered.contains("DEVICE_DELETED"), "{rendered}");
+        assert!(
+            rendered.contains("device[4]"),
+            "the failure names the device that did not move: {rendered}"
+        );
     }
 
     #[test]
