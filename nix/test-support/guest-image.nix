@@ -479,8 +479,14 @@ let
     pool = poolBudget;
     boot = {
       method = if useBootLoader then "bootloader" else "direct";
-      kernel = if useBootLoader then null else "kernel";
-      initrd = if useBootLoader then null else "initrd";
+      # The store paths, not copies of them. Every direct-boot check's guest
+      # has the same kernel and the same initrd - the closure rides in the
+      # initrd - so copying them into each image stored 358 MiB of
+      # byte-identical content eleven times over. The manifest already
+      # resolves an absolute path as itself, so naming the store path is all
+      # it takes; nothing reads them out of the image any more.
+      kernel = if useBootLoader then null else directBootKernel;
+      initrd = if useBootLoader then null else directBootInitrd;
       append = if useBootLoader then
         null
       else
@@ -789,13 +795,12 @@ else
       "$qemu_img" convert -f raw -O qcow2 "$TMPDIR/root.raw" "$TMPDIR/disk.qcow2"
       rm -f "$TMPDIR/root.raw"
 
-      # The direct-boot shape's kernel and initrd, copied in as real files
-      # rather than named by store path. The manifest names them relative to
-      # the image root, so an image that only pointed at the host's store
-      # would declare files it does not carry, and the launcher would find
-      # them missing at boot. A copy that fails fails the image here.
-      cp -L ${directBootKernel} "$out/kernel"
-      cp -L ${directBootInitrd} "$out/initrd"
+      # The direct-boot shape's kernel and initrd are named by store path in
+      # the manifest, not copied in here. The old copy existed because the
+      # manifest named them relative to the image root and the launcher
+      # resolved them there - but the resolver has always honoured an
+      # absolute path, and every direct-boot guest carries the same two
+      # files, so eleven images were storing 358 MiB of identical content.
     fi
     mv "$TMPDIR/disk.qcow2" "$out/disk.qcow2"
 
