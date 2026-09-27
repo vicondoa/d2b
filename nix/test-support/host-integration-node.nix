@@ -240,6 +240,68 @@ rec {
     system.stateVersion = "25.11";
   };
 
+  # The guest `guest-agent-cap-confinement` boots: a plain NixOS node with an
+  # unprivileged network-agent user, an isolated network namespace, and the
+  # agent process confined to it.
+  #
+  # As with `bridge-isolation`, the check never wanted the d2b daemon host,
+  # so this node is not built on `d2bDaemonNode`. The two units are the
+  # fixture's own: the namespace unit creates `/run/netns/d2b-test-agent`,
+  # and the agent unit runs as the unprivileged user inside that namespace
+  # with the three capabilities the check asserts on, no ambient privilege
+  # beyond them, and `NoNewPrivileges`. Moving them here is what lets the
+  # fixture go without the guest the check asserts against going with it.
+  d2bGuestAgentCapConfinementNode = { pkgs, ... }: {
+    users.groups.d2b-net-agent-test = { };
+    users.users.d2b-net-agent-test = {
+      isSystemUser = true;
+      group = "d2b-net-agent-test";
+    };
+
+    environment.systemPackages = [ pkgs.iproute2 ];
+
+    systemd.services.d2b-test-agent-netns = {
+      description = "Create the isolated network-agent test namespace";
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = pkgs.writeShellScript "d2b-test-agent-netns-up" ''
+          set -eu
+          install -d -m 0755 /run/netns
+          ${pkgs.iproute2}/bin/ip netns add d2b-test-agent
+          ${pkgs.iproute2}/bin/ip -n d2b-test-agent link set lo up
+        '';
+        ExecStop = "${pkgs.iproute2}/bin/ip netns delete d2b-test-agent";
+      };
+    };
+
+    systemd.services.d2b-test-guest-agent = {
+      description = "Network agent capability-confinement test process";
+      requires = [ "d2b-test-agent-netns.service" ];
+      after = [ "d2b-test-agent-netns.service" ];
+      serviceConfig = {
+        Type = "simple";
+        User = "d2b-net-agent-test";
+        Group = "d2b-net-agent-test";
+        ExecStart = "${pkgs.coreutils}/bin/sleep infinity";
+        NetworkNamespacePath = "/run/netns/d2b-test-agent";
+        CapabilityBoundingSet = [
+          "CAP_NET_ADMIN"
+          "CAP_NET_BIND_SERVICE"
+          "CAP_NET_RAW"
+        ];
+        AmbientCapabilities = [
+          "CAP_NET_ADMIN"
+          "CAP_NET_BIND_SERVICE"
+          "CAP_NET_RAW"
+        ];
+        NoNewPrivileges = true;
+      };
+    };
+
+    system.stateVersion = "25.11";
+  };
+
   # The guest each fixture-less image evaluates, by the name the image action
   # asks for. A check's own guest is read out of the check's fixture; these are
   # the guests with no fixture to be read out of - the two reusable shapes the
@@ -275,6 +337,10 @@ rec {
     daemon-smoke = {
       node = d2bDaemonSmokeNode;
       testName = "d2b-daemon-smoke";
+    };
+    guest-agent-cap-confinement = {
+      node = d2bGuestAgentCapConfinementNode;
+      testName = "d2b-guest-agent-cap-confinement";
     };
 
   };

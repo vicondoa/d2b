@@ -149,6 +149,7 @@ _CHECKS = [
 _PORTED_CHECKS = [
     "bridge-isolation",
     "daemon-smoke",
+    "guest-agent-cap-confinement",
 ]
 
 [

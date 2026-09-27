@@ -25,6 +25,7 @@
 
 pub mod bridge_isolation;
 pub mod daemon_smoke;
+pub mod guest_agent_cap_confinement;
 
 use crate::legacy::{GuestControl, LegacyResult};
 
@@ -42,6 +43,10 @@ pub type Assertions = fn(&mut GuestControl) -> LegacyResult<()>;
 const PORTED: &[(&str, Assertions)] = &[
     ("bridge-isolation", bridge_isolation::assertions),
     ("daemon-smoke", daemon_smoke::assertions),
+    (
+        "guest-agent-cap-confinement",
+        guest_agent_cap_confinement::assertions,
+    ),
 ];
 
 /// The assertions of one ported check, or `None` for a check that has not
