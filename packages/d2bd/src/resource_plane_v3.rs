@@ -189,11 +189,6 @@ fn interaction_driver_args<T: d2b_provider_wayland_policy::InteractionType>(
 /// Preserved reconcile backoff for the plane's resource actors (R13).
 const PLANE_BACKOFF: Duration = d2b_resource_runtime::DEFAULT_REQUEUE_BACKOFF;
 
-/// Bounded attempts for the anchor lookup's lock acquisition. The registry's
-/// critical sections are map operations, so a contended acquisition clears
-/// within a few yields; the bound only stops a genuinely wedged holder from
-/// spinning a worker forever.
-const REGISTRY_LOCK_SPIN_ATTEMPTS: usize = 64;
 
 /// Bounded wait budget for the binding-owned virtiofsd socket bind: the
 /// worker Process child binds the private socket after its launch, and the
@@ -315,33 +310,8 @@ impl PlaneResourceRegistry {
         Some(run(&mut inner))
     }
 
-    /// Anchor lookups must not report a miss on lock contention.
-    ///
-    /// [`Self::with_inner_sync`] deliberately treats a `try_lock` collision as
-    /// a miss, which is correct for the socket-target lookups: they fall
-    /// through to the authority on a miss. An anchor miss has no such
-    /// fallback - it means the Volume's row is not registered, so its source
-    /// resolution fails and the row's layout effect fails with it. Reporting
-    /// a collision that way turned a sub-millisecond overlap with the anchor
-    /// projection's own registration into a Volume that failed every retry
-    /// for as long as the projection held the lock, even though its anchor
-    /// was registered the whole time.
-    ///
-    /// The critical sections are short map operations rather than I/O, so a
-    /// bounded yield-and-retry resolves a collision without parking a
-    /// runtime worker on real work.
-    fn with_inner_sync_retrying<R>(&self, run: impl FnOnce(&mut RegistryInner) -> R) -> Option<R> {
-        for _ in 0..REGISTRY_LOCK_SPIN_ATTEMPTS {
-            match self.inner.try_lock() {
-                Ok(mut inner) => return Some(run(&mut inner)),
-                Err(_) => std::thread::yield_now(),
-            }
-        }
-        None
-    }
-
     fn lookup_anchor(&self, volume_uid: &ResourceUid) -> Option<VolumeAnchor> {
-        self.with_inner_sync_retrying(|inner| {
+        self.with_inner_sync(|inner| {
             let volume_name = inner.volume_names_by_uid.get(volume_uid.as_str()).cloned()?;
             inner.volume_anchors_by_name.get(&volume_name).cloned()
         })
