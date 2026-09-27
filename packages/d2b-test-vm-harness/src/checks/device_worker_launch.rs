@@ -1054,6 +1054,19 @@ fn row_dumps() -> Vec<(String, String)> {
         )
         .to_owned(),
     ));
+    // The filtered dumps above each answered "is this the one?" and kept
+    // coming back empty, because the next unexplained line was always in a
+    // module none of the patterns named. Dump the raw tail too: the whole
+    // point of a failing lane is to see what it did, not to guess which
+    // grep would have caught it.
+    dumps.push((
+        "d2bd journal tail (unfiltered)".to_owned(),
+        concat!(
+            "journalctl -u d2bd.service --no-pager -o cat -b | tail -n 400 ",
+            "|| echo 'no d2bd journal'; true",
+        )
+        .to_owned(),
+    ));
     dumps.push((
         "site artifact".to_owned(),
         "cat /etc/d2b/site.json 2>/dev/null || echo 'no site.json'".to_owned(),
