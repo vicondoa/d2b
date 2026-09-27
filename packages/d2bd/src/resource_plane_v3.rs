@@ -189,6 +189,12 @@ fn interaction_driver_args<T: d2b_provider_wayland_policy::InteractionType>(
 /// Preserved reconcile backoff for the plane's resource actors (R13).
 const PLANE_BACKOFF: Duration = d2b_resource_runtime::DEFAULT_REQUEUE_BACKOFF;
 
+/// Bounded attempts for the anchor lookup's lock acquisition. The registry's
+/// critical sections are map operations, so a contended acquisition clears
+/// within a few yields; the bound only stops a genuinely wedged holder from
+/// spinning a worker forever.
+const REGISTRY_LOCK_SPIN_ATTEMPTS: usize = 64;
+
 /// Bounded wait budget for the binding-owned virtiofsd socket bind: the
 /// worker Process child binds the private socket after its launch, and the
 /// daemon's socket facet waits this budget before reporting a retryable
@@ -309,8 +315,33 @@ impl PlaneResourceRegistry {
         Some(run(&mut inner))
     }
 
+    /// Anchor lookups must not report a miss on lock contention.
+    ///
+    /// [`Self::with_inner_sync`] deliberately treats a `try_lock` collision as
+    /// a miss, which is correct for the socket-target lookups: they fall
+    /// through to the authority on a miss. An anchor miss has no such
+    /// fallback - it means the Volume's row is not registered, so its source
+    /// resolution fails and the row's layout effect fails with it. Reporting
+    /// a collision that way turned a sub-millisecond overlap with the anchor
+    /// projection's own registration into a Volume that failed every retry
+    /// for as long as the projection held the lock, even though its anchor
+    /// was registered the whole time.
+    ///
+    /// The critical sections are short map operations rather than I/O, so a
+    /// bounded yield-and-retry resolves a collision without parking a
+    /// runtime worker on real work.
+    fn with_inner_sync_retrying<R>(&self, run: impl FnOnce(&mut RegistryInner) -> R) -> Option<R> {
+        for _ in 0..REGISTRY_LOCK_SPIN_ATTEMPTS {
+            match self.inner.try_lock() {
+                Ok(mut inner) => return Some(run(&mut inner)),
+                Err(_) => std::thread::yield_now(),
+            }
+        }
+        None
+    }
+
     fn lookup_anchor(&self, volume_uid: &ResourceUid) -> Option<VolumeAnchor> {
-        self.with_inner_sync(|inner| {
+        self.with_inner_sync_retrying(|inner| {
             let volume_name = inner.volume_names_by_uid.get(volume_uid.as_str()).cloned()?;
             inner.volume_anchors_by_name.get(&volume_name).cloned()
         })
@@ -911,13 +942,20 @@ async fn register_anchor_row(
 ) {
     match row.key.type_name.as_str() {
         "Volume" => {
+            let uid = resource_uid_string(&row.uid);
+            // Log after the insert, not before: an earlier placement made a
+            // registration look like it had already landed while the write
+            // was still queued behind the registry lock, and the resulting
+            // log ordering read as "registered, then missed".
             registry
-               .register_volume(
-                    &resource_uid_string(&row.uid),
-                    &row.key.name,
-                    volume_anchor_from_row(row),
-                )
+               .register_volume(&uid, &row.key.name, volume_anchor_from_row(row))
                .await;
+            tracing::info!(
+                zone = %zone_token.as_str(),
+                volume = %row.key.name.as_str(),
+                uid = %uid,
+                "anchor projection registered a Volume"
+            );
         }
         "VolumeBinding" => register_binding_row(registry, zone_token, row).await,
         _ => {}
@@ -1520,8 +1558,12 @@ impl d2b_provider_volume_local::VolumeRootResolver for ZoneVolumeRootResolver {
         system_artifact_id: Option<&BoundedToken>,
         kind: SourceKind,
     ) -> Result<d2b_provider_volume_local::ResolvedVolumeRoot, d2b_provider_volume_local::VolumeLocalError> {
+        // Name the uid that missed, not "?". A registration gap and a
+        // uid-representation gap both surface here, and the uid is the only
+        // datum that tells them apart - without it the stage name is all a
+        // reader has, and this failure is otherwise undiagnosable.
         let Some(anchor) = self.registry.lookup_anchor(volume_uid) else {
-            return Err(self.source_unresolved("volume-anchor", "?"));
+            return Err(self.source_unresolved("volume-anchor", volume_uid.as_str()));
         };
         if kind == SourceKind::NixClosure {
             if source_policy_id.is_some() {

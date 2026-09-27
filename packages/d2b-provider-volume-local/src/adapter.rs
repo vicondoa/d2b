@@ -661,9 +661,31 @@ impl<R: VolumeRootResolver> AnchoredVolumeEffectAdapter<R> {
         root: &VolumeRootHandle,
         entry: &EntryRequest,
     ) -> Result<(), VolumeLocalError> {
-        self.with_lock(root, |_guard| {
+        // Every arm below collapses its errno into a bare EffectFailed, so a
+        // failed layout effect reports only "a provider layout effect failed"
+        // and never which entry or why. Name the entry on the way out, so the
+        // declared path that did not provision is in the log rather than
+        // something a reader has to guess at.
+        let result = self.with_lock(root, |_guard| {
             let fd = root_fd(root)?.ok_or(VolumeLocalError::EffectFailed)?;
             ensure_root_identity(root)?;
+            // A Volume may declare its own root as a layout entry - the TPM
+            // state Volume does, to carry the mode and the principals' ACL on
+            // the directory the workers actually open. The source resolution
+            // that produced this handle already created that directory, so
+            // there is nothing to mkdir: apply the declaration in place, the
+            // way observe already reads it (see `open_entry`'s empty-path
+            // case). Treating it as a child instead asks `parent_for` for an
+            // empty leaf, which `validate_component` rejects before any
+            // effect runs - so the entry could never provision at all, and the
+            // Volume failed its layout effect on every retry.
+            if entry.declared().path().is_empty() {
+                if !matches!(entry.entry_type(), EntryType::Directory) {
+                    return Err(VolumeLocalError::InvalidSpec);
+                }
+                apply_metadata(fd, &self.resolver, entry)?;
+                return fsync(fd).map_err(|_| VolumeLocalError::EffectFailed);
+            }
             let (parent, leaf) = parent_for(fd, entry.declared().path(), false)?;
             match entry.entry_type() {
                 EntryType::Directory => {
@@ -722,7 +744,15 @@ impl<R: VolumeRootResolver> AnchoredVolumeEffectAdapter<R> {
                 EntryType::UnixSocket => return Err(VolumeLocalError::EffectFailed),
             }
             fsync(&parent).map_err(|_| VolumeLocalError::EffectFailed)
-        })
+        });
+        if result.is_err() {
+            tracing::warn!(
+                path = %entry.declared().path(),
+                entry_type = ?entry.entry_type(),
+                "volume layout effect failed; the declared entry above did not provision"
+            );
+        }
+        result
     }
 
     fn repair_sync(

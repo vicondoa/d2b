@@ -1045,8 +1045,11 @@ fn row_dumps() -> Vec<(String, String)> {
     dumps.push((
         "Volume source resolution stage".to_owned(),
         concat!(
-            "journalctl -u d2bd.service --no-pager -o cat -b -n 4000 ",
-            "| grep -E 'Volume source resolution failed' | tail -20 ",
+            // No -n window: the failure lands minutes into the boot and a
+            // line limit rolls past it, which is what made this look like
+            // "no failure recorded" on runs that plainly had one.
+            "journalctl -u d2bd.service --no-pager -o cat -b ",
+            "| grep -E 'Volume source resolution failed|volume layout effect failed|anchor projection registered' ",
             "|| echo 'no Volume source resolution failure recorded'; true",
         )
         .to_owned(),
