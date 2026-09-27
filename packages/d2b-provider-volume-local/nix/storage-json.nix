@@ -934,6 +934,38 @@ let
 
   perZoneGuestTpmStoragePaths = lib.flatten (map
     (name: [
+      # The per-guest runtime tree a device worker binds its socket under.
+      #
+      # A legacy VM declares this as `path:vm-run:<vm>`, created by tmpfiles
+      # at activation. A zone-native Device owner did not: it declared only
+      # the swtpm state and marker rows below, and nothing else in the tree
+      # provisions /run/d2b/vms. The broker's socket grant walks the path
+      # down to the worker's socket and refuses an absent ancestor - an
+      # absent ancestor yields no traverse grant, which the caller turns
+      # into "runner path ancestor is absent: /run/d2b/vms" and the spawn
+      # is refused. That is why only the roles whose posture binds a
+      # runtime socket failed while the one-shot flush, which binds none,
+      # was admitted. Same path as the legacy row, so it reuses the legacy
+      # id rather than inventing a second vocabulary for one directory.
+      (mkPath {
+        id = "path:vm-run:${name}";
+        scope = "vm:${name}";
+        path = "/run/d2b/vms/${name}";
+        lifecycle = "boot-scoped-readoptable";
+        persistence = "boot-scoped";
+        owner = principal "user" "d2bd";
+        group = principal "group" "d2b";
+        mode = "1770";
+        creator = actor "nix-module" "tmpfiles";
+        writers = [
+          (actor "daemon" "d2bd")
+          (actor "broker" "d2b-broker")
+        ];
+        cleanupPolicy = "boot";
+        repairPolicy = "nix-activation";
+        leaseClass = "process-pidfd";
+        invariants = [ "no-symlink" "scope-authorization-required" ];
+      })
       (mkPath {
         id = "path:swtpm-state:${name}";
         scope = "vm:${name}";

@@ -512,7 +512,26 @@ impl ForwardRendezvous {
                 let (response, fds) = result_response_with_fds(result);
                 (response, fds)
             }
-            Err(failure) => (refused(failure.code()), Vec::new()),
+            Err(failure) => {
+                // The response envelope carries the refusal code and
+                // nothing else, so the detail is dropped here unless it is
+                // written down. That is what turned a refused device
+                // worker launch into a closed-set slug with no reason
+                // anywhere in the journal: the broker relayed
+                // `handler-refused`, the supervisor printed detail="",
+                // and the actual reason - a runner path ancestor that does
+                // not exist - died here. The detail is redacted
+                // operator-facing text by contract, so it is safe to log
+                // and it is the only place it still exists.
+                if let Some(detail) = failure.detail() {
+                    tracing::warn!(
+                        code = failure.code(),
+                        detail,
+                        "forwarded invocation refused with a reason"
+                    );
+                }
+                (refused(failure.code()), Vec::new())
+            }
         }
     }
 
