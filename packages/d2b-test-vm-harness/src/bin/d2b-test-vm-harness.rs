@@ -666,9 +666,14 @@ fn run_check_inner(
         work_root,
         &guest.name,
     );
-    spec.activation_timeout = Duration::from_secs(
-        optional_u64(ACTIVATION_TIMEOUT, 1800)?,
-    );
+    // 600s, against a measured healthy activation of 17-20s. The bound was
+    // 1800s, which is ninety times the time a working guest takes and is
+    // not a bound so much as an abandonment: a full lane run spent half of
+    // its 32.7 minutes inside this one wait, on a guest that reached
+    // systemd's local-filesystems target at 40s and then stopped advancing.
+    // Thirty times the observed maximum still leaves a heavily loaded host
+    // room; the number is overridable per run for one that needs more.
+    spec.activation_timeout = Duration::from_secs(optional_u64(ACTIVATION_TIMEOUT, 600)?);
     let mut active = boot(&spec)?;
     // The declared pass said this guest's drives can be snapshotted; the
     // running guest's own block graph is the authority, and it is asked
