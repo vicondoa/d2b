@@ -28,6 +28,7 @@ pub mod daemon_smoke;
 pub mod guest_agent_cap_confinement;
 pub mod guest_shell_service;
 pub mod privilege_oracle;
+pub mod state_posture_contract;
 pub mod resource_operator_activation;
 pub mod wayland_proxy;
 
@@ -56,6 +57,10 @@ const PORTED: &[(&str, Assertions)] = &[
     (
         "resource-operator-activation",
         resource_operator_activation::assertions,
+    ),
+    (
+        "state-posture-contract",
+        state_posture_contract::assertions,
     ),
     ("wayland-proxy", wayland_proxy::assertions),
 ];

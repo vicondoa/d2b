@@ -153,6 +153,7 @@ _PORTED_CHECKS = [
     "guest-shell-service",
     "privilege-oracle",
     "resource-operator-activation",
+    "state-posture-contract",
     "wayland-proxy",
 ]
 
