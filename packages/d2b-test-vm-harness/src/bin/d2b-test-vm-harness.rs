@@ -107,6 +107,14 @@ const IMAGES: &str = "D2B_TEST_VM_HARNESS_IMAGES";
 /// The checks a contributor selected, as the existing selection variables
 /// carry them: a whitespace- or comma-separated list of check names.
 const CHECKS: &str = "D2B_VM_CHECK";
+/// Bazel's own filter, which `--test_filter` sets for a test action.
+///
+/// The flag is the one a contributor reaches for without being told this
+/// lane has selection variables, and the lane ignoring it is the worst
+/// available failure: `bazel test --test_filter=<check>` looks like it
+/// selected one check and quietly runs all of them, which costs a pool of
+/// guests and reports a verdict for a check nobody asked about.
+const TEST_FILTER: &str = "TESTBRIDGE_TEST_ONLY";
 
 /// One check, its own guest, and what that guest costs.
 #[derive(Clone)]
@@ -365,8 +373,11 @@ fn run_group(
     }
 }
 
-/// The checks this run was asked for, from the target's own argument or from
-/// the environment variable contributors already use.
+/// The checks this run was asked for, in the order the three sources are
+/// consulted: the target's own `--check` argument, then the selection
+/// variable contributors already use, then Bazel's own `--test_filter`.
+/// The first that names anything wins, so an explicit request is never
+/// widened by a default that happens to be set.
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn selection(arguments: &[String]) -> Vec<String> {
     let from_arguments: Vec<String> = arguments
@@ -381,8 +392,17 @@ fn selection(arguments: &[String]) -> Vec<String> {
     if !from_arguments.is_empty() {
         return from_arguments;
     }
-    env::var(CHECKS)
-        .unwrap_or_default()
+    let named = env::var(CHECKS).unwrap_or_default();
+    if !named.trim().is_empty() {
+        return split_names(&named);
+    }
+    split_names(&env::var(TEST_FILTER).unwrap_or_default())
+}
+
+/// One selection, however it was written: a whitespace-, comma- or
+/// newline-separated list of check names.
+fn split_names(selection: &str) -> Vec<String> {
+    selection
         .split([',', ' ', '\n', '\t'])
         .map(str::trim)
         .filter(|name| !name.is_empty())

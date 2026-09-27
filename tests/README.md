@@ -86,18 +86,27 @@ or required gate evidence.
 completions, protocol bindings, Nix outputs, and policy inputs in the checkout;
 it does not alter the repository-default remote profile used by `make check`.
 
-`make test-host-integration` first builds the fixed eight host tools with local
-Bazel, injects the staged bundle into the selected NixOS `vmChecks`, and then
-uploads their built dependency closures to configured Attic in one operation.
-The `vmCheck` result paths are excluded so capability skips are never cached as
-passing test results.
-If Attic or its configuration is unavailable, the lane reports an explicit
-skip and continues. If present configuration is invalid or unusable, the lane
-fails closed; an upload failure is also fatal. `D2B_VM_CHECK=<name>` builds one
-named `vmChecks` entry; `D2B_HOST_VM_CHECK=<name>` designates the validated
-selected check for the run and fails closed on an unknown name. Repeating the
-same command without source changes is the warm run and should execute zero
-Rust compilation actions.
+`make test-host-integration` runs the Bazel-owned host integration lane as one
+`bazel test` invocation. Each of the eleven checks boots its own NixOS guest,
+built as a graph output keyed on declared inputs, and the lane restores a
+pooled guest per check rather than booting one guest per check. Every
+assertion is Rust; the guest images rebuild when a guest module or a d2b host
+binary changes, and repeat runs execute no Rust compilation actions.
+
+The lane is a local, contributor-run pre-PR surface, not a CI gate, and it
+declares virtualization as a precondition: it needs `/dev/kvm` and has no
+silent emulation fallback, so on a host without KVM it stops with a message
+rather than turning very slow. It is x86_64-linux only.
+
+`D2B_VM_CHECK=<name>` runs one named check, and `bazel test --test_filter=<name>`
+works too — the lane reads Bazel's own filter as well as that variable, and the
+first of the two that names anything wins. A failing check reports under its own
+name in the lane's test output, with the stage it was in, the rows it was
+asserting on, and the guest's journal and zone dump.
+
+There is no Attic preflight or closure upload here: the guest-image action
+declares its own substituters and preflights them itself, so the cache handling
+lives with the build that needs it rather than in a second place that can drift.
 
 Run these aliases directly from a normal Nix-enabled checkout. Make enters
 the pinned `.#bazel` shell automatically when the explicit d2b shell contract

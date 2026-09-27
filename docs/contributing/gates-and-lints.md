@@ -242,23 +242,33 @@ make test-integration
 make test-host-integration
 ```
 
-`make test-host-integration` builds the fixed host-tool set with local Bazel,
-stages them as one `D2B_HOST_TOOL_BUNDLE`, and injects that bundle into the
-selected NixOS `vmChecks`. Nix realizes the VM check around those binaries; it
-must not rebuild d2b binaries through Nix. After every selected check succeeds, the lane
-uploads the built dependency closures to the configured Attic cache in one
-operation. It excludes the `vmCheck` result paths so a capability `SKIP` or
-`BLOCKED` result cannot be substituted as a passing test on another host.
-The handoff implementation is in the `test-host-integration` Make recipe and
+`make test-host-integration` runs the Bazel-owned host integration lane as one
+`bazel test` invocation of `//bazel/checks/vm:host_integration_lane_run`. Each of
+the eleven checks boots its own NixOS guest, built as a graph output keyed on
+declared inputs - the flake and its lock, the guest module sources, and the d2b
+host binaries all arrive as label inputs - and the lane restores a pooled guest
+per check rather than booting one guest per check. Every assertion is Rust; the
+fixtures' `runNixOSTest` `testScript` surface is gone. Nix realizes the guest
+closure and does not rebuild the injected d2b binaries; the implementation is in
+[`bazel/checks/vm/defs.bzl`](../../bazel/checks/vm/defs.bzl),
+[`nix/test-support/guest-image.nix`](../../nix/test-support/guest-image.nix), and
 [`nix/test-support/bazel-host-tools.nix`](../../nix/test-support/bazel-host-tools.nix).
 
-Attic is optional for this lane. When the Attic client or its configuration is
-unavailable, the lane reports an explicit skip and continues with the Bazel
-and VM work. A present configuration that is invalid, ambiguous, inaccessible,
-or otherwise unusable fails closed before the expensive work; an upload failure
-also fails the lane. `D2B_VM_CHECK=<name>` selects one named `vmChecks` entry
-to build; `D2B_HOST_VM_CHECK=<name>` designates the validated selected check
-for the run and fails closed on an unknown name.
+The guest-image action declares its own substituters and preflights them itself,
+so the Attic preflight and closure upload that the old nix recipe carried are
+gone with it. Cache handling now lives with the build that needs it rather than
+in a second place that can drift out of step.
+
+The lane is a local, contributor-run pre-PR surface, not a CI gate, and it
+declares virtualization as a precondition: it needs `/dev/kvm` and has no silent
+emulation fallback, so on a host without KVM it stops with a message rather than
+turning very slow. It is x86_64-linux only.
+
+`D2B_VM_CHECK=<name>` runs one named check, and `bazel test --test_filter=<name>`
+works too - the lane reads Bazel's own filter as well as that variable, and the
+first of the two that names anything wins. Each check reports under its own name
+in the lane's output with the stage it was in, the rows it asserted on, and the
+guest's journal and zone dump.
 
 For cold and unchanged warm evidence, run the same command twice:
 
