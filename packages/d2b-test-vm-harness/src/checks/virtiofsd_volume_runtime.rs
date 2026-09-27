@@ -27,9 +27,9 @@
 //! outliving its parent.
 //!
 //! The guest is the reusable daemon node plus the fixture's own contributions
-//! - nftables, the acceptance host runtime, the Volume acceptance artifact
-//! and its publisher key, the two zones and their rows, the two declared
-//! users and the operator role binding - declared in
+//! (nftables, the acceptance host runtime, the Volume acceptance artifact and
+//! its publisher key, the two zones and their rows, the two declared users and
+//! the operator role binding), declared in
 //! `nix/test-support/host-integration-node.nix`. `start_all()` is not
 //! restated here: it is the lane's own boot of the guest the check runs
 //! against.

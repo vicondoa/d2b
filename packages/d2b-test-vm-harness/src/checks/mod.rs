@@ -31,6 +31,7 @@ pub mod guest_shell_service;
 pub mod privilege_oracle;
 pub mod state_posture_contract;
 pub mod resource_operator_activation;
+pub mod runtime_cloud_hypervisor_guest_preflight;
 pub mod virtiofsd_volume_runtime;
 pub mod wayland_proxy;
 
@@ -71,6 +72,10 @@ const PORTED: &[(&str, Assertions)] = &[
     (
         "virtiofsd-volume-runtime",
         virtiofsd_volume_runtime::assertions,
+    ),
+    (
+        "runtime-cloud-hypervisor-guest-preflight",
+        runtime_cloud_hypervisor_guest_preflight::assertions,
     ),
     ("wayland-proxy", wayland_proxy::assertions),
 ];

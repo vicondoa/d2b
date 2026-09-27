@@ -817,10 +817,10 @@ fn declared_rows(bundle: &Value) -> BTreeMap<(&str, &str), &Value> {
             .get("metadata")
             .and_then(|metadata| metadata.get("name"))
             .and_then(Value::as_str);
-        if let (Some(kind), Some(name)) = (kind, name) {
-            if matches!(kind, "Process" | "EphemeralProcess") {
-                declared.insert((kind, name), row);
-            }
+        if let (Some(kind), Some(name)) = (kind, name)
+            && matches!(kind, "Process" | "EphemeralProcess")
+        {
+            declared.insert((kind, name), row);
         }
     }
     declared
@@ -1085,7 +1085,7 @@ fn dumps_string(text: &str, out: &mut String) {
             '\t' => out.push_str("\\t"),
             '\u{08}' => out.push_str("\\b"),
             '\u{0c}' => out.push_str("\\f"),
-            character if character < ' ' || character > '~' => {
+            character if !(' '..='~').contains(&character) => {
                 let mut buffer = [0_u16; 2];
                 for unit in character.encode_utf16(&mut buffer) {
                     out.push_str(&format!("\\u{unit:04x}"));

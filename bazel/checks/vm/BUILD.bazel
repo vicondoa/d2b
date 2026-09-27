@@ -153,6 +153,7 @@ _PORTED_CHECKS = [
     "guest-shell-service",
     "privilege-oracle",
     "resource-operator-activation",
+    "runtime-cloud-hypervisor-guest-preflight",
     "state-posture-contract",
     "virtiofsd-volume-runtime",
     "wayland-proxy",

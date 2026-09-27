@@ -656,10 +656,11 @@ fn check_level(
     // re-scopes the whole group class.
     let declared_mask = declared_acl
         .iter()
-        .any(|spec| spec.splitn(3, ':').next() == Some("m"));
+        .any(|spec| spec.split(':').next() == Some("m"));
     let mask_entry = entries.iter().find(|entry| entry.starts_with("m::"));
-    if !declared_mask {
-        if let Some(mask_entry) = mask_entry {
+    if !declared_mask
+        && let Some(mask_entry) = mask_entry
+    {
             let group_entry = entries.iter().find(|entry| entry.starts_with("g::"));
             let mut expected_mask = group_entry
                 .map(|entry| permission_bits(entry.splitn(3, ':').nth(2).unwrap_or("")))
@@ -678,7 +679,6 @@ fn check_level(
                      named grants, observed {mask_entry}"
                 )));
             }
-        }
     }
 
     // The declared rights: an expectation of `preserve` or `not-required` is

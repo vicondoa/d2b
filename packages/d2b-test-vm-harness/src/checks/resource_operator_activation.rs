@@ -22,7 +22,7 @@
 //! row builders are the fixture's own `live_rows` and `saved_rows`.
 //!
 //! The guest is the reusable daemon node plus the fixture's own contributions
-//! - nftables, the acceptance artifacts and zones, the two users, and `jq` -
+//! (nftables, the acceptance artifacts and zones, the two users, and `jq`),
 //! declared in `nix/test-support/host-integration-node.nix`.
 //!
 //! `start_all()` is not restated here: it is the lane's own boot of the

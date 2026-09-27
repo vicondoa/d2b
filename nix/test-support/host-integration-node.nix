@@ -1725,6 +1725,421 @@ rec {
     };
   };
 
+  # The guest `runtime-cloud-hypervisor-guest-preflight` boots: the
+  # writable-store shape plus the fixture's own contributions - the two
+  # provider artifacts, the ComponentSession key pair and v3 guest bundle,
+  # the Cloud Hypervisor configuration, the nested guest system whose boot
+  # the check preflights, its store-view image, and the zones and rows that
+  # carry them.
+  #
+  # Two files the fixture's commands interpolated as nix store paths are
+  # installed here at fixed guest paths instead, because a store path is not
+  # addressable from the lane's Rust: /etc/d2b/fixture-keys/host.key and
+  # /etc/d2b/fixture-keys/guest.pub, which are the same two files of the
+  # same fixtureKeys derivation.
+  d2bRuntimeCloudHypervisorPreflightNode =
+    d2bCloudHypervisorNode {
+      extra =
+        { lib, pkgs, ... }:
+        let
+      d2bLib = import ../../tests/host-integration/lib.nix {
+        inherit self;
+        inherit lib;
+        hostToolBundle =
+          if self.lib ? d2bHostToolBundle then self.lib.d2bHostToolBundle else null;
+      };
+      cloudHypervisorArtifact =
+        d2bLib.mkRuntimeCloudHypervisorArtifact pkgs;
+      volumeProviderArtifact = d2bLib.mkVolumeProviderArtifact pkgs;
+      fixtureKeys = pkgs.runCommand "acceptance-component-session-keys" { } ''
+        mkdir -p "$out"
+        printf '\001\002\003\004\005\006\007\010\011\012\013\014\015\016\017\020\021\022\023\024\025\026\027\030\031\032\033\034\035\036\037\040' > "$out/host.key"
+        printf '\007\243\174\274\024\040\223\310\267\125\334\033\020\350\154\264\046\067\112\321\152\250\123\355\013\337\300\262\270\155\034\174' > "$out/host.pub"
+        printf '\041\042\043\044\045\046\047\050\051\052\053\054\055\056\057\060\061\062\063\064\065\066\067\070\071\072\073\074\075\076\077\100' > "$out/guest.key"
+        printf '\130\151\257\364\120\124\227\062\313\252\355\136\135\371\263\012\155\243\034\260\345\164\053\255\132\324\241\247\150\361\246\173' > "$out/guest.pub"
+      '';
+      guestBundle = pkgs.runCommand "acceptance-guest-bundle" {
+        nativeBuildInputs = [ pkgs.python3 ];
+      } ''
+        mkdir -p "$out"
+        cat > "$out/host.json" <<'EOF'
+        {"schemaVersion":"v2","site":{"allowUnsafeEastWest":false},"environments":[],"nftables":{"family":"inet","table":"d2b","chains":[],"tableHashAfterApply":null,"ownershipId":"host-integration"},"networkManager":{"filePath":"/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf","matchCriteria":[],"reloadBehavior":"atomic-reload","ownership":{"owner":"root","group":"root","mode":"0644","driftPolicy":"replace"}},"hostsFile":{"startMarker":"# d2b-managed begin","endMarker":"# d2b-managed end","rule":"replace-managed-block"},"kernelModules":[],"fdOwnership":[],"cloudHypervisorCapabilities":[],"ifNameMappings":[],"ch":null,"firewallCoexistencePolicy":null}
+        EOF
+        printf '%s\n' '{"schemaVersion":"v2","vms":[]}' > "$out/processes.json"
+        printf '%s\n' '{"schemaVersion":"v2","publicOperations":[],"brokerOperations":[]}' > "$out/privileges.json"
+        printf '%s\n' '{"_manifest":{"manifestVersion":6},"_observability":{"enabled":false,"signozUrl":"http://127.0.0.1:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318,"obsVsockCid":0,"obsVsockHostSocket":"","vmName":""}}' > "$out/vms.json"
+        python3 - "$out/bundle.json" <<'PY'
+        import hashlib
+        import json
+        import sys
+
+        # Zone-native v3 bundle: the loader (BundleResolver) accepts only the
+        # v3 contract. The self-hash is computed over the serialization with
+        # bundleHash absent and artifactHashes nullified (verify_bundle_hash).
+        bundle = {
+            "artifactHashes": {},
+            "bundleVersion": 1,
+            "schemaVersion": "v3",
+            "privilegesPath": "privileges.json",
+            "zones": [],
+            "generation": {
+                "generatedAt": None,
+                "generator": "host-integration",
+                "sourceRevision": None,
+            },
+        }
+        preimage = dict(bundle)
+        preimage["artifactHashes"] = None
+        canonical = json.dumps(preimage, sort_keys=True, separators=(",", ":")).encode()
+        bundle["bundleHash"] = "sha256:" + hashlib.sha256(canonical).hexdigest()
+        with open(sys.argv[1], "w", encoding="utf-8") as output:
+            json.dump(bundle, output, sort_keys=True, separators=(",", ":"))
+            output.write("\n")
+        PY
+      '';
+
+      cloudHypervisorConfig = {
+        controllerExecutionRef = "Host/host-system";
+        defaultVcpus = 2;
+        defaultMemoryMb = 512;
+        defaultMachineType = "microvm";
+        watchdog = true;
+        adoptionWindowMs = 30000;
+        healthCheckIntervalMs = 5000;
+        healthCheckTimeoutMs = 1000;
+        healthCheckFailureThreshold = 3;
+        startupDeadlineMs = 120000;
+      };
+      guestSystem = d2bLib.mkGuestSystem {
+        inherit pkgs;
+        name = "acceptance-guest";
+        modules = [
+          ({ lib, name, ... }: {
+            boot.kernelParams = [ "console=ttyS0" "loglevel=7" ];
+            environment.etc."d2b/component-session/guest.key".source =
+              "${fixtureKeys}/guest.key";
+            environment.etc."d2b/component-session/parent.pub".source =
+              "${fixtureKeys}/host.pub";
+            systemd.services.d2bd-guest = {
+              environment = {
+                RUST_LOG = "d2bd=debug";
+              };
+              serviceConfig = {
+                ReadOnlyPaths = [
+                  "/etc/d2b/component-session/guest.key"
+                  "/etc/d2b/component-session/parent.pub"
+                ];
+                StandardOutput = lib.mkForce "journal+console";
+                StandardError = lib.mkForce "journal+console";
+              };
+            };
+            systemd.services.d2b-test-boot-identity = {
+              wantedBy = [ "basic.target" ];
+              before = [ "d2bd-guest.service" ];
+              serviceConfig.Type = "oneshot";
+              script = ''
+                printf 'D2B_GUEST_BOOT_ID=%s\n' \
+                  "$(${pkgs.coreutils}/bin/cat /proc/sys/kernel/random/boot_id)" \
+                  > /dev/console
+              '';
+            };
+            d2b.componentSession.localPrivateKeyPath =
+              "/etc/d2b/component-session/guest.key";
+            d2b.componentSession.parentPublicKeyPath =
+              "/etc/d2b/component-session/parent.pub";
+            d2b.componentSession.bundlePath =
+              "/var/lib/d2b/guest-bundle/bundle.json";
+            d2b.guestBroker.bundlePath =
+              "/var/lib/d2b/guest-bundle/bundle.json";
+            systemd.services.d2b-install-guest-bundle = {
+              requiredBy = [ "d2b-broker-guest.service" "d2bd-guest.service" ];
+              before = [ "d2b-broker-guest.service" "d2bd-guest.service" ];
+              serviceConfig.Type = "oneshot";
+              script = ''
+                install -d -o root -g d2bd -m 0750 /var/lib/d2b/guest-bundle
+                for file in bundle.json host.json processes.json privileges.json; do
+                  install -o root -g d2bd -m 0640 \
+                    ${guestBundle}/"$file" /var/lib/d2b/guest-bundle/"$file"
+                done
+                install -o root -g d2bd -m 0644 \
+                  ${guestBundle}/vms.json /var/lib/d2b/guest-bundle/vms.json
+              '';
+            };
+            networking.useDHCP = lib.mkForce false;
+            networking.networkmanager.enable = lib.mkForce false;
+            systemd.network.enable = lib.mkForce false;
+            services.dbus.enable = lib.mkForce false;
+            services.resolved.enable = lib.mkForce false;
+            systemd.services.systemd-vconsole-setup.enable = false;
+            d2b.vms.${name}.runner = {
+              store.onDisk = true;
+              store.disk = guestStoreDisk;
+              shares = lib.mkForce [ ];
+            };
+            fileSystems."/nix/store" = {
+              device = "/dev/vda";
+              fsType = "ext4";
+              options = [ "ro" "x-initrd.mount" ];
+              neededForBoot = true;
+            };
+          })
+        ];
+      };
+      guestClosure = pkgs.closureInfo {
+        rootPaths = [ guestSystem.config.system.build.toplevel ];
+      };
+      guestStoreDisk = pkgs.runCommand "acceptance-guest-store.img" {
+        nativeBuildInputs = [ pkgs.coreutils pkgs.e2fsprogs ];
+      } ''
+        mkdir -p root
+        while IFS= read -r path; do
+          cp -r --no-preserve=ownership,xattr,context "$path" root/
+        done < ${guestClosure}/store-paths
+        truncate -s 4096M "$out"
+        # Reproducible ext4 image: SOURCE_DATE_EPOCH pins the superblock times and
+        # a fixed UUID seed pins the htree hash seed (e2fsprogs ignores an all-zero
+        # seed and randomizes it), so every build is byte-identical. With a random
+        # seed each build differed, and the nixos-install closure spec (recorded
+        # from an earlier build) could never match the freshly built image.
+        SOURCE_DATE_EPOCH=0 mkfs.ext4 -q -F \
+          -U 123e4567-e89b-12d3-a456-426614174000 \
+          -E hash_seed=123e4567-e89b-12d3-a456-426614174000 \
+          -d root "$out"
+      '';
+      artifacts = {
+        runtime-cloud-hypervisor = {
+          inherit (cloudHypervisorArtifact) package type catalog;
+        };
+        volume-acceptance-provider = {
+          inherit (volumeProviderArtifact) package type catalog;
+        };
+        acceptance-system = {
+          package = guestSystem.config.system.build.toplevel;
+          type = "nixos-system";
+        };
+      };
+        in
+        {
+        d2b.site.adminUsers = [ "alice" ];
+        environment.systemPackages = with pkgs; [
+          iproute2
+          jq
+          iputils
+          procps
+        ];
+        d2b.artifacts = artifacts;
+        d2b.guestSystems.work.acceptance-guest = guestSystem;
+        d2b.zones.local-root.trustedPublishers.d2b-cloud-hypervisor.signingKey =
+          cloudHypervisorArtifact.trustedPublisher.signingKey;
+        d2b.zones.local-root.trustedPublishers.d2b-volume-acceptance.signingKey =
+          volumeProviderArtifact.trustedPublisher.signingKey;
+        d2b.zones.work.trustedPublishers.d2b-cloud-hypervisor.signingKey =
+          cloudHypervisorArtifact.trustedPublisher.signingKey;
+        d2b.zones.work.trustedPublishers.d2b-volume-acceptance.signingKey =
+          volumeProviderArtifact.trustedPublisher.signingKey;
+        d2b.zones.local-root.resources.host-system = {
+          type = "Host";
+          spec = {
+            providerRef = "Provider/system-core";
+            defaultDomain = "system";
+            allowedDomains = [ "system" ];
+            budget = { };
+            networkAttachments = [ ];
+            deviceAttachments = [ ];
+            volumeAttachmentDefaults = [ ];
+          };
+        };
+        d2b.zones.work = {
+          parentZone = "local-root";
+          resources = {
+            alice = {
+              type = "User";
+              spec = {
+                displayName = "Alice";
+                groups = [ ];
+                osUsername = "alice";
+              };
+            };
+            d2bd = {
+              type = "User";
+              spec = {
+                displayName = "d2bd";
+                groups = [ ];
+                osUsername = "d2bd";
+              };
+            };
+            lifecycle-operator = {
+              type = "Role";
+              spec.rules = [
+                {
+                  resourceTypes = [ "Endpoint" "Guest" "Host" "Process" "Provider" "Volume" "VolumeBinding" ];
+                  verbs = [ "get" "list" ];
+                  subresources = [ ];
+                  resourceNames = [ ];
+                  zones = [ "work" ];
+                  executionRefs = [ ];
+                  sessionVerbs = [ "connect" "invoke" ];
+                }
+                {
+                  resourceTypes = [ "Guest" ];
+                  verbs = [ "delete" ];
+                  subresources = [ ];
+                  resourceNames = [ "acceptance-guest" ];
+                  zones = [ "work" ];
+                  executionRefs = [ ];
+                  sessionVerbs = [ "connect" "invoke" ];
+                }
+                {
+                  resourceTypes = [ "Volume" ];
+                  verbs = [ "delete" ];
+                  subresources = [ ];
+                  resourceNames = [ "state" ];
+                  zones = [ "work" ];
+                  executionRefs = [ ];
+                  sessionVerbs = [ "connect" "invoke" ];
+                }
+              ];
+            };
+            lifecycle-operator-binding = {
+              type = "RoleBinding";
+              spec = {
+                roleRef = "Role/lifecycle-operator";
+                subjects = [ "User/alice" ];
+                externalPrincipalSelector = null;
+                scopeNarrowing = null;
+              };
+            };
+            host-system = {
+              type = "Host";
+              spec = {
+                providerRef = "Provider/system-core";
+                defaultDomain = "system";
+                allowedDomains = [ "system" ];
+                budget = { };
+                networkAttachments = [ ];
+                deviceAttachments = [ ];
+                volumeAttachmentDefaults = [ ];
+              };
+            };
+            volume-local = {
+              type = "Provider";
+              spec = {
+                artifactId = "volume-acceptance-provider";
+                config = {
+                  controllerExecutionRef = "Host/host-system";
+                  sourcePolicies = [
+                    {
+                      id = "default-state";
+                      class = "local-path";
+                      volumeKinds = [ "durable" "state" "cache" ];
+                    }
+                    # U7: daemon-owned root the unprivileged daemon can
+                    # lock and provision inline (path:daemon-state).
+                    {
+                      id = "daemon-state";
+                      class = "local-path";
+                      volumeKinds = [ "durable" "state" "cache" ];
+                    }
+                  ];
+                };
+              };
+            };
+            volume-virtiofs = {
+              type = "Provider";
+              spec = {
+                artifactId = "volume-acceptance-provider";
+                config.controllerExecutionRef = "Host/host-system";
+              };
+            };
+            state = {
+              type = "Volume";
+              spec = {
+                providerRef = "Provider/volume-local";
+                kind = "state";
+                source = {
+                  executionRef = "Host/host-system";
+                  settings = {
+                    kind = "local-path";
+                    sourcePolicyId = "daemon-state";
+                  };
+                };
+                layout = [{
+                  path = "state";
+                  type = "directory";
+                  # U7: daemon-owned so the unprivileged daemon can
+                  # provision inline; the guest share stays read-only.
+                  ownerRef = "User/d2bd";
+                  groupRef = "User/d2bd";
+                  mode = "0700";
+                  target = null;
+                  accessAcl = [ ];
+                  defaultAcl = [ ];
+                  foreignChildPolicy = "preserve";
+                  noFollow = true;
+                  recursive = false;
+                  sensitivity = "private";
+                  createPolicy = "create-if-never-provisioned";
+                  repairPolicy = "exact-owner";
+                  cleanupPolicy = "owner-controlled";
+                  adoptionPolicy = "quarantine-on-ambiguity";
+                  restartPolicy = "preserve-across-controller-restart";
+                  leaseClass = "none";
+                  invariants = [ "no-symlink" ];
+                }];
+                views.controller = {
+                  path = "";
+                  rights = [ "read" "write" "traverse" ];
+                };
+                # KTD1: the attachment stays declared input only. The Volume
+                # side mints the durable VolumeBinding at reconcile; the
+                # deterministic binding identity below is
+                # vol-binding-6a8ea4307a30f7ceae6533f2 (volume, execution
+                # target, view, mount path).
+                attachments = [{
+                  executionRef = "Guest/acceptance-guest";
+                  transport = "virtiofs";
+                  view = "controller";
+                  access = "read-only";
+                  mountPath = "/state";
+                  settings = {
+                    posixAcl = false;
+                    xattr = false;
+                    cache = "auto";
+                    inodeFileHandles = "never";
+                    threadPoolSize = null;
+                    socketGroup = null;
+                  };
+                }];
+              };
+            };
+            runtime-cloud-hypervisor = {
+              type = "Provider";
+              spec = {
+                artifactId = "runtime-cloud-hypervisor";
+                config = cloudHypervisorConfig;
+              };
+            };
+            acceptance-guest = {
+              type = "Guest";
+              spec = {
+                providerRef = "Provider/runtime-cloud-hypervisor";
+                executionRef = "Host/host-system";
+                systemArtifactId = "acceptance-system";
+                defaultDomain = "system";
+                allowedDomains = [ "system" ];
+                budget = { };
+                volumeAttachmentDefaults = [ ];
+                networkAttachments = [ ];
+                deviceAttachments = [ ];
+              };
+            };
+          };
+        };
+          environment.etc."d2b/fixture-keys/host.key".source = "${fixtureKeys}/host.key";
+          environment.etc."d2b/fixture-keys/guest.pub".source = "${fixtureKeys}/guest.pub";
+        };
+    };
+
   # The guest each fixture-less image evaluates, by the name the image action
   # asks for. A check's own guest is read out of the check's fixture; these are
   # the guests with no fixture to be read out of - the two reusable shapes the
@@ -1780,6 +2195,10 @@ rec {
     resource-operator-activation = {
       node = d2bResourceOperatorActivationNode;
       testName = "d2b-resource-operator-activation";
+    };
+    runtime-cloud-hypervisor-guest-preflight = {
+      node = d2bRuntimeCloudHypervisorPreflightNode;
+      testName = "d2b-runtime-cloud-hypervisor-guest-preflight";
     };
     state-posture-contract = {
       node = d2bStatePostureContractNode;
