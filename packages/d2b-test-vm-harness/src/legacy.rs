@@ -134,6 +134,22 @@ const PYTHON: &str = "D2B_TEST_VM_HARNESS_PYTHON";
 /// forever.
 const MINIMUM_READ_BOUND: Duration = Duration::from_millis(1);
 
+/// How long the host waits for a guest's answer beyond the command's own
+/// bound.
+///
+/// The guest's `timeout` bounds the command's execution. The host's wait is
+/// a different wait - it begins when the command is sent and ends when the
+/// answer comes back - and it covers the guest's teardown of the command, the
+/// base64 framing, and the status round-trip on top. Without room for those
+/// the host would give up on a command the guest was about to answer.
+#[cfg(not(test))]
+const COMMAND_READ_SLACK: Duration = Duration::from_secs(30);
+/// Under test the slack is short, so the test that pins this bound fails
+/// fast instead of waiting the production wait. What it pins is that a bound
+/// is applied at all: without one, the same test does not return.
+#[cfg(test)]
+const COMMAND_READ_SLACK: Duration = Duration::from_millis(50);
+
 /// One check that has not been ported: its name, and its evaluated
 /// `testScript` - the fixture's own assertions with the shared diagnostics
 /// prelude already interpolated at the top.
@@ -228,7 +244,7 @@ pub struct CommandResult {
 /// change what the guest runs for a command containing a quote: an ASCII
 /// string of unreserved characters passes through, and anything else is
 /// single-quoted with an embedded quote closed, double-quoted, and reopened.
-fn shlex_quote(text: &str) -> String {
+pub(crate) fn shlex_quote(text: &str) -> String {
     if text.is_empty() {
         return "''".to_owned();
     }
@@ -404,6 +420,27 @@ impl Console {
         self.await_shell(bound)
     }
 
+    /// The body of [`Self::run`], with the console's read already bounded.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    fn run_bounded(&mut self, command: &str, timeout: Option<u64>) -> Result<CommandResult> {
+        let deadline = timeout.map(|seconds| format!("timeout {seconds} ")).unwrap_or_default();
+        let inner = format!("set -euo pipefail; {command}");
+        self.send(&format!(
+            "{deadline}bash -c {} | (base64 -w 0; echo)\n",
+            shlex_quote(&inner)
+        ))?;
+        let output = base64_decode(self.read_block(command)?.trim())?;
+        self.send("echo ${PIPESTATUS[0]}\n")?;
+        let status = self.read_block(command)?;
+        let status = status.trim().parse::<i32>().map_err(|error| {
+            HarnessError::Configuration(format!("the guest answered {status:?} as a status: {error}"))
+        })?;
+        Ok(CommandResult {
+            status,
+            output: String::from_utf8_lossy(&output).into_owned(),
+        })
+    }
+
     /// Run one command in the guest and read back its status and output.
     ///
     /// The wire form is the driver's, unchanged: the command is run under
@@ -414,22 +451,28 @@ impl Console {
     /// rather than from the status of the framing around it.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn run(&mut self, command: &str, timeout: Option<u64>) -> Result<CommandResult> {
-        let deadline = timeout.map(|seconds| format!("timeout {seconds} ")).unwrap_or_default();
-        let inner = format!("set -euo pipefail; {command}");
-        self.send(&format!(
-            "{deadline}bash -c {} | (base64 -w 0; echo)\n",
-            shlex_quote(&inner)
-        ))?;
-        let output = base64_decode(self.read_block()?.trim())?;
-        self.send("echo ${PIPESTATUS[0]}\n")?;
-        let status = self.read_block()?;
-        let status = status.trim().parse::<i32>().map_err(|error| {
-            HarnessError::Configuration(format!("the guest answered {status:?} as a status: {error}"))
-        })?;
-        Ok(CommandResult {
-            status,
-            output: String::from_utf8_lossy(&output).into_owned(),
-        })
+        // The guest's own `timeout` bounds the command. This bounds the wait
+        // for the command's answer, which is a different wait and the one
+        // that hangs: a guest that dies mid-command, or a console that
+        // simply goes quiet, leaves the host reading a socket that will
+        // never carry another byte. That wait had no bound, so it took the
+        // whole lane down with no per-check result to show for it - the
+        // group threads parked in it, their guests went away, and the work
+        // directories whose cleanup is attached to that path were never
+        // removed. The same reasoning that bounds the shell greeting in
+        // `await_shell` bounds this.
+        let host_bound =
+            Duration::from_secs(timeout.unwrap_or(EXECUTE_DEFAULT_TIMEOUT)) + COMMAND_READ_SLACK;
+        self.writer
+            .set_read_timeout(Some(host_bound.max(MINIMUM_READ_BOUND)))
+            .map_err(|error| HarnessError::io("bounding the console's read", error))?;
+        let outcome = self.run_bounded(command, timeout);
+        // Every reader of this console sets its own bound, but leaving this
+        // one installed would silently shorten the next reader's.
+        self.writer
+            .set_read_timeout(None)
+            .map_err(|error| HarnessError::io("unbounding the console's read", error))?;
+        outcome
     }
 
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
@@ -444,16 +487,34 @@ impl Console {
     /// The block ends at the newline the shell's framing adds, which is the
     /// only newline in it: the output itself is base64, so it carries none.
     /// A read that returns nothing at all is a guest that stopped answering,
-    /// and is reported as such rather than as an empty output.
+    /// and is reported as such rather than as an empty output. A read that
+    /// runs out of its bound is the same guest seen a moment later, and is
+    /// reported as a message naming the command that was never answered -
+    /// which is the difference between a check that failed and a lane that
+    /// stopped producing results.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
-    fn read_block(&mut self) -> Result<String> {
+    fn read_block(&mut self, command: &str) -> Result<String> {
         let mut block = String::new();
         let mut chunk = [0_u8; 4096];
         loop {
-            let read = self
-                .reader
-                .read(&mut chunk)
-                .map_err(|error| HarnessError::io("reading the guest's console", error))?;
+            let read = match self.reader.read(&mut chunk) {
+                Ok(read) => read,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    return Err(HarnessError::Configuration(format!(
+                        "the guest did not answer `{command}` within the bound this command \
+                         carries, so the lane cannot say whether it passed or failed: the console \
+                         is silent, or the guest is gone"
+                    )));
+                }
+                Err(error) => {
+                    return Err(HarnessError::io("reading the guest's console", error));
+                }
+            };
             if read == 0 {
                 return Err(HarnessError::Configuration(
                     "the guest's console closed while a command was running".to_owned(),
@@ -787,6 +848,57 @@ impl GuestControl {
         }
     }
 
+    /// Run one command, and report everything that explains a command that
+    /// was refused.
+    ///
+    /// The prelude's `diag_step` around a single `machine.succeed`: the stage
+    /// it was in, the rows it was asserting on, the journal lines that
+    /// explain them, and the zone's composed explanation. Unlike
+    /// [`Self::diag_wait`] the command runs once - a step is an assertion
+    /// about a settled state, not a wait - so a refusal here is the
+    /// command's, in the words the driver refused it with.
+    pub fn diag_run(
+        &mut self,
+        stage: &str,
+        command: &str,
+        rows: &[DiagRow<'_>],
+        explain: &[DiagRow<'_>],
+    ) -> LegacyResult<String> {
+        self.stage(stage);
+        match self.succeed(&[command], None) {
+            Ok(output) => Ok(output),
+            Err(error) => {
+                self.explain_failure(stage, None, rows, explain, &error);
+                Err(error)
+            }
+        }
+    }
+
+    /// Wait for a file, and report everything that explains a wait that did
+    /// not finish.
+    ///
+    /// The prelude's `diag_step` wrapped a file wait the way it wrapped the
+    /// other two: the stage it was in, the rows it was asserting on, and the
+    /// zone's composed explanation. A file wait is not a command wait, so the
+    /// refusal names no wait text; the rows are the caller's, as they were the
+    /// fixture's.
+    pub fn diag_file(
+        &mut self,
+        stage: &str,
+        path: &str,
+        bound: Duration,
+        rows: &[DiagRow<'_>],
+    ) -> LegacyResult<()> {
+        self.stage(stage);
+        match self.wait_for_file(path, bound) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.explain_failure(stage, None, rows, &[], &error);
+                Err(error)
+            }
+        }
+    }
+
     /// Whether a unit is active, and the two states that end a wait early.
     fn unit_is_active(&mut self, unit: &str, user: Option<&str>) -> LegacyResult<bool> {
         let state = self.unit_property(unit, "ActiveState", user)?;
@@ -924,8 +1036,11 @@ impl GuestControl {
     /// The prelude's lines went to the check's own stdout, which the lane
     /// reports as it arrives and files under that check's result; these go to
     /// the same two places under the same wording, so a reader of a ported
-    /// check's failure reads what the fixture's failure printed.
-    fn announce(&mut self, line: &str) {
+    /// check's failure reads what the fixture's failure printed. A ported
+    /// check that has a line of its own to report - a fact the fixture
+    /// printed because it read better than a bare command - reports it here,
+    /// in its own words.
+    pub fn announce(&mut self, line: &str) {
         report(line);
         self.notes.push_str(line);
         self.notes.push('\n');
@@ -1562,6 +1677,24 @@ mod tests {
         );
         assert_eq!(statuses, vec!["echo ${PIPESTATUS[0]}\n".to_owned()]);
         assert!(notes.is_empty(), "{notes}");
+    }
+
+    /// A console whose peer never answers.
+    ///
+    /// The peer is held for the life of this function on purpose: dropping it
+    /// would close the socket, and a closed console is the other failure -
+    /// the one that already reported itself.
+    #[test]
+    fn a_command_the_guest_never_answers_fails_instead_of_waiting_forever() {
+        let (surface, _never_answers) = UnixStream::pair().expect("a console socket pair");
+        let mut control = GuestControl::new(Console::serving(surface, PathBuf::from("/dev/null")));
+        let error = control
+            .execute("sleep 9999", Some(0))
+            .expect_err("a guest that never answers must not hold the lane's read open");
+        assert!(
+            error.to_string().contains("sleep 9999"),
+            "the refusal must name the command that went unanswered: {error}"
+        );
     }
 
     #[test]
