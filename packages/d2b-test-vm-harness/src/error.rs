@@ -54,6 +54,18 @@ pub enum HarnessError {
         marker: String,
         console_tail: String,
     },
+    /// The guest's console stopped producing output while the lane was still
+    /// waiting for it to activate.
+    ///
+    /// A guest that is slow is still writing to its console; a guest that is
+    /// dead has stopped. Waiting the whole activation bound for a guest that
+    /// went quiet forty seconds in is the wait this separates from the
+    /// bounded one, which is what a slow guest still gets.
+    ConsoleStalled {
+        stalled: Duration,
+        marker: String,
+        console_tail: String,
+    },
     /// The guest reported activation for a different guest shape than the one
     /// the launcher was asked to boot.
     WrongShape {
@@ -108,6 +120,23 @@ impl fmt::Display for HarnessError {
                     formatter,
                     "the guest did not reach activation within {}s: no {marker} marker on its console",
                     bound.as_secs()
+                )?;
+                if !console_tail.is_empty() {
+                    write!(formatter, "\n--- guest console tail ---\n{console_tail}")?;
+                }
+                Ok(())
+            }
+            Self::ConsoleStalled {
+                stalled,
+                marker,
+                console_tail,
+            } => {
+                write!(
+                    formatter,
+                    "the guest's console stopped producing output for {}s before it reported \
+                     {marker}, so it is not going to: the guest is stuck or gone rather than \
+                     slow, and waiting out the full activation bound would say nothing more",
+                    stalled.as_secs()
                 )?;
                 if !console_tail.is_empty() {
                     write!(formatter, "\n--- guest console tail ---\n{console_tail}")?;

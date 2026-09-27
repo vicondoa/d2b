@@ -105,6 +105,15 @@ pub struct GuestSpec {
     pub work_root: PathBuf,
     /// How long the guest has to report activation before the lane fails.
     pub activation_timeout: Duration,
+    /// How long the guest's console may produce nothing before the lane calls
+    /// it stuck rather than slow.
+    ///
+    /// Separate from [`Self::activation_timeout`] on purpose: that bound is
+    /// generous because a loaded host really does take longer to boot a
+    /// guest, while a console that has gone quiet is not slow. Waiting the
+    /// activation bound out on a guest that stopped talking is how one dead
+    /// guest costs half an hour.
+    pub console_stall: Duration,
     /// The guest's name on the monitor and in diagnostics.
     pub name: String,
 }
@@ -124,6 +133,9 @@ impl GuestSpec {
             emulator: emulator.into(),
             work_root: work_root.into(),
             activation_timeout: Duration::from_secs(1200),
+            // Overwritten by the caller that owns the bound policy; the
+            // default here is the same generous fraction.
+            console_stall: Duration::from_secs(300),
             name: name.into(),
         }
     }
@@ -1088,6 +1100,7 @@ impl ActiveGuest {
         Ok(started.elapsed())
     }
 
+
     /// Wait for the guest to report activation again, after a restore reset
     /// it.
     ///
@@ -1096,12 +1109,26 @@ impl ActiveGuest {
     /// marker the first boot wrote is still in it, and a wait that looked
     /// for a marker would be satisfied by a guest that had not re-activated
     /// at all.
-    pub fn await_reactivation(&mut self, seen: usize, bound: Duration, marker: &str) -> Result<()> {
+    pub fn await_reactivation(
+        &mut self,
+        seen: usize,
+        bound: Duration,
+        stall: Duration,
+        marker: &str,
+    ) -> Result<()> {
         let console = self.work_dir.join("console.log");
         let deadline = Instant::now() + bound;
+        let mut progress = ConsoleProgress::new(&console, stall);
         loop {
             if read_console(&console).matches(marker).count() > seen {
                 return Ok(());
+            }
+            if let Some(stalled) = progress.observe() {
+                return Err(HarnessError::ConsoleStalled {
+                    stalled,
+                    marker: marker.to_owned(),
+                    console_tail: activation_failure_tail(&read_console(&console)),
+                });
             }
             if Instant::now() >= deadline {
                 return Err(HarnessError::NotActivated {
@@ -1164,6 +1191,51 @@ impl ActiveGuest {
         if self.work_dir.exists() {
             let _ = fs::remove_dir_all(&self.work_dir);
         }
+    }
+}
+/// The console's own progress, so a guest that has gone quiet is told apart
+/// from one that is slow.
+///
+/// The activation bound is generous because a loaded host genuinely takes
+/// longer to boot a guest. A console that has stopped growing is a different
+/// thing: the guest is stuck, and the rest of the bound will not change that.
+/// Watching the file's length is what tells the two apart, and it costs a
+/// `stat` per poll.
+struct ConsoleProgress {
+    console: PathBuf,
+    length: u64,
+    changed: Instant,
+    stall: Duration,
+}
+
+impl ConsoleProgress {
+    fn new(console: &Path, stall: Duration) -> Self {
+        Self {
+            console: console.to_path_buf(),
+            length: Self::len(console),
+            changed: Instant::now(),
+            stall,
+        }
+    }
+
+    /// How long the console has produced nothing, or `None` while it is still
+    /// within the stall bound.
+    fn observe(&mut self) -> Option<Duration> {
+        let now = Instant::now();
+        let current = Self::len(&self.console);
+        if current != self.length {
+            self.length = current;
+            self.changed = now;
+            return None;
+        }
+        let quiet = now.duration_since(self.changed);
+        (quiet >= self.stall).then_some(quiet)
+    }
+
+    /// A console the launcher cannot stat is treated as silent rather than as
+    /// absent: a missing file is a guest that produced nothing at all.
+    fn len(console: &Path) -> u64 {
+        fs::metadata(console).map(|meta| meta.len()).unwrap_or(0)
     }
 }
 
@@ -1334,6 +1406,7 @@ fn wait_for_activation(
     let console = work_dir.join("console.log");
     let marker = spec.manifest.activation.marker.as_str();
     let deadline = Instant::now() + spec.activation_timeout;
+    let mut progress = ConsoleProgress::new(&console, spec.console_stall);
     loop {
         if let Some(line) = activation_line(&read_console(&console), marker) {
             check_shape(&spec.manifest.activation.shape, &line)?;
@@ -1353,6 +1426,14 @@ fn wait_for_activation(
                     "the emulator exited with {status}\n{}",
                     activation_failure_tail(&read_console(&console))
                 ),
+            });
+        }
+        if let Some(stalled) = progress.observe() {
+            let _ = monitor.take_events();
+            return Err(HarnessError::ConsoleStalled {
+                stalled,
+                marker: marker.to_owned(),
+                console_tail: activation_failure_tail(&read_console(&console)),
             });
         }
         if Instant::now() >= deadline {
@@ -2139,5 +2220,51 @@ mod tests {
             2,
             "{report}"
         );
+    }
+}
+
+#[cfg(test)]
+mod console_progress_tests {
+    use super::ConsoleProgress;
+    use std::{fs, path::PathBuf, time::Duration};
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "d2b-console-progress-{}-{name}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("a scratch directory");
+        dir.join("console.log")
+    }
+
+    #[test]
+    fn a_console_that_stops_growing_is_reported_and_a_resumed_one_is_not() {
+        let console = scratch("stall");
+        fs::write(&console, b"booting\n").expect("a console with output");
+        let mut progress = ConsoleProgress::new(&console, Duration::from_millis(50));
+
+        // A guest that is still writing is slow, not stuck, and must not be
+        // called stalled while it writes.
+        assert!(
+            progress.observe().is_none(),
+            "a console that is still growing must not be reported as stalled"
+        );
+
+        std::thread::sleep(Duration::from_millis(70));
+        assert!(
+            progress.observe().is_some(),
+            "a console that has stopped growing must be reported as stalled"
+        );
+
+        // And a guest that starts talking again is back to being slow, not
+        // stuck: the watch follows the output rather than latching.
+        fs::write(&console, b"booting\nmore\n").expect("the console speaks again");
+        assert!(
+            progress.observe().is_none(),
+            "output resuming must clear the stall"
+        );
+
+        let _ = fs::remove_file(&console);
     }
 }

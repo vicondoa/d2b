@@ -40,6 +40,11 @@ const EMULATOR: &str = "D2B_TEST_VM_HARNESS_EMULATOR";
 const WORK_ROOT: &str = "D2B_TEST_VM_HARNESS_WORK_ROOT";
 /// How long the guest has to activate.
 const ACTIVATION_TIMEOUT: &str = "D2B_TEST_VM_HARNESS_ACTIVATION_TIMEOUT_SECS";
+/// How long the guest's console may produce nothing before the lane calls it
+/// stuck rather than slow. A third of the activation bound, so a guest that
+/// goes quiet is described in minutes while a slow one still gets the full
+/// wait - the console of a booting guest writes continuously.
+const CONSOLE_STALL: &str = "D2B_TEST_VM_HARNESS_CONSOLE_STALL_SECS";
 /// How many boot and teardown cycles to run.
 const CYCLES: &str = "D2B_TEST_VM_HARNESS_CYCLES";
 
@@ -672,6 +677,7 @@ fn run_check_inner(
     let mut point = SnapshotPoint::new(&spec)?;
     let marker = guest.manifest.activation.marker.clone();
     let activation_bound = spec.activation_timeout;
+    let console_stall = spec.console_stall;
 
     let mut surface = LegacyGuest::attach(&mut active)?;
     let fresh = surface
@@ -709,6 +715,7 @@ fn run_check_inner(
         &guest.name,
         &marker,
         activation_bound,
+        console_stall,
     )?;
     let restored_marker = surface
         .run(&LegacyCheck::new(format!("{}-marker", guest.name), EQUIVALENCE_MARKER))
@@ -750,6 +757,7 @@ fn run_check_inner(
         &guest.name,
         &marker,
         activation_bound,
+        console_stall,
     )?;
     report_line(&format!(
         "{}: second restore onto the same snapshot took {second:.1}s and wrote a layer of its own",
@@ -828,11 +836,12 @@ fn restore_and_measure(
     name: &str,
     marker: &str,
     bound: Duration,
+    stall: Duration,
 ) -> Result<f64, HarnessError> {
     let seen = active.activations(marker);
     let seconds = active.restore(point)?.as_secs_f64();
     let waiting = Instant::now();
-    active.await_reactivation(seen, bound, marker)?;
+    active.await_reactivation(seen, bound, stall, marker)?;
     let reactivation = waiting.elapsed().as_secs_f64();
     surface.resync()?;
     report_line(&format!(
@@ -966,6 +975,7 @@ fn run() -> Result<Vec<String>, HarnessError> {
         "lane-harness",
     );
     spec.activation_timeout = activation_timeout;
+    spec.console_stall = Duration::from_secs(optional_u64(CONSOLE_STALL, 180)?);
     let work_dir = spec.work_dir();
 
     for cycle in 0..cycles {
