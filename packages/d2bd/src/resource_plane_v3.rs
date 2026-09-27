@@ -190,6 +190,50 @@ fn interaction_driver_args<T: d2b_provider_wayland_policy::InteractionType>(
 const PLANE_BACKOFF: Duration = d2b_resource_runtime::DEFAULT_REQUEUE_BACKOFF;
 
 
+/// The host uid a `User/<name>` (or `Group/<name>`) principal resolves to.
+///
+/// A d2b principal is a name, not an NSS account: the Device TPM workers run
+/// as a stable id the storage contract already declares for them
+/// (`d2bLib.stablePrincipalId`, `nixos-modules/lib.nix`), and no Unix account
+/// is ever created for them. Resolving through `User::from_name` therefore
+/// found nothing and refused the Volume whose layout grants those principals
+/// - which is every Device-owned state Volume.
+///
+/// This mirrors `stablePrincipalId` exactly: 50000 plus the first three bytes
+/// of the SHA-256 over the principal name, big-endian. `User/d2bd` still
+/// resolves to a real account's uid by coincidence, but the arithmetic is
+/// what the rest of the contract agrees on, so a grant and the storage row
+/// that declares the same principal land on the same uid.
+fn stable_principal_id(name: &str) -> u32 {
+    if name == "root" {
+        return 0;
+    }
+    let digest = Sha256::digest(name.as_bytes());
+    50_000u32.saturating_add(u32::from_be_bytes([0, digest[0], digest[1], digest[2]]))
+}
+
+/// The id a `User/<name>` or `Group/<name>` principal resolves to.
+///
+/// A real account wins when one exists: the daemon's own `d2bd` is both a d2b
+/// principal and a Unix account, and the storage entries the daemon creates
+/// are owned by it, so resolving it arithmetically would hand every Volume an
+/// owner that does not match the filesystem.
+///
+/// A principal that is *not* an account is the Device-worker case: those run
+/// as a stable id and no Unix account is ever created for them. Those fall
+/// through to [`stable_principal_id`], which is the id the storage contract
+/// declares for the same name, so the layout's ACL grant and the storage row
+/// agree. An NSS error is not fatal here - a name that cannot be looked up is
+/// exactly the case the arithmetic exists for.
+fn principal_id_for(name: &str, group: bool) -> u32 {
+    let id = if group {
+        nix::unistd::Group::from_name(name).ok().flatten().map(|g| g.gid.as_raw())
+    } else {
+        nix::unistd::User::from_name(name).ok().flatten().map(|u| u.uid.as_raw())
+    };
+    id.unwrap_or_else(|| stable_principal_id(name))
+}
+
 /// Bounded wait budget for the binding-owned virtiofsd socket bind: the
 /// worker Process child binds the private socket after its launch, and the
 /// daemon's socket facet waits this budget before reporting a retryable
@@ -1627,10 +1671,22 @@ impl d2b_provider_volume_local::VolumeRootResolver for ZoneVolumeRootResolver {
         if reference.resource_type().as_str() != "User" {
             return Err(d2b_provider_volume_local::VolumeLocalError::InvalidSpec);
         }
-        nix::unistd::User::from_name(reference.name().as_str())
-           .map_err(|_| d2b_provider_volume_local::VolumeLocalError::EffectFailed)?
-           .map(|user| user.uid.as_raw())
-           .ok_or(d2b_provider_volume_local::VolumeLocalError::EffectFailed)
+        Ok(principal_id_for(reference.name().as_str(), false))
+    }
+
+    fn resolve_group(
+        &self,
+        reference: &ResourceRef,
+    ) -> Result<u32, d2b_provider_volume_local::VolumeLocalError> {
+        // A layout entry names its group with a `User/<name>` reference as
+        // often as a `Group/<name>` one - the closed contract's own fixtures
+        // declare `groupRef: "User/d2bd"`. Refusing anything but `Group` here
+        // rejected every Volume that spells it that way, which is all of them.
+        let kind = reference.resource_type().as_str();
+        if kind != "Group" && kind != "User" {
+            return Err(d2b_provider_volume_local::VolumeLocalError::InvalidSpec);
+        }
+        Ok(principal_id_for(reference.name().as_str(), kind == "Group"))
     }
 }
 
