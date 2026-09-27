@@ -229,36 +229,31 @@ let
     cargoBuildExtraArgs = "--package d2b-broker-composition --bin d2b-broker --no-default-features";
     installPhaseCommand = installBinaries [ "d2b-broker" ];
   });
+  # The host tools are Bazel-built. When a release publishes them, take the
+  # prebuilt artifact instead of recompiling d2b with cargo, so the Nix side
+  # never builds the same binaries the Bazel lane already built. The cargo
+  # build stays as the local-dev fallback for a checkout with no published
+  # release, and `selectPackage` declines any entry needing an executable
+  # rename, so a consumer that cannot use the prebuilt keeps its own build.
+  prebuilt = import ./prebuilt-packages.nix { inherit pkgs lib; };
+  # `nix/prebuilt.json` is keyed by executable name, not crate name, so the
+  # lookup uses the binary this package installs - `d2b-host` ships
+  # `d2b-activation-helper`, and `d2b-provider-display-wayland` ships
+  # `d2b-wayland-proxy`. `selectPackage` declines an entry that needs an
+  # executable rename and falls back when the manifest has no such entry, so
+  # a host tool with no published artifact keeps its cargo build.
+  main = name: binaries:
+    prebuilt.selectPackage (builtins.head binaries)
+      (mkMainPackage { package = name; inherit binaries; });
 in
 {
   inherit cargoArtifacts broker;
 
-  d2bd = mkMainPackage {
-    package = "d2bd";
-    binaries = [ "d2bd" ];
-  };
-  d2b = mkMainPackage {
-    package = "d2b";
-    binaries = [ "d2b" ];
-  };
-  activationHelper = mkMainPackage {
-    package = "d2b-host";
-    binaries = [ "d2b-activation-helper" ];
-  };
-  hostActivationHelper = mkMainPackage {
-    package = "d2b-host-activation-helper";
-    binaries = [ "d2b-host-activation-helper" ];
-  };
-  unsafeLocalHelper = mkMainPackage {
-    package = "d2b-unsafe-local-helper";
-    binaries = [ "d2b-unsafe-local-helper" ];
-  };
-  resourceCompiler = mkMainPackage {
-    package = "d2b-resource-compiler";
-    binaries = [ "d2b-resource-compiler" ];
-  };
-  waylandProxy = mkMainPackage {
-    package = "d2b-provider-display-wayland";
-    binaries = [ "d2b-wayland-proxy" ];
-  };
+  d2bd = main "d2bd" [ "d2bd" ];
+  d2b = main "d2b" [ "d2b" ];
+  activationHelper = main "d2b-host" [ "d2b-activation-helper" ];
+  hostActivationHelper = main "d2b-host-activation-helper" [ "d2b-host-activation-helper" ];
+  unsafeLocalHelper = main "d2b-unsafe-local-helper" [ "d2b-unsafe-local-helper" ];
+  resourceCompiler = main "d2b-resource-compiler" [ "d2b-resource-compiler" ];
+  waylandProxy = main "d2b-provider-display-wayland" [ "d2b-wayland-proxy" ];
 }
