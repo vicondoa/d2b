@@ -462,6 +462,10 @@ rec {
       node = d2bGuestShellServiceNode;
       testName = "d2b-guest-shell-service";
     };
+    privilege-oracle = {
+      node = d2bDaemonNode { };
+      testName = "d2b-privilege-oracle";
+    };
 
   };
 }

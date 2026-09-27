@@ -151,6 +151,7 @@ _PORTED_CHECKS = [
     "daemon-smoke",
     "guest-agent-cap-confinement",
     "guest-shell-service",
+    "privilege-oracle",
 ]
 
 [
