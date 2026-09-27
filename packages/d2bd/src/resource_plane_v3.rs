@@ -189,49 +189,33 @@ fn interaction_driver_args<T: d2b_provider_wayland_policy::InteractionType>(
 /// Preserved reconcile backoff for the plane's resource actors (R13).
 const PLANE_BACKOFF: Duration = d2b_resource_runtime::DEFAULT_REQUEUE_BACKOFF;
 
-
-/// The host uid a `User/<name>` (or `Group/<name>`) principal resolves to.
-///
-/// A d2b principal is a name, not an NSS account: the Device TPM workers run
-/// as a stable id the storage contract already declares for them
-/// (`d2bLib.stablePrincipalId`, `nixos-modules/lib.nix`), and no Unix account
-/// is ever created for them. Resolving through `User::from_name` therefore
-/// found nothing and refused the Volume whose layout grants those principals
-/// - which is every Device-owned state Volume.
-///
-/// This mirrors `stablePrincipalId` exactly: 50000 plus the first three bytes
-/// of the SHA-256 over the principal name, big-endian. `User/d2bd` still
-/// resolves to a real account's uid by coincidence, but the arithmetic is
-/// what the rest of the contract agrees on, so a grant and the storage row
-/// that declares the same principal land on the same uid.
-fn stable_principal_id(name: &str) -> u32 {
-    if name == "root" {
-        return 0;
-    }
-    let digest = Sha256::digest(name.as_bytes());
-    50_000u32.saturating_add(u32::from_be_bytes([0, digest[0], digest[1], digest[2]]))
-}
-
 /// The id a `User/<name>` or `Group/<name>` principal resolves to.
 ///
-/// A real account wins when one exists: the daemon's own `d2bd` is both a d2b
-/// principal and a Unix account, and the storage entries the daemon creates
-/// are owned by it, so resolving it arithmetically would hand every Volume an
-/// owner that does not match the filesystem.
+/// The closed Volume contract requires these principals to be real host
+/// accounts, resolved through NSS: `build_tpm_state_volume_spec` documents
+/// that "each principal must be a real host account the state-layout effect
+/// resolves through NSS", and `host-users.nix` materializes exactly those
+/// accounts from `d2bLib.deviceTpmPrincipals`, with the uid the worker row
+/// actually runs as (`deviceWorkerPrincipalId`, the triple-derived id
+/// `mint_template_intent` mirrors). A name that does not resolve is a
+/// provisioning gap, not something to paper over.
 ///
-/// A principal that is *not* an account is the Device-worker case: those run
-/// as a stable id and no Unix account is ever created for them. Those fall
-/// through to [`stable_principal_id`], which is the id the storage contract
-/// declares for the same name, so the layout's ACL grant and the storage row
-/// agree. An NSS error is not fatal here - a name that cannot be looked up is
-/// exactly the case the arithmetic exists for.
-fn principal_id_for(name: &str, group: bool) -> u32 {
+/// An earlier revision fell back to a name-derived stable id here. That was
+/// wrong twice over: the accounts do exist, so the fallback never ran; and on
+/// the path it was meant to cover it would have granted a uid no process ever
+/// holds, so a missing account would have become a silent permission grant
+/// rather than the loud refusal the contract wants. It is reverted.
+fn principal_id_for(
+    name: &str,
+    group: bool,
+) -> Result<u32, d2b_provider_volume_local::VolumeLocalError> {
     let id = if group {
-        nix::unistd::Group::from_name(name).ok().flatten().map(|g| g.gid.as_raw())
+        nix::unistd::Group::from_name(name).map(|entry| entry.map(|g| g.gid.as_raw()))
     } else {
-        nix::unistd::User::from_name(name).ok().flatten().map(|u| u.uid.as_raw())
+        nix::unistd::User::from_name(name).map(|entry| entry.map(|u| u.uid.as_raw()))
     };
-    id.unwrap_or_else(|| stable_principal_id(name))
+    id.map_err(|_| d2b_provider_volume_local::VolumeLocalError::EffectFailed)?
+        .ok_or(d2b_provider_volume_local::VolumeLocalError::EffectFailed)
 }
 
 /// Bounded wait budget for the binding-owned virtiofsd socket bind: the
@@ -1671,7 +1655,7 @@ impl d2b_provider_volume_local::VolumeRootResolver for ZoneVolumeRootResolver {
         if reference.resource_type().as_str() != "User" {
             return Err(d2b_provider_volume_local::VolumeLocalError::InvalidSpec);
         }
-        Ok(principal_id_for(reference.name().as_str(), false))
+        principal_id_for(reference.name().as_str(), false)
     }
 
     fn resolve_group(
@@ -1686,7 +1670,7 @@ impl d2b_provider_volume_local::VolumeRootResolver for ZoneVolumeRootResolver {
         if kind != "Group" && kind != "User" {
             return Err(d2b_provider_volume_local::VolumeLocalError::InvalidSpec);
         }
-        Ok(principal_id_for(reference.name().as_str(), kind == "Group"))
+        principal_id_for(reference.name().as_str(), kind == "Group")
     }
 }
 
@@ -3608,48 +3592,42 @@ use d2b_provider_system_core::MinijailPlatformGate;
     use d2b_resource_runtime::revision::ManualClock;
     use d2b_resource_runtime::watch::{ChangeKind, ChangeNotice, WatchHubConfig};
 
-    /// A d2b principal that is not a Unix account must still resolve, and to
-    /// the same id the storage contract declares for it. A Device's swtpm
-    /// principals are exactly that: no account is ever created for them, so
-    /// an NSS-only lookup refused the state Volume whose layout grants them,
-    /// and the Volume failed its layout effect on every retry.
-    ///
-    /// The expected values recompute `d2bLib.stablePrincipalId`
-    /// independently (50000 plus the first three bytes of the SHA-256 over
-    /// the name), so this pins agreement with the Nix side rather than
-    /// restating whatever the implementation happens to do.
+    /// A principal that is not a real host account must be refused, not
+    /// resolved to a guessed id. The closed contract requires these
+    /// principals to be real accounts, and `host-users.nix` materializes the
+    /// Device TPM ones from `d2bLib.deviceTpmPrincipals` with the uid the
+    /// worker row runs as. A name that does not resolve is therefore a
+    /// provisioning gap; answering it with a name-derived hash would turn a
+    /// loud refusal into a silent permission grant for a uid no process
+    /// holds, which is the harder failure to diagnose later.
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn a_principal_without_an_account_resolves_to_its_stable_id() {
-        use sha2::{Digest, Sha256};
-        let expected = |name: &str| {
-            let digest = Sha256::digest(name.as_bytes());
-            50_000u32.saturating_add(u32::from_be_bytes([0, digest[0], digest[1], digest[2]]))
-        };
-        // Neither name is a Unix account, so both must take the arithmetic
-        // path rather than refusing.
+    fn a_principal_without_an_account_is_refused() {
         for name in [
             "d2b-acceptance-guest-swtpm",
             "d2b-acceptance-guest-swtpm-flush",
+            "d2b-no-such-account-probe",
         ] {
-            assert_eq!(
-                principal_id_for(name, false),
-                expected(name),
-                "{name} must resolve to the id the storage contract declares"
+            assert!(
+                principal_id_for(name, false).is_err(),
+                "{name} has no host account and must not resolve to a guessed id"
             );
         }
     }
 
-    /// A principal that *is* a real account keeps the account's own id. The
-    /// daemon owns the files it creates, so resolving `root` arithmetically
-    /// would hand every Volume an owner that does not match the filesystem.
+    /// A principal that is a real account resolves to the account's own id.
+    /// These are the same ids `host-users.nix` assigns the Device TPM
+    /// accounts, so this is the path the state Volume's ACL grants ride.
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn a_principal_that_is_an_account_keeps_its_real_id() {
+    fn a_principal_that_is_an_account_resolves_to_its_real_id() {
         let Some(user) = nix::unistd::User::from_name("root").ok().flatten() else {
             return;
         };
-        assert_eq!(principal_id_for("root", false), user.uid.as_raw());
+        assert_eq!(
+            principal_id_for("root", false).expect("root is a host account"),
+            user.uid.as_raw()
+        );
     }
 
     /// One machinery-test rig for the anchor projection subscription: a
