@@ -3608,6 +3608,50 @@ use d2b_provider_system_core::MinijailPlatformGate;
     use d2b_resource_runtime::revision::ManualClock;
     use d2b_resource_runtime::watch::{ChangeKind, ChangeNotice, WatchHubConfig};
 
+    /// A d2b principal that is not a Unix account must still resolve, and to
+    /// the same id the storage contract declares for it. A Device's swtpm
+    /// principals are exactly that: no account is ever created for them, so
+    /// an NSS-only lookup refused the state Volume whose layout grants them,
+    /// and the Volume failed its layout effect on every retry.
+    ///
+    /// The expected values recompute `d2bLib.stablePrincipalId`
+    /// independently (50000 plus the first three bytes of the SHA-256 over
+    /// the name), so this pins agreement with the Nix side rather than
+    /// restating whatever the implementation happens to do.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_principal_without_an_account_resolves_to_its_stable_id() {
+        use sha2::{Digest, Sha256};
+        let expected = |name: &str| {
+            let digest = Sha256::digest(name.as_bytes());
+            50_000u32.saturating_add(u32::from_be_bytes([0, digest[0], digest[1], digest[2]]))
+        };
+        // Neither name is a Unix account, so both must take the arithmetic
+        // path rather than refusing.
+        for name in [
+            "d2b-acceptance-guest-swtpm",
+            "d2b-acceptance-guest-swtpm-flush",
+        ] {
+            assert_eq!(
+                principal_id_for(name, false),
+                expected(name),
+                "{name} must resolve to the id the storage contract declares"
+            );
+        }
+    }
+
+    /// A principal that *is* a real account keeps the account's own id. The
+    /// daemon owns the files it creates, so resolving `root` arithmetically
+    /// would hand every Volume an owner that does not match the filesystem.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_principal_that_is_an_account_keeps_its_real_id() {
+        let Some(user) = nix::unistd::User::from_name("root").ok().flatten() else {
+            return;
+        };
+        assert_eq!(principal_id_for("root", false), user.uid.as_raw());
+    }
+
     /// One machinery-test rig for the anchor projection subscription: a
     /// small hub (so Missed and Expired are reachable), a store, and a
     /// registry the subscription rebuilds. The `_dir` keeps the SQLite
