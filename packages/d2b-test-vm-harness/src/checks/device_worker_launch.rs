@@ -990,7 +990,8 @@ fn row_dumps() -> Vec<(String, String)> {
         concat!(
             "jq -c '{resources: [.resources[] | select(.type == \"Process\" or ",
             ".type == \"EphemeralProcess\") | {type, name: .metadata.name, ",
-            "owner: .metadata.ownerRef, template: .spec.template}], ",
+            "owner: .metadata.ownerRef, template: .spec.template, ",
+            "launchArgs: .spec.launchArgs, program: .spec.program}], ",
             "bindings: [.processTemplates[] | {processRef, ownerRef, template, ",
             "launchArgs, binaryRef}]}' /etc/d2b/zones/work/resource-bundle.json ",
             "|| true",
@@ -1092,6 +1093,21 @@ fn row_dumps() -> Vec<(String, String)> {
             "d=$(echo /var/lib/d2b/tpm-state/device-*-tpm-state); ",
             "echo \"== $d\"; getfacl -p \"$d\" 2>&1 | head -20; ",
             "stat -f -c '%T acl-supporting' \"$d\" 2>/dev/null; true",
+        )
+        .to_owned(),
+    ));
+    // The worker is `Vanished`: spawned, then gone. Its state directory is
+    // where it writes its log and pid file the moment it starts, so whatever
+    // killed it is very likely already on disk there. Without this the lane
+    // reports only that the process did not survive.
+    dumps.push((
+        "tpm state directory contents".to_owned(),
+        concat!(
+            "d=$(echo /var/lib/d2b/tpm-state/device-*-tpm-state); ",
+            "ls -la \"$d\" 2>&1 | head -20; ",
+            "for f in \"$d\"/*.log \"$d\"/log* \"$d\"/*.err; do ",
+            "  [ -f \"$f\" ] && { echo \"== $f\"; head -30 \"$f\"; }; ",
+            "done 2>/dev/null; true",
         )
         .to_owned(),
     ));
