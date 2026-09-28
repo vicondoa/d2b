@@ -1071,12 +1071,10 @@ fn row_dumps() -> Vec<(String, String)> {
     dumps.push((
         "device worker artifact bin (is the named swtpm binary there?)".to_owned(),
         concat!(
-            "for a in /nix/store/*-d2b-device-worker-*/bin; do ",
-            "echo \"== $a\"; ls -la \"$a\" 2>&1 | head -20; done; ",
-            "b=$(ls /nix/store/*-d2b-device-worker-*/bin/swtpm 2>/dev/null | head -1); ",
-            "echo \"swtpm binary: ${b:-MISSING}\"; ",
-            "[ -n \"$b\" ] && { file \"$b\" 2>&1 | head -3; ",
-            "head -c 20 \"$b\" | od -c | head -2; }; true"
+            "for a in /nix/store/*-d2b-device-worker-*/bin/swtpm; do ",
+            "echo \"== $a\"; ls -la \"$a\" 2>&1; ",
+            "\"$a\" --version 2>&1 | head -2; ",
+            "echo \"-- version exit=$? --\"; done; true"
         )
         .to_owned(),
     ));

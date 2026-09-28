@@ -440,7 +440,7 @@ export D2B_TEST_VM_HARNESS_WORK_ROOT="d2b-vm-lane-work/{name}"
 exec "$runfiles/__HARNESS__" lane "$@"
 """
 
-def lane_test(name, images, emulator, harness, python, timeout = "eternal"):
+def lane_test(name, images, emulator, harness, python, timeout = "eternal", tags = []):
     """The lane: one guest per check's own configuration, pooled and run.
 
     The images are the graph outputs of one `guest_image` per check, so each
@@ -471,7 +471,7 @@ def lane_test(name, images, emulator, harness, python, timeout = "eternal"):
         # the listing. The `$(rlocationpath ...)` parts are expanded by Bazel
         # before the shell sees them, which is why the paths arrive intact.
         cmd = "printf '%s\\n' " + " ".join(["$(rlocationpath %s)" % image for image in images]) + " > $@",
-        tags = _LANE_TAGS,
+        tags = _LANE_TAGS + tags,
     )
     _write_runner(
         name = name,
@@ -494,6 +494,6 @@ def lane_test(name, images, emulator, harness, python, timeout = "eternal"):
             harness,
             python,
         ],
-        tags = _LANE_TAGS + ["no-cache"],
+        tags = _LANE_TAGS + tags + ["no-cache"],
         timeout = timeout,
     )

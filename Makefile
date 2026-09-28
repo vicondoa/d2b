@@ -234,7 +234,7 @@ test-host-integration:
 	fi; \
 	$(D2B_BAZEL_TEST) --config=guest \
 	--test_env=D2B_VM_CHECK="$${D2B_VM_CHECK:-}" \
-	//bazel/checks/vm:host_integration_lane_run
+	$(if $(strip $(D2B_VM_CHECK)),//bazel/checks/vm:host_integration_lane_run_$(D2B_VM_CHECK),//bazel/checks/vm:host_integration_lane_run)
 
 ## perf - run the advisory performance budget suite.
 perf:

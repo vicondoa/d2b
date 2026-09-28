@@ -218,6 +218,33 @@ lane_test(
     python = "@python3//:bin/python3",
 )
 
+# One target per check, carrying that check's single image.
+#
+# `images` is a build attribute and the `lane_test` macro expands it when the
+# target is declared, so the image set cannot be a `select()` on a flag the
+# test only sees at run time. That made the one target above the only way in,
+# and a single-check run built all eleven guests to boot one - the property
+# the flake path had for free, where `D2B_VM_CHECK` picked one `vmChecks`
+# entry and Nix realized only what that entry referenced. These targets give
+# that back: `D2B_VM_CHECK=<name>` runs
+# `host_integration_lane_run_<name>`, which depends on one image, and an
+# unset `D2B_VM_CHECK` still runs the full lane above.
+#
+# They are `manual` so a wildcard over the package does not pull eleven lane
+# targets into the hermetic check suite; they are the pre-PR lane entry
+# points, not unit tests.
+[
+    lane_test(
+        name = "host_integration_lane_run_" + check,
+        images = [":guest_image_" + check],
+        emulator = _EMULATOR,
+        harness = _HARNESS,
+        python = "@python3//:bin/python3",
+        tags = ["manual"],
+    )
+    for check in _CHECKS
+]
+
 # The lane's own suite. The harness crate deliberately carries no test
 # aggregate - the repository's test census would force-register such a crate
 # into the main package suite - so the targets that lint and exercise it are
