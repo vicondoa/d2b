@@ -1027,6 +1027,23 @@ fn row_dumps() -> Vec<(String, String)> {
         )
         .to_owned(),
     ));
+    // The child that the broker spawns exits before the supervisor can open
+    // a pidfd for it, and every collapse maps that to the same
+    // `pidfd-unavailable` / `Vanished` pair: exec-failed, ran-and-exited and
+    // killed-by-signal are indistinguishable from outside. The broker's
+    // reaper already knows which - `ChildReaped` carries the `ChildExitStatus`
+    // (kind, code, signal) - but the field-level grep above collapses each
+    // record to three tokens and drops the code and signal. Print the records
+    // whole so one run says how the child actually died.
+    dumps.push((
+        "broker child reaped records (full, with exit code and signal)".to_owned(),
+        concat!(
+            "grep -h 'ChildReaped' /var/lib/d2b/audit/broker-*.jsonl ",
+            "2>/dev/null | tail -12 || echo 'no ChildReaped record in the broker audit log'; ",
+            "true"
+        )
+        .to_owned(),
+    ));
     // The state Volume is what the swtpm fence waits on, and its reconcile
     // record carries the layout effect's own failure. The swtpm audit grep
     // above cannot match it - the volume's records name the volume, not the
