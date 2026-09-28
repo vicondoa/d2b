@@ -6,6 +6,13 @@
 # Plan: ph1-p1-swtpm-persistence - the long-lived swtpm sidecar argv shape is locked here.
 # No `--daemon` entry: swtpm socket is foreground by default and `--daemon` takes no
 # argument, so the pre-0.10 `--daemon=false` spelling the installed swtpm rejects is gone.
+# The `uid=`/`gid=` owner entries are opt-in (`SwtpmArgvInput::uid/gid`), and
+# this golden exercises them. The namespaced device-worker launch passes
+# `None`: swtpm chowns each socket to the id it is given, and inside that
+# launch's user namespace the chown is refused - "Could not change ownership of
+# UnixIO socket to 0:0 Operation not permitted" - so swtpm exits 1 before it
+# binds the data socket, leaving no log, no pid file and no NVRAM. Omitting the
+# entries leaves the socket owned by the uid swtpm itself runs as.
 /nix/store/SWTPMSWTPMSWTPMSWTPMSWTPM-swtpm-0.10.0/bin/swtpm
 socket
 --tpm2

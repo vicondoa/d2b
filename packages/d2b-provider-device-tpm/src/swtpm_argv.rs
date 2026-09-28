@@ -10,8 +10,8 @@
 //! swtpm socket \
 //!   --tpm2 \
 //!   --tpmstate dir=<state-dir> \
-//!   --ctrl type=unixio,path=<state-dir>/ctrl.sock,mode=0660,uid=<uid>,gid=<gid> \
-//!   --server type=unixio,path=<vm>-tpm.sock,mode=0660,uid=<uid>,gid=<gid> \
+//!   --ctrl type=unixio,path=<state-dir>/ctrl.sock,mode=0660 \
+//!   --server type=unixio,path=<vm>-tpm.sock,mode=0660 \
 //!   --flags startup-clear \
 //!   --log file=<state-dir>/swtpm.log,level=20 \
 //!   --pid file=<state-dir>/swtpm.pid
@@ -59,14 +59,27 @@ pub struct SwtpmArgvInput {
     /// Absolute path to the swtpm server socket (`--server`). CH
     /// connects to this one through `--tpm`.
     pub server_socket_path: String,
-    /// Uid rendered into the `--ctrl`/`--server` socket owner entries: the
-    /// identity swtpm holds in the namespace it runs in (the in-namespace id
-    /// when the launcher installs a user namespace; naming an unmapped host
-    /// id there makes the socket chown fail with `EINVAL`).
-    pub uid: u32,
-    /// Gid rendered into the same socket owner entries (also the socket
-    /// group).
-    pub gid: u32,
+    /// Optional socket owner rendered into the `--ctrl`/`--server`
+    /// entries as `uid=`/`gid=`. swtpm `chown()`s each socket to whatever
+    /// id it is given, so this is only safe when that id is one the launch
+    /// can actually chown to.
+    ///
+    /// `None` (the default for a namespaced launch) omits the entries
+    /// entirely and lets the socket be created owned by the uid swtpm
+    /// already runs as, which is correct under every namespace mapping. A
+    /// namespaced launch that names an owner gets
+    ///
+    /// ```text
+    /// Could not change ownership of UnixIO socket to 0:0
+    /// Operation not permitted
+    /// ```
+    ///
+    /// and exits 1 before it binds the data socket, leaving no log, no pid
+    /// file and no NVRAM. Set both or neither: swtpm takes them as one
+    /// ownership.
+    pub uid: Option<u32>,
+    /// Gid counterpart of [`Self::uid`].
+    pub gid: Option<u32>,
     /// `--log file=<path>` value; usually `<state_dir>/swtpm.log`.
     pub log_path: String,
     /// `--log level=<N>` value. swtpm accepts 1..20; d2b defaults
@@ -110,6 +123,10 @@ pub enum SwtpmArgvError {
     },
     /// `vm_name` was empty.
     EmptyVmName,
+    /// Exactly one of `uid`/`gid` was supplied. swtpm takes the pair as a
+    /// single socket ownership, so a half-specified owner is a caller bug
+    /// rather than a default to guess.
+    IncompleteSocketOwner,
     /// `state_dir` was empty or non-absolute.
     InvalidStateDir {
         /// The offending path.
@@ -197,16 +214,34 @@ pub fn generate_swtpm_argv(input: &SwtpmArgvInput) -> Result<Vec<String>, SwtpmA
     argv.push("--tpmstate".to_owned());
     argv.push(format!("dir={}", input.state_dir));
 
+    // The socket owner entries are opt-in. swtpm `chown()`s each socket to
+    // whatever id it is handed, and inside the launch's user namespace that
+    // chown is refused ("Could not change ownership of UnixIO socket to
+    // 0:0 Operation not permitted"), so swtpm exits 1 before it binds the
+    // data socket and the state directory is left with no log, no pid file
+    // and no NVRAM. Reproduced with the exact device-worker artifact binary:
+    // this argv runs to a live swtpm, the same argv naming an owner aborts.
+    //
+    // A caller that genuinely needs the ownership still gets it; a launch
+    // that omits it gets a socket owned by the uid swtpm already runs as,
+    // which is what `mode=0660` and the state directory's ACL are written
+    // against.
+    let owner = match (input.uid, input.gid) {
+        (Some(uid), Some(gid)) => format!(",uid={uid},gid={gid}"),
+        (None, None) => String::new(),
+        _ => return Err(SwtpmArgvError::IncompleteSocketOwner),
+    };
+
     argv.push("--ctrl".to_owned());
     argv.push(format!(
-        "type=unixio,path={},mode=0660,uid={},gid={}",
-        input.ctrl_socket_path, input.uid, input.gid
+        "type=unixio,path={},mode=0660{}",
+        input.ctrl_socket_path, owner
     ));
 
     argv.push("--server".to_owned());
     argv.push(format!(
-        "type=unixio,path={},mode=0660,uid={},gid={}",
-        input.server_socket_path, input.uid, input.gid
+        "type=unixio,path={},mode=0660{}",
+        input.server_socket_path, owner
     ));
 
     if input.startup_clear {
@@ -278,8 +313,10 @@ mod tests {
             state_dir: "/var/lib/d2b/vms/corp-vm/tpm".to_owned(),
             ctrl_socket_path: "/var/lib/d2b/vms/corp-vm/tpm/ctrl.sock".to_owned(),
             server_socket_path: "/run/d2b/vms/corp-vm/swtpm.sock".to_owned(),
-            uid: 1100,
-            gid: 1100,
+            // Exercises the opt-in owner so the golden keeps documenting it;
+            // the namespaced device-worker launch passes `None`.
+            uid: Some(1100),
+            gid: Some(1100),
             log_path: "/var/lib/d2b/vms/corp-vm/tpm/swtpm.log".to_owned(),
             log_level: 20,
             pid_path: "/var/lib/d2b/vms/corp-vm/tpm/swtpm.pid".to_owned(),

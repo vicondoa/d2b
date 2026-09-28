@@ -1059,6 +1059,27 @@ fn row_dumps() -> Vec<(String, String)> {
         )
         .to_owned(),
     ));
+    // A reaped child with exit code 1 is what a failed `execve` looks like:
+    // `fork` succeeds, `exec` fails, the child `_exit(1)`s, and the parent
+    // reaps it - indistinguishable from "ran and failed" from outside. The
+    // rendered argv is correct (it carries the `socket` subcommand and every
+    // swtpm 0.10.1 `dir=`/`file=`/`type=unixio,` form, with the in-namespace
+    // uid 0 the `launch_ids` mapping produces), so the binary the argv names
+    // is the thing to confirm: it lives inside the device-worker artifact,
+    // not at a nixpkgs swtpm path, and a missing or non-ELF copy there fails
+    // exec exactly this way.
+    dumps.push((
+        "device worker artifact bin (is the named swtpm binary there?)".to_owned(),
+        concat!(
+            "for a in /nix/store/*-d2b-device-worker-*/bin; do ",
+            "echo \"== $a\"; ls -la \"$a\" 2>&1 | head -20; done; ",
+            "b=$(ls /nix/store/*-d2b-device-worker-*/bin/swtpm 2>/dev/null | head -1); ",
+            "echo \"swtpm binary: ${b:-MISSING}\"; ",
+            "[ -n \"$b\" ] && { file \"$b\" 2>&1 | head -3; ",
+            "head -c 20 \"$b\" | od -c | head -2; }; true"
+        )
+        .to_owned(),
+    ));
     // The state Volume is what the swtpm fence waits on, and its reconcile
     // record carries the layout effect's own failure. The swtpm audit grep
     // above cannot match it - the volume's records name the volume, not the

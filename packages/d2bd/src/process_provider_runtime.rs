@@ -3694,8 +3694,17 @@ fn device_worker_launch_args(
                 state_dir: params.state_dir.to_string_lossy().into_owned(),
                 ctrl_socket_path: params.ctrl_socket_path.to_string_lossy().into_owned(),
                 server_socket_path: params.server_socket_path.to_string_lossy().into_owned(),
-                uid: params.uid,
-                gid: params.gid,
+                // No socket owner: this launch runs in a user namespace, and
+                // swtpm chowns each socket to the id it is handed. Naming the
+                // in-namespace id here still fails - the chown is refused
+                // with EPERM and swtpm exits 1 before it binds the data
+                // socket ("Could not change ownership of UnixIO socket to
+                // 0:0 Operation not permitted"), leaving the state directory
+                // with no log, no pid file and no NVRAM. Reproduced with this
+                // exact artifact binary. Omitting the owner leaves each
+                // socket owned by the uid swtpm itself runs as.
+                uid: None,
+                gid: None,
                 log_path: params
                     .state_dir
                     .join("swtpm.log")
@@ -3767,6 +3776,24 @@ fn device_worker_launch_args(
     let mut argv = argv;
     if argv.is_empty() {
         return Err("provider-ticket:device-worker-argv-empty".to_owned());
+    }
+    // The rendered argument tail is the only record of what the child was
+    // actually asked to run. A child that exits non-zero without leaving a
+    // log behind is otherwise unattributable: swtpm prints its refusal to
+    // stderr, the broker discards that, and the state directory stays empty.
+    // Announce the inputs for the swtpm family so a failed launch can be
+    // attributed without guessing.
+    if let DeviceWorkerLaunch::Swtpm(params) = launch {
+        tracing::info!(
+            template = "swtpm-socket",
+            state_dir = %params.state_dir.display(),
+            ctrl_socket = %params.ctrl_socket_path.display(),
+            server_socket = %params.server_socket_path.display(),
+            uid = params.uid,
+            gid = params.gid,
+            argv = ?argv,
+            "rendered device worker argv"
+        );
     }
     Ok(argv.split_off(1))
 }
@@ -4626,30 +4653,43 @@ mod tests {
         }))
     }
 
-    /// The socket owner ids the rendered argv names follow the posture's
-    /// user namespace, not the host principal: the swtpm worker runs under
-    /// the ADR 0021 single-entry mapping, whose only id is in-namespace `0`
-    /// (naming the host principal there made swtpm exit 1 on a socket-chown
-    /// `EINVAL` before it ever bound a socket).
+    /// The rendered argv names **no** socket owner for this launch.
+    ///
+    /// swtpm `chown()`s each socket to the id it is handed. This worker runs
+    /// under a user namespace, and that chown is refused there with `EPERM`
+    /// whether the id named is the host principal or the in-namespace `0`:
+    /// swtpm records `Could not change ownership of UnixIO socket to 0:0
+    /// Operation not permitted` and exits 1 before it binds the data socket,
+    /// leaving the state directory with no log, no pid file and no NVRAM.
+    /// Reproduced with the exact device-worker artifact binary.
+    ///
+    /// Omitting the owner leaves each socket owned by the uid swtpm itself
+    /// runs as, which is the ownership the `mode=0660` grant and the state
+    /// directory's ACL are written against.
     #[test]
-    fn namespaced_swtpm_worker_argv_names_the_in_namespace_socket_owner() {
+    fn namespaced_swtpm_worker_argv_names_no_socket_owner() {
         use d2b_core::bundle_resolver::{DEVICE_TPM_PROVIDER_REF, device_worker_posture};
 
         let posture = device_worker_posture(DEVICE_TPM_PROVIDER_REF, "swtpm-socket")
             .expect("swtpm-socket posture");
         assert!(posture.user_namespace(), "the long-lived worker is namespaced");
-        let (uid, gid) = posture.launch_ids(60_100, 60_100);
+
+        // The posture still resolves launch ids for callers that want them;
+        // this one does not, because naming any owner breaks the launch.
         assert_eq!(
-            (uid, gid),
+            posture.launch_ids(60_100, 60_100),
             (0, 0),
-            "the host principal is unmapped inside its own namespace"
+            "the in-namespace mapping is unchanged for callers that use it"
         );
 
-        let DeviceWorkerLaunch::Swtpm(mut params) = swtpm_params() else {
+        let DeviceWorkerLaunch::Swtpm(params) = swtpm_params() else {
             unreachable!("fixture is the long-lived swtpm family");
         };
-        params.uid = uid;
-        params.gid = gid;
+        assert_eq!(
+            (params.uid, params.gid),
+            (60_100, 60_100),
+            "the fixture still carries the host principal it was built with"
+        );
         let args = device_worker_launch_args(
             std::path::Path::new("/run/d2b"),
             &DeviceWorkerLaunch::Swtpm(params),
@@ -4662,8 +4702,12 @@ mod tests {
                 .expect("socket flag is rendered")
                 + 1];
             assert!(
-                value.ends_with(",mode=0660,uid=0,gid=0"),
-                "{flag} must name the in-namespace owner: {value}"
+                value.ends_with(",mode=0660"),
+                "{flag} must name no owner: {value}"
+            );
+            assert!(
+                !value.contains("uid=") && !value.contains("gid="),
+                "{flag} must carry no owner entry: {value}"
             );
         }
 
@@ -4689,9 +4733,9 @@ mod tests {
                 "--tpmstate",
                 "dir=/var/lib/d2b/vms/corp-vm/swtpm/device-abc-tpm-state",
                 "--ctrl",
-                "type=unixio,path=/var/lib/d2b/vms/corp-vm/swtpm/device-abc-tpm-state/ctrl.sock,mode=0660,uid=60100,gid=60100",
+                "type=unixio,path=/var/lib/d2b/vms/corp-vm/swtpm/device-abc-tpm-state/ctrl.sock,mode=0660",
                 "--server",
-                "type=unixio,path=/run/d2b/vms/corp-vm/tpm.sock,mode=0660,uid=60100,gid=60100",
+                "type=unixio,path=/run/d2b/vms/corp-vm/tpm.sock,mode=0660",
                 "--flags",
                 "startup-clear",
                 "--log",
