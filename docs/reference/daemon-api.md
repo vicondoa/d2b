@@ -684,7 +684,7 @@ the failure class, for example `host check`, `audit`, `status`, or
 | `BundleError` | enum | [`BundleError`](../../packages/d2b-contracts/src/error.rs#L1252) | `Tampered` - struct { `path`: `PathBuf`; `reason`: `String` } |
 | `CredentialContractError` | enum | [`CredentialContractError`](../../packages/d2b-contracts/src/foundation_effects.rs#L24) | `InvalidOpaqueValue`; `InvalidStatus` |
 | `IdentityError` | enum | [`IdentityError`](../../packages/d2b-contracts/src/identity.rs#L255) | `Empty` - struct { `class`: `IdentityClass` }; `TooLong` - struct { `class`: `IdentityClass`; `max_bytes`: `usize` }; `InvalidShape` - struct { `class`: `IdentityClass` }; `UnknownStandardResourceType`; `Zero` - struct { `class`: `IdentityClass` } |
-| `ResourceRefError` | enum | [`ResourceRefError`](../../packages/d2b-contracts/src/identity.rs#L738) | `Empty`; `MissingSeparator`; `ExtraSeparator`; `Type` - (IdentityError); `Name` - (IdentityError) |
+| `ResourceRefError` | enum | [`ResourceRefError`](../../packages/d2b-contracts/src/identity.rs#L773) | `Empty`; `MissingSeparator`; `ExtraSeparator`; `Type` - (IdentityError); `Name` - (IdentityError) |
 | `RealmIdentityConfigError` | enum | [`RealmIdentityConfigError`](../../packages/d2b-contracts/src/identity_config.rs#L240) | `UnsupportedSchemaVersion` - struct { `found`: `String` }; `UnsupportedRuntimeState`; `InvariantDisabled` - (&'static str) |
 | `IdError` | enum | [`IdError`](../../packages/d2b-contracts/src/ids.rs#L54) | `Empty`; `TooLong`; `BadShape` |
 | `LauncherMetadataError` | enum | [`LauncherMetadataError`](../../packages/d2b-contracts/src/launcher.rs#L13) | `SchemaVersionMismatch` - struct { `expected`: `&'static str` }; `InvariantsNotAllTrue` |

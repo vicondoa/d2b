@@ -3141,10 +3141,12 @@ pub(crate) async fn resolve_device_worker_launch(
         .filter(|owner| owner.resource_type().as_str() == "Device")
         .cloned()
         .ok_or("device-worker-owner-not-device")?;
-    let device_uid = ctx
-        .owner()
-        .and_then(resource_uid_from_bytes)
-        .ok_or("device-worker-owner-uid-unresolved")?;
+    // The owning Device's durable uid keys the name of every child Volume the
+    // framework composes for it, so an owner key that carries no uid cannot
+    // resolve the state directory its worker would mount.
+    if ctx.owner().and_then(resource_uid_from_bytes).is_none() {
+        return Err("device-worker-owner-uid-unresolved");
+    }
     // A Device-owned worker row declares `executionRef Host/host-system`
     // and no Guest target, so the row's own launch identity names no VM
     // by construction. The coherent VM scope is the owning Device's
@@ -3201,7 +3203,6 @@ pub(crate) async fn resolve_device_worker_launch(
             let state_dir = device_state_dir(
                 self.bundle(),
                 &identity.zone,
-                &device_uid,
                 &device_ref,
                 &execution_ref,
                 &vm_name,
@@ -3225,7 +3226,6 @@ pub(crate) async fn resolve_device_worker_launch(
             let state_dir = device_state_dir(
                 self.bundle(),
                 &identity.zone,
-                &device_uid,
                 &device_ref,
                 &execution_ref,
                 &vm_name,
@@ -3392,6 +3392,51 @@ fn validate_resource_execution_target(
     Ok(())
 }
 
+/// Realize one serving worker's private socket directory, before the launch
+/// ticket carries it.
+///
+/// Only a directory THIS call creates is stamped `0700`. The directory is
+/// shared with the Device workers for the same Guest - the per-Guest runtime
+/// tree `path:vm-run:<guest>` declares - and the broker postures it to the
+/// mode that row names and grants every worker principal a named ACL entry
+/// on it. POSIX rewrites a file's ACL mask from its group bits on every
+/// `chmod`, so re-stamping a directory that already exists drops its mask to
+/// `---` and turns each of those entries into `#effective:---`: the Device
+/// worker then cannot bind its own socket there, exits, and is relaunched
+/// into the same revoked state. Stamping only what this call created leaves
+/// a directory the broker has already postured exactly as its trusted row
+/// declares it.
+async fn realize_serving_socket_dir(parent: &std::path::Path, zone: &ZoneId) -> Result<(), String> {
+    let created = match tokio::fs::create_dir(parent).await {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
+        // The `vms` parent host activation provisions can be missing on a
+        // zone-native host; realize the whole chain, which also proves the
+        // leaf was absent (its parent did not exist a moment ago).
+        Err(_) => {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|_| "provider-ticket:serving-socket-dir-create".to_owned())?;
+            true
+        }
+    };
+    if !created {
+        return Ok(());
+    }
+    use std::os::unix::fs::PermissionsExt as _;
+    if let Err(error) =
+        tokio::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).await
+    {
+        tracing::warn!(
+            zone = %zone,
+            socket_dir = %parent.display(),
+            error = %error,
+            "failed to enforce 0700 on the serving worker socket directory"
+        );
+    }
+    Ok(())
+}
+
 /// Compose one binding-owned serving worker's launch arguments.
 ///
 /// The executable is never named here: the trusted `virtiofsd-worker`
@@ -3452,21 +3497,7 @@ async fn serving_worker_launch_args(
     // The worker binds its private socket as the in-namespace principal; the
     // directory is realized before the launch (old-plane runtime-dir prep).
     if let Some(parent) = socket_path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|_| "provider-ticket:serving-socket-dir-create".to_owned())?;
-        use std::os::unix::fs::PermissionsExt as _;
-        if let Err(error) = tokio::fs::set_permissions(
-            parent,
-            std::fs::Permissions::from_mode(0o700),
-        ).await {
-            tracing::warn!(
-                zone = %zone,
-                socket_dir = %parent.display(),
-                error = %error,
-                "failed to enforce 0700 on the serving worker socket directory"
-            );
-        }
+        realize_serving_socket_dir(parent, zone).await?;
     }
     let cache = match launch.cache {
         AttachmentCache::Auto => "auto",
@@ -3530,7 +3561,6 @@ fn device_worker_path(
 fn device_state_dir(
     bundle: &BundleResolver,
     zone: &ZoneId,
-    device_uid: &ResourceUid,
     device_ref: &ResourceRef,
     execution_ref: &str,
     vm_name: &str,
@@ -3538,7 +3568,6 @@ fn device_state_dir(
     let execution_ref =
         ResourceRef::parse(execution_ref).map_err(|_| "device-worker-execution-ref-invalid")?;
     let document = d2b_provider_device_tpm::build_tpm_state_volume_resource(
-        device_uid,
         device_ref,
         zone.as_str(),
         &execution_ref,
@@ -4582,6 +4611,129 @@ mod tests {
         assert_eq!(converted.kernel_major, 5);
         assert_eq!(converted.kernel_minor, 2);
         assert!(!converted.cgroup_kill_available);
+    }
+
+    /// The per-Guest runtime directory is shared, and each worker principal
+    /// reaches it through its own named ACL entry the broker installed: the
+    /// Device worker's socket and this serving worker's private socket share
+    /// one directory. POSIX rewrites a file's ACL mask from its group bits on
+    /// every `chmod`, so stamping `0700` over a directory that already
+    /// exists drops the mask to `---` and turns every one of those entries
+    /// into `#effective:---` - the Device worker then cannot bind its own
+    /// socket there, exits, and is relaunched into the same revoked state
+    /// while this prep stamps it again. Only a directory this call created
+    /// may be stamped.
+    ///
+    /// The fixture's filesystem work lives in the synchronous helpers below
+    /// rather than in this body: a `#[tokio::test]` runs on a runtime, and
+    /// parking a worker on `std::fs` is the shape the async gate refuses
+    /// (and the deny list replaces with `tokio::fs`). Only the awaits this
+    /// test is actually about stay in the async body.
+    // `#[tokio::test]`'s own expansion drives the body through
+    // `Runtime::block_on`; that generated bridge is the test harness's, and
+    // the sanctioned inline allow is what keeps it out of the census.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn the_serving_socket_dir_prep_leaves_an_existing_grant_effective() {
+        if ![
+            "/run/current-system/sw/bin/setfacl",
+            "/usr/bin/setfacl",
+            "/bin/setfacl",
+        ]
+        .iter()
+        .any(|candidate| std::path::Path::new(candidate).exists())
+        {
+            eprintln!("skipping serving socket-directory ACL test: no setfacl binary");
+            return;
+        }
+
+        let parent = std::env::temp_dir().join(format!("serving-socket-dir-{}", std::process::id()));
+        let socket_dir = parent.join("acceptance-guest");
+        prepare_granted_socket_dir(&socket_dir);
+        assert_eq!(
+            socket_dir_mode(&socket_dir) & 0o070,
+            0o070,
+            "the grant starts effective"
+        );
+
+        let zone = ZoneId::parse("work").expect("zone id");
+        realize_serving_socket_dir(&socket_dir, &zone)
+            .await
+            .expect("realize an existing socket directory");
+        assert_eq!(
+            socket_dir_mode(&socket_dir) & 0o070,
+            0o070,
+            "the prep must not restamp a directory it did not create: the chmod \
+             revoked every other principal's grant on the shared tree"
+        );
+
+        // A directory this call does create still gets the declared 0700.
+        let fresh = parent.join("fresh-guest");
+        realize_serving_socket_dir(&fresh, &zone)
+            .await
+            .expect("realize a fresh socket directory");
+        assert_eq!(
+            socket_dir_mode(&fresh) & 0o7777,
+            0o700,
+            "a directory this call created is still stamped 0700"
+        );
+
+        // The removed stamp, on the very directory the assertion above
+        // protects: this is exactly what the prep used to do unconditionally,
+        // and it is the whole regression - the mask drops to `---` and the
+        // Device worker's entry goes `#effective:---`, so it can no longer
+        // bind the socket it shares this tree with.
+        stamp_socket_dir(&socket_dir, 0o700);
+        assert_eq!(
+            socket_dir_mode(&socket_dir) & 0o070,
+            0o000,
+            "an unconditional 0700 stamp is what nullifies the shared grants; \
+             the fixture would not prove anything if it did not"
+        );
+
+        remove_socket_dir_fixture(&parent);
+    }
+
+    /// Stamp `path` with `mode`. The state under test is what a `chmod` does
+    /// to an inode, so the fixture produces it with the real call, off the
+    /// runtime worker.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn stamp_socket_dir(path: &std::path::Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+            .unwrap_or_else(|error| panic!("stamp {} with {mode:o}: {error}", path.display()));
+    }
+
+    /// The mode bits `path` currently carries, read off the inode.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn socket_dir_mode(path: &std::path::Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::metadata(path)
+            .unwrap_or_else(|error| panic!("stat {}: {error}", path.display()))
+            .permissions()
+            .mode()
+    }
+
+    /// Build the shared socket directory the way the broker's Device-worker
+    /// grant leaves it: created, postured to the mode the `path:vm-run` row
+    /// declares, and carrying one named ACL entry for the worker principal.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn prepare_granted_socket_dir(socket_dir: &std::path::Path) {
+        std::fs::create_dir_all(socket_dir).expect("create the socket directory");
+        stamp_socket_dir(socket_dir, 0o1770);
+        // The Device worker's grant, as `grant_runner_tree_acls` leaves it.
+        let granted = std::process::Command::new("setfacl")
+            .args(["-m", "u:50123:rwx"])
+            .arg(socket_dir)
+            .status()
+            .expect("run setfacl");
+        assert!(granted.success(), "the fixture must start from a granted ACL");
+    }
+
+    /// Remove the fixture tree.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn remove_socket_dir_fixture(parent: &std::path::Path) {
+        std::fs::remove_dir_all(parent).expect("remove the fixture");
     }
 
     fn controller_bootstrap_context_for_fence(

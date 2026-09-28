@@ -2109,10 +2109,25 @@ fn contains_secret_shape_at(value: &Value, allow_path: bool) -> bool {
                 || lower.contains("password")
                 || lower.contains("secret")
         }
-        Value::Array(values) => values.iter().any(contains_secret_shape),
+        // `allow_path` has to survive the array hop, or a caller that granted
+        // it to the array's entries loses it at the first element. With no
+        // grant in effect this stays the original dispatch, so a nested
+        // Volume resource is still routed to the Volume policy.
+        Value::Array(values) => values.iter().any(|value| match allow_path {
+            true => contains_secret_shape_at(value, true),
+            false => contains_secret_shape(value),
+        }),
         Value::Object(values) => values.iter().any(|(key, value)| {
             (forbidden_key(key) && !(allow_path && (key == "path" || key == "mountPath")))
-                || contains_secret_shape_at(value, false)
+                // A declared sandbox mount names the point it mounts at rather
+                // than material it carries, so `mountPath` is exempt here for
+                // the same reason it is exempt under a Volume's `layout` and
+                // `views`. Without this a provider cannot declare any mount:
+                // `forbidden_key` matches every key ending in `path`, so the
+                // mount's own field trips the policy for every resource type
+                // but Volume. Only the declared mount entry is exempt; every
+                // other key and every string value in it is still scanned.
+                || contains_secret_shape_at(value, allow_path || key == "mounts")
         }),
         Value::Null | Value::Bool(_) | Value::Number(_) => false,
     }
@@ -2141,6 +2156,62 @@ fn forbidden_key(value: &str) -> bool {
 #[allow(clippy::items_after_test_module)]
 #[cfg(test)]
 mod tests {
+    /// A declared sandbox mount names the point it mounts at, so `mountPath`
+    /// must not trip the inline-secret policy for a non-Volume resource. Every
+    /// other key in the mount stays subject to the policy.
+    #[test]
+    fn a_declared_mount_path_is_not_secret_shaped() {
+        let process = json!({
+            "type": "Process",
+            "spec": {
+                "mounts": [{
+                    "access": "read-write",
+                    "mountPath": "/state",
+                    "ownVolumeSuffix": "worker-state",
+                    "required": true,
+                    "view": "worker"
+                }]
+            }
+        });
+        assert!(
+            !contains_secret_shape(&process),
+            "a mount's own path is a mount point, not secret material"
+        );
+    }
+
+    #[test]
+    fn secret_material_inside_a_mount_is_still_refused() {
+        let process = json!({
+            "type": "Process",
+            "spec": {
+                "mounts": [{
+                    "access": "read-write",
+                    "mountPath": "/state",
+                    "socket": "/run/d2b/worker.sock"
+                }]
+            }
+        });
+        assert!(
+            contains_secret_shape(&process),
+            "exempting a mount's path must not exempt the rest of the mount"
+        );
+    }
+
+    #[test]
+    fn a_mount_does_not_exempt_a_sibling_spec_key() {
+        let process = json!({
+            "type": "Process",
+            "spec": {
+                "mounts": [{"mountPath": "/state"}],
+                "token": "inline-secret"
+            }
+        });
+        assert!(
+            contains_secret_shape(&process),
+            "the mount grant is scoped to the mount, not the whole spec"
+        );
+    }
+
     use super::*;
     use serde_json::json;
 

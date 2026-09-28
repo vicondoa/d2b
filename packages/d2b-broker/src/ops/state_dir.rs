@@ -14,33 +14,6 @@ use std::path::{Path, PathBuf};
 use d2b_contracts::types::PathClass;
 use d2b_core::bundle_resolver::BundleResolver;
 
-/// Failure from the generic state-directory operation.
-///
-/// swtpm hardening carries its path-free terminal audit record separately so
-/// the runtime can preserve the typed `PrepareSwtpmDir` disposition rather
-/// than reducing it to a generic live-handler error.
-#[derive(Debug)]
-pub enum PrepareStateDirError {
-    Operation(super::OpError),
-    SwtpmDirHardening(crate::ops::swtpm_dir::SwtpmHardenError),
-}
-
-impl From<super::OpError> for PrepareStateDirError {
-    fn from(error: super::OpError) -> Self {
-        Self::Operation(error)
-    }
-}
-
-impl std::fmt::Display for PrepareStateDirError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Operation(error) => error.fmt(formatter),
-            Self::SwtpmDirHardening(error) => error.fmt(formatter),
-        }
-    }
-}
-
-impl std::error::Error for PrepareStateDirError {}
 
 /// Which broker-managed directory tree an op prepares:a per-VM state
 /// root or a per-VM runtime root.
@@ -251,24 +224,22 @@ pub struct PreparedStateDir {
 ///
 /// # Errors
 ///
-/// Returns [`super::OpError::InvalidInput`] for a non-VM path class,
-/// [`super::OpError::UnknownSubject`] / [`super::OpError::Refused`]
-/// for unresolvable subjects, and the swtpm-hardening refusal as
-/// [`PrepareStateDirError::SwtpmDirHardening`]. Where applicable.
+/// Returns [`super::OpError::InvalidInput`] for a non-VM path class and
+/// [`super::OpError::UnknownSubject`] / [`super::OpError::Refused`] for
+/// unresolvable subjects.
 pub fn live_prepare_state_dir(
     _exec:&SystemLiveExec,
     resolver:&BundleResolver,
     req:&d2b_contracts_broker::broker_wire::PrepareDirRequest,
     _audit_log:&crate::audit::AuditLog,
-) -> Result<PreparedStateDir, PrepareStateDirError> {
+) -> Result<PreparedStateDir, super::OpError> {
     if req.path_class != PathClass::Vm {
         return Err(super::OpError::InvalidInput {
             detail: format!(
                 "PrepareStateDir requires pathClass=vm, got {:?}",
                 req.path_class
             ),
-        }
-        .into());
+        });
     }
     let Some(intent) = resolver.resolve_prepare_dir_intent(req.vm_id.as_str(), false) else {
         // v3: a zone-native Guest carries no legacy state-directory intent.
@@ -279,11 +250,11 @@ pub fn live_prepare_state_dir(
         // `packages/d2b-provider-device-tpm/src/resources.rs`), so there is no
         // legacy directory for this op to prepare. Accept exactly the subject
         // such a trusted row names - the same row the daemon's worker
-        // derivation, the spawn-time swtpm-dir fence and the volume-local
-        // controller's root all agree on - and keep every other unknown
-        // subject failing closed.
+        // derivation, the spawn-time trusted identity resolution, and the
+        // volume-local controller's root all agree on - and keep every
+        // other unknown subject failing closed.
         let (spec, state_root) =
-            crate::ops::swtpm_dir::zone_native_swtpm_state_row(resolver, req.vm_id.as_str())
+            crate::ops::swtpm_identity::zone_native_swtpm_state_row(resolver, req.vm_id.as_str())
                 .ok_or_else(|| super::OpError::UnknownSubject {
                     operation: "PrepareStateDir",
                     subject: req.vm_id.as_str().to_owned(),
@@ -331,8 +302,8 @@ pub fn live_prepare_state_dir(
     // typed effect in the TPM lifecycle; the v2 broker-owned swtpm legacy
     // adoption/hardening branch here was removed with the v2 swtpm-migration
     // resolver surface. Zone-native TPM state (v3 resource bundles) is today
-    // authorized and hardened through the spawn-time swtpm-dir fence in
-    // `swtpm_dir`.
+    // authorized through the spawn-time trusted identity in
+    // `swtpm_identity` and provisioned by the state Volume controller.
     Ok(PreparedStateDir {
         base_dir: intent.base_dir,
         owner_uid: intent.owner_uid,
@@ -343,7 +314,7 @@ pub fn live_prepare_state_dir(
 
 /// The trusted `path:swtpm-state:<guest>` storage row a zone-native Guest's
 /// TPM state root comes from, as one resolver - the same artifact the
-/// spawn-time swtpm-dir fence resolves (`swtpm_dir::resource_backed_identity`
+/// spawn-time trusted identity resolves (`swtpm_identity::resource_backed_identity`
 /// reads `path:swtpm-state:<guest>` and `path:tpm-state` through the same
 /// `find_storage_path_spec`).
 ///
@@ -699,7 +670,7 @@ mod tests {
         assert_eq!(
             prepared.base_dir,
             PathBuf::from("/var/lib/d2b/tpm-state")
-                .join(crate::ops::swtpm_dir::state_volume_name(&device_uid))
+                .join(crate::ops::swtpm_identity::state_volume_name(&device_uid))
         );
         assert_ne!(
             prepared.base_dir,
@@ -722,10 +693,7 @@ mod tests {
             &audit_log,
         )
         .expect_err("a subject no trusted row names still fails closed");
-        assert!(matches!(
-            error,
-            PrepareStateDirError::Operation(super::super::OpError::UnknownSubject { .. })
-        ));
+        assert!(matches!(error, super::super::OpError::UnknownSubject { .. }));
     }
 
     fn live_fixture() -> (SystemLiveExec, crate::audit::AuditLog) {

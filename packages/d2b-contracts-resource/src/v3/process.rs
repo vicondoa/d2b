@@ -307,10 +307,31 @@ pub enum MountAccess {
 }
 
 /// One Volume mount exposed inside the process sandbox.
+///
+/// A mount binds exactly one Volume, named in one of two forms:
+///
+/// * `volumeRef` - a Volume declared in the same Zone.
+/// * `ownVolumeSuffix` - the controller-created child Volume of the row's own
+///   declaring Device. A Device-owned Volume is built by the Device manager at
+///   runtime (`build_tpm_state_volume_resource`, `managedBy = "controller"`),
+///   so it is never a declared row, and the framework - not the projection -
+///   composes its name from the owning Device's durable uid
+///   ([`d2b_core::bundle_resolver::device_child_volume_name`]). A resource uid
+///   is a digest over NUL-separated identity fields, so no declarative
+///   projection can compute one: the row names the child by its role and the
+///   resolver materializes the concrete name.
+///
+/// The two are mutually exclusive, and a mount that names neither is refused
+/// on the wire. A `volumeRef` that *is* present is always a real
+/// `Volume/<name>` reference, so no reader of this contract has to ask whether
+/// the name it holds is a template.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MountSpec {
-    volume_ref: ResourceRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    volume_ref: Option<ResourceRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    own_volume_suffix: Option<BoundedToken>,
     view: BoundedToken,
     mount_path: String,
     access: MountAccess,
@@ -318,7 +339,7 @@ pub struct MountSpec {
 }
 
 impl MountSpec {
-    /// Construct a mount after checking the reference type and mount path.
+    /// Construct a mount of a Volume declared in the same Zone.
     pub fn new(
         volume_ref: ResourceRef,
         view: BoundedToken,
@@ -330,7 +351,8 @@ impl MountSpec {
         let mount_path = mount_path.into();
         validate_absolute_path(&mount_path)?;
         Ok(Self {
-            volume_ref,
+            volume_ref: Some(volume_ref),
+            own_volume_suffix: None,
             view,
             mount_path,
             access,
@@ -338,9 +360,41 @@ impl MountSpec {
         })
     }
 
-    /// Borrow the mounted Volume.
-    pub const fn volume_ref(&self) -> &ResourceRef {
-        &self.volume_ref
+    /// Construct a mount of the controller-created child Volume the row's own
+    /// declaring Device owns for `volume_suffix`.
+    ///
+    /// The Device is not named here: it is the row's own `ownerRef`, so a
+    /// projection cannot point a mount at a sibling Device's Volume by
+    /// spelling one. Only the role within that Device's private child set is
+    /// declared.
+    pub fn own_child_volume(
+        volume_suffix: BoundedToken,
+        view: BoundedToken,
+        mount_path: impl Into<String>,
+        access: MountAccess,
+        required: bool,
+    ) -> Result<Self, PrimitiveSpecError> {
+        let mount_path = mount_path.into();
+        validate_absolute_path(&mount_path)?;
+        Ok(Self {
+            volume_ref: None,
+            own_volume_suffix: Some(volume_suffix),
+            view,
+            mount_path,
+            access,
+            required,
+        })
+    }
+
+    /// Borrow the mounted Zone-declared Volume, when the mount binds one.
+    pub const fn volume_ref(&self) -> Option<&ResourceRef> {
+        self.volume_ref.as_ref()
+    }
+
+    /// Borrow the role suffix of the declaring Device's own child Volume, when
+    /// the mount binds one.
+    pub const fn own_volume_suffix(&self) -> Option<&BoundedToken> {
+        self.own_volume_suffix.as_ref()
     }
 
     /// Borrow the selected Volume view.
@@ -362,6 +416,17 @@ impl MountSpec {
     pub const fn required(&self) -> bool {
         self.required
     }
+
+    /// Name this mount's bound Volume for a refusal: the concrete reference
+    /// when the mount declared one, otherwise the Device-owned child role it
+    /// asked the framework to materialize.
+    pub fn declared_volume_label(&self) -> String {
+        match (&self.volume_ref, &self.own_volume_suffix) {
+            (Some(volume_ref), _) => volume_ref.to_canonical_string(),
+            (None, Some(suffix)) => format!("Volume/<own>/{}", suffix.as_str()),
+            (None, None) => "Volume/<none>".to_owned(),
+        }
+    }
 }
 
 redacted_debug!(MountSpec);
@@ -370,7 +435,8 @@ wire_deserialize!(
     MountSpec,
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     Wire {
-        volume_ref: ResourceRef,
+        volume_ref: Option<ResourceRef>,
+        own_volume_suffix: Option<BoundedToken>,
         view: BoundedToken,
         mount_path: String,
         #[serde(default = "read_only")]
@@ -379,13 +445,18 @@ wire_deserialize!(
         required: bool,
     },
     wire,
-    Self::new(
-        wire.volume_ref,
-        wire.view,
-        wire.mount_path,
-        wire.access,
-        wire.required,
-    )
+    match (wire.volume_ref, wire.own_volume_suffix) {
+        // `new` re-checks the reference type, so the wire path inherits the
+        // same rule the constructor states.
+        (Some(volume_ref), None) => {
+            Self::new(volume_ref, wire.view, wire.mount_path, wire.access, wire.required)
+        }
+        (None, Some(suffix)) => {
+            Self::own_child_volume(suffix, wire.view, wire.mount_path, wire.access, wire.required)
+        }
+        (Some(_), Some(_)) => Err(PrimitiveSpecError::ConflictingFields),
+        (None, None) => Err(PrimitiveSpecError::MissingRequiredField),
+    }
     .map_err(serde::de::Error::custom)
 );
 

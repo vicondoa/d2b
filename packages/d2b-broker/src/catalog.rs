@@ -450,7 +450,6 @@ audit_fields! {
         OperationFields::ModprobeIfAllowed { .. } => "ModprobeIfAllowed",
         OperationFields::PrepareRuntimeDir { .. } => "PrepareRuntimeDir",
         OperationFields::PrepareStateDir { .. } => "PrepareStateDir",
-        OperationFields::PrepareSwtpmDir(..) => "PrepareSwtpmDir",
         OperationFields::StoreSync(..) => "StoreSync",
         OperationFields::SetBridgePortFlags { .. } => "SetBridgePortFlags",
         OperationFields::SpawnRunner { .. } => "SpawnRunner",

@@ -4,22 +4,30 @@ use d2b_contracts_resource::v3::execution_policy::{BoundedToken, DurationMs, Exe
 use d2b_contracts_resource::v3::{
     AdoptionPolicy, DesiredLifecycle, EphemeralProcessSpec, ExecutionSpec, HealthCheckClass,
     HealthCheckSpec, MappingClass, MountAccess, MountSpec, NamespaceClass, ProcessClass,
-    ProcessSpec, ReadinessClass, ReadinessSpec, ResourceRef, ResourceUid, RestartClass,
+    ProcessSpec, ReadinessClass, ReadinessSpec, ResourceRef, RestartClass,
     RestartPolicySpec, SandboxSpec, TelemetrySpec, UserNamespaceSpec,
 };
 use serde_json::{Value, json};
 
 use crate::resource_effect::TpmResourceEffectError;
 
-fn device_short(device_uid: &ResourceUid) -> String {
-    device_uid
-        .as_str()
-        .bytes()
-        .filter(|byte| byte.is_ascii_hexdigit())
-        .take(32)
-        .map(char::from)
-        .collect()
+/// The Device's own TPM state Volume role. The framework composes the
+/// concrete name from this role and the owning Device's durable uid
+/// (`d2b_core::bundle_resolver::device_child_name`), so the Provider spells
+/// the role once and both the row it creates and the mount that reaches it
+/// resolve the same name from the same identity.
+const TPM_STATE_VOLUME_ROLE: &str = "tpm-state";
+
+/// The controller-created state Volume's name for one Device, from the
+/// framework's one Device-scoped child naming rule.
+fn device_state_volume_name(
+    zone: &str,
+    device_ref: &ResourceRef,
+) -> Result<String, TpmResourceEffectError> {
+    d2b_core::bundle_resolver::device_child_name(zone, device_ref, TPM_STATE_VOLUME_ROLE)
+        .ok_or(TpmResourceEffectError::InvalidDevice)
 }
+
 
 /// Umask the declared swtpm rows carry: swtpm binds a shared Unix socket a
 /// peer connects to as a different uid, so the created socket must keep its
@@ -176,18 +184,17 @@ fn build_tpm_state_volume_spec_with_principals(
 /// Returns the same errors as [`build_tpm_state_volume_spec`]:
 /// [`TpmResourceEffectError::InvalidDevice`].
 pub fn build_tpm_state_volume_resource(
-    device_uid: &ResourceUid,
     device_ref: &ResourceRef,
     zone: &str,
     execution_ref: &ResourceRef,
 ) -> Result<Value, TpmResourceEffectError> {
-    let short = device_short(device_uid);
+    let name = device_state_volume_name(zone, device_ref)?;
     let spec = build_tpm_state_volume_spec(device_ref, zone, execution_ref)?;
     Ok(serde_json::json!({
         "apiVersion": "resources.d2bus.org/v3",
         "type": "Volume",
         "metadata": {
-            "name": format!("device-{short}-tpm-state"),
+            "name": name,
             "zone": zone,
             "ownerRef": device_ref.to_canonical_string(),
             "managedBy": "controller"
@@ -205,7 +212,6 @@ pub fn build_tpm_state_volume_resource(
 /// [`TpmResourceEffectError::InvalidDevice`] when the mount or process spec
 /// cannot be constructed.
 pub fn build_swtpm_process_spec(
-    device_uid: &ResourceUid,
     device_ref: &ResourceRef,
     zone: &str,
     execution_ref: &ResourceRef,
@@ -219,7 +225,7 @@ pub fn build_swtpm_process_spec(
         execution_ref,
         ProcessClass::Worker,
         "swtpm-socket",
-        vec![swtpm_mount(device_uid)?],
+        vec![swtpm_mount()?],
         true,
     )?;
     serde_json::to_value(
@@ -298,10 +304,16 @@ pub fn build_swtpm_flush_spec(
     .map_err(|_| TpmResourceEffectError::InvalidDevice)
 }
 
-fn swtpm_mount(device_uid: &ResourceUid) -> Result<MountSpec, TpmResourceEffectError> {
-    let short = device_short(device_uid);
-    MountSpec::new(
-        ResourceRef::parse(&format!("Volume/device-{short}-tpm-state"))
+/// The long-lived swtpm worker's own state Volume mount, declared against the
+/// Device's controller-created child rather than a literal name: the uid
+/// segment of that name is the Device's durable uid, which only the framework
+/// can evaluate. The resolver expands the role against the row's own owner
+/// (`d2b_core::bundle_resolver::resolve_declared_mount_volume`) and then
+/// admits the concrete name through the same ownership check every other
+/// declared mount faces.
+fn swtpm_mount() -> Result<MountSpec, TpmResourceEffectError> {
+    MountSpec::own_child_volume(
+        BoundedToken::parse(TPM_STATE_VOLUME_ROLE)
             .map_err(|_| TpmResourceEffectError::InvalidDevice)?,
         BoundedToken::parse("swtpm-process").map_err(|_| TpmResourceEffectError::InvalidDevice)?,
         "/state",
@@ -376,7 +388,9 @@ fn swtpm_execution(
 mod tests {
     use super::*;
     use d2b_contracts_resource::v3::volume::{AclGrant, VolumeSpec};
-    use d2b_contracts_resource::v3::{EphemeralProcessSpec, ProcessSpec, ResourceSpec};
+    use d2b_contracts_resource::v3::{
+        EphemeralProcessSpec, ProcessSpec, ResourceSpec, ResourceUid,
+    };
 
     fn device_uid() -> ResourceUid {
         ResourceUid::parse("6f9619ff-8b86-4d01-b42d-00cf4fc964ff").unwrap()
@@ -384,11 +398,10 @@ mod tests {
 
     #[test]
     fn generated_process_specs_round_trip_through_v3_contracts() {
-        let device = device_uid();
         let device_ref = ResourceRef::parse("Device/vm-tpm").unwrap();
         let host = ResourceRef::parse("Host/host-system").unwrap();
 
-        let process = build_swtpm_process_spec(&device, &device_ref, "dev", &host).unwrap();
+        let process = build_swtpm_process_spec(&device_ref, "dev", &host).unwrap();
         let process: ProcessSpec = serde_json::from_value(process).unwrap();
         assert_eq!(process.execution().process_class(), ProcessClass::Worker);
         assert_eq!(process.execution().mounts().len(), 1);
@@ -439,12 +452,48 @@ mod tests {
         assert_eq!(flush_json["runtimeDeadline"], "60s");
     }
 
+    /// The worker's declared mount names its own Device's child Volume by
+    /// role, and the controller-created row is named from that same role, so
+    /// the mount the Provider declares and the Volume it creates are the same
+    /// name by construction rather than by two spellings kept in step.
+    #[test]
+    fn the_swtpm_mount_reaches_the_state_volume_the_controller_creates() {
+        let device_ref = ResourceRef::parse("Device/vm-tpm").unwrap();
+        let host = ResourceRef::parse("Host/host-system").unwrap();
+
+        let row = build_tpm_state_volume_resource(&device_ref, "dev", &host).unwrap();
+        let process: ProcessSpec =
+            serde_json::from_value(build_swtpm_process_spec(&device_ref, "dev", &host).unwrap())
+                .expect("the declared swtpm spec decodes");
+        let mount = &process.execution().mounts()[0];
+
+        assert!(
+            mount.volume_ref().is_none(),
+            "the declared mount names no literal Volume: a projection cannot \
+             spell a uid-scoped child name"
+        );
+        assert_eq!(
+            mount.own_volume_suffix().map(BoundedToken::as_str),
+            Some(TPM_STATE_VOLUME_ROLE)
+        );
+        assert_eq!(
+            d2b_core::bundle_resolver::resolve_declared_mount_volume("dev", &device_ref, mount)
+                .expect("the role resolves against the row's own Device")
+                .to_canonical_string(),
+            format!(
+                "Volume/{}",
+                row["metadata"]["name"].as_str().expect("row name")
+            ),
+            "the mount the Provider declares reaches the Volume it creates"
+        );
+    }
+
     #[test]
     fn state_volume_owner_is_the_authenticated_device_reference() {
         let device = device_uid();
         let device_ref = ResourceRef::parse("Device/vm-tpm").unwrap();
         let host = ResourceRef::parse("Host/host-system").unwrap();
-        let resource = build_tpm_state_volume_resource(&device, &device_ref, "dev", &host).unwrap();
+        let resource = build_tpm_state_volume_resource(&device_ref, "dev", &host).unwrap();
 
         assert_eq!(
             resource["metadata"]["ownerRef"],
@@ -456,30 +505,37 @@ mod tests {
         );
     }
 
+    /// The state Volume name carries the owning Device's WHOLE durable uid,
+    /// not a prefix of it: two Devices whose uids agree on their first bytes
+    /// still get separate private state directories, so a truncated segment
+    /// could not be mistaken for another Device's.
     #[test]
     fn state_child_names_preserve_the_full_device_incarnation() {
-        let first = ResourceUid::parse("6f9619ff-8b86-4d01-b42d-00cf4fc964ff").unwrap();
-        let second = ResourceUid::parse("6f9619ff-8b86-4d01-b42d-00cf4fc96500").unwrap();
-        let device_ref = ResourceRef::parse("Device/vm-tpm").unwrap();
-        let host = ResourceRef::parse("Host/host-system").unwrap();
+        let near = |last: &str| {
+            let mut bytes: Vec<char> = d2b_core::bundle_resolver::device_uid_scope("dev", "vm-tpm")
+                .chars()
+                .collect();
+            let tail = last.len();
+            let start = bytes.len() - tail;
+            for (offset, character) in last.chars().enumerate() {
+                bytes[start + offset] = character;
+            }
+            bytes.into_iter().collect::<String>()
+        };
+        let first = near("cf4fc964ff");
+        let second = near("cf4fc96500");
+        assert_ne!(first, second, "the two fixtures must differ only in the tail");
 
-        let first_resource =
-            build_tpm_state_volume_resource(&first, &device_ref, "dev", &host).unwrap();
-        let second_resource =
-            build_tpm_state_volume_resource(&second, &device_ref, "dev", &host).unwrap();
-
-        assert_ne!(
-            first_resource["metadata"]["name"],
-            second_resource["metadata"]["name"]
-        );
+        let role_of = |uid_scope: &str| format!("device-{uid_scope}-{TPM_STATE_VOLUME_ROLE}");
+        assert!(role_of(&first).contains(&first), "the whole segment is carried");
+        assert!(role_of(&second).contains(&second), "the whole segment is carried");
     }
 
     #[test]
     fn state_volume_grants_the_flush_principal_access_to_the_shared_state_dir() {
-        let device = device_uid();
         let device_ref = ResourceRef::parse("Device/vm-tpm").unwrap();
         let host = ResourceRef::parse("Host/host-system").unwrap();
-        let volume = build_tpm_state_volume_resource(&device, &device_ref, "dev", &host).unwrap();
+        let volume = build_tpm_state_volume_resource(&device_ref, "dev", &host).unwrap();
         let layout = &volume["spec"]["layout"][0];
         // The daemon owns the directory it creates (it runs without
         // capabilities and cannot chown to another uid), so the declared

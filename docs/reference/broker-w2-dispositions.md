@@ -9,9 +9,9 @@ is kept as the historical triage input.
 This table tracks the broker request dispositions for the current
 `OperationAuthz.operation` enum plus the daemon-only `Hello`
 handshake. Current broker behavior is described in
-[`privileges.md`](./privileges.md). The table has exactly one
-`compile-time-only` broker row (`PrepareSwtpmDir`, a `SpawnRunner`
-side-effect audit operation that never reaches the wire dispatcher).
+[`privileges.md`](./privileges.md). No `compile-time-only` broker row
+remains: the `PrepareSwtpmDir` swtpm state-dir hardening row was removed
+with the NVRAM tamper guard it carried.
 
 | Variant | Disposition | Note | Target |
 | --- | --- | --- | --- |
@@ -58,7 +58,6 @@ side-effect audit operation that never reaches the wire dispatcher).
 | PrepareRuntimeDir | promoted-live | Resolves the trusted runtime-dir intent and prepares ownership/mode for the per-VM runtime directory. | live in production broker |
 | PrepareStateDir | promoted-live | Resolves the trusted state-dir intent and prepares ownership/mode for the per-VM state directory. | live in production broker |
 | PrepareStoreView | promoted-live | Resolves the per-VM store-view intent, builds the hardlink farm, and validates the generation marker. | live in production broker |
-| PrepareSwtpmDir | compile-time-only | Audit operation emitted as a `SpawnRunner` side-effect for the `Swtpm` runner (issue #64); it provisions/hardens the persistent per-VM swtpm state dir and writes the identity-bound tamper marker inside the broker's pre-spawn step. It is not a standalone wire request, so it never reaches the wire dispatcher. | broker `SpawnRunner` side-effect |
 | QemuMediaAttach | promoted-live | Resolves an enrolled qemu-media slot, passes the media fd to QEMU over QMP, and returns only redacted command labels. | live in production broker |
 | QemuMediaBoot | promoted-live | Resolves the declared boot source, passes the media fd to QEMU over QMP, attaches the boot USB storage device, and continues the paused runner. | live in production broker |
 | QemuMediaDetach | promoted-live | Resolves an enrolled qemu-media slot, removes the QMP device/block/fd nodes, and returns only redacted command labels. | live in production broker |

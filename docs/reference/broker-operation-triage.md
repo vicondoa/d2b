@@ -18,7 +18,7 @@ no resource family.
 - `transport-excluded` - the name is a transport-layer concern the
 operation envelope does not carry.
 
-Counts: 65 family-owned, 33 broker-generic, 0 transport-excluded (41 rows carry a wire discriminant, 57 rows do not).
+Counts: 65 family-owned, 32 broker-generic, 0 transport-excluded (41 rows carry a wire discriminant, 56 rows do not).
 
 | Operation | Owner | Family | Declaring provider | Service | Method | Profiles | Disposition | Target | Justification |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -62,7 +62,6 @@ Counts: 65 family-owned, 33 broker-generic, 0 transport-excluded (41 rows carry 
 | DiskInit | family | volume | d2b-provider-volume-local | d2b.volume | disk-init | host | promoted-live | live in production broker | - |
 | SecurityKeyOpenDevice | family | device-security-key | d2b-provider-device-security-key | d2b.device-security-key | security-key-open-device | host | stubbed-unimplemented | future work | - |
 | SecurityKeyApplyUdevRules | family | device-security-key | d2b-provider-device-security-key | d2b.device-security-key | security-key-apply-udev-rules | host | stubbed-unimplemented | future work | - |
-| PrepareSwtpmDir | broker-generic | - | - | - | - | host | compile-time-only | broker `SpawnRunner` side-effect | broker pre-spawn step: the broker provisions and hardens the per-VM swtpm state dir from its SpawnRunner step before the child starts, and the row carries that record shape only |
 | EnvelopeInvoke | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | generic envelope invocation surface (U10/KTD10): the one daemon-to-broker control path that replaces per-operation typed wire variants as their typed arms retire; the broker runs the committed operation's five envelope steps in place of a typed dispatch arm, and a retired variant stays version-gated so a straggler peer gets the stale-wire-version refusal plus an audit record |
 | open-pidfd | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | U10 sandwich kernel: the pidfd_open syscall plus start-time verification, served in-broker and invoked as the nested core of the forwarded OpenPidfd family operation; returns the pidfd over the fd leg. |
 | open-peer-pidfd-from-accepted-socket | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | U10 sandwich kernel: the peer-pidfd derivation (SO_PEERCRED + pidfd_open) from an accepted socket descriptor, served in-broker as the nested core of the forwarded OpenPeerPidfdFromAcceptedSocket family operation. |

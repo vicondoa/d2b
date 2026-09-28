@@ -364,8 +364,7 @@
       },
       "audit": {
         "fields": [
-          "PrepareStateDir",
-          "PrepareSwtpmDir"
+          "PrepareStateDir"
         ],
         "required": true,
         "mode": "yes"
@@ -669,8 +668,7 @@
       },
       "audit": {
         "fields": [
-          "SpawnRunner",
-          "PrepareSwtpmDir"
+          "SpawnRunner"
         ],
         "required": true,
         "mode": "yes"

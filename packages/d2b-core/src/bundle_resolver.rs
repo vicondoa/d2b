@@ -82,8 +82,8 @@ use crate::site::SiteJson;
 use crate::storage::StorageJson;
 use d2b_contracts::launcher::RealmWorkloadsLauncherV2Json;
 use d2b_contracts_resource::v3::{
-    IfName, NetworkIfRole, NetworkProvenance, ResourceRef, ResourceUid, ZoneId,
-    derive_network_ifname, derive_network_route_name,
+    IfName, MountAccess, MountSpec, NetworkIfRole, NetworkProvenance, ResourceRef, ResourceUid,
+    ZoneId, derive_network_ifname, derive_network_route_name,
     network::{Ipv4Cidr, NetworkSpec},
     resource_schema::{CanonicalJsonValue, framed_canonical_digest},
     storage::ZoneStoreStorageRow,
@@ -137,6 +137,10 @@ pub struct BundleResolver {
     usbip_firewall_intents: BTreeMap<String, ResolvedUsbipFirewallIntent>,
     usbip_bind_intents: BTreeMap<String, ResolvedUsbipBindIntent>,
     runner_intents: BTreeMap<String, ResolvedRunnerIntent>,
+    /// The Device-owned worker template bindings, by declaring Zone. Kept
+    /// beside the intents they minted so a declared read-write binding can be
+    /// re-resolved against the storage contract the broker attaches.
+    device_worker_templates: BTreeMap<String, Vec<ProcessTemplateBinding>>,
     store_view_intents: BTreeMap<String, ResolvedStoreViewIntent>,
 }
 
@@ -165,7 +169,12 @@ struct ParsedBundleArtifacts {
     guest_vmm_intents: BTreeMap<String, BTreeMap<String, ResolvedRunnerIntent>>,
     guest_vmm_zone_uids: BTreeMap<String, BTreeMap<String, ResourceUid>>,
     guest_store_view_intents: BTreeMap<String, ResolvedStoreViewIntent>,
-    provider_controller_templates: Vec<ProcessTemplateBinding>,
+    /// Private signed-package template bindings, keyed by the canonical Zone
+    /// whose resource bundle declared them. A Device worker's read-write
+    /// grant is authorized against its owning Device's durable uid, which is
+    /// a digest of the Zone-scoped `(zone, type, name)` key, so the Zone each
+    /// binding came from is part of resolving it.
+    provider_controller_templates: BTreeMap<String, Vec<ProcessTemplateBinding>>,
     zone_storage_rows: BTreeMap<String, ZoneStoreStorageRow>,
     storage: Option<StorageJson>,
     site: Option<SiteJson>,
@@ -1456,16 +1465,19 @@ impl BundleResolver {
         );
         let bundle_hash = stable_digest_bytes(bundle_bytes.unwrap_or_default().as_slice());
         let provider_controller_templates = zone_resource_bundles
-            .values()
-            .flat_map(|bytes| {
+            .iter()
+            .map(|(zone, bytes)| {
                 let bundle = ResourceBundle::from_json(bytes);
                 debug_assert!(
                     bundle.is_ok(),
                     "zone resource bundle bytes must be verified"
                 );
-                bundle
-                    .map(|bundle| bundle.process_templates)
-                    .unwrap_or_default()
+                (
+                    zone.clone(),
+                    bundle
+                        .map(|bundle| bundle.process_templates)
+                        .unwrap_or_default(),
+                )
             })
             .collect();
         let resource_network_intents =
@@ -1625,6 +1637,7 @@ impl BundleResolver {
         runner_intents.extend(build_provider_controller_intents(
             &provider_controller_templates,
         ));
+        let device_worker_templates = device_worker_templates_of(&provider_controller_templates);
         // A Device worker's intent id is `(execution target, declared row
         // name)`. Never displace another trusted intent that already claims
         // it: a row whose identity collides with a legacy runner or
@@ -1646,7 +1659,7 @@ impl BundleResolver {
                 .map(|intent| (intent.intent_id.clone(), intent)),
         );
         let store_view_intents = guest_store_view_intents;
-        Self {
+        let mut resolver = Self {
             audit_bundle_version: format!("v{}", bundle.bundle_version),
             audit_bundle_hash: bundle_hash,
             installed_generation_identity,
@@ -1676,8 +1689,15 @@ impl BundleResolver {
             usbip_firewall_intents,
             usbip_bind_intents,
             runner_intents,
+            device_worker_templates,
             store_view_intents,
-        }
+        };
+        // The declared read-write bindings resolve against the storage
+        // contract, which the production loader carries here and the broker
+        // re-attaches through `set_storage`. Running the grant now covers the
+        // former; `set_storage` runs it again for the latter.
+        resolver.grant_declared_device_worker_volumes();
+        resolver
     }
 
     pub fn audit_bundle_version(&self) -> &str {
@@ -1725,6 +1745,133 @@ impl BundleResolver {
     /// contract back onto the loaded resolver.
     pub fn set_storage(&mut self, storage: StorageJson) {
         self.storage = Some(storage);
+        // A Device worker's declared read-write binding resolves against the
+        // storage contract, so the grant the launch policy carries is
+        // recomputed here. The broker attaches the reconciled contract before
+        // it reads any launch policy, so the grant the worker launches with is
+        // the one this pass mints.
+        self.grant_declared_device_worker_volumes();
+    }
+
+    /// Mint the writable paths a Device worker's declared read-write bindings
+    /// imply, and drop any worker whose declared grant does not resolve.
+    ///
+    /// A read-only binding grants nothing: only `MountAccess::ReadWrite`
+    /// contributes a path, and a template whose posture binds no Volume
+    /// read-write mints the empty set exactly as before this pass existed.
+    ///
+    /// The resolved directory is the Volume's own root under the trusted
+    /// storage row its class resolves to ([`Self::resolve_volume_view_root`]),
+    /// composed the same way the Volume controller composes it, so the
+    /// granted path is the directory the worker opens by pathname. The
+    /// declared `MountSpec::view` is *not* a path inside the Volume: it names
+    /// the Volume view the row attaches, and the broker grants whole
+    /// directories, so the grant is the volume root and the view stays an
+    /// attachment-selection concern. Granting a sub-path would hand out a
+    /// directory no trusted artifact names.
+    ///
+    /// A binding the posture admits but the storage contract cannot resolve
+    /// is fail-closed, not skipped: the worker keeps no intent at all, so the
+    /// launch is refused instead of running with a silently smaller grant.
+    ///
+    /// A resolver that carries no storage contract yet has nothing to resolve
+    /// against, so the pass does nothing until one is attached; a *present*
+    /// contract that cannot resolve a declared grant is a real disagreement
+    /// and fails closed.
+    fn grant_declared_device_worker_volumes(&mut self) {
+        if self.storage.is_none() {
+            return;
+        }
+        for (zone, bindings) in &self.device_worker_templates {
+            for binding in bindings {
+                let Some(posture) = device_worker_posture(
+                    &binding.owner_ref().to_canonical_string(),
+                    binding.template().as_str(),
+                ) else {
+                    continue;
+                };
+                let intent_id = intent_id_legacy_runner(
+                    binding.execution_ref().name().as_str(),
+                    binding.process_ref().name().as_str(),
+                );
+                if !self.runner_intents.contains_key(&intent_id) {
+                    continue;
+                }
+                let Some(device) = self.declared_row_owning_device(zone, binding.process_ref())
+                else {
+                    self.runner_intents.remove(&intent_id);
+                    continue;
+                };
+                let mut writable_paths = Vec::new();
+                let mut resolved = true;
+                for mount in binding.mounts() {
+                    if mount.access() != MountAccess::ReadWrite {
+                        continue;
+                    }
+                    // The declared reference is expanded to the concrete
+                    // Volume before it is authorized, so the ownership check
+                    // and the granted path both read one name: a controller-
+                    // created child is materialized here
+                    // (`resolve_declared_mount_volume`) and every other
+                    // reference is already concrete. A row that names a
+                    // Volume the framework cannot resolve - including a row
+                    // whose owner is not a Device at all - resolves to nothing
+                    // and fails closed below.
+                    let Some(volume) = resolve_declared_mount_volume(zone, &device, mount) else {
+                        resolved = false;
+                        break;
+                    };
+                    let Some(storage_path_id) = posture.volume_grant().storage_path_id() else {
+                        resolved = false;
+                        break;
+                    };
+                    if !posture.volume_grant().admits(zone, &device, &volume) {
+                        resolved = false;
+                        break;
+                    }
+                    let Some(path) =
+                        self.resolve_volume_view_root(storage_path_id, volume.name().as_str(), "")
+                    else {
+                        resolved = false;
+                        break;
+                    };
+                    writable_paths.push(WritablePath {
+                        path: path.to_string_lossy().into_owned(),
+                        purpose: format!(
+                            "Declared {} mount of {}",
+                            volume.to_canonical_string(),
+                            mount.mount_path()
+                        ),
+                    });
+                }
+                if !resolved {
+                    self.runner_intents.remove(&intent_id);
+                    continue;
+                }
+                if let Some(intent) = self.runner_intents.get_mut(&intent_id) {
+                    intent.mount_policy.writable_paths = writable_paths;
+                }
+            }
+        }
+    }
+
+    /// The Device that owns one declared worker row, read from the Zone
+    /// bundle that declared the row.
+    fn declared_row_owning_device(
+        &self,
+        zone: &str,
+        process_ref: &ResourceRef,
+    ) -> Option<ResourceRef> {
+        self.parsed_zone_resources
+            .get(zone)?
+            .resources
+            .iter()
+            .find(|resource| {
+                resource.resource_type().as_str() == process_ref.resource_type().as_str()
+                    && resource.metadata().name().as_str() == process_ref.name().as_str()
+            })
+            .and_then(|resource| resource.metadata().owner_ref().cloned())
+            .filter(|owner| owner.resource_type().as_str() == "Device")
     }
 
     /// Return the sealed Zone topology, when the allocator artifact carries it.
@@ -4455,6 +4602,7 @@ pub struct DeviceWorkerPosture {
     user_namespace: bool,
     device_binds: &'static [&'static str],
     umask: u32,
+    volume_grant: DeviceWorkerVolumeGrant,
 }
 
 impl DeviceWorkerPosture {
@@ -4513,9 +4661,158 @@ impl DeviceWorkerPosture {
             (host_uid, host_gid)
         }
     }
+
+    /// The read-write Volume class this template's rows may bind.
+    pub const fn volume_grant(&self) -> DeviceWorkerVolumeGrant {
+        self.volume_grant
+    }
+}
+
+/// What read-write Volume a Device worker template's rows may bind.
+///
+/// The grant is a predicate over the bound Volume's *owner*, never a list of
+/// Volume references: a Device-owned Volume's name embeds the owning
+/// Device's durable uid, so a closed static table cannot enumerate them.
+/// Naming the property instead keeps the table closed, family-agnostic, and
+/// free of any specific Device.
+///
+/// `OwningDevice` also names the trusted storage row its bound Volume class
+/// resolves under, because a grant is only expressible as a host path once
+/// the class's root is known; keeping both in one variant stops a template
+/// from binding a class the mint could not resolve. The row id is the one
+/// the volume-local runtime resolves the class's opaque source policy to
+/// (`packages/d2b-provider-volume-local/nix/storage-json.nix`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceWorkerVolumeGrant {
+    /// The template binds no Volume read-write.
+    None,
+    /// The template may bind read-write a Volume owned by the same Device
+    /// the worker's declared row belongs to, and that Volume resolves under
+    /// the named trusted storage row.
+    OwningDevice { storage_path_id: &'static str },
+}
+
+impl DeviceWorkerVolumeGrant {
+    /// The trusted storage row this grant's Volumes resolve under, when the
+    /// template binds one.
+    pub const fn storage_path_id(&self) -> Option<&'static str> {
+        match self {
+            Self::None => None,
+            Self::OwningDevice { storage_path_id } => Some(storage_path_id),
+        }
+    }
+
+    /// Whether this grant admits `volume` for a worker row owned by
+    /// `device`.
+    ///
+    /// Ownership is read off the reference itself. A Device-owned Volume is
+    /// a controller-composed child, so it never appears in a declared
+    /// resource list, and its uid-scoped name is the one thing the compiler
+    /// and this resolver both see. The uid is the digest of the Device's
+    /// `(zone, type, name)` key
+    /// ([`d2b_contracts::identity::deterministic_resource_uid`]), so the
+    /// owning Device is reconstructed from the same identity the resource
+    /// plane assigns it, and a Volume scoped to a *different* Device - or to
+    /// no Device at all - is refused.
+    pub fn admits(self, zone: &str, device: &ResourceRef, volume: &ResourceRef) -> bool {
+        matches!(self, Self::OwningDevice { .. })
+            && device_owns_volume(zone, device, volume)
+    }
+}
+
+/// Whether `volume` is a Volume the Device `device` owns, by the framework's
+/// Device-scoped resource naming.
+///
+/// A Device-owned resource's name carries the owning Device's durable uid as
+/// a complete `-`-delimited segment, which is the naming every Device
+/// Provider composes its per-Device children with
+/// ([`device_child_volume_name`], used by
+/// `packages/d2b-provider-device-tpm/src/resources.rs`). The framework owns
+/// the uid derivation; the Provider owns only the role around it.
+pub fn device_owns_volume(zone: &str, device: &ResourceRef, volume: &ResourceRef) -> bool {
+    if device.resource_type().as_str() != "Device"
+        || volume.resource_type().as_str() != "Volume"
+    {
+        return false;
+    }
+    let scope = device_uid_scope(zone, device.name().as_str());
+    volume
+        .name()
+        .as_str()
+        .split('-')
+        .any(|segment| segment == scope)
+}
+
+/// The concrete Volume a declared worker mount binds, once the framework has
+/// materialized the name of a controller-created child.
+///
+/// A `volumeRef` is already concrete. An `ownVolumeSuffix` names the
+/// controller-created child of the row's own declaring Device, whose name
+/// only the framework can compose ([`device_child_volume_name`]): a resource
+/// uid is a digest over NUL-separated identity fields, which no declarative
+/// projection can evaluate, so the row states the role and this is where the
+/// concrete name is derived.
+///
+/// `None` means the row names no Device to derive a child from, so there is
+/// no Volume to resolve and the caller fails closed.
+pub fn resolve_declared_mount_volume(
+    zone: &str,
+    device: &ResourceRef,
+    mount: &MountSpec,
+) -> Option<ResourceRef> {
+    if let Some(volume_ref) = mount.volume_ref() {
+        return Some(volume_ref.clone());
+    }
+    let name = device_child_volume_name(
+        zone,
+        device,
+        mount.own_volume_suffix()?.as_str(),
+    )?;
+    ResourceRef::parse(&name).ok()
+}
+
+/// The `Volume/<name>` reference of one controller-created child Volume of
+/// `device`, or `None` when `device` is not a Device.
+pub fn device_child_volume_name(zone: &str, device: &ResourceRef, role: &str) -> Option<String> {
+    device_child_name(zone, device, role).map(|name| format!("Volume/{name}"))
+}
+
+/// The bare name of one controller-created child of `device`: `device-<uid>-
+/// <role>`, where the uid is the owning Device's deterministic
+/// `(zone, type, name)` uid
+/// ([`d2b_contracts::identity::deterministic_resource_uid`]) rendered to its
+/// 32 hex characters.
+///
+/// This is the one place the framework's Device-scoped child naming is
+/// written. A Device controller creating the row and a resolver authorizing a
+/// reference to it both call it with the same `(zone, Device, name)` identity,
+/// so the row a worker mounts and the name its mount resolves to cannot drift
+/// apart. A projection states only the role, because no declarative layer can
+/// evaluate the uid the name embeds.
+pub fn device_child_name(zone: &str, device: &ResourceRef, role: &str) -> Option<String> {
+    if device.resource_type().as_str() != "Device" {
+        return None;
+    }
+    Some(format!(
+        "device-{}-{role}",
+        device_uid_scope(zone, device.name().as_str())
+    ))
+}
+
+/// The 32 hex characters a Device's deterministic uid renders to, the segment
+/// a controller-created child of that Device embeds in its name.
+pub fn device_uid_scope(zone: &str, device_name: &str) -> String {
+    d2b_contracts::identity::deterministic_resource_uid(zone, "Device", device_name)
+        .as_str()
+        .bytes()
+        .filter(|byte| byte.is_ascii_hexdigit())
+        .take(32)
+        .map(char::from)
+        .collect()
 }
 
 const fn device_namespaces(mount: bool, pid: bool, ipc: bool, uts: bool, user: bool) -> NamespaceSet {
+
     NamespaceSet {
         mount,
         pid,
@@ -4564,8 +4861,15 @@ const VIDEO_WORKER_NAMESPACES: NamespaceSet = device_namespaces(true, true, true
 /// `process-principal-root` mapping applies to long-lived workers only, so
 /// the one-shot flush runs as its system principal directly.
 pub fn device_worker_posture(provider_ref: &str, template: &str) -> Option<DeviceWorkerPosture> {
-    let (role, binary_ref, seccomp_policy_ref, namespaces, user_namespace, device_binds) =
-        match (provider_ref, template) {
+    let (
+        role,
+        binary_ref,
+        seccomp_policy_ref,
+        namespaces,
+        user_namespace,
+        device_binds,
+        volume_grant,
+    ) = match (provider_ref, template) {
             (DEVICE_TPM_PROVIDER_REF, "swtpm-socket") => (
                 ProcessRole::Swtpm,
                 "swtpm",
@@ -4573,6 +4877,14 @@ pub fn device_worker_posture(provider_ref: &str, template: &str) -> Option<Devic
                 TPM_WORKER_NAMESPACES,
                 true,
                 &[][..],
+                // The long-lived worker writes NVRAM into the state Volume
+                // its own Device owns, under the storage row that
+                // volume-local resolves the class's `tpm-state` source
+                // policy to. The pre-start flush binds the same class but
+                // only reaches the control socket, so it declares no grant.
+                DeviceWorkerVolumeGrant::OwningDevice {
+                    storage_path_id: "path:tpm-state",
+                },
             ),
             (DEVICE_TPM_PROVIDER_REF, "swtpm-init-flush") => (
                 ProcessRole::SwtpmPreStartFlush,
@@ -4581,6 +4893,7 @@ pub fn device_worker_posture(provider_ref: &str, template: &str) -> Option<Devic
                 TPM_FLUSH_NAMESPACES,
                 false,
                 &[][..],
+                DeviceWorkerVolumeGrant::None,
             ),
             (DEVICE_GPU_PROVIDER_REF, "gpu-worker") => (
                 ProcessRole::Gpu,
@@ -4589,6 +4902,7 @@ pub fn device_worker_posture(provider_ref: &str, template: &str) -> Option<Devic
                 GPU_WORKER_NAMESPACES,
                 true,
                 &["/dev/kvm", "/dev/dri/renderD128", "/dev/udmabuf"][..],
+                DeviceWorkerVolumeGrant::None,
             ),
             (DEVICE_GPU_PROVIDER_REF, "gpu-render-node") => (
                 ProcessRole::GpuRenderNode,
@@ -4597,6 +4911,7 @@ pub fn device_worker_posture(provider_ref: &str, template: &str) -> Option<Devic
                 GPU_WORKER_NAMESPACES,
                 true,
                 &[][..],
+                DeviceWorkerVolumeGrant::None,
             ),
             (DEVICE_GPU_PROVIDER_REF, "video-worker") => (
                 ProcessRole::Video,
@@ -4605,6 +4920,7 @@ pub fn device_worker_posture(provider_ref: &str, template: &str) -> Option<Devic
                 VIDEO_WORKER_NAMESPACES,
                 false,
                 &["/dev/dri/renderD128"][..],
+                DeviceWorkerVolumeGrant::None,
             ),
             (DEVICE_GPU_PROVIDER_REF, "video-worker-nvidia") => (
                 ProcessRole::Video,
@@ -4618,6 +4934,7 @@ pub fn device_worker_posture(provider_ref: &str, template: &str) -> Option<Devic
                     "/dev/nvidia-uvm",
                     "/dev/nvidia0",
                 ][..],
+                DeviceWorkerVolumeGrant::None,
             ),
             _ => return None,
         };
@@ -4629,6 +4946,7 @@ pub fn device_worker_posture(provider_ref: &str, template: &str) -> Option<Devic
         user_namespace,
         device_binds,
         umask: DEVICE_WORKER_UMASK,
+        volume_grant,
     })
 }
 
@@ -4818,10 +5136,10 @@ fn mint_template_intent(
 /// [`build_device_worker_intents`] instead: they launch as their own broker
 /// runner role, never as a Provider controller.
 fn build_provider_controller_intents(
-    templates: &[ProcessTemplateBinding],
+    templates: &BTreeMap<String, Vec<ProcessTemplateBinding>>,
 ) -> BTreeMap<String, ResolvedRunnerIntent> {
     let mut out = BTreeMap::new();
-    for binding in templates {
+    for binding in templates.values().flatten() {
         let shape = TemplateIntentShape::of(binding);
         if matches!(shape, TemplateIntentShape::DeviceWorker(_)) {
             continue;
@@ -4841,10 +5159,10 @@ fn build_provider_controller_intents(
 /// id is the declared row name, so the exact Process row - never a template
 /// name shared by two Devices - is the launch identity.
 fn build_device_worker_intents(
-    templates: &[ProcessTemplateBinding],
+    templates: &BTreeMap<String, Vec<ProcessTemplateBinding>>,
 ) -> BTreeMap<String, ResolvedRunnerIntent> {
     let mut out = BTreeMap::new();
-    for binding in templates {
+    for binding in templates.values().flatten() {
         let shape = TemplateIntentShape::of(binding);
         if !matches!(shape, TemplateIntentShape::DeviceWorker(_)) {
             continue;
@@ -4853,6 +5171,31 @@ fn build_device_worker_intents(
         out.insert(intent.intent_id.clone(), intent);
     }
     out
+}
+
+/// The Device-owned worker bindings among every declared template binding,
+/// by Zone - the only bindings whose declared mounts this resolver grants.
+fn device_worker_templates_of(
+    templates: &BTreeMap<String, Vec<ProcessTemplateBinding>>,
+) -> BTreeMap<String, Vec<ProcessTemplateBinding>> {
+    templates
+        .iter()
+        .map(|(zone, bindings)| {
+            (
+                zone.clone(),
+                bindings
+                    .iter()
+                    .filter(|binding| {
+                        matches!(
+                            TemplateIntentShape::of(binding),
+                            TemplateIntentShape::DeviceWorker(_)
+                        )
+                    })
+                    .cloned()
+                    .collect(),
+            )
+        })
+        .collect()
 }
 
 fn runner_role_name(role: &ProcessRole) -> Option<&'static str> {
@@ -5015,7 +5358,10 @@ fn resolve_bundle_ref(bundle_root: &Path, artifact_path: &str) -> PathBuf {
 /// Integrity-pinned per-Zone Resource bundle payloads plus the Process
 /// templates their manifests carry, as produced by
 /// [`load_zone_resource_bundles`].
-type LoadedZoneResourceBundles = (BTreeMap<String, Vec<u8>>, Vec<ProcessTemplateBinding>);
+type LoadedZoneResourceBundles = (
+    BTreeMap<String, Vec<u8>>,
+    BTreeMap<String, Vec<ProcessTemplateBinding>>,
+);
 
 /// Load the integrity-pinned per-Zone Resource bundles emitted by Nix.
 ///
@@ -5029,7 +5375,7 @@ fn load_zone_resource_bundles(
     policy: &BundleVerifyPolicy,
 ) -> Result<LoadedZoneResourceBundles, Error> {
     let mut bundles = BTreeMap::new();
-    let mut process_templates = Vec::new();
+    let mut process_templates: BTreeMap<String, Vec<ProcessTemplateBinding>> = BTreeMap::new();
     let Some(artifact_hashes) = bundle.artifact_hashes.as_ref() else {
         return Ok((bundles, process_templates));
     };
@@ -5058,7 +5404,7 @@ fn load_zone_resource_bundles(
                 "duplicate Zone resource bundle",
             ));
         }
-        process_templates.extend(parsed.process_templates);
+        process_templates.insert(zone_name.to_owned(), parsed.process_templates);
     }
     Ok((bundles, process_templates))
 }
@@ -6044,8 +6390,8 @@ mod tests {
     };
     use crate::runtime::RuntimeMetadata;
     use d2b_contracts_resource::v3::{
-        CanonicalJsonObject, IfName, ResourceName, ResourceTypeName, ResourceUid, Timestamp,
-        ZoneId,
+        CanonicalJsonObject, IfName, MountAccess, MountSpec, ResourceName, ResourceTypeName,
+        ResourceUid, Timestamp, ZoneId,
         execution_policy::BoundedToken,
         network::{Ipv4Cidr, NetworkSpec},
     };
@@ -6844,6 +7190,715 @@ mod tests {
         );
     }
 
+    /// The Volume a Device-owned worker row may bind read-write is named
+    /// after the owning Device's durable uid, so the framework's own uid
+    /// derivation is what proves ownership at bundle-compile time.
+    #[test]
+    fn device_volume_grant_admits_only_the_owning_device_volume() {
+        use d2b_contracts::identity::deterministic_resource_uid;
+
+        let device = ResourceRef::parse("Device/tpm0").expect("device ref");
+        let own = ResourceRef::parse(&format!(
+            "Volume/device-{}-tpm-state",
+            device_volume_scope("dev", "tpm0")
+        ))
+        .expect("own volume ref");
+        let foreign = ResourceRef::parse(&format!(
+            "Volume/device-{}-tpm-state",
+            device_volume_scope("dev", "tpm1")
+        ))
+        .expect("foreign volume ref");
+        let host_wide = ResourceRef::parse("Volume/daemon-state").expect("host volume ref");
+
+        let grant = device_worker_posture(DEVICE_TPM_PROVIDER_REF, "swtpm-socket")
+            .expect("swtpm-socket posture")
+            .volume_grant();
+        assert!(grant.admits("dev", &device, &own));
+        assert!(!grant.admits("dev", &device, &foreign));
+        assert!(!grant.admits("dev", &device, &host_wide));
+        // The uid is Zone-scoped: the same Device name in another Zone names a
+        // different Volume, so a cross-Zone reference is not this Device's.
+        assert!(!grant.admits("work", &device, &own));
+        // A template that binds no Volume read-write admits nothing.
+        assert!(
+            !device_worker_posture(DEVICE_TPM_PROVIDER_REF, "swtpm-init-flush")
+                .expect("flush posture")
+                .volume_grant()
+                .admits("dev", &device, &own)
+        );
+        assert_eq!(
+            device_worker_posture(DEVICE_TPM_PROVIDER_REF, "swtpm-socket")
+                .expect("posture")
+                .volume_grant()
+                .storage_path_id(),
+            Some("path:tpm-state"),
+            "the grant names the trusted row its class resolves under"
+        );
+        assert_eq!(
+            deterministic_resource_uid("dev", "Device", "tpm0")
+                .as_str()
+                .bytes()
+                .filter(|byte| byte.is_ascii_hexdigit())
+                .take(32)
+                .map(char::from)
+                .collect::<String>(),
+            device_volume_scope("dev", "tpm0")
+        );
+    }
+
+    /// A declared read-write binding becomes exactly the host path the
+    /// broker's own fence resolves for that Volume, and a row that declares
+    /// no read-write binding still mints an empty grant.
+    #[test]
+    fn declared_read_write_binding_mints_its_resolved_host_path() {
+        let own = format!("device-{}-tpm-state", device_volume_scope("dev", "tpm0"));
+        let state_dir = PathBuf::from("/var/lib/d2b/tpm-state").join(&own);
+        let read_write = serde_json::json!({
+            "volumeRef": format!("Volume/{own}"),
+            "view": "swtpm-process",
+            "mountPath": "/state",
+            "access": "read-write",
+            "required": true,
+        });
+        let read_only = serde_json::json!({
+            "volumeRef": "Volume/device-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-tpm-state",
+            "view": "swtpm-process",
+            "mountPath": "/state",
+            "access": "read-only",
+            "required": true,
+        });
+
+        for (case, mounts, expected) in [
+            ("read-write", vec![read_write.clone()], vec![state_dir.clone()]),
+            ("read-only", vec![read_only.clone()], Vec::new()),
+            ("undeclared", Vec::new(), Vec::new()),
+        ] {
+            let mut resolver = device_worker_resolver(&mounts);
+            resolver.set_storage(storage_contract(Some(
+                "/var/lib/d2b/tpm-state".to_owned(),
+            )));
+            let intent = resolver
+                .find_device_worker_intent(
+                    &ResourceRef::parse("Process/swtpm-tpm0").expect("row ref"),
+                    "Host/dev-host",
+                    ProcessExecutionDomain::System,
+                    None,
+                    "swtpm-socket",
+                )
+                .unwrap_or_else(|| panic!("{case}: the declared row must still resolve"));
+            let granted: Vec<&str> = intent
+                .mount_policy
+                .writable_paths
+                .iter()
+                .map(|writable| writable.path.as_str())
+                .collect();
+            assert_eq!(
+                granted,
+                expected
+                    .iter()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect::<Vec<String>>(),
+                "{case}: the granted path set"
+            );
+            assert_eq!(
+                intent.mount_policy.read_only_paths,
+                vec!["/nix/store".to_owned()],
+                "{case}: nothing else in the policy moved"
+            );
+        }
+    }
+
+    /// A declared read-write binding the storage contract cannot resolve is
+    /// fail-closed: the worker keeps no intent at all rather than launching
+    /// with a silently smaller grant.
+    #[test]
+    fn an_unresolvable_declared_grant_refuses_the_worker() {
+        let own = format!("device-{}-tpm-state", device_volume_scope("dev", "tpm0"));
+        let mounts = vec![serde_json::json!({
+            "volumeRef": format!("Volume/{own}"),
+            "view": "swtpm-process",
+            "mountPath": "/state",
+            "access": "read-write",
+            "required": true,
+        })];
+        let mut resolver = device_worker_resolver(&mounts);
+        resolver.set_storage(storage_contract(None));
+        assert!(
+            resolver
+                .find_device_worker_intent(
+                    &ResourceRef::parse("Process/swtpm-tpm0").expect("row ref"),
+                    "Host/dev-host",
+                    ProcessExecutionDomain::System,
+                    None,
+                    "swtpm-socket",
+                )
+                .is_none(),
+            "a read-write grant the storage contract cannot resolve must not \
+             survive as a worker with an empty policy"
+        );
+    }
+
+
+    /// A declared read-write binding naming a Volume scoped to a *different*
+    /// Device is fail-closed at the resolver too, not only at compile time:
+    /// the grant the closed posture does not admit removes the worker's intent
+    /// rather than leaving a worker that launches with an empty policy.
+    #[test]
+    fn a_foreign_device_volume_binding_refuses_the_worker() {
+        let foreign = format!(
+            "device-{}-tpm-state",
+            device_volume_scope("dev", "tpm1")
+        );
+        let mounts = vec![serde_json::json!({
+            "volumeRef": format!("Volume/{foreign}"),
+            "view": "swtpm-process",
+            "mountPath": "/state",
+            "access": "read-write",
+            "required": true,
+        })];
+        let mut resolver = device_worker_resolver(&mounts);
+        // The trusted row resolves, so the refusal below is the ownership
+        // check alone and not an absent storage contract.
+        resolver.set_storage(storage_contract(Some(
+            "/var/lib/d2b/tpm-state".to_owned(),
+        )));
+        assert!(
+            resolver
+                .find_device_worker_intent(
+                    &ResourceRef::parse("Process/swtpm-tpm0").expect("row ref"),
+                    "Host/dev-host",
+                    ProcessExecutionDomain::System,
+                    None,
+                    "swtpm-socket",
+                )
+                .is_none(),
+            "a Volume scoped to another Device must not survive as a worker \
+             with an empty policy"
+        );
+    }
+
+    /// The form a declarative projection can actually spell: the row names
+    /// the child by role, and the framework composes the concrete Volume from
+    /// the row's own owning Device. Two Devices declare the identical bytes
+    /// and reach two different directories, so what separates one Device's
+    /// private state from its sibling's is the owner, never the declaration.
+    #[test]
+    fn an_own_child_volume_binding_resolves_against_the_declaring_device() {
+        for device in ["tpm0", "tpm1"] {
+            let mounts = vec![serde_json::json!({
+                "ownVolumeSuffix": "tpm-state",
+                "view": "swtpm-process",
+                "mountPath": "/state",
+                "access": "read-write",
+                "required": true,
+            })];
+            let mut resolver = device_worker_resolver_named(device, &mounts);
+            resolver.set_storage(storage_contract(Some(
+                "/var/lib/d2b/tpm-state".to_owned(),
+            )));
+            assert_eq!(
+                resolver
+                    .find_device_worker_intent(
+                        &ResourceRef::parse(&format!("Process/swtpm-{device}")).expect("row ref"),
+                        "Host/dev-host",
+                        ProcessExecutionDomain::System,
+                        None,
+                        "swtpm-socket",
+                    )
+                    .unwrap_or_else(|| panic!("{device}: the declared child must resolve"))
+                    .mount_policy
+                    .writable_paths[0]
+                    .path,
+                format!(
+                    "/var/lib/d2b/tpm-state/device-{}-tpm-state",
+                    device_volume_scope("dev", device)
+                ),
+                "{device}: the granted path is this Device's own child Volume"
+            );
+        }
+    }
+
+    /// The structural form does not widen what a row can reach: it names a
+    /// role inside the declaring Device's private child set, so a name spelled
+    /// out for a *different* Device is still refused by the same ownership
+    /// check, and a row that names no Device resolves no Volume at all.
+    #[test]
+    fn the_owning_devices_child_set_stays_private_under_both_forms() {
+        let owner = ResourceRef::parse("Device/tpm0").expect("owner ref");
+        let sibling = ResourceRef::parse("Device/tpm1").expect("sibling ref");
+        let guest = ResourceRef::parse("Guest/dev").expect("guest ref");
+        let own_child = MountSpec::own_child_volume(
+            BoundedToken::parse("tpm-state").expect("role"),
+            BoundedToken::parse("swtpm-process").expect("view"),
+            "/state",
+            MountAccess::ReadWrite,
+            true,
+        )
+        .expect("own-child mount");
+        // The other form, a name spelled out by hand: it resolves to itself.
+        let spelled_sibling = serde_json::from_value::<MountSpec>(serde_json::json!({
+            "volumeRef": format!(
+                "Volume/device-{}-tpm-state",
+                device_volume_scope("dev", "tpm1")
+            ),
+            "view": "swtpm-process",
+            "mountPath": "/state",
+            "access": "read-write",
+            "required": true,
+        }))
+        .expect("spelled sibling volume");
+        let grant = device_worker_posture(DEVICE_TPM_PROVIDER_REF, "swtpm-socket")
+            .expect("swtpm-socket posture")
+            .volume_grant();
+
+        // The declaration carries no identity: the same bytes expand to a
+        // different Volume for a different owner, and to none at all for a
+        // row owned by something that is not a Device.
+        assert_ne!(
+            resolve_declared_mount_volume("dev", &owner, &own_child),
+            resolve_declared_mount_volume("dev", &sibling, &own_child),
+        );
+        assert!(
+            resolve_declared_mount_volume("dev", &guest, &own_child).is_none(),
+            "a row owned by no Device names no child Volume"
+        );
+
+        // The expanded name is authorized by the same rule as any other, and
+        // a name spelled for the sibling is not the owner's.
+        let own = resolve_declared_mount_volume("dev", &owner, &own_child).expect("owner child");
+        assert!(grant.admits("dev", &owner, &own));
+        assert!(
+            !grant.admits(
+                "dev",
+                &owner,
+                &resolve_declared_mount_volume("dev", &owner, &spelled_sibling)
+                    .expect("the spelled name resolves to itself")
+            ),
+            "a sibling's child Volume is refused whichever form the row spells"
+        );
+    }
+
+    /// The state directory a declared binding resolves to is character for
+    /// character the directory the broker's own swtpm fence composes from the
+    /// bundle: the same trusted storage row, joined with the same Volume name.
+    #[test]
+    fn the_granted_path_is_the_directory_the_broker_fence_resolves() {
+        let own = format!("device-{}-tpm-state", device_volume_scope("dev", "tpm0"));
+        let mounts = vec![serde_json::json!({
+            "volumeRef": format!("Volume/{own}"),
+            "view": "swtpm-process",
+            "mountPath": "/state",
+            "access": "read-write",
+            "required": true,
+        })];
+        let mut resolver = device_worker_resolver(&mounts);
+        resolver.set_storage(storage_contract(Some(
+            "/var/lib/d2b/tpm-state".to_owned(),
+        )));
+        let granted = resolver
+            .find_device_worker_intent(
+                &ResourceRef::parse("Process/swtpm-tpm0").expect("row ref"),
+                "Host/dev-host",
+                ProcessExecutionDomain::System,
+                None,
+                "swtpm-socket",
+            )
+            .expect("swtpm intent")
+            .mount_policy
+            .writable_paths[0]
+            .path
+            .clone();
+        // The broker's state-directory grant: the trusted `path:tpm-state`
+        // row's root joined with the state Volume name
+        // (`resource_backed_identity` + `trusted_state_dir` in
+        // `packages/d2b-broker/src/ops/swtpm_identity.rs`).
+        let fence_state_root = PathBuf::from("/var/lib/d2b/tpm-state");
+        assert_eq!(granted, fence_state_root.join(&own).to_string_lossy());
+    }
+
+    /// The 32-hex segment a Device-owned resource's name carries: the owning
+    /// Device's durable uid with its UUID punctuation dropped.
+    fn device_volume_scope(zone: &str, device: &str) -> String {
+        d2b_contracts::identity::deterministic_resource_uid(zone, "Device", device)
+            .as_str()
+            .bytes()
+            .filter(|byte| byte.is_ascii_hexdigit())
+            .take(32)
+            .map(char::from)
+            .collect()
+    }
+
+    /// A storage contract carrying the `path:tpm-state` row the swtpm grant
+    /// names, at `root`.
+    fn storage_contract(root: Option<String>) -> StorageJson {
+        use crate::storage::{
+            ActorKind, ActorRef, CleanupPolicy, LeaseClass, PrincipalKind, PrincipalRef,
+            RepairPolicy, SensitivityClass, StorageAdoptionPolicy, StorageInvariant, StorageLifecycle,
+            StoragePathKind, StoragePathSpec, StoragePersistence, StorageRestartPolicy,
+        };
+        use d2b_contracts::contract_id::{ContractId, PathTemplate};
+
+        let empty = || StorageJson {
+            schema_version: "v2".to_owned(),
+            roots: Vec::new(),
+            paths: Vec::new(),
+            restart_policies: Vec::new(),
+            degraded_states: Vec::new(),
+            remediations: Vec::new(),
+        };
+
+        let principal = |kind, value: &str| PrincipalRef {
+            kind,
+            value: ContractId::parse(value).expect("principal id"),
+        };
+        let actor = |kind, value: &str| ActorRef {
+            kind,
+            value: ContractId::parse(value).expect("actor id"),
+        };
+        let Some(root) = root else {
+            return empty();
+        };
+        StorageJson {
+            schema_version: "v2".to_owned(),
+            roots: Vec::new(),
+            paths: vec![StoragePathSpec {
+                id: ContractId::parse("path:tpm-state").expect("path id"),
+                scope: ContractId::parse("host").expect("scope id"),
+                path_template: PathTemplate::parse(root.as_str()).expect("path template"),
+                kind: StoragePathKind::Directory,
+                lifecycle: StorageLifecycle::Config,
+                persistence: StoragePersistence::Persistent,
+                owner: principal(PrincipalKind::User, "d2bd"),
+                group: principal(PrincipalKind::Group, "d2bd"),
+                mode: "0700".to_owned(),
+                access_acl: Vec::new(),
+                default_acl: Vec::new(),
+                creator: actor(ActorKind::NixModule, "tmpfiles"),
+                writers: vec![actor(ActorKind::Daemon, "d2bd")],
+                readers: vec![actor(ActorKind::Broker, "d2b-broker")],
+                cleanup_policy: CleanupPolicy::Never,
+                repair_policy: RepairPolicy::BrokerFailClosed,
+                restart_policy: StorageRestartPolicy::PreserveAcrossDaemonRestart,
+                adoption_policy: StorageAdoptionPolicy::AdoptWithLiveOwnerProof,
+                lease_class: LeaseClass::None,
+                sensitivity: SensitivityClass::SecretAdjacent,
+                no_follow: true,
+                recursive: false,
+                invariants: vec![StorageInvariant::NoSymlink],
+            }],
+            restart_policies: Vec::new(),
+            degraded_states: Vec::new(),
+            remediations: Vec::new(),
+        }
+    }
+
+    /// One Zone bundle declaring the TPM Device `tpm0`, its `swtpm-socket`
+    /// worker row, and the template binding that carries the row's declared
+    /// mounts.
+    fn device_worker_resolver(mounts: &[serde_json::Value]) -> BundleResolver {
+        device_worker_resolver_named("tpm0", mounts)
+    }
+
+    /// The same bundle with the Device - and so the row that owns it - named
+    /// `device_name`, so a case can show which Device a declared mount
+    /// resolves against.
+    fn device_worker_resolver_named(
+        device_name: &str,
+        mounts: &[serde_json::Value],
+    ) -> BundleResolver {
+        let resource_bundle = device_worker_resource_bundle("dev", device_name, mounts);
+        let host = serde_json::from_str::<HostJson>(HOST_JSON_FIXTURE).expect("host fixture");
+        let manifest = ManifestV04::from_slice(
+            include_str!("../../../tests/golden/manifest_v04/baseline-vms.json").as_bytes(),
+        )
+        .expect("manifest fixture");
+        BundleResolver::from_artifacts_with_zone_resource_bundles(
+            Bundle {
+                bundle_version: 11,
+                schema_version: "v2".to_owned(),
+                privileges_path: "privileges.json".to_owned(),
+                storage_path: None,
+                realm_workloads_launcher_v2_path: None,
+                generation: BundleGeneration {
+                    generator: "test".to_owned(),
+                    source_revision: None,
+                    generated_at: None,
+                },
+                bundle_hash: Some("sha256:bundle".to_owned()),
+                artifact_hashes: None,
+            },
+            host,
+            ProcessesJson {
+                schema_version: "v2".to_owned(),
+                vms: Vec::new(),
+            },
+            manifest,
+            BTreeMap::from([(
+                "dev".to_owned(),
+                serde_json::to_vec(&resource_bundle).expect("resource bundle bytes"),
+            )]),
+        )
+    }
+
+    /// The Zone resource-bundle *bytes* the same fixture builds, so the
+    /// daemon's own construction path ([`BundleResolver::load_with_policy`],
+    /// which reads the bytes back off disk and re-derives every Zone-keyed
+    /// table) is exercised over the identical declaration instead of over a
+    /// resolver assembled in memory.
+    fn device_worker_resource_bundle(
+        zone_name: &str,
+        device_name: &str,
+        mounts: &[serde_json::Value],
+    ) -> ResourceBundle {
+        let zone = ZoneId::parse(zone_name).expect("zone");
+        let host_name = format!("{zone_name}-host");
+        let device_ref = ResourceRef::parse(&format!("Device/{device_name}")).expect("device ref");
+        let row_name = format!("swtpm-{device_name}");
+        let resources = vec![
+            BundleResource::new(
+                ResourceTypeName::parse("Host").expect("host type"),
+                BundleResourceMetadata::new(
+                    ResourceName::parse(&host_name).expect("host name"),
+                    zone.clone(),
+                    None,
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                ),
+                CanonicalJsonObject::parse(br#"{}"#).expect("host spec"),
+            )
+            .expect("host resource"),
+            BundleResource::new(
+                ResourceTypeName::parse("Provider").expect("provider type"),
+                BundleResourceMetadata::new(
+                    ResourceName::parse("device-tpm").expect("provider name"),
+                    zone.clone(),
+                    None,
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                ),
+                CanonicalJsonObject::parse(
+                    format!(
+                        r#"{{"artifactId":"device-tpm","config":{{"controllerExecutionRef":"Host/{host_name}"}}}}"#
+                    )
+                    .as_bytes(),
+                )
+                .expect("provider spec"),
+            )
+            .expect("provider resource"),
+            BundleResource::new(
+                ResourceTypeName::parse("Device").expect("device type"),
+                BundleResourceMetadata::new(
+                    ResourceName::parse(device_name).expect("device name"),
+                    zone.clone(),
+                    Some(ResourceRef::parse(&format!("Guest/{zone_name}")).expect("guest ref")),
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                ),
+                CanonicalJsonObject::parse(br#"{"providerRef":"Provider/device-tpm"}"#)
+                    .expect("device spec"),
+            )
+            .expect("device resource"),
+            BundleResource::new(
+                ResourceTypeName::parse("Process").expect("row type"),
+                BundleResourceMetadata::new(
+                    ResourceName::parse(&row_name).expect("row name"),
+                    zone.clone(),
+                    Some(device_ref),
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                ),
+                CanonicalJsonObject::parse(
+                    format!(
+                        r#"{{"domain":"system","executionRef":"Host/{host_name}","processClass":"worker","providerRef":"Provider/system-minijail","template":"swtpm-socket"}}"#
+                    )
+                    .as_bytes(),
+                )
+                .expect("row spec"),
+            )
+            .expect("row resource"),
+        ];
+        let mut binding = serde_json::json!({
+            "processRef": format!("Process/{row_name}"),
+            "ownerRef": DEVICE_TPM_PROVIDER_REF,
+            "executionRef": format!("Host/{host_name}"),
+            "template": "swtpm-socket",
+            "artifactId": "device-tpm",
+            "binaryRef": "swtpm",
+            "artifactDigest": format!("sha256:{}", "a".repeat(64)),
+            "binaryPath": "/nix/store/device-tpm/bin/swtpm",
+            "launchArgs": true,
+        });
+        if !mounts.is_empty() {
+            binding["mounts"] = serde_json::Value::Array(mounts.to_vec());
+        }
+        let binding = serde_json::from_value::<ProcessTemplateBinding>(binding)
+            .expect("declared-row binding");
+        ResourceBundle::new(
+            zone,
+            resources,
+            format!("sha256:{}", "b".repeat(64)),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Timestamp::parse("1970-01-01T00:00:00.000Z").expect("timestamp"),
+        )
+        .expect("resource bundle")
+        .with_process_templates(vec![binding])
+        .expect("process templates")
+    }
+
+    /// The daemon's own construction path: a Zone-native bundle loaded off
+    /// disk through [`BundleResolver::load_with_policy`], carrying a Zone
+    /// resource bundle and the host storage contract, with no
+    /// [`Self::set_storage`] anywhere in sight.
+    ///
+    /// This is the only construction `d2bd` ever runs for the Device-worker
+    /// launch (`BundleResolver::load` in `composition.rs`), and it differs
+    /// from the in-memory fixture in every way the grant depends on: the
+    /// Zone-keyed tables are re-derived from the artifact-hash keys, the
+    /// storage contract arrives with the load instead of a later
+    /// `set_storage`, and the grant therefore has to fire from inside the
+    /// constructor. A resolver that mints the state dir here mints it on the
+    /// policy the Process provider's `SpawnRunner` handler forwards to the
+    /// broker.
+    #[test]
+    fn the_daemon_construction_path_grants_the_declared_state_directory() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let zone = "work";
+        let device = "tpm0";
+        let own_child = format!("tpm-state");
+        let mounts = vec![serde_json::json!({
+            "ownVolumeSuffix": own_child,
+            "view": "swtpm-process",
+            "mountPath": "/state",
+            "access": "read-write",
+            "required": true,
+        })];
+        let resource_bundle_bytes =
+            serde_json::to_vec(&device_worker_resource_bundle(zone, device, &mounts))
+                .expect("resource bundle bytes");
+        let storage_bytes =
+            serde_json::to_vec(&storage_contract(Some("/var/lib/d2b/tpm-state".to_owned())))
+                .expect("storage contract bytes");
+
+        let root = crate::test_support::scratch_root("device-worker-daemon-construction-path");
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        let _ = fs::remove_dir_all(&root);
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fs::create_dir_all(root.join("zones").join(zone)).expect("create zones dir");
+        let write_artifact = |name: &str, bytes: &[u8]| {
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            let path = root.join(name);
+            if let Some(parent) = path.parent() {
+                #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+                fs::create_dir_all(parent).expect("create artifact dir");
+            }
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            fs::write(&path, bytes).expect("write artifact");
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).expect("chmod artifact");
+            sha256_hex(bytes)
+        };
+        let zone_bundle_key = format!("zones/{zone}/resource-bundle.json");
+        let zone_bundle_hash = write_artifact(&zone_bundle_key, &resource_bundle_bytes);
+        let storage_hash = write_artifact("storage.json", &storage_bytes);
+
+        // The sealed cross-Zone index the v3 loader requires whenever a Zone
+        // resource bundle is present: one Zone, no parent, and the framed
+        // canonical digest the loader re-derives.
+        let parent_map = BTreeMap::from([(zone.to_owned(), None::<String>)]);
+        let index_bytes = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": "v1",
+            "zones": { zone: {} },
+            "topology": {
+                "sealed": true,
+                "parentMap": { zone: null },
+                "parentMapDigest": framed_canonical_digest(
+                    "d2b:v3:parent-topology",
+                    &serde_json::to_vec(&parent_map).expect("parent map bytes"),
+                ),
+                "generationByZone": { zone: "sha256:zone" },
+            },
+        }))
+        .expect("index bytes");
+        let index_hash = write_artifact("index.json", &index_bytes);
+
+        // The index's self-hash covers the document with `artifactHashes`
+        // nulled and no `bundleHash`, exactly as the loader re-derives it.
+        let mut bundle = serde_json::json!({
+            "artifactHashes": serde_json::Value::Null,
+            "bundleVersion": 1,
+            "schemaVersion": "v3",
+            "privilegesPath": "privileges.json",
+            "storagePath": "storage.json",
+            "zones": [{ "zone": zone, "path": zone_bundle_key.as_str() }],
+            "generation": {
+                "generator": "nixos-modules/bundle.nix",
+                "sourceRevision": null,
+                "generatedAt": null,
+            },
+        });
+        let bundle_hash =
+            sha256_hex(&serde_json::to_vec(&bundle).expect("bundle hash preimage"));
+        bundle["bundleHash"] = serde_json::Value::String(bundle_hash);
+        bundle["artifactHashes"] = serde_json::json!({
+            zone_bundle_key.as_str(): zone_bundle_hash,
+            "storage.json": storage_hash,
+            "index.json": index_hash,
+        });
+        write_artifact(
+            "bundle.json",
+            &serde_json::to_vec(&bundle).expect("bundle bytes"),
+        );
+
+        let resolver = BundleResolver::load_with_policy(
+            &root.join("bundle.json"),
+            &current_user_bundle_policy(),
+        )
+        .expect("the daemon's own bundle load succeeds");
+        assert!(
+            resolver.storage().is_some(),
+            "the loaded bundle carries the host storage contract"
+        );
+        let own = format!(
+            "device-{}-{own_child}",
+            device_volume_scope(zone, device)
+        );
+        let intent = resolver
+            .find_device_worker_intent(
+                &ResourceRef::parse(&format!("Process/swtpm-{device}")).expect("row ref"),
+                &format!("Host/{zone}-host"),
+                ProcessExecutionDomain::System,
+                None,
+                "swtpm-socket",
+            )
+            .expect("the declared Device-worker row resolves on the loaded bundle");
+        assert_eq!(
+            intent
+                .mount_policy
+                .writable_paths
+                .iter()
+                .map(|writable| writable.path.as_str())
+                .collect::<Vec<_>>(),
+            vec![format!("/var/lib/d2b/tpm-state/{own}")],
+            "the daemon's resolver mints the granted state dir at construction, \
+             with no set_storage pass"
+        );
+
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The uid a Device-owned worker row runs as is minted from the
+    /// `<owner>:<row>:<execution>` triple, and the host layer provisions the
+    /// matching `d2b-<zone>-<device>-swtpm` account with it
+    /// (`nixos-modules/lib.nix`, `deviceWorkerPrincipalId`, reached through
+    /// `host-users.nix`): every ACL the state Volume's layout effect applies
+    /// is granted to that account by name, so a principal that is not this
+    /// id leaves the worker unable to open the directory it was granted.
+    ///
+    /// The Nix mirror is pinned by `nix-unit-provider-device-tpm`
+    /// (`packages/d2b-provider-device-tpm/nix/tests/default.nix`); the two
         fn build_personal_dev_bundle(root: &Path) -> BundleResolver {
         build_personal_dev_bundle_with_fixture_network(root, true)
     }
@@ -7111,7 +8166,7 @@ mod tests {
                 guest_vmm_intents: BTreeMap::new(),
                 guest_vmm_zone_uids: BTreeMap::new(),
                 guest_store_view_intents: BTreeMap::new(),
-                provider_controller_templates: Vec::new(),
+                provider_controller_templates: BTreeMap::new(),
                 zone_storage_rows: BTreeMap::new(),
                 storage: None,
                 site: None,

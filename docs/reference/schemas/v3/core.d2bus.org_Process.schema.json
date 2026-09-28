@@ -308,13 +308,23 @@
       "type": "string"
     },
     "MountSpec": {
-      "description": "One Volume mount exposed inside the process sandbox.",
+      "description": "One Volume mount exposed inside the process sandbox.\n\nA mount binds exactly one Volume, named in one of two forms:\n\n* `volumeRef` - a Volume declared in the same Zone. * `ownVolumeSuffix` - the controller-created child Volume of the row's own declaring Device. A Device-owned Volume is built by the Device manager at runtime (`build_tpm_state_volume_resource`, `managedBy = \"controller\"`), so it is never a declared row, and the framework - not the projection - composes its name from the owning Device's durable uid ([`d2b_core::bundle_resolver::device_child_volume_name`]). A resource uid is a digest over NUL-separated identity fields, so no declarative projection can compute one: the row names the child by its role and the resolver materializes the concrete name.\n\nThe two are mutually exclusive, and a mount that names neither is refused on the wire. A `volumeRef` that *is* present is always a real `Volume/<name>` reference, so no reader of this contract has to ask whether the name it holds is a template.",
       "properties": {
         "access": {
           "$ref": "#/definitions/MountAccess"
         },
         "mountPath": {
           "type": "string"
+        },
+        "ownVolumeSuffix": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BoundedToken"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "required": {
           "type": "boolean"
@@ -323,7 +333,16 @@
           "$ref": "#/definitions/BoundedToken"
         },
         "volumeRef": {
-          "$ref": "#/definitions/ResourceRef",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef",
+              "x-d2b-reference-kind": "ResourceRef",
+              "x-d2b-reference-scope": "same-zone"
+            },
+            {
+              "type": "null"
+            }
+          ],
           "x-d2b-reference-kind": "ResourceRef",
           "x-d2b-reference-scope": "same-zone"
         }
@@ -332,8 +351,7 @@
         "access",
         "mountPath",
         "required",
-        "view",
-        "volumeRef"
+        "view"
       ],
       "type": "object"
     },

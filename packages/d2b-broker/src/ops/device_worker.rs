@@ -19,11 +19,55 @@
 //! the pinned Device, the Guest it declares, and the per-Guest socket
 //! directory are all bundle-derived.
 
+use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
 
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 use d2b_core::bundle_resolver::{BundleResolver, DEVICE_TPM_PROVIDER_REF};
 use d2b_core::processes::ProcessRole;
+use d2b_core::storage::StoragePathKind;
+
+/// The numeric posture the trusted `path:vm-run:<guest>` storage row declares
+/// for one Guest's per-Guest runtime socket directory, resolved against this
+/// host: owner uid, owner gid, and mode. Every field comes from the verified
+/// storage contract; the broker invents none of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GuestRuntimeDirPosture {
+    /// The row's declared owner user.
+    pub(crate) owner_uid: u32,
+    /// The row's declared owning group.
+    pub(crate) owner_gid: u32,
+    /// The row's declared mode (`1770` for the per-Guest runtime tree: the
+    /// worker principal reaches the directory through an explicit grant, and
+    /// the sticky bit keeps one principal from renaming another's socket).
+    pub(crate) mode: u32,
+}
+
+/// The trusted posture of one Guest's per-Guest runtime socket directory
+/// (`<runtime_root>/vms/<guest>`), taken from the verified storage contract's
+/// `path:vm-run:<guest>` row.
+///
+/// The row must be scoped to that very Guest and declare a directory: a
+/// storage id that resolved to another scope or another kind is a contract
+/// this broker refuses rather than a posture it borrows. `None` for a Guest
+/// the contract names no such row for, or one whose declared principals and
+/// mode do not resolve on this host - the caller then fails closed instead
+/// of creating the directory with a posture of its own.
+pub(crate) fn guest_runtime_dir_posture(
+    resolver: &BundleResolver,
+    guest: &str,
+) -> Option<GuestRuntimeDirPosture> {
+    let spec = resolver.find_storage_path_spec(&format!("path:vm-run:{guest}"))?;
+    if spec.scope.as_str() != format!("vm:{guest}") || spec.kind != StoragePathKind::Directory {
+        return None;
+    }
+    let (owner_uid, owner_gid, mode) = crate::ops::storage_contract::row_posture(spec)?;
+    Some(GuestRuntimeDirPosture {
+        owner_uid,
+        owner_gid,
+        mode,
+    })
+}
 
 /// The runtime directory layout the per-Guest device sockets live under:
 /// `<runtime_root>/vms/<guest>/<socket>` (the convention the guest VMM's
@@ -231,9 +275,9 @@ pub(crate) fn unique_tpm_state_dir(
     state_root: &Path,
 ) -> Option<PathBuf> {
     match devices {
-        [(_, device_uid)] => {
-            Some(state_root.join(crate::ops::swtpm_dir::state_volume_name(device_uid)))
-        }
+        [(_, device_uid)] => Some(
+            state_root.join(crate::ops::swtpm_identity::state_volume_name(device_uid)),
+        ),
         _ => None,
     }
 }
@@ -303,6 +347,91 @@ pub(crate) fn guest_socket_directory(
         return Err(GuestSocketError::DirectoryOutsideRuntimeRoot);
     }
     Ok(directory)
+}
+
+/// Why one Guest's per-Guest runtime directory could not be created and
+/// postured to the posture its trusted `path:vm-run:<guest>` row declares.
+///
+/// A closed set of path-free slugs: both the launch refusal and the audit
+/// record render the slug and the errno class, never a raw path or a raw
+/// I/O message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimeDirPostureError {
+    /// The verified storage contract declares no `path:vm-run:<guest>` row
+    /// for this Guest, so the directory has no declared identity and the
+    /// broker refuses to invent one.
+    RowUnresolved,
+    /// The `vms` parent the per-Guest directory lives in does not exist.
+    /// Host activation's tmpfiles rule owns that parent
+    /// (`d /run/d2b/vms 1770 d2bd d2b`), so its absence is a host posture
+    /// gap the broker refuses rather than one it invents a posture for.
+    ParentAbsent,
+    /// The directory exists or was created, but could not be brought to
+    /// the declared mode and ownership. Carries the `io::ErrorKind` so the
+    /// refusal stays path-free.
+    PostureFailed(std::io::ErrorKind),
+}
+
+impl std::fmt::Display for RuntimeDirPostureError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RowUnresolved => f.write_str("per-guest-dir-posture-row-unresolved"),
+            Self::ParentAbsent => f.write_str("per-guest-dir-posture-parent-absent"),
+            Self::PostureFailed(kind) => {
+                write!(f, "per-guest-dir-posture-failed:{kind:?}")
+            }
+        }
+    }
+}
+
+/// Create one Guest's per-Guest runtime socket directory
+/// (`<runtime_root>/vms/<guest>`) and posture it to what its trusted
+/// `path:vm-run:<guest>` storage row declares, returning the `(dev, ino)` of
+/// the exact inode that was postured so an audit record can tie itself to it
+/// without naming a path.
+///
+/// A fresh directory is created with the declared mode and ownership; an
+/// existing one is reconciled to the same declared posture, so a directory
+/// host activation or an earlier launch drifted is repaired rather than
+/// inherited. Every step is fd-relative to the parent opened with
+/// `openat2(RESOLVE_NO_SYMLINKS | RESOLVE_BENEATH)`, so no component can be
+/// swapped for a symlink between the check and the `mkdirat`.
+///
+/// Refuses rather than degrades: a directory it cannot create or posture is
+/// a launch the broker has no honest way to complete, because the ACL grant
+/// the worker needs has nowhere to land.
+///
+pub(crate) fn create_guest_runtime_dir(
+    directory: &Path,
+    posture: GuestRuntimeDirPosture,
+) -> Result<(u64, u64), RuntimeDirPostureError> {
+    let parent = directory
+        .parent()
+        .ok_or(RuntimeDirPostureError::ParentAbsent)?;
+    let name = directory
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(RuntimeDirPostureError::PostureFailed(
+            std::io::ErrorKind::InvalidInput,
+        ))?;
+    let parent_fd = crate::sys::path_safe::open_dir_path_safe(parent).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            RuntimeDirPostureError::ParentAbsent
+        } else {
+            RuntimeDirPostureError::PostureFailed(error.kind())
+        }
+    })?;
+    let fd = crate::sys::path_safe::ensure_dir_path_safe(
+        &parent_fd,
+        name,
+        posture.mode,
+        posture.owner_uid,
+        posture.owner_gid,
+    )
+    .map_err(|error| RuntimeDirPostureError::PostureFailed(error.kind()))?;
+    let stat = crate::sys::path_safe::fstat_fd(fd.as_fd())
+        .map_err(|error| RuntimeDirPostureError::PostureFailed(error.kind()))?;
+    Ok((stat.st_dev, stat.st_ino))
 }
 
 /// Whether `path` is absolute and carries no `.`/`..` component.
@@ -621,6 +750,95 @@ mod tests {
             manifest,
             BTreeMap::from([("work".to_owned(), bundle_bytes)]),
         )
+    }
+
+    /// The broker's `resolver()` fixture plus the storage contract's
+    /// `path:vm-run:<guest>` row: the declared posture of the per-Guest
+    /// runtime directory. `scope` is a parameter so a test can hand the row
+    /// another Guest's scope and see the fence refuse it.
+    fn resolver_with_vm_run_row(guest: &str, scope: &str) -> BundleResolver {
+        use d2b_contracts::contract_id::{ContractId, PathTemplate};
+        use d2b_core::storage::{
+            ActorKind, ActorRef, CleanupPolicy, LeaseClass, PrincipalKind, PrincipalRef,
+            RepairPolicy, SensitivityClass, StorageAdoptionPolicy, StorageInvariant, StorageJson,
+            StorageLifecycle, StoragePathKind, StoragePathSpec, StoragePersistence,
+            StorageRestartPolicy,
+        };
+        let principal = |kind, value: &str| PrincipalRef {
+            kind,
+            value: ContractId::parse(value).unwrap(),
+        };
+        let actor = |kind, value: &str| ActorRef {
+            kind,
+            value: ContractId::parse(value).unwrap(),
+        };
+        let mut resolver = resolver();
+        resolver.set_storage(StorageJson {
+            schema_version: "v2".to_owned(),
+            roots: Vec::new(),
+            paths: vec![StoragePathSpec {
+                id: ContractId::parse(&format!("path:vm-run:{guest}")).unwrap(),
+                scope: ContractId::parse(scope).unwrap(),
+                path_template: PathTemplate::parse(&format!("/run/d2b/vms/{guest}")).unwrap(),
+                kind: StoragePathKind::Directory,
+                lifecycle: StorageLifecycle::BootScopedReadoptable,
+                persistence: StoragePersistence::BootScoped,
+                owner: principal(PrincipalKind::Uid, "64025"),
+                group: principal(PrincipalKind::Gid, "64025"),
+                mode: "1770".to_owned(),
+                access_acl: Vec::new(),
+                default_acl: Vec::new(),
+                creator: actor(ActorKind::NixModule, "tmpfiles"),
+                writers: Vec::new(),
+                readers: Vec::new(),
+                cleanup_policy: CleanupPolicy::Boot,
+                repair_policy: RepairPolicy::NixActivation,
+                restart_policy: StorageRestartPolicy::PreserveAcrossDaemonRestart,
+                adoption_policy: StorageAdoptionPolicy::QuarantineOnAmbiguity,
+                lease_class: LeaseClass::ProcessPidfd,
+                sensitivity: SensitivityClass::Private,
+                no_follow: true,
+                recursive: false,
+                invariants: vec![StorageInvariant::NoSymlink],
+            }],
+            restart_policies: Vec::new(),
+            degraded_states: Vec::new(),
+            remediations: Vec::new(),
+        });
+        resolver
+    }
+
+    /// The posture the broker creates a per-Guest runtime directory with is
+    /// the one the trusted `path:vm-run:<guest>` row declares - read out of
+    /// the verified contract, never invented - and a row scoped to another
+    /// Guest is refused rather than borrowed, because a borrowed posture
+    /// would be another directory's identity.
+    #[test]
+    fn the_guest_runtime_dir_posture_is_the_one_its_trusted_row_declares() {
+        assert_eq!(
+            guest_runtime_dir_posture(
+                &resolver_with_vm_run_row("acceptance-guest", "vm:acceptance-guest"),
+                "acceptance-guest"
+            ),
+            Some(GuestRuntimeDirPosture {
+                owner_uid: 64_025,
+                owner_gid: 64_025,
+                mode: 0o1770,
+            }),
+        );
+        assert_eq!(
+            guest_runtime_dir_posture(
+                &resolver_with_vm_run_row("acceptance-guest", "vm:other-guest"),
+                "acceptance-guest"
+            ),
+            None,
+            "a row scoped to another Guest must not posture this one"
+        );
+        assert_eq!(
+            guest_runtime_dir_posture(&resolver(), "acceptance-guest"),
+            None,
+            "a Guest the contract names no runtime row for has no declared posture"
+        );
     }
 
     fn fixture() -> (BundleResolver, ResourceRef, ResourceUid, ResourceUid) {

@@ -227,6 +227,12 @@ nix_surface_test(
             "packages/d2b-provider-device-tpm/nix/guest.nix",
         ],
         "files": [
+            # The surface test now compiles the real Provider projection with
+            # the shared process module, so its inputs are runfiles too.
+            "nixos-modules/generated/process-role-providers.nix",
+            "nixos-modules/generated/provider-projections.nix",
+            "nixos-modules/lib.nix",
+            "nixos-modules/resources-zones-processes.nix",
             "packages/d2b-provider-device-tpm/nix/default.nix",
         ],
         "package": "packages/d2b-provider-device-tpm",
@@ -342,10 +348,12 @@ nix_surface_test(
         "files": [
             "packages/d2b-provider-guest-cloud-hypervisor/nix/default.nix",
             "nixos-modules/bundle-zones.nix",
+            "nixos-modules/generated/process-role-providers.nix",
             "nixos-modules/generated/provider-projections.nix",
             "nixos-modules/generated/resource-inventories.nix",
             "nixos-modules/generated/resource-types.nix",
             "nixos-modules/generated/zone-spec-canonical.nix",
+            "nixos-modules/lib.nix",
             "nixos-modules/resources-bundle.nix",
             "nixos-modules/resources-zones-processes.nix",
         ],

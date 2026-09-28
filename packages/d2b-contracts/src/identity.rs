@@ -599,6 +599,41 @@ impl ResourceUid {
     }
 }
 
+/// The stable uid of one `(zone, type, name)` resource key.
+///
+/// A resource's durable identity is a digest of the key it was declared
+/// under, so a row nothing has persisted yet still has a nameable uid: a
+/// Provider's Nix projection composes the same value when its per-resource
+/// naming needs one, and the manager reconstructs it from the key after a
+/// restart. This is the one derivation every reader that reconstructs an
+/// identity from a key calls - `d2b_resource_runtime::manager::deterministic_uid`
+/// among them - so the readers cannot drift from each other.
+pub fn deterministic_resource_uid(zone: &str, resource_type: &str, name: &str) -> ResourceUid {
+    ResourceUid::from_bytes(&deterministic_resource_uid_bytes(
+        zone,
+        resource_type,
+        name,
+    ))
+    .expect("the deterministic uid renders canonically")
+}
+
+/// The raw sixteen bytes behind [`deterministic_resource_uid`], before the
+/// version and variant bits a `ResourceUid` spells.
+pub fn deterministic_resource_uid_bytes(zone: &str, resource_type: &str, name: &str) -> [u8; 16] {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"d2b-resource-uid/v1\x00");
+    hasher.update(zone.as_bytes());
+    hasher.update([0u8]);
+    hasher.update(resource_type.as_bytes());
+    hasher.update([0u8]);
+    hasher.update(name.as_bytes());
+    let digest = hasher.finalize();
+    let mut uid = [0u8; 16];
+    uid.copy_from_slice(&digest[..16]);
+    uid
+}
+
 impl core::fmt::Display for ResourceUid {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("ResourceUid(<redacted>)")

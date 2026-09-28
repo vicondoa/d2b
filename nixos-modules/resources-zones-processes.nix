@@ -177,6 +177,50 @@ let
       && builtins.hasAttr parsed.name resources
       && resources.${parsed.name}.type == parsed.type;
 
+  # A declared mount names its Volume in exactly one of two mutually exclusive
+  # ways.
+  #
+  # `volumeRef` is a Volume row declared in the same Zone. That rule is
+  # unchanged and complete on its own: it needs no owner, and a row that
+  # declares none is still admitted.
+  #
+  # `ownVolumeSuffix` is the controller-composed child Volume of the row's own
+  # declaring Device. That child is a real shape in the resource plane, not a
+  # leak: a Device-owned Volume is built by the Device manager at runtime
+  # (`build_tpm_state_volume_resource`, `managedBy = "controller"`), so it is
+  # never a declared row. Its concrete name embeds the owning Device's durable
+  # uid (`device-<uid>-<suffix>`), and a resource uid is a digest over
+  # NUL-separated identity fields that a Nix expression cannot spell at all -
+  # so the row declares WHICH child, the Device that owns it and the role
+  # within that Device's private child set, and the framework materializes the
+  # name. What this layer can check is the declaration, not a derived name:
+  # the row must declare a Device owner that resolves to a Device of this
+  # Zone, and the role must be a bounded token. A row with no Device owner
+  # cannot name a Device's private child, and a projection cannot name a
+  # sibling's child at all, because the owning Device is the row's own
+  # `ownerRef` and never a field of the mount.
+  #
+  # The ownership rule over the concrete name is enforced where the name
+  # exists: `d2b_core::bundle_resolver::device_owns_volume`, run on the
+  # resolved bundle and again by the resource compiler on the declared row.
+  declaredVolume = row: mount:
+    resolvesAs row.zone.resources [ "Volume" ] (mount.volumeRef or null);
+
+  ownChildVolume = row: mount:
+    let
+      ownerRef = (row.resource.metadata or { }).ownerRef or null;
+      suffix = mount.ownVolumeSuffix or null;
+    in builtins.isString suffix
+      && builtins.match tokenPattern suffix != null
+      && resolvesAs row.zone.resources [ "Device" ] ownerRef;
+
+  namesOneVolume = mount:
+    (builtins.hasAttr "volumeRef" mount)
+    != (builtins.hasAttr "ownVolumeSuffix" mount);
+
+  volumeAdmitted = row: mount:
+    declaredVolume row mount || ownChildVolume row mount;
+
   exactKeys = allowed: value:
     builtins.isAttrs value
     && lib.all (key: builtins.elem key allowed) (lib.attrNames value);
@@ -201,18 +245,21 @@ let
   checkMount = row: index: mount:
     let
       path = "${row.path}.spec.mounts.${toString index}";
-      volumeRef = mount.volumeRef or null;
       view = mount.view or null;
       access = mount.access or null;
       mountPath = mount.mountPath or null;
     in [
       {
-        assertion = exactKeys [ "volumeRef" "view" "mountPath" "access" "required" ] mount;
+        assertion = exactKeys [ "volumeRef" "ownVolumeSuffix" "view" "mountPath" "access" "required" ] mount;
         message = "${path} contains an unsupported field.";
       }
       {
-        assertion = resolvesAs row.zone.resources [ "Volume" ] volumeRef;
-        message = "${path}.volumeRef must resolve to a Volume in the same Zone.";
+        assertion = namesOneVolume mount;
+        message = "${path} must name exactly one of volumeRef or ownVolumeSuffix.";
+      }
+      {
+        assertion = volumeAdmitted row mount;
+        message = "${path} must name a Volume declared in the same Zone, or ownVolumeSuffix naming this row's owning Device's controller-created child Volume.";
       }
       {
         assertion = builtins.isString view && builtins.match tokenPattern view != null;

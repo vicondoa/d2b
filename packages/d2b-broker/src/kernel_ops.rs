@@ -762,7 +762,6 @@ async fn spawn_process(
             .unwrap_or_default();
     let activation_input: Option<d2b_contracts_resource::v3::ActivationRunnerInput> =
         optional_parse_field(invocation.payload, "activationInput")?;
-    let swtpm_identity = optional_parse_swtpm_identity(invocation.payload)?;
     let device_worker = parse_device_worker(invocation.payload)?;
     let mut request_fds = invocation
         .fds
@@ -833,6 +832,58 @@ async fn spawn_process(
             ))
         })?;
     }
+
+    // The two Device-owned derivations - the per-Guest runtime directory a
+    // worker binds its socket in, and the swtpm worker's trusted state
+    // directory - both come from verified bundle artifacts, so one reload
+    // of the captured bundle path (the same per-request reload authority
+    // the USBIP branch above uses) feeds both. Neither rides the launch
+    // plan: the runtime posture comes from the storage contract's
+    // `path:vm-run:<guest>` row, and the swtpm identity from the Zone
+    // bundle's `Device` row plus the `path:swtpm-state:<guest>` and
+    // `path:tpm-state` rows, so no daemon-asserted path ever reaches a
+    // grant. A launch that is neither a swtpm role nor a socket-binding
+    // worker - and a legacy VM-scoped one whose per-VM tree host
+    // activation provisions - resolves neither.
+    let swtpm_scope = device_worker.scope.as_ref().filter(|_| {
+        matches!(
+            role,
+            d2b_contracts_broker::broker_wire::RunnerRole::Swtpm
+                | d2b_contracts_broker::broker_wire::RunnerRole::SwtpmFlush
+        )
+    });
+    let runtime_scope = device_worker
+        .scope
+        .as_ref()
+        .filter(|_| device_worker.binds_runtime_socket);
+    let (swtpm_identity, guest_runtime_posture) = match swtpm_scope.or(runtime_scope) {
+        None => (None, None),
+        Some(_) => {
+            let resolver = match crate::runtime::load_kernel_resolver(&config.bundle_path) {
+                crate::runtime::BundleSlot::Loaded(resolver) => resolver,
+                crate::runtime::BundleSlot::Unavailable => {
+                    return Err(refused(
+                        "spawn-process: device worker bundle resolver unavailable",
+                    ));
+                }
+                crate::runtime::BundleSlot::Tampered { .. } => {
+                    return Err(refused("spawn-process: device worker bundle tampered"));
+                }
+            };
+            let identity = swtpm_scope.and_then(|scope| {
+                crate::ops::swtpm_identity::resource_backed_identity(
+                    &resolver,
+                    &scope.zone_uid,
+                    &scope.device_ref,
+                    Some(&scope.device_uid),
+                )
+            });
+            let posture = runtime_scope.and_then(|scope| {
+                crate::ops::device_worker::guest_runtime_dir_posture(&resolver, scope.guest())
+            });
+            (identity, posture)
+        }
+    };
     // The stale-socket preflight cleanups (the retired arm's three
     // `cleanup_*_stale_socket` calls). The guest runtime Provider declares
     // its socket-carrying argv paths; the kernel unlinks provably-stale
@@ -901,6 +952,7 @@ async fn spawn_process(
         &config.state_dir,
         swtpm_identity.as_ref(),
         &device_worker,
+        guest_runtime_posture,
         &config.runtime_root,
     )
     .await
@@ -1005,10 +1057,6 @@ async fn spawn_process(
     if !plan_input.mount_policy.device_binds.is_empty() {
         result["deviceBinds"] = serde_json::to_value(&plan_input.mount_policy.device_binds)
             .map_err(|error| errored(format!("spawn-process device binds: {error}")))?;
-    }
-    if let Some(audit) = &outcome.swtpm_dir_audit {
-        result["swtpmDirAudit"] = serde_json::to_value(audit)
-            .map_err(|error| errored(format!("spawn-process swtpm audit: {error}")))?;
     }
     Ok(DispatchOutcome {
         result: canonical(result)?,
@@ -1755,46 +1803,6 @@ fn integer_field(
         Some(CanonicalJsonValue::Integer(value)) => Ok(*value),
         _ => Err(refused(format!("{key}: expected an integer"))),
     }
-}
-
-/// The optional swtpm identity: `{guest, stateRoot, stateVolume}`.
-fn optional_parse_swtpm_identity(
-    payload: &CanonicalJsonObject,
-) -> Result<Option<crate::ops::swtpm_dir::ResourceBackedSwtpm>, DispatchFailure> {
-    let Some(value) = payload.get("swtpmIdentity") else {
-        return Ok(None);
-    };
-    // The daemon's family handler always carries the derived field, so an
-    // absent resolver derivation serializes as JSON null - treat it as
-    // absent like the kernel's other optional parsers.
-    if matches!(value, CanonicalJsonValue::Null) {
-        return Ok(None);
-    }
-    let CanonicalJsonValue::Object(fields) = value else {
-        return Err(refused("swtpmIdentity: expected an object"));
-    };
-    let guest = match fields.get("guest") {
-        Some(CanonicalJsonValue::String(guest)) => guest.clone(),
-        _ => return Err(refused("swtpmIdentity.guest: expected a string")),
-    };
-    let state_root = match fields.get("stateRoot") {
-        Some(CanonicalJsonValue::String(root)) => PathBuf::from(root),
-        _ => return Err(refused("swtpmIdentity.stateRoot: expected a string")),
-    };
-    let state_volume = match fields.get("stateVolume") {
-        Some(CanonicalJsonValue::String(volume)) => Some(volume.clone()),
-        Some(CanonicalJsonValue::Null) | None => None,
-        _ => {
-            return Err(refused(
-                "swtpmIdentity.stateVolume: expected a string or null",
-            ));
-        }
-    };
-    Ok(Some(crate::ops::swtpm_dir::ResourceBackedSwtpm {
-        guest,
-        state_root,
-        state_volume,
-    }))
 }
 
 /// The Device-worker launch scope: `{scope: {zoneUid, deviceRef,

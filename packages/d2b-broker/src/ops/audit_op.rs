@@ -25,69 +25,6 @@ pub enum BrokerAuditRecordClass {
     Diagnostic,
 }
 
-/// Terminal disposition of the swtpm-dir hardening step. Path-free.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SwtpmDirResult {
-    /// The persistent swtpm dir did not exist and was freshly created
-    /// with owner=`d2b-<vm>-swtpm` and mode 0700.
-    Created,
-    /// The dir already existed with the correct owner/group; its ACLs
-    /// were cleared and mode re-asserted to 0700, contents preserved.
-    Reconciled,
-    /// The dir existed and was already clean (no reconcile mutation
-    /// required beyond verification).
-    VerifiedClean,
-    /// The step refused to proceed (symlink, non-dir, owner mismatch,
-    /// tamper-marker mismatch, etc.). The runner spawn is aborted.
-    FailedClosed,
-}
-
-/// Terminal disposition of the identity-bound tamper-guard marker.
-/// Path-free.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SwtpmMarkerResult {
-    /// No prior marker existed; a fresh marker recording the trusted
-    /// swtpm-dir identity (st_dev/st_ino + first-provision stamp) was
-    /// written.
-    Created,
-    /// A prior marker existed and verified against the swtpm dir's
-    /// current identity.
-    Verified,
-    /// The marker was absent-after-prior-provision, a symlink, a
-    /// non-regular file, foreign-owned, or its recorded identity did
-    /// not match the swtpm dir. The step fails closed.
-    FailedClosed,
-}
-
-/// Hashed/path-free audit fields for the swtpm-dir first-run hardening
-/// step (issue #64). NO raw `base_dir` / `tpm.sock` / state paths ever
-/// appear here - only a `base_dir_hash`, the closed-set result enums,
-/// and the resulting owner/mode.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SwtpmDirAudit {
-    /// The VM the swtpm runner belongs to (not a path).
-    pub vm_id: String,
-    /// FNV1a-64 hash of the persistent swtpm-dir path. Lets operators
-    /// correlate records for the same dir without recording the path.
-    pub base_dir_hash: String,
-    /// Terminal result of the dir provisioning/hardening.
-    pub result: SwtpmDirResult,
-    /// Mode the dir carries after the step (0o700 on success).
-    pub mode: u32,
-    /// Owner uid the dir carries after the step (the swtpm principal).
-    pub owner_uid: u32,
-    /// Owner gid the dir carries after the step (the swtpm principal).
-    pub owner_gid: u32,
-    /// Terminal result of the identity-bound tamper-guard marker.
-    pub marker_result: SwtpmMarkerResult,
-    /// Closed-set, path-free reason slug present only when `result` is
-    /// `FailedClosed` (e.g. `previously-provisioned-swtpm-state-missing`,
-    /// `swtpm-dir-owner-mismatch`, `swtpm-dir-not-a-directory`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fail_reason: Option<String>,
-}
 
 /// Privileged USB audit identity projection. This record is for the
 /// root-owned broker audit log only: vendor/product IDs are normalized to
@@ -238,16 +175,6 @@ pub enum OperationFields {
         owner_gid: u32,
         mode: u32,
     },
-    /// Terminal audit fields for the swtpm-dir first-run hardening
-    /// step (issue #64). Emitted as a `SpawnRunner` side-effect for the
-    /// long-lived `Swtpm` runner: the broker provisions and hardens ONLY
-    /// the persistent per-VM swtpm state dir (`${stateDir}/swtpm`,
-    /// mode 0700) before the userNS child opens the TPM2 NVRAM by
-    /// pathname. The record is host-confidential but PATH-FREE: it
-    /// carries a hashed `base_dir_hash` and never the raw state-dir /
-    /// `tpm.sock` paths. Exactly one record per swtpm spawn attempt
-    /// (success or fail-closed).
-    PrepareSwtpmDir(SwtpmDirAudit),
     /// Signed ADR 0027 `StoreSync` terminal audit fields. Every
     /// `StoreSync` attempt emits exactly one of these. The full schema,
     /// enums, and invariant-enforcing constructors live in
@@ -596,7 +523,6 @@ impl OperationFields {
                 owner_gid: u32,
                 mode: u32,
             }),
-            "PrepareSwtpmDir" => Ok(Self::PrepareSwtpmDir(serde_json::from_value(value)?)),
             "StoreSync" => Ok(Self::StoreSync(serde_json::from_value(value)?)),
             "SetBridgePortFlags" => parse_fields!(value => SetBridgePortFlags {
                 vm: String,
@@ -1426,32 +1352,4 @@ mod tests {
             }
         );
     }
-    roundtrip_test!(
-        prepare_swtpm_dir_success_round_trip,
-        "PrepareSwtpmDir",
-        OperationFields::PrepareSwtpmDir(SwtpmDirAudit {
-            vm_id: "work".to_owned(),
-            base_dir_hash: "fnv1a64:dead".to_owned(),
-            result: SwtpmDirResult::Created,
-            mode: 0o700,
-            owner_uid: 6001,
-            owner_gid: 6001,
-            marker_result: SwtpmMarkerResult::Created,
-            fail_reason: None,
-        })
-    );
-    roundtrip_test!(
-        prepare_swtpm_dir_fail_closed_round_trip,
-        "PrepareSwtpmDir",
-        OperationFields::PrepareSwtpmDir(SwtpmDirAudit {
-            vm_id: "work".to_owned(),
-            base_dir_hash: "fnv1a64:beef".to_owned(),
-            result: SwtpmDirResult::FailedClosed,
-            mode: 0,
-            owner_uid: 6001,
-            owner_gid: 6001,
-            marker_result: SwtpmMarkerResult::FailedClosed,
-            fail_reason: Some("previously-provisioned-swtpm-state-missing".to_owned()),
-        })
-    );
 }

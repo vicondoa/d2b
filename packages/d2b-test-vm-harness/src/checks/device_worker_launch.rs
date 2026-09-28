@@ -566,6 +566,37 @@ pub fn assertions(control: &mut GuestControl) -> LegacyResult<()> {
     while Instant::now() < outcome_deadline {
         control.succeed(&[&format!("{}; echo OK", list_json("Process", OUTCOME_PROCESS))], None)?;
         control.succeed(&[&format!("{}; echo OK", flush_get(OUTCOME_FLUSH))], None)?;
+        // TEMPORARY DIAGNOSTIC (to be removed).
+        if let Ok(seen) = control.execute(
+            "for f in /var/lib/d2b/tpm-state/device-*-tpm-state/swtpm.log; do \
+             echo \"== $f\"; cat \"$f\" 2>&1; done; true",
+            None,
+        ) {
+            if seen.status == 0 && seen.output.trim().len() > 1 {
+                let reaped = control
+                    .execute(
+                        "grep -h ChildReaped /var/lib/d2b/audit/broker-*.jsonl 2>/dev/null | \
+                         tail -8; true",
+                        None,
+                    )
+                    .map(|out| out.output)
+                    .unwrap_or_default();
+                let acls = control
+                    .execute(
+                        "getfacl -pn /run/d2b/vms/acceptance-guest 2>&1 | head -12; \
+                         stat -c '%n %A %u:%g' /run/d2b/vms/acceptance-guest 2>&1; true",
+                        None,
+                    )
+                    .map(|out| out.output)
+                    .unwrap_or_default();
+                control.announce(&format!(
+                    "[d2b] SWTPM-LOG-CAPTURE:\n{}",
+                    seen.output
+                ));
+                control.announce(&format!("[d2b] SWTPM-REAPED:\n{reaped}"));
+                control.announce(&format!("[d2b] SWTPM-RUNDIR-ACL:\n{acls}"));
+            }
+        }
         let probed = control.succeed(&[OUTCOME_PROBE], None)?;
         // The fixture read the half before its `---` marker, which is the
         // three declared Process rows.
@@ -1143,6 +1174,12 @@ fn row_dumps() -> Vec<(String, String)> {
         concat!(
             "d=$(echo /var/lib/d2b/tpm-state/device-*-tpm-state); ",
             "echo \"== $d\"; getfacl -p \"$d\" 2>&1 | head -20; ",
+            "echo \"== numeric $d\"; getfacl -pn \"$d\" 2>&1 | head -20; ",
+            "echo \"== parent /var/lib/d2b/tpm-state\"; ",
+            "getfacl -p /var/lib/d2b/tpm-state 2>&1 | head -20; ",
+            "stat -c '%n %A %U:%G %u:%g' /var/lib/d2b/tpm-state 2>&1; ",
+            "echo \"== principal ids\"; id d2b-work-tpm0-swtpm 2>&1; ",
+            "id d2b-work-tpm0-swtpm-flush 2>&1; ",
             "stat -f -c '%T acl-supporting' \"$d\" 2>/dev/null; true",
         )
         .to_owned(),
@@ -1171,6 +1208,19 @@ fn row_dumps() -> Vec<(String, String)> {
         concat!(
             "find /run/d2b/vms /run/d2b-video -maxdepth 3 ",
             "-printf '%M %u:%g %p\\n' 2>/dev/null | sort | head -n 40 || true",
+        )
+        .to_owned(),
+    ));
+    // TEMPORARY DIAGNOSTIC (to be removed).
+    dumps.push((
+        "per-guest runtime dir ACL".to_owned(),
+        concat!(
+            "for d in /run/d2b /run/d2b/vms /run/d2b/vms/acceptance-guest; do ",
+            "echo \"== $d\"; stat -c '%n %A %U:%G %u:%g %i' \"$d\" 2>&1; ",
+            "getfacl -pn \"$d\" 2>&1 | head -20; done; ",
+            "echo '== swtpm log'; ",
+            "for f in /var/lib/d2b/tpm-state/device-*-tpm-state/swtpm.log; do ",
+            "echo \"== $f\"; cat \"$f\" 2>&1 | head -20; done; true",
         )
         .to_owned(),
     ));
