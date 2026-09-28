@@ -2662,7 +2662,8 @@ fn device_worker_socket_grant(
 }
 
 /// Open the TPM worker's trusted state Volume directory to its own principal,
-/// search-only on every non-world-traversable ancestor.
+/// search-only on every non-world-traversable ancestor, once the launch's own
+/// arguments have been shown to name nothing else.
 ///
 /// The state root above the Volume directory is declared mode 0700, so the only
 /// non-owner access it can carry is a named traverse ACL. POSIX rewrites the
@@ -2679,10 +2680,21 @@ fn device_worker_socket_grant(
 ///
 /// A launch that is not a resource-backed `w1-swtpm` one has no trusted state
 /// directory to grant, and grants nothing.
+///
+/// The worker opens its state **by pathname** (the broker skips
+/// `apply_mount_actions` under a user namespace), so the grant is only a
+/// grant for the directory the launch actually names. The arguments are
+/// therefore fenced against the trusted directories first: every path they
+/// carry must be the trusted state directory (or something under it) or the
+/// trusted per-Guest runtime directory (or something under it). An argument
+/// aimed anywhere else is refused before the spawn rather than granted
+/// `rwx` over a state directory nobody derived.
 fn grant_swtpm_state_dir_traversal(
     plan: &SpawnRunnerPlan,
     swtpm_identity: Option<&crate::ops::swtpm_identity::ResourceBackedSwtpm>,
+    device_worker: &crate::ops::device_worker::DeviceWorkerLaunch,
     broker_state_dir: &Path,
+    runtime_root: &Path,
 ) -> Result<(), LiveHandlerError> {
     if plan.seccomp_policy_ref.as_deref() != Some("w1-swtpm") {
         return Ok(());
@@ -2690,16 +2702,42 @@ fn grant_swtpm_state_dir_traversal(
     let Some(identity) = swtpm_identity else {
         return Ok(());
     };
+    let Some(scope) = device_worker.scope.as_ref() else {
+        return Ok(());
+    };
+    let runtime_dir = scope.socket_directory(runtime_root).map_err(|error| {
+        audit_device_worker_runtime_dir("argv-fence", "failed-closed", &error.to_string());
+        LiveHandlerError::SpawnFailed {
+            detail: format!("device worker argv fence: {error}"),
+        }
+    })?;
+    crate::ops::swtpm_identity::verify_argv_names_only_trusted_paths(
+        plan,
+        identity,
+        &runtime_dir,
+    )
+    .map_err(|mismatch| {
+        audit_device_worker_runtime_dir("argv-fence", "failed-closed", &mismatch.to_string());
+        LiveHandlerError::SpawnFailed {
+            detail: format!("device worker argv fence: {mismatch}"),
+        }
+    })?;
     let state_dir = crate::ops::swtpm_identity::trusted_state_dir(identity);
     grant_runner_tree_acls(
         &state_dir,
         broker_state_dir,
         plan.uid,
         // The state Volume's `create-if-never-provisioned` lifecycle owns
-        // the leaf: the broker did not create it, so an absent one is a
-        // layout that has not landed yet and the grant refuses rather than
-        // granting nothing.
-        RunnerTreeLeaf::Owned,
+        // the leaf. The long-lived worker opens the directory itself, so for
+        // that row an absent one is a grant that could not be applied and the
+        // launch refuses. The one-shot flush only connects to a control
+        // socket that lands with it, and the row exists to be admitted
+        // before that socket does, so for the flush the same absence is a
+        // provisioning race this grant does not own.
+        match device_worker.state_volume_leaf {
+            crate::ops::device_worker::StateVolumeLeaf::MustExist => RunnerTreeLeaf::Owned,
+            crate::ops::device_worker::StateVolumeLeaf::MayNotHaveLanded => RunnerTreeLeaf::Foreign,
+        },
     )
     .map_err(|detail| LiveHandlerError::SpawnFailed {
         detail: format!(
@@ -3244,7 +3282,13 @@ pub async fn live_spawn_runner(
             })?;
     }
 
-    grant_swtpm_state_dir_traversal(&plan, swtpm_identity, broker_state_dir)?;
+    grant_swtpm_state_dir_traversal(
+        &plan,
+        swtpm_identity,
+        device_worker,
+        broker_state_dir,
+        runtime_root,
+    )?;
 
     let isolation = crate::sys::pidfd_sys::RunnerIsolationSpec {
         capabilities: plan.capabilities.clone(),
@@ -5268,6 +5312,7 @@ mod tests {
                 guest: "acceptance-guest".to_owned(),
             }),
             binds_runtime_socket: true,
+            state_volume_leaf: crate::ops::device_worker::StateVolumeLeaf::MustExist,
         };
         let plan = legacy_swtpm_plan(&runtime_root.join("vms"), "acceptance-guest");
         let error = device_worker_socket_grant(&plan, &launch, &runtime_root, None)
@@ -5410,13 +5455,22 @@ mod tests {
         let identity = crate::ops::swtpm_identity::ResourceBackedSwtpm {
             guest: "acceptance-guest".to_owned(),
             state_root: state_root.clone(),
-            state_volume: Some("device-0123456789abcdef0123456789abcdef-tpm-state".to_owned()),
+            state_volume: "device-0123456789abcdef0123456789abcdef-tpm-state".to_owned(),
         };
-        let mut plan = resource_backed_swtpm_plan(&state_dir, Path::new("/run/d2b/vms"));
+        let runtime_root = root.join("run").join("d2b");
+        let mut plan = resource_backed_swtpm_plan(&state_dir, &guest_runtime_dir(&runtime_root));
         plan.uid = uid;
         plan.seccomp_policy_ref = Some("w1-swtpm".to_owned());
-        grant_swtpm_state_dir_traversal(&plan, Some(&identity), &root.path)
-            .expect("the trusted state directory grants");
+        grant_swtpm_state_dir_traversal(
+            &plan,
+            Some(&identity),
+            &typed_device_worker_launch(
+                crate::ops::device_worker::StateVolumeLeaf::MustExist,
+            ),
+            &root.path,
+            &runtime_root,
+        )
+        .expect("the trusted state directory grants");
 
         // `rwx` on the leaf, `--x` on the root - and a mask that makes the
         // root's traverse entry effective rather than present-but-nullified.
@@ -5449,16 +5503,26 @@ mod tests {
         let identity = crate::ops::swtpm_identity::ResourceBackedSwtpm {
             guest: "acceptance-guest".to_owned(),
             state_root: root.join("tpm-state"),
-            state_volume: Some("device-0123456789abcdef0123456789abcdef-tpm-state".to_owned()),
+            state_volume: "device-0123456789abcdef0123456789abcdef-tpm-state".to_owned(),
         };
+        let runtime_root = root.join("run").join("d2b");
         let mut plan = resource_backed_swtpm_plan(
-            &identity.state_root.join("device-0123456789abcdef0123456789abcdef-tpm-state"),
-            Path::new("/run/d2b/vms"),
+            &root.path.join("tpm-state")
+                .join("device-0123456789abcdef0123456789abcdef-tpm-state"),
+            &guest_runtime_dir(&runtime_root),
         );
         plan.uid = 50_123;
         plan.seccomp_policy_ref = Some("w1-swtpm".to_owned());
-        let error = grant_swtpm_state_dir_traversal(&plan, Some(&identity), &root.path)
-            .expect_err("an absent state root refuses the launch");
+        let error = grant_swtpm_state_dir_traversal(
+            &plan,
+            Some(&identity),
+            &typed_device_worker_launch(
+                crate::ops::device_worker::StateVolumeLeaf::MustExist,
+            ),
+            &root.path,
+            &runtime_root,
+        )
+        .expect_err("an absent state root refuses the launch");
         assert!(
             matches!(&error, LiveHandlerError::SpawnFailed { detail } if detail.contains("ancestor is absent")),
             "{error:?}"
@@ -5477,8 +5541,140 @@ mod tests {
             );
             plan.uid = 50_123;
             plan.seccomp_policy_ref = policy.map(str::to_owned);
-            grant_swtpm_state_dir_traversal(&plan, None, &root.path)
-                .expect("a launch with no trusted state directory is a no-op");
+            grant_swtpm_state_dir_traversal(
+                &plan,
+                None,
+                &typed_device_worker_launch(
+                    crate::ops::device_worker::StateVolumeLeaf::MustExist,
+                ),
+                &root.path,
+                &root.path,
+            )
+            .expect("a launch with no trusted state directory is a no-op");
+        }
+    }
+
+    /// The per-Guest runtime socket directory the pinned scope's Guest owns
+    /// under one broker runtime root.
+    fn guest_runtime_dir(runtime_root: &Path) -> PathBuf {
+        runtime_root.join("vms").join("acceptance-guest")
+    }
+
+    /// The typed Device-worker launch the dispatch arm resolves for a
+    /// resource-backed TPM row: the pinned owning Device's scope, and the
+    /// state-directory policy that row's own role decides.
+    fn typed_device_worker_launch(
+        leaf: crate::ops::device_worker::StateVolumeLeaf,
+    ) -> crate::ops::device_worker::DeviceWorkerLaunch {
+        use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
+
+        crate::ops::device_worker::DeviceWorkerLaunch {
+            scope: Some(crate::ops::device_worker::DeviceWorkerScope {
+                zone_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+                    .expect("zone uid"),
+                device_ref: ResourceRef::parse("Device/tpm0").expect("device ref"),
+                device_uid: ResourceUid::parse("0940f65d-b4f7-427f-992b-a65d545ec479")
+                    .expect("device uid"),
+                guest: "acceptance-guest".to_owned(),
+            }),
+            binds_runtime_socket: true,
+            state_volume_leaf: leaf,
+        }
+    }
+
+    /// The worker opens its state by pathname, so a plan that aims it
+    /// anywhere the broker did not derive is refused before the spawn rather
+    /// than trusted with a traverse grant for a directory nobody derived. The
+    /// refusal is the typed, path-free slug.
+    #[test]
+    fn a_plan_naming_a_state_directory_outside_the_trusted_one_is_refused() {
+        let root = TestDir::new("swtpm-state-dir-argv-fence");
+        let state_root = root.path.join("tpm-state");
+        let state_dir = state_root.join("device-0123456789abcdef0123456789abcdef-tpm-state");
+        let identity = crate::ops::swtpm_identity::ResourceBackedSwtpm {
+            guest: "acceptance-guest".to_owned(),
+            state_root: state_root.clone(),
+            state_volume: "device-0123456789abcdef0123456789abcdef-tpm-state".to_owned(),
+        };
+        let runtime_root = root.path.join("run").join("d2b");
+        let launch =
+            typed_device_worker_launch(crate::ops::device_worker::StateVolumeLeaf::MustExist);
+        for outside in [
+            // A sibling Device's state Volume under the same shared root.
+            state_root.join("device-00000000000000000000000000000000-tpm-state"),
+            // A directory the payload chose outright.
+            PathBuf::from("/var/lib/d2b/elsewhere"),
+        ] {
+            let mut plan =
+                resource_backed_swtpm_plan(&state_dir, &guest_runtime_dir(&runtime_root));
+            plan.uid = 50_123;
+            plan.seccomp_policy_ref = Some("w1-swtpm".to_owned());
+            plan.argv[4] = format!("dir={}", outside.display());
+            let error = grant_swtpm_state_dir_traversal(
+                &plan,
+                Some(&identity),
+                &launch,
+                &root.path,
+                &runtime_root,
+            )
+            .expect_err("a state directory the bundle did not name must refuse");
+            assert!(
+                matches!(&error, LiveHandlerError::SpawnFailed { detail }
+                    if detail.contains("device-worker-argv-outside-trusted-paths")),
+                "{error:?}"
+            );
+        }
+    }
+
+    /// The one-shot flush exists to be admitted before the worker's state
+    /// directory has landed - it connects to a socket that arrives with it -
+    /// so its absence is a provisioning race this grant does not own. The
+    /// long-lived worker opens that directory itself, and still refuses.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn the_flush_is_admitted_before_the_state_directory_lands_and_the_worker_is_not() {
+        let root = TestDir::new("swtpm-state-dir-flush-leaf");
+        let state_root = root.path.join("tpm-state");
+        let identity = crate::ops::swtpm_identity::ResourceBackedSwtpm {
+            guest: "acceptance-guest".to_owned(),
+            state_root: state_root.clone(),
+            state_volume: "device-0123456789abcdef0123456789abcdef-tpm-state".to_owned(),
+        };
+        let runtime_root = root.path.join("run").join("d2b");
+        let mut plan = resource_backed_swtpm_plan(
+            &state_root.join("device-0123456789abcdef0123456789abcdef-tpm-state"),
+            &guest_runtime_dir(&runtime_root),
+        );
+        plan.uid = 50_123;
+        plan.seccomp_policy_ref = Some("w1-swtpm".to_owned());
+        // The shared state root is host-activation's and is always there;
+        // what has not landed yet is this Device's own Volume directory
+        // inside it, which is exactly what the flush is admitted ahead of.
+        std::fs::create_dir_all(&state_root).expect("create the state root");
+        assert!(
+            !crate::ops::swtpm_identity::trusted_state_dir(&identity).exists(),
+            "the fixture must start from a state directory that has not landed"
+        );
+
+        for (leaf, admits) in [
+            (
+                crate::ops::device_worker::StateVolumeLeaf::MayNotHaveLanded,
+                true,
+            ),
+            (crate::ops::device_worker::StateVolumeLeaf::MustExist, false),
+        ] {
+            let outcome = grant_swtpm_state_dir_traversal(
+                &plan,
+                Some(&identity),
+                &typed_device_worker_launch(leaf),
+                &root.path,
+                &runtime_root,
+            );
+            assert_eq!(
+                outcome.is_ok(),
+                admits,
+                "{leaf:?}: the flush waits for the directory, the worker does not"
+            );
         }
     }
 
@@ -5545,6 +5741,7 @@ mod tests {
         let no_socket = crate::ops::device_worker::DeviceWorkerLaunch {
             scope: None,
             binds_runtime_socket: false,
+            state_volume_leaf: crate::ops::device_worker::StateVolumeLeaf::MustExist,
         };
         assert!(
             device_worker_socket_grant(&plan, &no_socket, &runtime_root, None)

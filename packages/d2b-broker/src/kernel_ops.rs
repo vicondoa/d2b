@@ -762,7 +762,7 @@ async fn spawn_process(
             .unwrap_or_default();
     let activation_input: Option<d2b_contracts_resource::v3::ActivationRunnerInput> =
         optional_parse_field(invocation.payload, "activationInput")?;
-    let device_worker = parse_device_worker(invocation.payload)?;
+    let device_worker = parse_device_worker(invocation.payload, &role)?;
     let mut request_fds = invocation
         .fds
         .iter()
@@ -870,14 +870,29 @@ async fn spawn_process(
                     return Err(refused("spawn-process: device worker bundle tampered"));
                 }
             };
-            let identity = swtpm_scope.and_then(|scope| {
-                crate::ops::swtpm_identity::resource_backed_identity(
-                    &resolver,
-                    &scope.zone_uid,
-                    &scope.device_ref,
-                    Some(&scope.device_uid),
+            let identity = swtpm_scope
+                .map(
+                    |scope| {
+                        crate::ops::swtpm_identity::resource_backed_identity(
+                            &resolver,
+                            &scope.zone_uid,
+                            &scope.device_ref,
+                            &scope.device_uid,
+                        )
+                    },
                 )
-            });
+                .transpose()
+                // A scope that contradicts the verified bundle is refused
+                // here, at the dispatch: the uid it asserts is the one the
+                // granted state directory is named from, so a launch that
+                // names another Device's would otherwise be handed that
+                // Device's TPM state directory. It is never downgraded to
+                // "grants nothing", which would launch the same worker with
+                // the directory it was never granted.
+                .map_err(|mismatch| {
+                    refused(format!("spawn-process: device worker scope: {mismatch}"))
+                })?
+                .flatten();
             let posture = runtime_scope.and_then(|scope| {
                 crate::ops::device_worker::guest_runtime_dir_posture(&resolver, scope.guest())
             });
@@ -1808,8 +1823,13 @@ fn integer_field(
 /// The Device-worker launch scope: `{scope: {zoneUid, deviceRef,
 /// deviceUid, guest} | null, bindsRuntimeSocket: bool}`, absent meaning
 /// the default (no scope, no runtime socket).
+///
+/// `role` decides what the row needs of its state directory's presence: the
+/// long-lived worker opens that directory itself, the one-shot flush waits
+/// for a socket that lands with it.
 fn parse_device_worker(
     payload: &CanonicalJsonObject,
+    role: &d2b_contracts_broker::broker_wire::RunnerRole,
 ) -> Result<crate::ops::device_worker::DeviceWorkerLaunch, DispatchFailure> {
     let Some(value) = payload.get("deviceWorker") else {
         return Ok(crate::ops::device_worker::DeviceWorkerLaunch::default());
@@ -1868,6 +1888,15 @@ fn parse_device_worker(
     Ok(crate::ops::device_worker::DeviceWorkerLaunch {
         scope,
         binds_runtime_socket,
+        // The one-shot flush is the row that exists to be admitted before
+        // the worker has created the directory it connects to; every other
+        // role opens that directory itself and is refused when it is absent.
+        state_volume_leaf: match role {
+            d2b_contracts_broker::broker_wire::RunnerRole::SwtpmFlush => {
+                crate::ops::device_worker::StateVolumeLeaf::MayNotHaveLanded
+            }
+            _ => crate::ops::device_worker::StateVolumeLeaf::MustExist,
+        },
     })
 }
 

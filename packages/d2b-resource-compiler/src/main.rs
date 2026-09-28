@@ -2043,19 +2043,65 @@ fn parse_digest(value: &str) -> Result<ArtifactDigest, CliError> {
 /// when the resource schemas grow the same marker, this policy moves onto it
 /// and the key list below disappears.
 fn contains_secret_shape(value: &Value) -> bool {
-    if value
-        .get("type")
-        .and_then(Value::as_str)
-        .is_some_and(|resource_type| resource_type == "Volume")
-    {
-        return contains_volume_secret_shape(value);
+    match value.get("type").and_then(Value::as_str) {
+        Some("Volume") => contains_volume_secret_shape(value),
+        Some(resource_type) if declares_mount_list(resource_type) => {
+            contains_mountable_secret_shape(value)
+        }
+        _ => contains_secret_shape_at(value, ScanScope::Strict),
     }
-    contains_secret_shape_at(value, false)
+}
+
+/// The resource types whose `spec.mounts` is the framework's declared sandbox
+/// mount list. Only a row of that list is a mount point, so only it earns the
+/// mount-point exemption - a key that happens to be spelled `mounts` anywhere
+/// else buys nothing.
+fn declares_mount_list(kind: &str) -> bool {
+    matches!(kind, "Process" | "EphemeralProcess")
+}
+
+/// A row whose `spec` carries the declared mount list. Everything else about
+/// the row is scanned under the strict policy.
+fn contains_mountable_secret_shape(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return contains_secret_shape_at(value, ScanScope::Strict);
+    };
+    object.iter().any(|(key, value)| {
+        if forbidden_key(key) {
+            return true;
+        }
+        if key == "spec" {
+            return contains_process_spec_secret_shape(value);
+        }
+        contains_secret_shape_at(value, ScanScope::Strict)
+    })
+}
+
+/// A Process row's `spec`: the declared `mounts` list, and every other key
+/// under the strict policy - a forbidden key here is refused whatever its
+/// value looks like, so a sibling of the mount list is never exempted by it.
+fn contains_process_spec_secret_shape(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return contains_secret_shape_at(value, ScanScope::Strict);
+    };
+    object.iter().any(|(key, value)| {
+        if forbidden_key(key) {
+            return true;
+        }
+        match key.as_str() {
+            "mounts" => value.as_array().is_none_or(|mounts| {
+                mounts
+                    .iter()
+                    .any(|mount| contains_secret_shape_at(mount, ScanScope::DeclaredMount))
+            }),
+            _ => contains_secret_shape_at(value, ScanScope::Strict),
+        }
+    })
 }
 
 fn contains_volume_secret_shape(value: &Value) -> bool {
     let Some(object) = value.as_object() else {
-        return contains_secret_shape_at(value, false);
+        return contains_secret_shape_at(value, ScanScope::Strict);
     };
     object.iter().any(|(key, value)| {
         if forbidden_key(key) && key != "path" {
@@ -2064,13 +2110,13 @@ fn contains_volume_secret_shape(value: &Value) -> bool {
         if key == "spec" {
             return contains_volume_spec_secret_shape(value);
         }
-        contains_secret_shape_at(value, false)
+        contains_secret_shape_at(value, ScanScope::Strict)
     })
 }
 
 fn contains_volume_spec_secret_shape(value: &Value) -> bool {
     let Some(object) = value.as_object() else {
-        return contains_secret_shape_at(value, false);
+        return contains_secret_shape_at(value, ScanScope::Strict);
     };
     object.iter().any(|(key, value)| {
         if forbidden_key(key) && key != "attachments" && key != "layout" && key != "views" {
@@ -2080,24 +2126,49 @@ fn contains_volume_spec_secret_shape(value: &Value) -> bool {
             "attachments" => value.as_array().is_none_or(|attachments| {
                 attachments
                     .iter()
-                    .any(|attachment| contains_secret_shape_at(attachment, true))
+                    .any(|attachment| contains_secret_shape_at(attachment, ScanScope::VolumeEntry))
             }),
             "layout" => value.as_array().is_none_or(|entries| {
                 entries
                     .iter()
-                    .any(|entry| contains_secret_shape_at(entry, true))
+                    .any(|entry| contains_secret_shape_at(entry, ScanScope::VolumeEntry))
             }),
             "views" => value.as_object().is_none_or(|views| {
                 views
                     .values()
-                    .any(|view| contains_secret_shape_at(view, true))
+                    .any(|view| contains_secret_shape_at(view, ScanScope::VolumeEntry))
             }),
-            _ => contains_secret_shape_at(value, false),
+            _ => contains_secret_shape_at(value, ScanScope::Strict),
         }
     })
 }
 
-fn contains_secret_shape_at(value: &Value, allow_path: bool) -> bool {
+/// Where the scan is inside a declaration. The exemption a position earns is
+/// a property of the shape the resource declares, never of a key's spelling,
+/// so the walk carries the position rather than a boolean a key can set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScanScope {
+    /// No exemption.
+    Strict,
+    /// One entry of a Process row's declared `spec.mounts` list: the entry
+    /// names the point it mounts at rather than material it carries, so its
+    /// own `path` / `mountPath` fields are a mount point. Nothing below the
+    /// entry earns it.
+    DeclaredMount,
+    /// One entry of a Volume's `attachments` / `layout` / `views`, which
+    /// likewise names a mount point rather than material it carries.
+    VolumeEntry,
+}
+
+impl ScanScope {
+    /// Whether a path-shaped key in this position is a mount point rather
+    /// than a path the policy must never see.
+    fn exempts_path_key(self) -> bool {
+        !matches!(self, Self::Strict)
+    }
+}
+
+fn contains_secret_shape_at(value: &Value, scope: ScanScope) -> bool {
     match value {
         Value::String(value) => {
             let lower = value.to_ascii_lowercase();
@@ -2109,28 +2180,39 @@ fn contains_secret_shape_at(value: &Value, allow_path: bool) -> bool {
                 || lower.contains("password")
                 || lower.contains("secret")
         }
-        // `allow_path` has to survive the array hop, or a caller that granted
-        // it to the array's entries loses it at the first element. With no
-        // grant in effect this stays the original dispatch, so a nested
-        // Volume resource is still routed to the Volume policy.
-        Value::Array(values) => values.iter().any(|value| match allow_path {
-            true => contains_secret_shape_at(value, true),
-            false => contains_secret_shape(value),
+        // A resource-shaped element is routed to its own policy wherever it
+        // appears: an exemption in effect at this position is that position's
+        // grant, never a way to skip the policy the element's own type
+        // declares.
+        Value::Array(values) => values.iter().any(|value| {
+            match value.get("type").and_then(Value::as_str) {
+                Some(_) => contains_secret_shape(value),
+                None => contains_secret_shape_at(value, scope),
+            }
         }),
+        // A declared sandbox mount names the point it mounts at rather than
+        // material it carries, so `path` and `mountPath` are exempt in a
+        // mount entry. Without this a provider cannot declare any mount:
+        // `forbidden_key` matches every key ending in `path`, so the mount's
+        // own field trips the policy for every resource type but Volume. Only
+        // the position earns the exemption; every other key, and every value
+        // below this one, is still scanned.
         Value::Object(values) => values.iter().any(|(key, value)| {
-            (forbidden_key(key) && !(allow_path && (key == "path" || key == "mountPath")))
-                // A declared sandbox mount names the point it mounts at rather
-                // than material it carries, so `mountPath` is exempt here for
-                // the same reason it is exempt under a Volume's `layout` and
-                // `views`. Without this a provider cannot declare any mount:
-                // `forbidden_key` matches every key ending in `path`, so the
-                // mount's own field trips the policy for every resource type
-                // but Volume. Only the declared mount entry is exempt; every
-                // other key and every string value in it is still scanned.
-                || contains_secret_shape_at(value, allow_path || key == "mounts")
+            (forbidden_key(key) && !(scope.exempts_path_key() && is_path_key(key)))
+                || contains_secret_shape_at(
+                    value,
+                    match scope {
+                        ScanScope::DeclaredMount => ScanScope::Strict,
+                        other => other,
+                    },
+                )
         }),
         Value::Null | Value::Bool(_) | Value::Number(_) => false,
     }
+}
+
+fn is_path_key(key: &str) -> bool {
+    key == "path" || key == "mountPath"
 }
 
 fn forbidden_key(value: &str) -> bool {
@@ -2197,18 +2279,87 @@ mod tests {
         );
     }
 
+    /// The sibling is refused on its own KEY: its value is deliberately
+    /// inert, so a test that passed on the value's spelling would prove
+    /// nothing about the mount grant not reaching it.
     #[test]
     fn a_mount_does_not_exempt_a_sibling_spec_key() {
         let process = json!({
             "type": "Process",
             "spec": {
                 "mounts": [{"mountPath": "/state"}],
-                "token": "inline-secret"
+                "token": "worker-instance-7"
             }
         });
         assert!(
             contains_secret_shape(&process),
             "the mount grant is scoped to the mount, not the whole spec"
+        );
+    }
+
+    /// The exemption is a property of the DECLARED mount entry, not of the
+    /// key's spelling: a `mounts` key anywhere else - a different resource's,
+    /// a Volume's, or nested below the declared entry - buys no exemption, so
+    /// it cannot smuggle a `path` past a key the policy refuses everywhere
+    /// else.
+    #[test]
+    fn a_key_spelled_mounts_outside_the_declared_entry_earns_no_exemption() {
+        let process = json!({
+            "type": "Process",
+            "spec": {
+                "mounts": [{"mountPath": "/state"}]
+            },
+            "metadata": {
+                "mounts": [{"mountPath": "/etc/shadow"}]
+            }
+        });
+        assert!(
+            contains_secret_shape(&process),
+            "a `mounts` key that is not the declared mount list must be scanned"
+        );
+
+        let nested = json!({
+            "type": "Process",
+            "spec": {
+                "mounts": [{"options": {"mountPath": "/etc/shadow"}}]
+            }
+        });
+        assert!(
+            contains_secret_shape(&nested),
+            "the exemption is the mount entry's own field, never one below it"
+        );
+
+        let not_a_process = json!({
+            "type": "Endpoint",
+            "spec": {
+                "mounts": [{"mountPath": "/etc/shadow"}]
+            }
+        });
+        assert!(
+            contains_secret_shape(&not_a_process),
+            "only a row that declares a mount list may exempt one"
+        );
+    }
+
+    /// A resource-shaped value keeps its own policy wherever it appears: the
+    /// mount entry's exemption is that entry's own field, so a Volume row
+    /// nested inside one is still judged by the Volume policy, where
+    /// `mountPath` is not the exempt field.
+    #[test]
+    fn a_nested_volume_keeps_the_volume_policy_inside_a_mount_entry() {
+        let process = json!({
+            "type": "Process",
+            "spec": {
+                "mounts": [{
+                    "mountPath": "/state",
+                    "nested": [{"type": "Volume", "mountPath": "/elsewhere"}]
+                }]
+            }
+        });
+        assert!(
+            contains_secret_shape(&process),
+            "a nested Volume row is the Volume policy's to judge, not the \
+             mount entry's exemption's"
         );
     }
 

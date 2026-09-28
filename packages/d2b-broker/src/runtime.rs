@@ -9403,12 +9403,13 @@ fn resolve_device_worker_launch(
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
 ) -> Result<crate::ops::device_worker::DeviceWorkerLaunch, BrokerError> {
     use crate::ops::device_worker::{
-        DeviceWorkerLaunch, binds_runtime_socket, resolve_launch_scope,
+        DeviceWorkerLaunch, binds_runtime_socket, resolve_launch_scope, state_volume_leaf_for_role,
     };
     if !d2b_core::bundle_resolver::is_device_worker_role(&intent.role) {
         return Ok(DeviceWorkerLaunch::default());
     }
     let binds_runtime_socket = binds_runtime_socket(&intent.role);
+    let state_volume_leaf = state_volume_leaf_for_role(&intent.role);
     // A legacy VM-scoped Device worker (the `swtpm` role of a manifest VM)
     // launches without a typed Process identity: it carries no resource row,
     // so there is no owning Device to pin. Its runtime socket directory is
@@ -9420,6 +9421,7 @@ fn resolve_device_worker_launch(
         return Ok(DeviceWorkerLaunch {
             scope: None,
             binds_runtime_socket,
+            state_volume_leaf,
         });
     };
     let scope = resolve_launch_scope(
@@ -9437,6 +9439,7 @@ fn resolve_device_worker_launch(
     Ok(DeviceWorkerLaunch {
         scope: Some(scope),
         binds_runtime_socket,
+        state_volume_leaf,
     })
 }
 

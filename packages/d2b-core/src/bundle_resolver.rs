@@ -141,6 +141,11 @@ pub struct BundleResolver {
     /// beside the intents they minted so a declared read-write binding can be
     /// re-resolved against the storage contract the broker attaches.
     device_worker_templates: BTreeMap<String, Vec<ProcessTemplateBinding>>,
+    /// The template-derived intents whose declared read-write grant no
+    /// attached storage contract resolves, held out of `runner_intents` so
+    /// the worker is refused rather than launched with an empty grant, and
+    /// so a contract attached later can mint the grant they do resolve.
+    unresolved_device_worker_intents: BTreeMap<String, ResolvedRunnerIntent>,
     store_view_intents: BTreeMap<String, ResolvedStoreViewIntent>,
 }
 
@@ -1690,12 +1695,14 @@ impl BundleResolver {
             usbip_bind_intents,
             runner_intents,
             device_worker_templates,
+            unresolved_device_worker_intents: BTreeMap::new(),
             store_view_intents,
         };
         // The declared read-write bindings resolve against the storage
-        // contract, which the production loader carries here and the broker
-        // re-attaches through `set_storage`. Running the grant now covers the
-        // former; `set_storage` runs it again for the latter.
+        // contract, which the production loader carries here. Running the
+        // grant now mints it, and `set_storage` runs the pass again for a
+        // contract attached later - which mints the grants this one could
+        // not resolve rather than leaving those workers refused forever.
         resolver.grant_declared_device_worker_volumes();
         resolver
     }
@@ -1740,48 +1747,41 @@ impl BundleResolver {
         &self.manifest
     }
 
-    /// Replace the storage contract. The broker reconciles the storage
-    /// scope against the declared contract and writes the resolved
-    /// contract back onto the loaded resolver.
+    /// Replace the storage contract and recompute the grants that resolve
+    /// against it.
+    ///
+    /// A Device worker's declared read-write binding resolves against the
+    /// storage contract, so the grant the launch policy carries is recomputed
+    /// here. **No production caller exists today**: both call sites are test
+    /// fixtures, so a loaded resolver resolves these grants against the
+    /// contract its own bundle carries. A caller that attaches a reconciled
+    /// scope therefore has to attach it here, before it reads any launch
+    /// policy, or the grant the worker launches with is the one this pass
+    /// minted from the bundle's rows.
     pub fn set_storage(&mut self, storage: StorageJson) {
         self.storage = Some(storage);
-        // A Device worker's declared read-write binding resolves against the
-        // storage contract, so the grant the launch policy carries is
-        // recomputed here. The broker attaches the reconciled contract before
-        // it reads any launch policy, so the grant the worker launches with is
-        // the one this pass mints.
         self.grant_declared_device_worker_volumes();
     }
 
-    /// Mint the writable paths a Device worker's declared read-write bindings
-    /// imply, and drop any worker whose declared grant does not resolve.
-    ///
-    /// A read-only binding grants nothing: only `MountAccess::ReadWrite`
-    /// contributes a path, and a template whose posture binds no Volume
-    /// read-write mints the empty set exactly as before this pass existed.
-    ///
-    /// The resolved directory is the Volume's own root under the trusted
-    /// storage row its class resolves to ([`Self::resolve_volume_view_root`]),
-    /// composed the same way the Volume controller composes it, so the
-    /// granted path is the directory the worker opens by pathname. The
-    /// declared `MountSpec::view` is *not* a path inside the Volume: it names
-    /// the Volume view the row attaches, and the broker grants whole
-    /// directories, so the grant is the volume root and the view stays an
-    /// attachment-selection concern. Granting a sub-path would hand out a
-    /// directory no trusted artifact names.
-    ///
     /// A binding the posture admits but the storage contract cannot resolve
     /// is fail-closed, not skipped: the worker keeps no intent at all, so the
     /// launch is refused instead of running with a silently smaller grant.
+    /// An *absent* storage contract resolves nothing either, so it fails
+    /// closed on the same footing - a template that declares a read-write
+    /// mount must not survive as a worker holding an empty `writable_paths`
+    /// while its intent says the row mounts something.
     ///
-    /// A resolver that carries no storage contract yet has nothing to resolve
-    /// against, so the pass does nothing until one is attached; a *present*
-    /// contract that cannot resolve a declared grant is a real disagreement
-    /// and fails closed.
+    /// Nothing is reconciled in front of this pass in production: there is
+    /// no caller of [`Self::set_storage`] outside tests, so the grant resolves
+    /// against the storage contract the bundle itself carries. A host that
+    /// needs a reconciled scope attached must attach it through that setter
+    /// (or the grants are minted against the bundle's own rows).
     fn grant_declared_device_worker_volumes(&mut self) {
-        if self.storage.is_none() {
-            return;
-        }
+        // An earlier pass held back the intents whose declared grant nothing
+        // resolved; judge them again against the contract that is attached
+        // now, rather than leaving them refused for a gap this pass closes.
+        self.runner_intents
+            .extend(std::mem::take(&mut self.unresolved_device_worker_intents));
         for (zone, bindings) in &self.device_worker_templates {
             for binding in bindings {
                 let Some(posture) = device_worker_posture(
@@ -1799,7 +1799,11 @@ impl BundleResolver {
                 }
                 let Some(device) = self.declared_row_owning_device(zone, binding.process_ref())
                 else {
-                    self.runner_intents.remove(&intent_id);
+                    hold_back_unresolved(
+                        &mut self.runner_intents,
+                        &mut self.unresolved_device_worker_intents,
+                        &intent_id,
+                    );
                     continue;
                 };
                 let mut writable_paths = Vec::new();
@@ -1825,7 +1829,12 @@ impl BundleResolver {
                         resolved = false;
                         break;
                     };
-                    if !posture.volume_grant().admits(zone, &device, &volume) {
+                    // A Volume the Zone bundle DECLARES is owned by whoever
+                    // its own row names, and no uid-shaped name overrides
+                    // that: the controller-created child is absent from every
+                    // declared list by construction, so a declared row is
+                    // evidence in its own right and must name this Device.
+                    if !self.volume_is_this_devices(zone, &device, &volume) {
                         resolved = false;
                         break;
                     }
@@ -1845,7 +1854,11 @@ impl BundleResolver {
                     });
                 }
                 if !resolved {
-                    self.runner_intents.remove(&intent_id);
+                    hold_back_unresolved(
+                        &mut self.runner_intents,
+                        &mut self.unresolved_device_worker_intents,
+                        &intent_id,
+                    );
                     continue;
                 }
                 if let Some(intent) = self.runner_intents.get_mut(&intent_id) {
@@ -1872,6 +1885,26 @@ impl BundleResolver {
             })
             .and_then(|resource| resource.metadata().owner_ref().cloned())
             .filter(|owner| owner.resource_type().as_str() == "Device")
+    }
+
+    /// Whether `volume` is a Volume of `device`.
+    ///
+    /// A Volume no declared row names is a controller-created child, so the
+    /// framework's Device-scoped naming is the only evidence and
+    /// [`device_owns_volume`] reads it. A Volume the Zone bundle *does*
+    /// declare carries its own authored owner, and that is the only evidence
+    /// that counts: a declared row whose name happens to embed a Device's uid
+    /// is a Volume somebody declared, not a child of that Device.
+    fn volume_is_this_devices(
+        &self,
+        zone: &str,
+        device: &ResourceRef,
+        volume: &ResourceRef,
+    ) -> bool {
+        match self.declared_row_owning_device(zone, volume) {
+            Some(declared_owner) => &declared_owner == device,
+            None => device_owns_volume(zone, device, volume),
+        }
     }
 
     /// Return the sealed Zone topology, when the allocator artifact carries it.
@@ -3227,7 +3260,20 @@ impl BundleResolver {
         self.runner_intents.keys().map(String::as_str)
     }
 
+}
 
+/// Refuse one Device worker whose declared read-write grant does not resolve:
+/// the intent leaves the resolvable set - so no launch policy resolves it -
+/// and is held in its template-derived form so a contract that resolves the
+/// grant later can mint it again.
+fn hold_back_unresolved(
+    runner_intents: &mut BTreeMap<String, ResolvedRunnerIntent>,
+    held: &mut BTreeMap<String, ResolvedRunnerIntent>,
+    intent_id: &str,
+) {
+    if let Some(intent) = runner_intents.remove(intent_id) {
+        held.insert(intent_id.to_owned(), intent);
+    }
 }
 
 fn module_requirement_w3(requirement: &ModuleRequirement) -> ModuleRequirementW3 {
@@ -4723,24 +4769,32 @@ impl DeviceWorkerVolumeGrant {
 /// Whether `volume` is a Volume the Device `device` owns, by the framework's
 /// Device-scoped resource naming.
 ///
-/// A Device-owned resource's name carries the owning Device's durable uid as
-/// a complete `-`-delimited segment, which is the naming every Device
-/// Provider composes its per-Device children with
-/// ([`device_child_volume_name`], used by
+/// A Device-owned resource's name is exactly `device-<uid>-<role>`, where
+/// `<uid>` is the owning Device's durable uid rendered to 32 hex characters
+/// and `<role>` is the per-Device role the controller names the child by
+/// ([`device_child_name`], used by
 /// `packages/d2b-provider-device-tpm/src/resources.rs`). The framework owns
 /// the uid derivation; the Provider owns only the role around it.
+///
+/// The whole name is compared, never a segment of it: a DECLARED Volume whose
+/// name merely embeds the uid somewhere (`<uid>-shadow`, `mirror-device-<uid>`)
+/// is not a controller-created child of that Device, and a segment match
+/// would admit one.
 pub fn device_owns_volume(zone: &str, device: &ResourceRef, volume: &ResourceRef) -> bool {
     if device.resource_type().as_str() != "Device"
         || volume.resource_type().as_str() != "Volume"
     {
         return false;
     }
-    let scope = device_uid_scope(zone, device.name().as_str());
-    volume
+    let Some((scope, role)) = volume
         .name()
         .as_str()
-        .split('-')
-        .any(|segment| segment == scope)
+        .strip_prefix("device-")
+        .and_then(|name| name.split_once('-'))
+    else {
+        return false;
+    };
+    !role.is_empty() && scope == device_uid_scope(zone, device.name().as_str())
 }
 
 /// The concrete Volume a declared worker mount binds, once the framework has
@@ -7475,6 +7529,89 @@ mod tests {
                     .expect("the spelled name resolves to itself")
             ),
             "a sibling's child Volume is refused whichever form the row spells"
+        );
+    }
+
+    /// A declared read-write mount the resolver cannot resolve is refused for
+    /// the same reason whether a contract is attached and cannot resolve it or
+    /// none is attached at all: the worker does not survive as an intent whose
+    /// grant is an empty set it never declared.
+    #[test]
+    fn an_absent_storage_contract_refuses_the_worker_rather_than_emptying_its_grant() {
+        let own = format!("device-{}-tpm-state", device_volume_scope("dev", "tpm0"));
+        let mounts = vec![serde_json::json!({
+            "volumeRef": format!("Volume/{own}"),
+            "view": "swtpm-process",
+            "mountPath": "/state",
+            "access": "read-write",
+            "required": true,
+        })];
+        let resolver = device_worker_resolver(&mounts);
+        assert!(
+            resolver
+                .find_device_worker_intent(
+                    &ResourceRef::parse("Process/swtpm-tpm0").expect("row ref"),
+                    "Host/dev-host",
+                    ProcessExecutionDomain::System,
+                    None,
+                    "swtpm-socket",
+                )
+                .is_none(),
+            "a declared read-write grant with nothing to resolve it against \
+             must not survive as a worker with an empty policy"
+        );
+
+        // A contract that does resolve it mints the grant, so a host that
+        // attaches its reconciled scope later still launches the worker.
+        let mut attached = device_worker_resolver(&mounts);
+        attached.set_storage(storage_contract(Some(
+            "/var/lib/d2b/tpm-state".to_owned(),
+        )));
+        assert_eq!(
+            attached
+                .find_device_worker_intent(
+                    &ResourceRef::parse("Process/swtpm-tpm0").expect("row ref"),
+                    "Host/dev-host",
+                    ProcessExecutionDomain::System,
+                    None,
+                    "swtpm-socket",
+                )
+                .expect("the attached contract resolves the declared grant")
+                .mount_policy
+                .writable_paths
+                .len(),
+            1
+        );
+    }
+
+    /// The uid-scoped name is a controller-composed child's identity, and the
+    /// whole name is what says so. A DECLARED Volume that merely embeds the
+    /// uid in some other shape is a Volume somebody authored, so it is not
+    /// admitted as this Device's child - and, where the bundle declares it,
+    /// its own `ownerRef` is the only ownership evidence that counts.
+    #[test]
+    fn a_declared_volume_whose_name_embeds_the_device_uid_is_not_its_child() {
+        let device = ResourceRef::parse("Device/tpm0").expect("device ref");
+        let scope = device_volume_scope("dev", "tpm0");
+        for embedded in [
+            format!("mirror-device-{scope}-state"),
+            format!("mirror-{scope}-state"),
+            format!("device-{scope}"),
+        ] {
+            let volume = ResourceRef::parse(&format!("Volume/{embedded}")).expect("volume ref");
+            assert!(
+                !device_owns_volume("dev", &device, &volume),
+                "{embedded} is not `device-<uid>-<role>`: a declared row that \
+                 embeds the uid is not a controller-created child"
+            );
+        }
+        assert!(
+            device_owns_volume(
+                "dev",
+                &device,
+                &ResourceRef::parse(&format!("Volume/device-{scope}-tpm-state")).expect("own")
+            ),
+            "the controller's own naming is still this Device's child"
         );
     }
 

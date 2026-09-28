@@ -247,10 +247,30 @@ pub(crate) fn resolve_launch_scope(
     })
 }
 
+/// Whether a Device-owned worker row must find its state directory already
+/// provisioned when it launches, or may be admitted before it lands.
+///
+/// The long-lived worker opens the NVRAM inside that directory by pathname,
+/// so for that row an absent directory is a launch it cannot complete. The
+/// one-shot flush only connects to a control socket that arrives with the
+/// directory, and the row exists precisely to be admitted before that socket
+/// does - refusing it there would turn a provisioning race into a refusal
+/// the row can only escape by racing the worker.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum StateVolumeLeaf {
+    /// The row opens the state directory itself: an absent one refuses.
+    #[default]
+    MustExist,
+    /// The row waits for a socket another actor provides: an absent
+    /// directory is not this launch's refusal.
+    MayNotHaveLanded,
+}
+
 /// What one launch arm resolved for a Device-owned worker row.
 ///
-/// The default - no scope, no runtime socket - is what every launch whose
-/// intent is not a Device-owned worker role resolves.
+/// The default - no scope, no runtime socket, the strict state-directory
+/// policy - is what every launch whose intent is not a Device-owned worker
+/// role resolves.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DeviceWorkerLaunch {
     /// The pinned owning-Device scope of a typed launch (the launched row is a
@@ -259,6 +279,8 @@ pub struct DeviceWorkerLaunch {
     /// Whether the launched role binds a socket under the broker runtime
     /// root's per-Guest directory ([`binds_runtime_socket`]).
     pub(crate) binds_runtime_socket: bool,
+    /// What this row needs of its state directory's presence.
+    pub(crate) state_volume_leaf: StateVolumeLeaf,
 }
 
 /// The state Volume directory of one Guest's TPM Device under the trusted TPM
@@ -295,6 +317,19 @@ pub(crate) const fn binds_runtime_socket(role: &ProcessRole) -> bool {
         role,
         ProcessRole::Swtpm | ProcessRole::Gpu | ProcessRole::GpuRenderNode
     )
+}
+
+/// What one Device-owned worker role needs of its state directory's
+/// presence when it launches.
+///
+/// The long-lived worker opens the directory by pathname, so an absent one
+/// refuses; the one-shot flush connects to a socket that lands with the
+/// directory, so an absent one is a race the row is admitted ahead of.
+pub(crate) const fn state_volume_leaf_for_role(role: &ProcessRole) -> StateVolumeLeaf {
+    match role {
+        ProcessRole::SwtpmPreStartFlush => StateVolumeLeaf::MayNotHaveLanded,
+        _ => StateVolumeLeaf::MustExist,
+    }
 }
 
 /// Why one Guest's runtime socket directory could not be derived.
@@ -366,6 +401,10 @@ pub(crate) enum RuntimeDirPostureError {
     /// (`d /run/d2b/vms 1770 d2bd d2b`), so its absence is a host posture
     /// gap the broker refuses rather than one it invents a posture for.
     ParentAbsent,
+    /// The directory already exists and its owner is not the one the row
+    /// declares, so it is a directory another principal planted inside the
+    /// sticky per-Guest parent rather than this launch's own.
+    OwnerMismatch,
     /// The directory exists or was created, but could not be brought to
     /// the declared mode and ownership. Carries the `io::ErrorKind` so the
     /// refusal stays path-free.
@@ -377,6 +416,7 @@ impl std::fmt::Display for RuntimeDirPostureError {
         match self {
             Self::RowUnresolved => f.write_str("per-guest-dir-posture-row-unresolved"),
             Self::ParentAbsent => f.write_str("per-guest-dir-posture-parent-absent"),
+            Self::OwnerMismatch => f.write_str("per-guest-dir-posture-owner-mismatch"),
             Self::PostureFailed(kind) => {
                 write!(f, "per-guest-dir-posture-failed:{kind:?}")
             }
@@ -390,12 +430,22 @@ impl std::fmt::Display for RuntimeDirPostureError {
 /// the exact inode that was postured so an audit record can tie itself to it
 /// without naming a path.
 ///
-/// A fresh directory is created with the declared mode and ownership; an
-/// existing one is reconciled to the same declared posture, so a directory
-/// host activation or an earlier launch drifted is repaired rather than
-/// inherited. Every step is fd-relative to the parent opened with
+/// A directory this call creates gets the declared mode and ownership. A
+/// directory that already exists is accepted only when its owner is the one
+/// the row declares, and its metadata is left exactly as it is: re-asserting
+/// the mode rewrites the ACL mask from the group bits and nullifies every
+/// named entry, so reconciling a directory this grant did not create is not
+/// a repair. Every step is fd-relative to the parent opened with
 /// `openat2(RESOLVE_NO_SYMLINKS | RESOLVE_BENEATH)`, so no component can be
 /// swapped for a symlink between the check and the `mkdirat`.
+///
+/// The create is exclusive ([`crate::sys::path_safe::mkdir_at_exclusive`],
+/// issue #64): the sticky per-Guest parent is writable by a `d2b`-group
+/// principal, so a leaf can be planted between the absence check and the
+/// create. Adopting and re-owning such a directory would hand the planter a
+/// directory the broker then believes it provisioned, so the race is refused
+/// - and a leaf that was planted before the check is refused on the same
+/// evidence, by its owner.
 ///
 /// Refuses rather than degrades: a directory it cannot create or posture is
 /// a launch the broker has no honest way to complete, because the ACL grant
@@ -421,17 +471,58 @@ pub(crate) fn create_guest_runtime_dir(
             RuntimeDirPostureError::PostureFailed(error.kind())
         }
     })?;
-    let fd = crate::sys::path_safe::ensure_dir_path_safe(
-        &parent_fd,
-        name,
+    let fd = match crate::sys::path_safe::mkdir_at_exclusive(
+        parent_fd.as_fd(),
+        Path::new(name),
         posture.mode,
-        posture.owner_uid,
-        posture.owner_gid,
-    )
-    .map_err(|error| RuntimeDirPostureError::PostureFailed(error.kind()))?;
+    ) {
+        Ok(()) => {
+            let fd = open_leaf(&parent_fd, name)?;
+            crate::sys::path_safe::fchmod(fd.as_fd(), posture.mode)
+                .and_then(|()| {
+                    crate::sys::path_safe::fchown(
+                        fd.as_fd(),
+                        Some(posture.owner_uid),
+                        Some(posture.owner_gid),
+                    )
+                })
+                .map_err(|error| RuntimeDirPostureError::PostureFailed(error.kind()))?;
+            fd
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            // Accepted on the evidence of its own owner, never adopted: a
+            // leaf this launch did not create carries whatever posture it was
+            // planted with, and stamping it would make a planted directory
+            // indistinguishable from a provisioned one.
+            let fd = open_leaf(&parent_fd, name)?;
+            let stat = crate::sys::path_safe::fstat_fd(fd.as_fd())
+                .map_err(|error| RuntimeDirPostureError::PostureFailed(error.kind()))?;
+            if stat.st_uid != posture.owner_uid {
+                return Err(RuntimeDirPostureError::OwnerMismatch);
+            }
+            fd
+        }
+        Err(error) => return Err(RuntimeDirPostureError::PostureFailed(error.kind())),
+    };
     let stat = crate::sys::path_safe::fstat_fd(fd.as_fd())
         .map_err(|error| RuntimeDirPostureError::PostureFailed(error.kind()))?;
     Ok((stat.st_dev, stat.st_ino))
+}
+
+/// Open the leaf directory itself beneath an already-open safe parent: no
+/// symlink, no magic link, and nothing above the parent.
+fn open_leaf(
+    parent_fd: &std::os::fd::OwnedFd,
+    name: &str,
+) -> Result<std::os::fd::OwnedFd, RuntimeDirPostureError> {
+    use rustix::fs::OFlags;
+
+    crate::sys::path_safe::open_at(
+        parent_fd.as_fd(),
+        Path::new(name),
+        OFlags::RDONLY | OFlags::DIRECTORY,
+    )
+    .map_err(|error| RuntimeDirPostureError::PostureFailed(error.kind()))
 }
 
 /// Whether `path` is absolute and carries no `.`/`..` component.
@@ -839,6 +930,85 @@ mod tests {
             None,
             "a Guest the contract names no runtime row for has no declared posture"
         );
+    }
+
+    /// The sticky per-Guest parent is writable by a `d2b`-group principal, so
+    /// a leaf can be planted there before the launch reaches the create, or
+    /// raced into it between the create and the open. A planted leaf is
+    /// refused on the evidence of its own owner - never adopted, and never
+    /// re-stamped into looking provisioned - while a directory the row's own
+    /// owner already holds is this launch's to use, untouched.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_planted_runtime_directory_owned_by_another_principal_is_refused() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = std::env::current_dir()
+            .expect("cwd")
+            .join("target")
+            .join(format!(
+                "device-worker-planted-leaf-{}",
+                std::process::id()
+            ));
+        let vms = root.join("vms");
+        std::fs::create_dir_all(&vms).expect("create the vms parent");
+        let leaf = vms.join("acceptance-guest");
+        let posture = GuestRuntimeDirPosture {
+            // The uid a planted directory cannot hold in this test without
+            // privileges: the fixture declares an owner that is not the test's
+            // own principal, and the fixture plants the leaf as the test's.
+            owner_uid: u32::MAX,
+            owner_gid: u32::MAX,
+            mode: 0o1770,
+        };
+        let planted_mode = 0o700;
+        std::fs::create_dir(&leaf).expect("plant the leaf");
+        std::fs::set_permissions(&leaf, std::fs::Permissions::from_mode(planted_mode))
+            .expect("set the planted mode");
+
+        assert_eq!(
+            create_guest_runtime_dir(&leaf, posture),
+            Err(RuntimeDirPostureError::OwnerMismatch),
+            "a leaf another principal planted must be refused, not adopted"
+        );
+        assert_eq!(
+            std::fs::metadata(&leaf)
+                .expect("stat the planted leaf")
+                .permissions()
+                .mode()
+                & 0o777,
+            planted_mode,
+            "a refused leaf keeps the metadata it was planted with"
+        );
+        // The declaration that matches the leaf is accepted as it stands, so
+        // a directory host activation or an earlier launch provisioned is
+        // used rather than re-stamped.
+        let accepted = create_guest_runtime_dir(
+            &leaf,
+            GuestRuntimeDirPosture {
+                owner_uid: u32::from(std::os::unix::fs::MetadataExt::uid(
+                    &std::fs::metadata(&leaf).expect("stat the leaf"),
+                )),
+                owner_gid: u32::from(std::os::unix::fs::MetadataExt::gid(
+                    &std::fs::metadata(&leaf).expect("stat the leaf"),
+                )),
+                mode: 0o1770,
+            },
+        )
+        .expect("a leaf the row's own owner holds is this launch's to use");
+        assert!(accepted.1 > 0, "the accepted leaf's inode is reported");
+        assert_eq!(
+            std::fs::metadata(&leaf)
+                .expect("stat the accepted leaf")
+                .permissions()
+                .mode()
+                & 0o777,
+            planted_mode,
+            "an accepted leaf keeps its ACL-bearing mode: the grant below it is \
+             what opens it, and re-asserting the declared mode would nullify it"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn fixture() -> (BundleResolver, ResourceRef, ResourceUid, ResourceUid) {
