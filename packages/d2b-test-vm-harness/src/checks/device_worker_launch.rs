@@ -1044,6 +1044,21 @@ fn row_dumps() -> Vec<(String, String)> {
         )
         .to_owned(),
     ));
+    // The spawned child inherits the broker's stderr, and the ChildReaped
+    // records above show it execs and exits 1 - so swtpm's own refusal text is
+    // in the broker journal. The per-stage journal greps filter on `w1-swtpm`
+    // and `swtpm`, and that text contains neither, so the one line naming the
+    // failure never reaches the log. Take a bounded unfiltered tail: `-n 300`
+    // plus `tail -n 60` keeps it small enough that the diagnostic does not
+    // itself overrun the stage timeout (an unbounded dump did exactly that).
+    dumps.push((
+        "broker journal tail (unfiltered, bounded)".to_owned(),
+        concat!(
+            "journalctl -u d2b-broker.service --no-pager -o cat -b -n 300 ",
+            "2>/dev/null | tail -n 60 || echo 'broker journal unavailable'; true"
+        )
+        .to_owned(),
+    ));
     // The state Volume is what the swtpm fence waits on, and its reconcile
     // record carries the layout effect's own failure. The swtpm audit grep
     // above cannot match it - the volume's records name the volume, not the
