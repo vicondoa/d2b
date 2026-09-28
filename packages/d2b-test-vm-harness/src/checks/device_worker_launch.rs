@@ -1049,7 +1049,7 @@ fn row_dumps() -> Vec<(String, String)> {
             // line limit rolls past it, which is what made this look like
             // "no failure recorded" on runs that plainly had one.
             "journalctl -u d2bd.service --no-pager -o cat -b ",
-            "| grep -E 'Volume source resolution failed|volume layout effect failed|volume layout step failed|volume reconcile step failed|marker publish' ",
+            "| grep -E 'Volume source resolution failed|volume layout effect failed|volume layout step failed|volume reconcile step failed|marker publish|supervisor launch effect failed' ",
             "|| echo 'no Volume source resolution failure recorded'; true",
         )
         .to_owned(),
@@ -1064,6 +1064,34 @@ fn row_dumps() -> Vec<(String, String)> {
         concat!(
             "journalctl -u d2bd.service --no-pager -o cat -b | tail -n 400 ",
             "|| echo 'no d2bd journal'; true",
+        )
+        .to_owned(),
+    ));
+    // The swtpm worker's state directory is the one thing it touches the
+    // moment it starts, and the supervisor reports it as `Vanished`: it
+    // launched and died. The worker runs as a per-Device principal and the
+    // directory is mode-restricted, so its ownership either admits that
+    // principal or explains the death outright.
+    //
+    // `stat` only. `getfacl` and `getent` both walk NSS, which can block for
+    // the entire diagnostic budget on a NixOS guest and take every other
+    // dump down with it - which is exactly how this one first cost us the
+    // evidence it was added to collect.
+    dumps.push((
+        "swtpm state directory ownership".to_owned(),
+        "stat -c '%n %A %U:%G %u:%g' /var/lib/d2b/tpm-state/*/ 2>/dev/null; true".to_owned(),
+    ));
+    // Whether the ACL actually landed, and whether this filesystem supports
+    // one at all. `stat` shows a trailing `+` on a path carrying an ACL, and
+    // its absence is the finding - but a setxattr that reports success on a
+    // filesystem that then drops it would look identical from `stat` alone.
+    // `getfacl` on one path does not walk NSS; the earlier hang was `getent`.
+    dumps.push((
+        "tpm state ACL and filesystem".to_owned(),
+        concat!(
+            "d=$(echo /var/lib/d2b/tpm-state/device-*-tpm-state); ",
+            "echo \"== $d\"; getfacl -p \"$d\" 2>&1 | head -20; ",
+            "stat -f -c '%T acl-supporting' \"$d\" 2>/dev/null; true",
         )
         .to_owned(),
     ));

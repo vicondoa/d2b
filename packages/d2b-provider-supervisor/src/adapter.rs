@@ -870,6 +870,13 @@ pub fn matches_peer_process(
 }
 
 fn map_error(error: ProcessEffectError) -> ProcessConformanceError {
+    // Everything below the modelled arms collapses into one `LaunchFailed`,
+    // so the concrete cause never reaches the log: the minijail provider
+    // then reports `error=launch-failed` for what could be a missing intent,
+    // a denied syscall, or a sandbox rejection, and there is no way to tell
+    // them apart from outside. Name the variant and any payload on the way
+    // out.
+    tracing::warn!(error = ?error, "supervisor launch effect failed");
     match error {
         ProcessEffectError::WaitOwnerMismatch => ProcessConformanceError::WaitOwnerMismatch,
         ProcessEffectError::IdentityChanged | ProcessEffectError::FateUnknown => {
