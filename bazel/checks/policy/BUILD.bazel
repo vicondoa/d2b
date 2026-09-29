@@ -95,6 +95,7 @@ test_suite(
         ":drift",
         ":policy",
         ":provider_crate_layout",
+        "//packages/xtask:lane_guest_activation",
         "//packages/xtask:pr_workflow",
         "//packages/xtask:repository_contract",
     ],

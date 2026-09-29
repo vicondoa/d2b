@@ -194,6 +194,23 @@ struct CheckResult {
 /// initialising state. A restore that drops any of those is a restore that
 /// would break a check, and that is the failure worth catching.
 ///
+/// The random pool is read from the kernel's own state file rather than out
+/// of the boot journal, for the same reason the guest's activation unit reads
+/// it that way: the printk that announces the pool is emitted at about 0.02s,
+/// before journald reliably captures, so whether it is in the journal is
+/// decided by a race in the first few seconds of each boot. Two boots of the
+/// same image would then disagree about a row that is supposed to prove the
+/// restore reproduced the fresh boot, and it would fail restores that
+/// restored correctly.
+///
+/// It reports the pool against the 256 bits the kernel itself treats as
+/// initialised, not the raw estimate, and that is load-bearing rather than
+/// cosmetic. The estimate is live - it climbs for the first seconds of every
+/// boot - and the two marker texts are compared verbatim, so reporting the
+/// number itself would have this gate fail every run, on a value the restore
+/// has nothing to do with. The question this row asks is the one the restore
+/// could actually answer: is the pool out of its initialising state.
+///
 /// The guest's block devices are among them, by the name the guest's kernel
 /// gave each one and its size: the kernel names a disk by the order the
 /// devices were created, so a restore that put this member's disks back in
@@ -239,7 +256,7 @@ report("acceptanceUnitsFile", "cat {}".format(units_file))
 report("stateDisk", "findmnt -n -o TARGET,SOURCE,FSTYPE /var/lib/d2b || true")
 report("hostTools", "ls /run/d2b-host-tools 2>/dev/null || ls /nix/var/nix/profiles/default/bin 2>/dev/null | head -n 0; echo inventory")
 report("activation", "systemctl show d2b-lane-activation --property=ActiveState --property=Result --no-pager")
-report("crng", "journalctl -b --no-pager -o cat | grep -c 'crng init done' || true")
+report("crng", "[ \"$(cat /proc/sys/kernel/random/entropy_avail)\" -ge 256 ] && echo ready || echo initialising")
 report("backdoor", "systemctl is-active backdoor.service")
 report("blockDevices", "for device in /sys/block/vd*; do printf '%s=%s ' \"$(basename \"$device\")\" \"$(cat \"$device/size\")\"; done; echo")
 print("d2b-lane-marker complete")

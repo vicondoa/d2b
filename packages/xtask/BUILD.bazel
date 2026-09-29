@@ -436,6 +436,13 @@ d2b_rust_test(
 )
 
 d2b_rust_test(
+    name = "lane_guest_activation",
+    srcs = ["tests/lane_guest_activation.rs"],
+    data = ["//:nix/test-support/guest-image.nix"],
+    visibility = ["//visibility:public"],
+)
+
+d2b_rust_test(
     name = "policy_production_closure",
     srcs = [
         "tests/common/mod.rs",

@@ -69,11 +69,16 @@ let
   # means everywhere else in the tree.
   activationMarker = "D2B_LANE_READY";
 
-  # The guest-side bound on that wait. It is the backstop behind the
-  # launcher's own bounded wait, and is deliberately the longer of the two:
-  # the launcher fails the lane with the guest's console attached, which is
-  # a better failure than a unit that dies silently first.
-  activationTimeoutSeconds = 1800;
+  # The guest-side bound on that wait, and deliberately the shorter of the
+  # two bounds. The launcher's own is 600s, and a guest bound set above it
+  # can never explain itself: the launcher has already stopped reading the
+  # console by the time the guest would have reached the point where it says
+  # what it was waiting for, so the guest's own diagnosis is written into a
+  # stream nobody is left to read. 420s is about twenty-three times a
+  # measured healthy activation of 15-19s, and leaves roughly 180s for the
+  # unit to print its failure and for that console tail to reach the
+  # launcher.
+  activationTimeoutSeconds = 420;
   # How long a polled unit may sit not-active before the guest describes the
   # ordering state it is sitting in, and how long after that it repeats
   # itself. Both are well inside the launcher's own bound, which is the whole
@@ -661,10 +666,11 @@ let
           # own assertions already wait for, so the guest's readiness means
           # the same thing to the launcher as it does to the check.
           # Plain seconds. The systemd time span above carries an `s` because
-          # that is a duration; shell arithmetic does not, and `1800s` is not
-          # a number - it is a base the shell cannot read - so a deadline
-          # written that way aborts this script on its first statement under
-          # `set -e`, and the guest reports nothing at all.
+          # that is a duration; shell arithmetic does not, and a span written
+          # with that suffix is not a number - it is a base the shell cannot
+          # read - so a deadline written that way aborts this script on its
+          # first statement under `set -e`, and the guest reports nothing at
+          # all.
           units_file=/run/d2b-lane-acceptance-units
           if [ -r ${acceptanceUnitsFile} ]; then
             cat ${acceptanceUnitsFile} >"$units_file"
@@ -708,8 +714,22 @@ let
           # back with a cold CRNG and a blocked getrandom(). The marker is
           # therefore also the snapshot precondition: it is written only
           # once the pool the lane will snapshot is ready.
+          #
+          # Asked of the kernel's own state rather than of the journal. The
+          # message this used to grep for is a printk the kernel emits at
+          # about 0.02s, and the journal is not reliably capturing that
+          # early: journald takes a SIGTERM and restarts a few seconds into
+          # the boot and then rotates on the clock jump that follows, so the
+          # earliest content that reaches the journal is some six seconds in.
+          # Whether that one line made it in is decided by a race in those
+          # first seconds, and a boot that loses it has a pool that came up
+          # perfectly normally and an activation that never finishes.
+          # `/proc/sys/kernel/random/entropy_avail` is the kernel's own
+          # report of the same state and depends on no logging path at all;
+          # 256 bits is the level at which the kernel treats the pool as
+          # initialised.
           say "waiting for the random pool"
-          until journalctl -b --no-pager -o cat | grep -q "random: crng init done"; do
+          until [ "$(cat /proc/sys/kernel/random/entropy_avail)" -ge 256 ]; do
             if failed=$(first_failed); [ -n "$failed" ]; then
               report_failure "$failed"
             fi
