@@ -884,6 +884,84 @@ let
         && !(builtins.hasAttr name tpmVms))
       guestOwners);
 
+  # Zone-native Guests a virtiofsd serving worker can serve: the
+  # execution target of at least one `virtiofs` Volume attachment.
+  #
+  # The serving worker binds its private socket as
+  # `/run/d2b/vms/<guest>/...` (`serving_socket_path`), inside the SAME
+  # per-Guest runtime tree the Device workers bind under, and the daemon
+  # reads that tree's posture out of `path:vm-run:<guest>` BEFORE it
+  # creates anything (`declared_vm_run_dir_mode`,
+  # `packages/d2bd/src/process_provider_runtime.rs`). A Guest that owns
+  # no Device but carries a virtiofs Volume attachment is served all the
+  # same, so keying the row on the Device-owner relation alone left the
+  # launch with no declared posture to apply and the daemon refused it.
+  #
+  # The transport is the discriminator, not the attachment's mere
+  # presence: a `virtio-blk` attachment puts a block image on the Guest's
+  # own bus and no host-side worker binds a socket for it
+  # (`AttachmentTransport`; the `virtiofsd-worker` template the serving
+  # path admits is only ever declared for a virtiofs binding - see
+  # `serving_worker_launch` in
+  # `packages/d2b-provider-process/src/driver.rs`).
+  zoneGuestVirtiofsServingTargets =
+    let
+      servingTargetOf = volumeRow:
+        let
+          guestOf = ref:
+            let
+              parts = if builtins.isString ref then lib.splitString "/" ref else [ ];
+            in
+            if lib.length parts == 2 && builtins.elemAt parts 0 == "Guest" then
+              builtins.elemAt parts 1
+            else
+              null;
+          attachments = (volumeRow.spec or { }).attachments or [ ];
+        in
+        map
+          (attachment:
+            if (attachment.transport or null) == "virtiofs" then
+              guestOf attachment.executionRef
+            else
+              null)
+          attachments;
+      targets = lib.concatMap
+        (zoneName:
+          let resources = cfg.zones.${zoneName}.resources or { };
+          in lib.concatMap
+            (volumeName: servingTargetOf resources.${volumeName})
+            (lib.filter
+              (name: (resources.${name}.type or null) == "Volume")
+              (lib.attrNames resources)))
+        (lib.sort lib.lessThan (lib.attrNames cfg.zones));
+      declaredGuests = lib.concatMap
+        (zoneName:
+          let resources = cfg.zones.${zoneName}.resources or { };
+          in lib.filter
+            (name: (resources.${name}.type or null) == "Guest")
+            (lib.attrNames resources))
+        (lib.sort lib.lessThan (lib.attrNames cfg.zones));
+    in
+    lib.unique (lib.filter
+      (name:
+        name != null
+        && builtins.elem name declaredGuests
+        # A legacy VM already carries its own `path:vm-run:<vm>` from
+        # `perNormalVmStoragePaths`; storage path ids are unique, so the
+        # legacy row keeps the id.
+        && !(builtins.hasAttr name normalNixosVms))
+      targets);
+
+  # Every zone-native Guest whose per-Guest runtime tree some worker binds
+  # a socket under: a Device worker, a virtiofsd serving worker, or both.
+  # Deduplicated, because a Guest that both owns a Device and carries a
+  # virtiofs attachment has ONE runtime tree and therefore ONE
+  # `path:vm-run:<guest>` row, and storage path ids are unique.
+  zoneGuestRuntimeTreeGuests = lib.unique
+    (lib.filter
+      (name: !(builtins.hasAttr name normalNixosVms))
+      (zoneGuestDeviceOwners ++ zoneGuestVirtiofsServingTargets));
+
   # The host-global TPM state policy root. The TPM Provider's state Volume
   # names the opaque `sourcePolicyId: "tpm-state"`, which the volume-local
   # runtime resolves as the storage contract's `path:tpm-state` row, and the
@@ -900,64 +978,85 @@ let
   # of the legacy store tree, which a zone-native host never provisions.
   zoneGuestTpmStateRoot = "${toString cfg.site.stateDir}/tpm-state";
 
-  perZoneGuestTpmStoragePaths = lib.flatten (map
-    (name: [
-      # The per-guest runtime tree a device worker binds its socket under.
-      #
-      # A legacy VM declares this as `path:vm-run:<vm>`, created by tmpfiles
-      # at activation. A zone-native Device owner did not, and a guest name
-      # is not known to the host's static tmpfiles rules either - so this
-      # row is the DECLARATION the broker acts on: the device worker's socket
-      # grant reads the posture below out of the verified contract and
-      # creates /run/d2b/vms/<name> with it, right before it opens the
-      # directory to the worker's principal. The shared parent is the one
-      # static tmpfiles rule does own (`d /run/d2b/vms 1770 d2bd d2b`,
-      # host-daemon.nix); an absent parent, or a directory the broker cannot
-      # posture, refuses the launch rather than letting the worker fail
-      # later. That is why only the roles whose posture binds a runtime
-      # socket were affected while the one-shot flush, which binds none, was
-      # admitted. Same path as the legacy row, so it reuses the legacy id
-      # rather than inventing a second vocabulary for one directory.
-      (mkPath {
-        id = "path:vm-run:${name}";
-        scope = "vm:${name}";
-        path = "/run/d2b/vms/${name}";
-        lifecycle = "boot-scoped-readoptable";
-        persistence = "boot-scoped";
-        owner = principal "user" "d2bd";
-        group = principal "group" "d2b";
-        mode = "1770";
-        creator = actor "nix-module" "tmpfiles";
-        writers = [
-          (actor "daemon" "d2bd")
-          (actor "broker" "d2b-broker")
-        ];
-        cleanupPolicy = "boot";
-        repairPolicy = "nix-activation";
-        leaseClass = "process-pidfd";
-        invariants = [ "no-symlink" "scope-authorization-required" ];
-      })
-      (mkPath {
-        id = "path:swtpm-state:${name}";
-        scope = "vm:${name}";
-        path = zoneGuestTpmStateRoot;
-        owner = principal "user" "d2bd";
-        group = principal "group" "d2bd";
-        mode = "0700";
-        creator = actor "nix-module" "tmpfiles";
-        writers = [
-          (actor "daemon" "d2bd")
-          (actor "broker" "d2b-broker")
-        ];
-        readers = [ (actor "broker" "d2b-broker") ];
-        cleanupPolicy = "never";
-        repairPolicy = "broker-fail-closed";
-        sensitivity = "secret-adjacent";
-        invariants = [ "no-symlink" "broker-opaque-id-only" "scope-authorization-required" ];
-      })
-    ])
-    zoneGuestDeviceOwners)
-  ++ lib.optionals (zoneGuestDeviceOwners != [ ]) [
+  # The per-guest runtime tree a worker binds its socket under.
+  #
+  # A legacy VM declares this as `path:vm-run:<vm>`, created by tmpfiles
+  # at activation. A zone-native Guest did not, and a guest name is not
+  # known to the host's static tmpfiles rules either - so this row is the
+  # DECLARATION the broker acts on: the worker's socket grant reads the
+  # posture below out of the verified contract and creates
+  # /run/d2b/vms/<name> with it, right before it opens the directory to the
+  # worker's principal. The daemon's own serving path reads the very same
+  # row before it creates anything of its own, so the two sides of the
+  # create race land on one posture. The shared parent is the one static
+  # tmpfiles rule does own (`d /run/d2b/vms 1770 d2bd d2b`,
+  # host-daemon.nix); an absent parent, or a directory the broker cannot
+  # posture, refuses the launch rather than letting the worker fail
+  # later. That is why only the roles whose posture binds a runtime socket
+  # were affected while the one-shot flush, which binds none, was
+  # admitted. Same path as the legacy row, so it reuses the legacy id
+  # rather than inventing a second vocabulary for one directory.
+  #
+  # One row per Guest, shared by every worker that binds under it. The
+  # mode carries the sticky bit and live group bits on purpose: the group
+  # bits are what the daemon's group-bitless guard checks, and the sticky
+  # bit is what stops one principal renaming another's socket in the
+  # shared tree.
+  zoneGuestVmRunPath = name: mkPath {
+    id = "path:vm-run:${name}";
+    scope = "vm:${name}";
+    path = "/run/d2b/vms/${name}";
+    lifecycle = "boot-scoped-readoptable";
+    persistence = "boot-scoped";
+    owner = principal "user" "d2bd";
+    group = principal "group" "d2b";
+    mode = "1770";
+    creator = actor "nix-module" "tmpfiles";
+    writers = [
+      (actor "daemon" "d2bd")
+      (actor "broker" "d2b-broker")
+    ];
+    cleanupPolicy = "boot";
+    repairPolicy = "nix-activation";
+    leaseClass = "process-pidfd";
+    invariants = [ "no-symlink" "scope-authorization-required" ];
+  };
+
+  perZoneGuestTpmStoragePaths =
+    # The runtime tree, for every zone-native Guest any worker binds a
+    # socket under - a Device worker, a virtiofsd serving worker, or both.
+    # `zoneGuestRuntimeTreeGuests` is deduplicated, so a Guest in both
+    # relations gets exactly one row: storage path ids are unique and the
+    # contract rejects a duplicate.
+    map zoneGuestVmRunPath zoneGuestRuntimeTreeGuests
+    ++
+    # The TPM state root stays keyed on the Device-owner relation alone:
+    # only a Device's controller creates a subdirectory under it, so a
+    # Guest that merely carries a virtiofs attachment has no subdirectory
+    # to parent there.
+    lib.flatten (map
+      (name: [
+        (mkPath {
+          id = "path:swtpm-state:${name}";
+          scope = "vm:${name}";
+          path = zoneGuestTpmStateRoot;
+          owner = principal "user" "d2bd";
+          group = principal "group" "d2bd";
+          mode = "0700";
+          creator = actor "nix-module" "tmpfiles";
+          writers = [
+            (actor "daemon" "d2bd")
+            (actor "broker" "d2b-broker")
+          ];
+          readers = [ (actor "broker" "d2b-broker") ];
+          cleanupPolicy = "never";
+          repairPolicy = "broker-fail-closed";
+          sensitivity = "secret-adjacent";
+          invariants = [ "no-symlink" "broker-opaque-id-only" "scope-authorization-required" ];
+        })
+      ])
+      zoneGuestDeviceOwners)
+    ++ lib.optionals (zoneGuestDeviceOwners != [ ]) [
     # The Provider-declared policy root (`sourcePolicyId: "tpm-state"`) that
     # every Device's controller-created state Volume resolves under. Same path
     # as every `path:swtpm-state:<guest>` row above, so the daemon's driver
