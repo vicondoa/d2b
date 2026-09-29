@@ -164,6 +164,11 @@ let
         visible = false;
       };
     };
+    # `zone-storage-json.nix` reads the local root off the zone compiler, and
+    # reading `d2b._bundle` forces that module. `_zoneCompiler` is typed
+    # `anything` above, so the value is set in config rather than declared
+    # as a nested option.
+    config.d2b._zoneCompiler.localRoot = "local-root";
   };
 
   # Self-contained eval for the U7 binding-chain cases: the module declares
@@ -399,6 +404,141 @@ let
         enforcement = "hard";
       };
     };
+  };
+
+  # ---- The per-Guest runtime socket tree (`path:vm-run:<guest>`) ----
+  #
+  # The virtiofsd serving worker binds its private socket as
+  # `/run/d2b/vms/<guest>/...`, inside the SAME tree the Device workers bind
+  # under, and the daemon reads that tree's posture out of this row BEFORE
+  # it creates anything (`declared_vm_run_dir_mode` and
+  # `serving_worker_launch_args` in
+  # `packages/d2bd/src/process_provider_runtime.rs`). So the assertion is
+  # about the POSTURE the row declares, not merely that a row exists: a
+  # group-bitless or mis-scoped row is refused exactly like a missing one.
+  virtiofsAttachment = {
+    executionRef = "Guest/guest";
+    transport = "virtiofs";
+    view = "controller";
+    access = "read-only";
+    mountPath = "/state";
+  };
+
+  vmRunBase = { ... }: {
+    d2b.artifacts.volume-local = {
+      package = volumeArtifact;
+      type = "provider";
+    };
+    d2b.artifacts.volume-virtiofs = {
+      package = volumeArtifact;
+      type = "provider";
+    };
+    d2b.zones.local-root.resources = {
+      alice.type = "User";
+      volume-local = {
+        type = "Provider";
+        spec = {
+          artifactId = "volume-local";
+          config.controllerExecutionRef = "Host/host-system";
+        };
+      };
+      volume-virtiofs = {
+        type = "Provider";
+        spec = {
+          artifactId = "volume-virtiofs";
+          config.controllerExecutionRef = "Host/host-system";
+        };
+      };
+      host-system = {
+        type = "Host";
+        spec.providerRef = "Provider/volume-local";
+      };
+      tpm = {
+        type = "Device";
+        spec.providerRef = "Provider/device-tpm";
+      };
+      # The attachment execution target. It owns no Device unless a case
+      # says otherwise, which is the shape that had no declared runtime row
+      # at all and so refused the serving launch.
+      guest = {
+        type = "Guest";
+        spec = { };
+      };
+      state = volumeResource // {
+        spec = volumeResource.spec // {
+          attachments = [ virtiofsAttachment ];
+        };
+      };
+    };
+  };
+
+  vmRunEval = overrides: (mkEval [ d2bScopedOptions vmRunBase overrides ]).config;
+
+  storagePaths = sys: sys.d2b._bundle.storageJson.data.paths;
+  vmRunIds = sys:
+    map (row: row.id)
+      (lib.filter (row: lib.hasPrefix "path:vm-run:" row.id) (storagePaths sys));
+  # Exactly-one lookup: a Guest in both the Device-owner and the
+  # virtiofs-attachment relations has ONE runtime tree and therefore ONE
+  # `path:vm-run` row. Storage path ids are unique and the contract rejects
+  # a duplicate, so a second entry is a build failure, not a cosmetic one.
+  vmRunRow = sys: guest:
+    let
+      id = "path:vm-run:${guest}";
+      matches = lib.filter (row: row.id == id) (storagePaths sys);
+    in
+    if builtins.length matches == 1 then
+      builtins.head matches
+    else
+      throw "expected exactly one ${id} row, got ${toString (builtins.length matches)}";
+
+  # The posture `declared_vm_run_dir_mode` requires, and the one both sides
+  # of the create race agree on.
+  vmRunPosture = row: {
+    inherit (row) scope kind mode;
+    path = row.pathTemplate;
+  };
+  expectedVmRunPosture = {
+    scope = "vm:guest";
+    kind = "directory";
+    mode = "1770";
+    path = "/run/d2b/vms/guest";
+  };
+
+  # The shape that had no declared runtime tree at all: a virtiofs Volume
+  # attachment whose execution target is a Guest that owns no Device.
+  virtiofsOnlyGuest = vmRunEval { };
+  # A Guest that owns a Device AND carries a virtiofs attachment: the row
+  # must appear once, and its TPM row must be unaffected.
+  deviceAndVirtiofsGuest = vmRunEval {
+    d2b.zones.local-root.resources.tpm.metadata.ownerRef = "Guest/guest";
+  };
+  # A Guest whose only attachment is a `virtio-blk` block image. No
+  # host-side worker binds a socket for it - the block device rides the
+  # Guest's own bus - so it declares no runtime tree.
+  virtioBlkGuest = vmRunEval {
+    d2b.zones.local-root.resources.state.spec = lib.mkForce {
+      kind = "durable";
+      source.settings = {
+        kind = "block-image";
+        sourcePolicyId = "disk-root";
+      };
+      attachments = [{
+        executionRef = "Guest/guest";
+        transport = "virtio-blk";
+        view = "controller";
+        access = "read-only";
+        mountPath = "/disk";
+      }];
+    };
+  };
+  # A Host-targeted attachment: no Guest is the execution target, so there
+  # is no Guest to declare a tree for.
+  hostTargetedOnly = vmRunEval {
+    # `attachments` is a list option, so a second element would merge into
+    # the base's rather than replace it.
+    d2b.zones.local-root.resources.state.spec.attachments = lib.mkForce
+      [ (virtiofsAttachment // { executionRef = "Host/host-system"; }) ];
   };
 
   layoutEntry = changes:
@@ -905,5 +1045,53 @@ in
       (lib.filter (user: user.zoneName == "local-root")
         bindingVolume.d2b._resourceCompiler.volumeGenerated.users);
     expected = [ "vol-state-vfd" ];
+  };
+  # A Guest that carries a virtiofs Volume attachment and owns no Device
+  # still has a worker bind a socket under its runtime tree, so the tree's
+  # posture has to be DECLARED. The daemon reads this row before it creates
+  # anything and refuses the launch when it cannot: a missing row and a
+  # mis-postured one fail the same way, so the whole posture is asserted
+  # rather than the row's mere presence. `mode` carries the sticky bit and
+  # live group bits - the group bits are precisely what the daemon's
+  # group-bitless guard checks before it will create the directory.
+  "volume-mounts/virtiofs-attached-guest-declares-vm-run-posture" = {
+    expr = vmRunPosture (vmRunRow virtiofsOnlyGuest "guest");
+    expected = expectedVmRunPosture;
+  };
+  # The same Guest with a Device as well: ONE runtime tree, so exactly one
+  # row. Storage path ids are unique, so a duplicate here is a contract
+  # rejection rather than a cosmetic one.
+  "volume-mounts/device-and-virtiofs-guest-emits-one-vm-run-row" = {
+    expr = vmRunIds deviceAndVirtiofsGuest;
+    expected = [ "path:vm-run:guest" ];
+  };
+  # A Device owner keeps exactly the posture it had: the Device-worker
+  # grant reads this row, and it is the control that the widened predicate
+  # did not narrow or restate the existing rows.
+  "volume-mounts/device-owner-keeps-the-vm-run-posture" = {
+    expr = vmRunPosture (vmRunRow deviceAndVirtiofsGuest "guest");
+    expected = expectedVmRunPosture;
+  };
+  # A Device owner's TPM row is untouched by the widened predicate: only a
+  # Device's controller creates a subdirectory under that root, so a Guest
+  # that merely carries a virtiofs attachment must not gain one.
+  "volume-mounts/virtiofs-attached-guest-declares-no-swtpm-state-row" = {
+    expr = builtins.any
+      (row: row.id == "path:swtpm-state:guest")
+      (storagePaths virtiofsOnlyGuest);
+    expected = false;
+  };
+  # The transport is the discriminator, not the attachment's presence. A
+  # `virtio-blk` attachment puts a block image on the Guest's own bus and
+  # no host-side worker binds a socket for it, so it declares no tree.
+  "volume-mounts/virtio-blk-attached-guest-declares-no-vm-run-row" = {
+    expr = vmRunIds virtioBlkGuest;
+    expected = [ ];
+  };
+  # A Host-targeted attachment names no Guest, so there is no Guest whose
+  # tree needs declaring.
+  "volume-mounts/host-targeted-attachment-declares-no-vm-run-row" = {
+    expr = vmRunIds hostTargetedOnly;
+    expected = [ ];
   };
 }
