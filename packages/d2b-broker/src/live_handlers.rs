@@ -5394,18 +5394,17 @@ mod tests {
         let socket_dir = runtime_root.join("vms").join("acceptance-guest");
         std::fs::create_dir_all(&socket_dir).expect("create the socket directory");
 
-        // A real `AF_UNIX` socket, bound on a short path because
-        // `sockaddr_un.sun_path` is 108 bytes and this directory is longer.
-        let short = std::env::current_dir()
-            .expect("cwd")
-            .join("target")
-            .join(format!(
-                "live-{}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .expect("clock before epoch")
-                    .as_nanos()
-            ));
+        // A real `AF_UNIX` socket, bound on a path short enough for
+        // `sockaddr_un.sun_path` (108 bytes). The system temp dir is used
+        // rather than a directory under the crate root because Bazel runs
+        // tests from an execroot deep enough to overflow `sun_path`.
+        let short = std::env::temp_dir().join(format!(
+            "d2b-live-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock before epoch")
+                .as_nanos()
+        ));
         std::fs::create_dir_all(&short).expect("create the short staging dir");
         let staged = short.join("tpm.sock");
         let listener =
