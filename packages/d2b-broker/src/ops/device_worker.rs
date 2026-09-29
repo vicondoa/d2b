@@ -608,7 +608,7 @@ impl std::fmt::Display for RuntimeDirPostureError {
 /// principal, so a leaf can be planted between the absence check and the
 /// create. Adopting and re-owning such a directory would hand the planter a
 /// directory the broker then believes it provisioned, so the race is refused
-/// - and a leaf that was planted before the check is refused on the same
+/// and a leaf that was planted before the check is refused on the same
 /// evidence, by its owner.
 ///
 /// Refuses rather than degrades: a directory it cannot create or posture is

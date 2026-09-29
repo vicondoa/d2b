@@ -7903,7 +7903,7 @@ mod tests {
 
         let zone = "work";
         let device = "tpm0";
-        let own_child = format!("tpm-state");
+        let own_child = "tpm-state".to_string();
         let mounts = vec![serde_json::json!({
             "ownVolumeSuffix": own_child,
             "view": "swtpm-process",
