@@ -569,6 +569,13 @@ pub(crate) enum RuntimeDirPostureError {
     /// declares, so it is a directory another principal planted inside the
     /// sticky per-Guest parent rather than this launch's own.
     OwnerMismatch,
+    /// The directory already exists, its owner is the one the row declares,
+    /// its mode is not the declared one, and the DECLARED mode carries no
+    /// group bits. POSIX rewrites an ACL mask from the group bits, so
+    /// stamping that mode would nullify the very named entries the worker
+    /// binds its socket through: the broker refuses to trade a wrong mode
+    /// for a revoked grant.
+    DeclaredModeZeroesAclMask,
     /// The directory exists or was created, but could not be brought to
     /// the declared mode and ownership. Carries the `io::ErrorKind` so the
     /// refusal stays path-free.
@@ -581,6 +588,9 @@ impl std::fmt::Display for RuntimeDirPostureError {
             Self::RowUnresolved => f.write_str("per-guest-dir-posture-row-unresolved"),
             Self::ParentAbsent => f.write_str("per-guest-dir-posture-parent-absent"),
             Self::OwnerMismatch => f.write_str("per-guest-dir-posture-owner-mismatch"),
+            Self::DeclaredModeZeroesAclMask => {
+                f.write_str("per-guest-dir-posture-declared-mode-zeroes-acl-mask")
+            }
             Self::PostureFailed(kind) => {
                 write!(f, "per-guest-dir-posture-failed:{kind:?}")
             }
@@ -596,20 +606,28 @@ impl std::fmt::Display for RuntimeDirPostureError {
 ///
 /// A directory this call creates gets the declared mode and ownership. A
 /// directory that already exists is accepted only when its owner is the one
-/// the row declares, and its metadata is left exactly as it is: re-asserting
-/// the mode rewrites the ACL mask from the group bits and nullifies every
-/// named entry, so reconciling a directory this grant did not create is not
-/// a repair. Every step is fd-relative to the parent opened with
+/// the row declares, and its MODE is then reconciled to the declared one: the
+/// same directory is shared with the sibling workers of that Guest, so a leaf
+/// that reached the filesystem before this grant - the daemon's own
+/// serving-socket realize creates it first on a host where the two race -
+/// must still end up carrying the sticky posture the row declares, or a
+/// principal holding a named rwx entry on it can rename another worker's
+/// socket and bind its own at that name. The reconcile is safe precisely
+/// because the DECLARED mode carries group bits: POSIX rewrites an ACL mask
+/// from the group bits, so stamping `1770` leaves every named entry effective
+/// where stamping `0700` would nullify the lot. A declared mode with no group
+/// bits is refused rather than applied. Every step is fd-relative to the
+/// parent opened with
 /// `openat2(RESOLVE_NO_SYMLINKS | RESOLVE_BENEATH)`, so no component can be
 /// swapped for a symlink between the check and the `mkdirat`.
 ///
 /// The create is exclusive ([`crate::sys::path_safe::mkdir_at_exclusive`],
 /// issue #64): the sticky per-Guest parent is writable by a `d2b`-group
 /// principal, so a leaf can be planted between the absence check and the
-/// create. Adopting and re-owning such a directory would hand the planter a
-/// directory the broker then believes it provisioned, so the race is refused
-/// and a leaf that was planted before the check is refused on the same
-/// evidence, by its owner.
+/// create. A leaf planted by ANOTHER principal is refused on the evidence of
+/// its owner and never adopted, because re-owning it would hand the planter a
+/// directory the broker then believes it provisioned; a leaf the row's own
+/// owner holds is this launch's to posture.
 ///
 /// Refuses rather than degrades: a directory it cannot create or posture is
 /// a launch the broker has no honest way to complete, because the ACL grant
@@ -654,15 +672,27 @@ pub(crate) fn create_guest_runtime_dir(
             fd
         }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            // Accepted on the evidence of its own owner, never adopted: a
-            // leaf this launch did not create carries whatever posture it was
-            // planted with, and stamping it would make a planted directory
-            // indistinguishable from a provisioned one.
+            // Accepted on the evidence of its own owner, never adopted from
+            // another principal: once the owner matches, the leaf is in this
+            // row's trust domain, and the posture the row declares is the
+            // one it must end up carrying however it got there.
             let fd = open_leaf(&parent_fd, name)?;
             let stat = crate::sys::path_safe::fstat_fd(fd.as_fd())
                 .map_err(|error| RuntimeDirPostureError::PostureFailed(error.kind()))?;
             if stat.st_uid != posture.owner_uid {
                 return Err(RuntimeDirPostureError::OwnerMismatch);
+            }
+            if stat.st_mode & 0o7777 != posture.mode {
+                // Safe only for a declared mode that carries group bits: the
+                // `chmod` below rewrites the ACL mask from them, so a
+                // group-bitless declared mode would nullify the named entries
+                // the worker binds its socket through instead of repairing
+                // the posture.
+                if posture.mode & 0o070 == 0 {
+                    return Err(RuntimeDirPostureError::DeclaredModeZeroesAclMask);
+                }
+                crate::sys::path_safe::fchmod(fd.as_fd(), posture.mode)
+                    .map_err(|error| RuntimeDirPostureError::PostureFailed(error.kind()))?;
             }
             fd
         }
@@ -1131,10 +1161,11 @@ mod tests {
 
     /// The sticky per-Guest parent is writable by a `d2b`-group principal, so
     /// a leaf can be planted there before the launch reaches the create, or
-    /// raced into it between the create and the open. A planted leaf is
-    /// refused on the evidence of its own owner - never adopted, and never
-    /// re-stamped into looking provisioned - while a directory the row's own
-    /// owner already holds is this launch's to use, untouched.
+    /// raced into it between the create and the open. A leaf planted by
+    /// another principal is refused on the evidence of its owner and keeps
+    /// the metadata it was planted with - it is never adopted, and never
+    /// re-stamped into looking provisioned. A leaf the row's OWN owner holds
+    /// is this launch's, and is reconciled to the declared posture.
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_planted_runtime_directory_owned_by_another_principal_is_refused() {
@@ -1177,32 +1208,162 @@ mod tests {
             planted_mode,
             "a refused leaf keeps the metadata it was planted with"
         );
-        // The declaration that matches the leaf is accepted as it stands, so
-        // a directory host activation or an earlier launch provisioned is
-        // used rather than re-stamped.
+        // The declaration that matches the leaf is accepted, and a leaf that
+        // reached the filesystem first - the daemon's own serving-socket
+        // realize creates this very directory when the two race - is
+        // reconciled to the declared mode rather than used as it stands.
         let accepted = create_guest_runtime_dir(
             &leaf,
             GuestRuntimeDirPosture {
-                owner_uid: u32::from(std::os::unix::fs::MetadataExt::uid(
+                owner_uid: std::os::unix::fs::MetadataExt::uid(
                     &std::fs::metadata(&leaf).expect("stat the leaf"),
-                )),
-                owner_gid: u32::from(std::os::unix::fs::MetadataExt::gid(
+                ),
+                owner_gid: std::os::unix::fs::MetadataExt::gid(
                     &std::fs::metadata(&leaf).expect("stat the leaf"),
-                )),
+                ),
                 mode: 0o1770,
             },
         )
-        .expect("a leaf the row's own owner holds is this launch's to use");
+        .expect("a leaf the row's own owner holds is this launch's to posture");
         assert!(accepted.1 > 0, "the accepted leaf's inode is reported");
         assert_eq!(
             std::fs::metadata(&leaf)
-                .expect("stat the accepted leaf")
+                .expect("stat the reconciled leaf")
                 .permissions()
                 .mode()
-                & 0o777,
-            planted_mode,
-            "an accepted leaf keeps its ACL-bearing mode: the grant below it is \
-             what opens it, and re-asserting the declared mode would nullify it"
+                & 0o7777,
+            0o1770,
+            "an accepted leaf is reconciled to the declared posture: the sticky \
+             bit is what stops one principal renaming another's socket, and a \
+             leaf left at the mode it was created with does not carry it"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The per-Guest runtime directory is SHARED: the daemon's own
+    /// serving-socket realize creates it when a host lets the two race, and
+    /// that create is where a mode with no group bits, and so no sticky bit,
+    /// would land. The posture type claims the sticky bit is what stops one
+    /// principal renaming another's socket there, so the EEXIST path has to
+    /// make the claim true: a leaf the row's own owner already holds is
+    /// reconciled to the DECLARED mode.
+    ///
+    /// The second assertion is the one that matters. POSIX rewrites a
+    /// directory's ACL mask from its group bits on every `chmod`, so a
+    /// reconcile to a group-bitless mode would leave the directory looking
+    /// postured while the named rwx entry every sibling worker binds its
+    /// socket through has silently become `#effective:---`.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn an_adopted_runtime_dir_is_brought_to_the_declared_mode_with_its_grant_intact() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+        let root = std::env::current_dir()
+            .expect("cwd")
+            .join("target")
+            .join(format!(
+                "device-worker-adopted-leaf-{}",
+                std::process::id()
+            ));
+        let vms = root.join("vms");
+        let leaf = vms.join("acceptance-guest");
+        std::fs::create_dir_all(&vms).expect("create the vms parent");
+        std::fs::create_dir(&leaf).expect("the leaf another actor created first");
+        // The exact artefact the competing create leaves: mode 0700, no
+        // sticky bit, so the posture the row declares is simply absent.
+        std::fs::set_permissions(&leaf, std::fs::Permissions::from_mode(0o700))
+            .expect("stamp the competing create's mode");
+        if ![
+            "/run/current-system/sw/bin/setfacl",
+            "/usr/bin/setfacl",
+            "/bin/setfacl",
+        ]
+        .iter()
+        .any(|candidate| Path::new(candidate).exists())
+        {
+            eprintln!("skipping adopted runtime-directory ACL test: no setfacl binary");
+            let _ = std::fs::remove_dir_all(&root);
+            return;
+        }
+        let uid = 50_123;
+        let fd = crate::sys::path_safe::open_dir_path_safe(&leaf).expect("open the adopted leaf");
+        crate::sys::pidfd_sys::run_setfacl_op_on_fd(fd.as_fd(), "-m", &format!("u:{uid}:rwx"))
+            .expect("grant the sibling worker principal its named entry");
+
+        let posture = GuestRuntimeDirPosture {
+            owner_uid: std::fs::metadata(&leaf).expect("stat").uid(),
+            owner_gid: std::fs::metadata(&leaf).expect("stat").gid(),
+            mode: 0o1770,
+        };
+        create_guest_runtime_dir(&leaf, posture).expect("reconcile the adopted leaf");
+
+        let mode = std::fs::metadata(&leaf).expect("stat").permissions().mode();
+        assert_eq!(
+            mode & 0o7777,
+            0o1770,
+            "an adopted leaf must carry the DECLARED posture, sticky bit included"
+        );
+        assert_eq!(
+            mode & 0o070,
+            0o070,
+            "the reconcile must leave the sibling worker's named entry effective: \
+             a group-bitless fchmod would zero the ACL mask this reads back and \
+             the Device worker could no longer bind its socket in this tree"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The reconcile is a `chmod`, and a `chmod` rewrites the ACL mask from
+    /// the group bits. So a DECLARED mode with no group bits cannot be
+    /// stamped onto an adopted leaf without nullifying the very grants the
+    /// worker reaches the directory through: that is a posture the broker
+    /// refuses rather than one it applies, under a typed path-free slug.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn an_adopted_runtime_dir_refuses_a_declared_mode_that_would_zero_the_acl_mask() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = std::env::current_dir()
+            .expect("cwd")
+            .join("target")
+            .join(format!(
+                "device-worker-mask-zeroing-declared-mode-{}",
+                std::process::id()
+            ));
+        let vms = root.join("vms");
+        let leaf = vms.join("acceptance-guest");
+        std::fs::create_dir_all(&vms).expect("create the vms parent");
+        std::fs::create_dir(&leaf).expect("create the leaf");
+        std::fs::set_permissions(&leaf, std::fs::Permissions::from_mode(0o1770))
+            .expect("stamp the leaf with the declared sticky mode");
+
+        let error = create_guest_runtime_dir(
+            &leaf,
+            GuestRuntimeDirPosture {
+                owner_uid: nix::unistd::Uid::current().as_raw(),
+                owner_gid: nix::unistd::Gid::current().as_raw(),
+                mode: 0o700,
+            },
+        )
+        .expect_err("a group-bitless declared mode must be refused, not applied");
+        assert_eq!(error, RuntimeDirPostureError::DeclaredModeZeroesAclMask);
+        assert!(
+            error
+                .to_string()
+                .starts_with("per-guest-dir-posture-")
+                && !error.to_string().contains('/'),
+            "the refusal must stay a typed path-free slug, got: {error}"
+        );
+        assert_eq!(
+            std::fs::metadata(&leaf)
+                .expect("stat the leaf")
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o1770,
+            "a refused leaf keeps the posture it already carried"
         );
 
         let _ = std::fs::remove_dir_all(&root);
