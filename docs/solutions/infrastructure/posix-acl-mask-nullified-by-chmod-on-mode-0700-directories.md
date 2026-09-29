@@ -30,7 +30,7 @@ mask::rwx
 other::---
 ```
 
-The entry was present, the mask was intact, and access was still denied —
+The entry was present, the mask was intact, and access was still denied -
 because the failure was one directory *up*, at the state root, whose ACL had
 already been nullified.
 
@@ -40,7 +40,7 @@ already been nullified.
 - `getfacl` on the failing directory shows `mask::---` and every named entry
   marked `#effective:---`, while the entries themselves are still listed.
 - The worker's own error was `swtpm: Could not open logfile for writing:
-  Permission denied` — the state *directory* was fine; the state *root* was not.
+  Permission denied` - the state *directory* was fine; the state *root* was not.
 - No log, no socket, no NVRAM file was ever created, because the process died on
   its first filesystem write.
 
@@ -48,7 +48,7 @@ already been nullified.
 
 **Reading the leaf's ACL and concluding the grant was correct.** The check
 dumped the state directory, saw `rwx` for the swtpm principal, and the natural
-conclusion was that the sandbox mount policy was wrong. It wasn't — the broker
+conclusion was that the sandbox mount policy was wrong. It wasn't - the broker
 skips `apply_mount_actions` entirely under a user namespace, so the mount policy
 was never the lever here, and a large amount of work went into a grant mechanism
 that turned out to be inert for this posture.
@@ -71,14 +71,14 @@ and it has to stay *effective* after whatever else sets the mode.
 entry through `setfacl_required` (`:1320`) rather than tolerating a silent
 `Ok(None)`, and the regression test
 `swtpm_state_dir_traversal_is_effective_after_the_root_mode_is_reasserted`
-(`:5646`) builds the exact failing shape — traverse entry installed on a 0700
-root, declared mode re-asserted, asserted to *start* from a nulled mask — then
+(`:5646`) builds the exact failing shape - traverse entry installed on a 0700
+root, declared mode re-asserted, asserted to *start* from a nulled mask - then
 asserts the entry is effective afterwards.
 
 The same failure mode was later found in a second place: the daemon's
 `realize_serving_socket_dir` stamped a hardcoded `0700` on the shared per-Guest
 runtime directory instead of the storage row's declared `1770`. Its guard was
-also weaker than its own specification — it tested `mode & 0o7777 != 0`, a
+also weaker than its own specification - it tested `mode & 0o7777 != 0`, a
 *nonzero* test, where the spec required a *group-bits* test, so a declared `0700`
 parsed cleanly. It now tests `mode & 0o070 != 0`, matching the broker's refusal.
 
@@ -88,7 +88,7 @@ POSIX ACLs have a **mask** entry that is the ceiling on every named user and
 named group entry. When a file's mode is changed by `chmod`, the kernel
 recomputes that mask **from the file's group bits**. A mode of `0700` has group
 bits `000`, so the mask becomes `---`, and every named entry below it is capped
-to nothing — while remaining present in the file.
+to nothing - while remaining present in the file.
 
 Reproduced on this host, exactly:
 
@@ -105,8 +105,8 @@ user:12345:--x	#effective:---
 ```
 
 The entry survives. The permission does not. So `setfacl` after a `chmod` is
-order-dependent: any `chmod` issued later — by a daemon, a tmpfiles rule, a
-reconcile pass, or a mode re-assertion in a completely different code path —
+order-dependent: any `chmod` issued later - by a daemon, a tmpfiles rule, a
+reconcile pass, or a mode re-assertion in a completely different code path -
 silently undoes the grant, and the only symptom is `EACCES` at open time.
 
 The consequence that made this expensive: a *correct grant one level below a
@@ -127,7 +127,7 @@ entry's presence passes while the permission is dead. Assert the mask, or assert
 that no entry is `#effective`-downgraded:
 
 ```rust
-// The entry must be EFFECTIVE, not merely present — the pre-fix shape
+// The entry must be EFFECTIVE, not merely present - the pre-fix shape
 // passes a presence check and fails this one.
 let mask = /* parse getfacl -p output */;
 assert_ne!(mask, 0o000, "named entries are capped to nothing");
@@ -144,7 +144,7 @@ directories, in two different crates.
 
 ## Related Issues
 
-- #611 — TPM state Volume never provisions its per-Device directory
-- #612 — device-worker-launch: swtpm worker dies before main(), leaving no log
-- #615 — controller-session failure is undiagnosable (same class of "the log
+- #611 - TPM state Volume never provisions its per-Device directory
+- #612 - device-worker-launch: swtpm worker dies before main(), leaving no log
+- #615 - controller-session failure is undiagnosable (same class of "the log
   does not say what actually happened")

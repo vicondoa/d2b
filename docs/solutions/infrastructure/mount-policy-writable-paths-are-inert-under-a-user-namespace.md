@@ -21,7 +21,7 @@ tags: [sandbox, user-namespace, minijail, mount-policy, writable-paths, broker, 
 
 A device worker was launched with a `MountPolicy` carrying a correctly authorized
 `writable_paths` entry, and the state directory still was not writable inside
-the sandbox. The policy was never applied at all — the broker skips the entire
+the sandbox. The policy was never applied at all - the broker skips the entire
 bind-mount block for user-namespace postures, by design.
 
 ## Symptoms
@@ -38,7 +38,7 @@ bind-mount block for user-namespace postures, by design.
 **Building a provider-declared storage grant to fix it.** The whole point of a
 grant is that a provider declares the storage its worker needs and the
 framework authorizes and materializes it. That mechanism was implemented,
-reviewed, tested, and is a genuine, fail-closed capability — and it changed
+reviewed, tested, and is a genuine, fail-closed capability - and it changed
 nothing here, because the broker never consults the mount policy for this
 posture. It was the largest single piece of work in the change set and it was
 inert for the exact case it was written for.
@@ -56,8 +56,8 @@ the host and let the ACL do the work.
 Two things in the tree already reflect that and are worth reading before
 touching this area:
 
-- `packages/d2b-broker/src/sys.rs:3248` — `in_ns_credentials = user_ns_spec.is_some()`
-- `packages/d2b-broker/src/sys.rs:3351` — `if !in_ns_credentials { apply_mount_actions_debug(mount_actions) }`
+- `packages/d2b-broker/src/sys.rs:3248` - `in_ns_credentials = user_ns_spec.is_some()`
+- `packages/d2b-broker/src/sys.rs:3351` - `if !in_ns_credentials { apply_mount_actions_debug(mount_actions) }`
 
 The comment above the guard states the reason: the user-NS already provides
 isolation, each namespace has its own mount tree cloned from `clone3`, and
@@ -95,7 +95,7 @@ work this way, and neither touches `writable_paths`.
 instead how the directory is postured on the host.
 
 `writable_paths` is a security boundary. It is the right lever for a
-classic-minijail posture and the wrong lever here — reaching for it on a
+classic-minijail posture and the wrong lever here - reaching for it on a
 user-NS posture produces a policy that looks correct, passes review, and has no
 effect.
 
@@ -107,12 +107,12 @@ documentation and in the posture table, not only in the spawn code.
 
 **When a mount policy entry appears to have no effect, check whether the
 `if !in_ns_credentials` guard was crossed before continuing to reason about the
-path.** Everything downstream — is the path right, is it authorized, does it
-exist — is a separate question from whether it was ever consulted.
+path.** Everything downstream - is the path right, is it authorized, does it
+exist - is a separate question from whether it was ever consulted.
 
 ## Related Issues
 
-- #611 — TPM state Volume never provisions its per-Device directory
+- #611 - TPM state Volume never provisions its per-Device directory
 - `docs/solutions/infrastructure/posix-acl-mask-nullified-by-chmod-on-mode-0700-directories.md`
-  — the same investigation's other root cause: the host ACL was the thing that
+  - the same investigation's other root cause: the host ACL was the thing that
   mattered, and it had been silently nullified
