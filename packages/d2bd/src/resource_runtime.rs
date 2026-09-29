@@ -1055,6 +1055,27 @@ enum ControllerAssignmentRefreshError {
     Failed(ResourceRuntimeError),
 }
 
+/// One controller-session establish refusal, with the handshake step that
+/// produced it.
+///
+/// The refusal itself collapses every step to one
+/// `ResourceRuntimeError` (see
+/// `ResourceRuntimeError::AuthenticationUnavailable`), so the step travels
+/// beside it: the reconcile warn names the step that failed instead of
+/// leaving the reader to reconstruct it from a neighbouring log line.
+#[derive(Debug, Clone, Copy)]
+struct ControllerSessionEstablishError {
+    stage: &'static str,
+    error: ResourceRuntimeError,
+}
+
+impl ControllerSessionEstablishError {
+    /// A refusal at a named step, kept with its own typed cause.
+    const fn at(stage: &'static str, error: ResourceRuntimeError) -> Self {
+        Self { stage, error }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum ControllerAssignmentRefreshAction<'a> {
     Retryable {
@@ -7054,7 +7075,9 @@ impl ControllerSessionCoordinator {
                     // of orphaning the controller.
                     providers.rearm_controller_bootstrap(endpoint);
                     tracing::warn!(
-                        error = %error,
+                        provider = %context.provider_owner_ref().to_canonical_string(),
+                        stage = error.stage,
+                        error = %error.error,
                         "external Provider controller ResourceV3 session setup failed",
                     );
                 }
@@ -7685,6 +7708,7 @@ impl ControllerSessionCoordinator {
         result.map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)
     }
 
+
     #[allow(clippy::type_complexity)]
     async fn establish_controller_session(
         &self,
@@ -7701,7 +7725,7 @@ impl ControllerSessionCoordinator {
             d2b_session::AuthenticatedSessionRouteBinding,
             Option<Arc<dyn crate::process_provider_runtime::GuestCredentialBackendLease>>,
         ),
-        ResourceRuntimeError,
+        ControllerSessionEstablishError,
     > {
         let authentication_error = |stage: &'static str| {
             tracing::warn!(
@@ -7709,7 +7733,10 @@ impl ControllerSessionCoordinator {
                 stage,
                 "external Provider controller authentication failed",
             );
-            ResourceRuntimeError::AuthenticationUnavailable
+            ControllerSessionEstablishError::at(
+                stage,
+                ResourceRuntimeError::AuthenticationUnavailable,
+            )
         };
         // Capture the underlying handshake cause alongside the stage; a
         // bare stage cannot distinguish load flakes from real breakage.
@@ -7720,7 +7747,10 @@ impl ControllerSessionCoordinator {
                 error = ?error,
                 "external Provider controller authentication failed",
             );
-            ResourceRuntimeError::AuthenticationUnavailable
+            ControllerSessionEstablishError::at(
+                stage,
+                ResourceRuntimeError::AuthenticationUnavailable,
+            )
         };
         let context = endpoint.context().clone();
         let (delivery_key_handoff, backend_lease) = endpoint.handles();
@@ -7800,7 +7830,8 @@ impl ControllerSessionCoordinator {
             crate::interaction_composition::policy_channel_binding_digest(&policy)
                 .ok_or_else(|| authentication_error("binding-digest"))?,
         );
-        let transport = unix_transport(resource_socket, &policy)?;
+        let transport = unix_transport(resource_socket, &policy)
+            .map_err(|error| authentication_error_caused("resource-transport", &error))?;
         let mut responder = SessionEngine::establish_responder(
             transport,
             policy,
@@ -7919,8 +7950,25 @@ impl ControllerSessionCoordinator {
                 .issue_authenticated_subject(route.context().clone(), authorization_state)
                 .map_err(|_| authentication_error("authenticated-subject"))?;
             let service = Arc::new(
-                ResourceBusAdapter::bind_component_session(self.api()?, subject)
-                    .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?,
+                ResourceBusAdapter::bind_component_session(
+                    self.api()
+                        .map_err(|error| {
+                            ControllerSessionEstablishError::at("resource-api", error)
+                        })?,
+                    subject,
+                )
+                .map_err(|error| {
+                    tracing::warn!(
+                        zone = %self.zone.as_str(),
+                        stage = "component-service-bind",
+                        error = ?error,
+                        "external Provider controller component service bind failed",
+                    );
+                    ControllerSessionEstablishError::at(
+                        "component-service-bind",
+                        ResourceRuntimeError::ResourceApiBindFailed,
+                    )
+                })?,
             );
             let resource_client = Some(Arc::new(service.client()));
             let services = Arc::clone(&service).ttrpc_services();

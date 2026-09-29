@@ -2301,7 +2301,7 @@ struct ServingWorkerLaunchPaths {
 /// A `.`/`..` component is refused outright wherever the broker fences a
 /// caller-named path with a `starts_with` comparison: `/run/d2b/../etc` is
 /// a component prefix of `/run/d2b` while resolving outside it.
-fn is_anchored_absolute(path: &Path) -> bool {
+pub(crate) fn is_anchored_absolute(path: &Path) -> bool {
     path.is_absolute()
         && !path.components().any(|component| {
             matches!(
@@ -2608,7 +2608,76 @@ impl DeviceWorkerSocketGrant {
         )
         .inspect_err(|_| {
             audit_device_worker_runtime_dir("grant", "failed-closed", "runner-tree-grant-refused")
-        })
+        })?;
+        // Last step before the spawn, as it was when this lived in the retired
+        // `swtpm_dir` harden pass: the directory is now postured and open, so
+        // the only thing left that can make this worker's own `bind(2)` fail
+        // is an entry a previous run of it left behind.
+        // The refusal is audited inside the step; the detail carries the
+        // path the launch-failure envelope needs.
+        self.unlink_stale_worker_socket()
+    }
+
+    /// Clear the one stale artefact a previous run of this worker can leave
+    /// behind in its own socket directory: the named socket a worker that was
+    /// superseded before its clean shutdown never unlinked. `bind(2)` on a
+    /// path that already exists fails with `EADDRINUSE`, so every relaunch
+    /// would die on a socket it is entitled to create, and the row would burn
+    /// its restart budget on an error that names nothing.
+    ///
+    /// Only that one entry is removed, fd-relative under the same path-safety
+    /// rules the grant itself uses (`openat2` no-symlink/beneath on the
+    /// directory, `fstatat` without following a final symlink), and the
+    /// directory's own posture, its ACL and every sibling entry are left
+    /// untouched. An absent directory is a no-op rather than an error: the
+    /// grant that owns it runs first, and a directory that is not there is
+    /// that grant's own refusal, not this step's.
+    fn unlink_stale_worker_socket(&self) -> Result<(), String> {
+        const S_IFMT_MASK: u32 = 0o170000;
+        const S_IF_SOCK: u32 = 0o140000;
+        let directory_fd = match crate::sys::path_safe::open_dir_path_safe(&self.directory) {
+            Ok(fd) => fd,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(format!(
+                    "device worker socket directory unreadable: {:?}",
+                    error.kind()
+                ))
+            }
+        };
+        match crate::sys::path_safe::fstatat_nofollow(
+            &directory_fd,
+            crate::ops::swtpm_identity::WORKER_SOCKET_NAME,
+        ) {
+            // A SOCKET is never removed. This step runs on every relaunch of
+            // the row, not once per start, so a retry that overlaps a
+            // predecessor that is still alive would unlink the very endpoint
+            // that predecessor is serving: the worker keeps running with no
+            // reachable socket, and the row is what times out. Only an entry
+            // that is not a socket - a regular file left where the socket
+            // belongs, which `bind(2)` collides with exactly as hard - is
+            // cleared.
+            // `S_IFMT` / `S_IFSOCK` are the POSIX file-type bits of the
+            // mode this probe already returned; nothing here opens the entry.
+            Ok(Some(stat)) if stat.st_mode & S_IFMT_MASK != S_IF_SOCK => {
+                crate::sys::path_safe::remove_path_safe(
+                    &directory_fd,
+                    crate::ops::swtpm_identity::WORKER_SOCKET_NAME,
+                )
+                    .map_err(|error| {
+                        format!("stale socket removal failed: {:?}", error.kind())
+                    })
+                    .inspect_err(|_| {
+                        audit_device_worker_runtime_dir(
+                            "stale-socket",
+                            "failed-closed",
+                            "stale-socket-removal-refused",
+                        )
+                    })
+            }
+            Ok(_) => Ok(()),
+            Err(error) => Err(format!("stale socket probe failed: {:?}", error.kind())),
+        }
     }
 }
 
@@ -2661,9 +2730,60 @@ fn device_worker_socket_grant(
     Ok(Some(grant))
 }
 
+/// Fence one resource-backed `w1-swtpm` launch's arguments against the paths
+/// the broker is about to grant on, and refuse an argument set that names
+/// anything else.
+///
+/// The worker opens its state **by pathname** (the broker skips
+/// `apply_mount_actions` under a user namespace), so the traverse grant below
+/// is only a grant for the directory the launch actually names. Every path
+/// the arguments carry - the argument itself, or the value of a
+/// comma-separated `key=path` field - must be an anchored absolute path under
+/// the trusted state directory or the trusted per-Guest runtime directory of
+/// the scope pinned against the verified bundle. A relative or `.`/`..`
+/// spelling, a sibling Device's state Volume, and a path the payload chose
+/// outright are each refused, before the socket directory is created,
+/// postured and opened, and before the state directory is opened at all.
+///
+/// This fence is pure - it derives the runtime directory and reads the
+/// arguments, and touches nothing on disk - so it runs with the other typed
+/// preflights at the top of [`live_spawn_runner`], ahead of every ACL that
+/// function applies. A launch refused here leaves no ACL behind.
+///
+/// A launch that is not a resource-backed `w1-swtpm` one, or one the verified
+/// bundle resolves no identity for, has no trusted paths to fence against and
+/// is admitted to the (equally absent) grants below.
+fn fence_device_worker_argv_paths(
+    plan: &SpawnRunnerPlan,
+    swtpm_identity: Option<&crate::ops::swtpm_identity::ResourceBackedSwtpm>,
+    device_worker: &crate::ops::device_worker::DeviceWorkerLaunch,
+    runtime_root: &Path,
+) -> Result<(), LiveHandlerError> {
+    if plan.seccomp_policy_ref.as_deref() != Some("w1-swtpm") {
+        return Ok(());
+    }
+    let (Some(identity), Some(scope)) = (swtpm_identity, device_worker.scope.as_ref()) else {
+        return Ok(());
+    };
+    let runtime_dir = scope.socket_directory(runtime_root).map_err(|error| {
+        audit_device_worker_runtime_dir("argv-fence", "failed-closed", &error.to_string());
+        LiveHandlerError::SpawnFailed {
+            detail: format!("device worker argv fence: {error}"),
+        }
+    })?;
+    crate::ops::swtpm_identity::verify_argv_names_only_trusted_paths(plan, identity, &runtime_dir)
+        .map_err(|mismatch| {
+            audit_device_worker_runtime_dir("argv-fence", "failed-closed", &mismatch.to_string());
+            LiveHandlerError::SpawnFailed {
+                detail: format!("device worker argv fence: {mismatch}"),
+            }
+        })
+}
+
 /// Open the TPM worker's trusted state Volume directory to its own principal,
-/// search-only on every non-world-traversable ancestor, once the launch's own
-/// arguments have been shown to name nothing else.
+/// search-only on every non-world-traversable ancestor. The launch's own
+/// arguments are already fenced by [`fence_device_worker_argv_paths`], which
+/// runs before any ACL this spawn applies.
 ///
 /// The state root above the Volume directory is declared mode 0700, so the only
 /// non-owner access it can carry is a named traverse ACL. POSIX rewrites the
@@ -2680,21 +2800,11 @@ fn device_worker_socket_grant(
 ///
 /// A launch that is not a resource-backed `w1-swtpm` one has no trusted state
 /// directory to grant, and grants nothing.
-///
-/// The worker opens its state **by pathname** (the broker skips
-/// `apply_mount_actions` under a user namespace), so the grant is only a
-/// grant for the directory the launch actually names. The arguments are
-/// therefore fenced against the trusted directories first: every path they
-/// carry must be the trusted state directory (or something under it) or the
-/// trusted per-Guest runtime directory (or something under it). An argument
-/// aimed anywhere else is refused before the spawn rather than granted
-/// `rwx` over a state directory nobody derived.
-fn grant_swtpm_state_dir_traversal(
+async fn grant_swtpm_state_dir_traversal(
     plan: &SpawnRunnerPlan,
     swtpm_identity: Option<&crate::ops::swtpm_identity::ResourceBackedSwtpm>,
     device_worker: &crate::ops::device_worker::DeviceWorkerLaunch,
     broker_state_dir: &Path,
-    runtime_root: &Path,
 ) -> Result<(), LiveHandlerError> {
     if plan.seccomp_policy_ref.as_deref() != Some("w1-swtpm") {
         return Ok(());
@@ -2702,27 +2812,29 @@ fn grant_swtpm_state_dir_traversal(
     let Some(identity) = swtpm_identity else {
         return Ok(());
     };
-    let Some(scope) = device_worker.scope.as_ref() else {
+    if device_worker.scope.is_none() {
         return Ok(());
-    };
-    let runtime_dir = scope.socket_directory(runtime_root).map_err(|error| {
-        audit_device_worker_runtime_dir("argv-fence", "failed-closed", &error.to_string());
-        LiveHandlerError::SpawnFailed {
-            detail: format!("device worker argv fence: {error}"),
-        }
-    })?;
-    crate::ops::swtpm_identity::verify_argv_names_only_trusted_paths(
-        plan,
-        identity,
-        &runtime_dir,
-    )
-    .map_err(|mismatch| {
-        audit_device_worker_runtime_dir("argv-fence", "failed-closed", &mismatch.to_string());
-        LiveHandlerError::SpawnFailed {
-            detail: format!("device worker argv fence: {mismatch}"),
-        }
-    })?;
+    }
     let state_dir = crate::ops::swtpm_identity::trusted_state_dir(identity);
+    // A state directory the worker cannot start against is refused here,
+    // before the traverse grant, so the refusal costs no ACL and the
+    // operator is told what it is instead of watching the row burn its
+    // restart budget on an exit that names nothing. The check reads one
+    // entry and changes nothing: a headerless persistent-state blob is
+    // unrecoverable key material, and the broker does not decide what that
+    // is worth.
+    let health = crate::ops::swtpm_identity::classify_state_dir(identity).await;
+    if health != crate::ops::swtpm_identity::StateDirHealth::Usable {
+        audit_device_worker_runtime_dir("state-health", "failed-closed", &health.to_string());
+        return Err(LiveHandlerError::SpawnFailed {
+            detail: format!(
+                "state directory is not usable for this worker: {health}; the volume's \
+                 persistent TPM state is incomplete, so every launch will fail until an \
+                 operator inspects it by hand - the broker will not delete or re-create \
+                 it, because that state holds the TPM Endorsement Key"
+            ),
+        });
+    }
     grant_runner_tree_acls(
         &state_dir,
         broker_state_dir,
@@ -2889,7 +3001,7 @@ fn acl_diff_hash(subsystem: &str, op: &str, target_class: &str, dev: u64, ino: u
 /// Closed-enum labels only: the success path carries the postured inode's
 /// digest, never the path, the uid, or the acl-spec; the refusal path
 /// carries the typed slug the launch refuses with.
-fn audit_device_worker_runtime_dir(op: &str, result: &str, target: &str) {
+pub(crate) fn audit_device_worker_runtime_dir(op: &str, result: &str, target: &str) {
     tracing::info!(
         kind = "critical",
         subsystem = "device-worker-runtime-dir",
@@ -3192,6 +3304,15 @@ pub async fn live_spawn_runner(
         }
     })?;
 
+    // The argv fence runs with the other typed preflights, before the first
+    // ACL this function touches: it is pure (it reads the plan's arguments
+    // and the pinned scope's own runtime directory, and creates nothing), so
+    // a launch it refuses leaves no ACL, no created directory and no posture
+    // behind it. Everything below it - the runner-tree refresh, the worker's
+    // socket directory, its state-directory traverse grant - only runs for an
+    // argument set already shown to name nothing but the trusted paths.
+    fence_device_worker_argv_paths(&plan, swtpm_identity, device_worker, runtime_root)?;
+
     let (binary, argv, env) =
         build_cstring_vectors(&plan).map_err(LiveHandlerError::SpawnPreflight)?;
     let seccomp_program = load_runner_seccomp(&plan).await?;
@@ -3264,14 +3385,13 @@ pub async fn live_spawn_runner(
         .await?;
     }
 
-    // Every typed fence above passed (the swtpm-dir hardening, the GPU plan
-    // validation, the memlock budget): only now is the worker's trusted
-    // socket directory created, postured to the posture the storage
-    // contract declares for it, and opened to its principal. A launch the
-    // broker refuses therefore leaves no ACL behind, and the directory is
-    // derived from trusted identity - the pinned owning Device's Guest, or
-    // the legacy plan's own trusted runtime directory - never from a launch
-    // argument.
+    // Every typed fence above passed (the argv fence, the swtpm-dir
+    // hardening, the GPU plan validation, the memlock budget) and no ACL has
+    // been touched yet: only now is the worker's trusted socket directory
+    // created, postured to the posture the storage contract declares for it,
+    // and opened to its principal. The directory is derived from trusted
+    // identity - the pinned owning Device's Guest, or the legacy plan's own
+    // trusted runtime directory - never from a launch argument.
     if let Some(grant) =
         device_worker_socket_grant(&plan, device_worker, runtime_root, guest_runtime_posture)?
     {
@@ -3282,13 +3402,7 @@ pub async fn live_spawn_runner(
             })?;
     }
 
-    grant_swtpm_state_dir_traversal(
-        &plan,
-        swtpm_identity,
-        device_worker,
-        broker_state_dir,
-        runtime_root,
-    )?;
+    grant_swtpm_state_dir_traversal(&plan, swtpm_identity, device_worker, broker_state_dir).await?;
 
     let isolation = crate::sys::pidfd_sys::RunnerIsolationSpec {
         capabilities: plan.capabilities.clone(),
@@ -5215,6 +5329,125 @@ mod tests {
         );
     }
 
+    /// A worker superseded before its clean shutdown leaves its `tpm.sock`
+    /// behind, and `bind(2)` on a path that already exists fails with
+    /// `EADDRINUSE` - so every relaunch of that row dies on a socket it is
+    /// entitled to create and the row burns its restart budget on an error
+    /// that names nothing. The grant is the last step before the spawn, so
+    /// this is where that entry goes.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn device_worker_socket_grant_clears_the_socket_a_previous_run_left_behind() {
+        if ![
+            "/run/current-system/sw/bin/setfacl",
+            "/usr/bin/setfacl",
+            "/bin/setfacl",
+        ]
+        .iter()
+        .any(|candidate| Path::new(candidate).exists())
+        {
+            eprintln!("skipping stale-socket test: no setfacl binary");
+            return;
+        }
+
+        let root = TestDir::new("device-worker-stale-socket");
+        let runtime_root = root.join("run").join("d2b");
+        let socket_dir = runtime_root.join("vms").join("acceptance-guest");
+        std::fs::create_dir_all(&socket_dir).expect("create the socket directory");
+
+        // A regular file where the socket belongs: `bind(2)` collides with it
+        // exactly as it would with a socket, and it is the shape a worker that
+        // died before `bind(2)` left. This is the only shape this step clears
+        // - see the guard in `unlink_stale_worker_socket`.
+        std::fs::write(socket_dir.join("tpm.sock"), b"not a socket")
+            .expect("plant a non-socket entry at the socket's name");
+        let sibling = socket_dir.join("gpu.sock");
+        std::fs::write(&sibling, b"a sibling entry the grant must not touch")
+            .expect("plant a sibling entry");
+        assert!(socket_dir.join("tpm.sock").exists());
+
+        let grant =
+            DeviceWorkerSocketGrant::for_guest(&runtime_root, "acceptance-guest", test_posture())
+                .expect("the trusted Guest scope names the socket directory");
+        grant.apply(50_123).expect("posture, grant and clear the stale entry");
+
+        assert!(
+            !socket_dir.join("tpm.sock").exists(),
+            "the socket the previous run left must not survive into this launch"
+        );
+        assert!(
+            sibling.exists(),
+            "clearing the one stale socket must not touch any sibling entry"
+        );
+    }
+
+    /// A relaunch that overlaps a predecessor that is still alive must NOT
+    /// unlink the endpoint that predecessor is serving. This step runs on
+    /// every retry of the row, not once per start, so a socket left by a live
+    /// worker is the one entry that has to survive: the worker keeps running
+    /// with no reachable socket, and the row is what times out.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn clearing_a_stale_socket_never_removes_a_live_sockets_endpoint() {
+        let root = TestDir::new("device-worker-live-socket");
+        let runtime_root = root.join("run").join("d2b");
+        let socket_dir = runtime_root.join("vms").join("acceptance-guest");
+        std::fs::create_dir_all(&socket_dir).expect("create the socket directory");
+
+        // A real `AF_UNIX` socket, bound on a short path because
+        // `sockaddr_un.sun_path` is 108 bytes and this directory is longer.
+        let short = std::env::current_dir()
+            .expect("cwd")
+            .join("target")
+            .join(format!(
+                "live-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("clock before epoch")
+                    .as_nanos()
+            ));
+        std::fs::create_dir_all(&short).expect("create the short staging dir");
+        let staged = short.join("tpm.sock");
+        let listener =
+            std::os::unix::net::UnixListener::bind(&staged).expect("bind a live socket");
+        std::fs::hard_link(&staged, socket_dir.join("tpm.sock"))
+            .expect("link it into the directory under test");
+
+        let grant =
+            DeviceWorkerSocketGrant::for_guest(&runtime_root, "acceptance-guest", test_posture())
+                .expect("the trusted Guest scope names the socket directory");
+        grant
+            .unlink_stale_worker_socket()
+            .expect("a live socket is not a stale entry to clear");
+
+        assert!(
+            socket_dir.join("tpm.sock").exists(),
+            "the endpoint a live worker is serving must survive a relaunch's grant"
+        );
+        drop(listener);
+        let _ = std::fs::remove_dir_all(&short);
+    }
+
+    /// The same step, on a directory that is not there: the grant owns the
+    /// directory and refuses it before this runs, so an absent one here is
+    /// the grant's refusal, not a second one, and this step must not add a
+    /// failure of its own on the way out.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn clearing_a_stale_socket_on_an_absent_directory_is_a_no_op() {
+        let root = TestDir::new("device-worker-stale-socket-absent");
+        let runtime_root = root.join("run").join("d2b");
+        std::fs::create_dir_all(runtime_root.join("vms")).expect("create the vms parent");
+
+        let grant =
+            DeviceWorkerSocketGrant::for_guest(&runtime_root, "acceptance-guest", test_posture())
+                .expect("the trusted Guest scope names the socket directory");
+        grant
+            .unlink_stale_worker_socket()
+            .expect("an absent socket directory has no stale entry to clear");
+        assert!(!grant.directory.exists());
+    }
+
     /// The posture the trusted `path:vm-run:<guest>` row declares on a real
     /// host, with the mode the row declares and the principals the test uid
     /// can actually create with (a non-root test cannot `chown` to `d2bd`).
@@ -5409,9 +5642,9 @@ mod tests {
     /// and leaves the worker unable to open its own state directory. The grant
     /// has to put the traverse back, and it has to be effective (a non-zero
     /// mask), not merely present.
-    #[test]
+    #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn swtpm_state_dir_traversal_is_effective_after_the_root_mode_is_reasserted() {
+    async fn swtpm_state_dir_traversal_is_effective_after_the_root_mode_is_reasserted() {
         use std::os::unix::fs::PermissionsExt as _;
 
         if ![
@@ -5429,10 +5662,14 @@ mod tests {
         let root = TestDir::new("swtpm-state-dir-traversal");
         let state_root = root.join("tpm-state");
         let state_dir = state_root.join("device-0123456789abcdef0123456789abcdef-tpm-state");
-        std::fs::create_dir_all(&state_dir).expect("create state volume directory");
-        std::fs::set_permissions(&state_root, std::fs::Permissions::from_mode(0o700))
+        tokio::fs::create_dir_all(&state_dir)
+            .await
+            .expect("create state volume directory");
+        tokio::fs::set_permissions(&state_root, std::fs::Permissions::from_mode(0o700))
+            .await
             .expect("chmod state root");
-        std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o700))
+        tokio::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o700))
+            .await
             .expect("chmod state volume directory");
 
         let uid = 50_123;
@@ -5440,10 +5677,12 @@ mod tests {
         // installed on the 0700 root, and re-asserting the declared mode has
         // zeroed the mask, so the entry is present but not effective.
         test_setfacl(&state_root, &format!("u:{uid}:--x"));
-        std::fs::set_permissions(&state_root, std::fs::Permissions::from_mode(0o700))
+        tokio::fs::set_permissions(&state_root, std::fs::Permissions::from_mode(0o700))
+            .await
             .expect("re-assert the declared state-root mode");
         assert_eq!(
-            std::fs::metadata(&state_root)
+            tokio::fs::metadata(&state_root)
+                .await
                 .expect("stat state root")
                 .permissions()
                 .mode()
@@ -5468,14 +5707,15 @@ mod tests {
                 crate::ops::device_worker::StateVolumeLeaf::MustExist,
             ),
             &root.path,
-            &runtime_root,
         )
+        .await
         .expect("the trusted state directory grants");
 
         // `rwx` on the leaf, `--x` on the root - and a mask that makes the
         // root's traverse entry effective rather than present-but-nullified.
         assert_eq!(
-            std::fs::metadata(&state_dir)
+            tokio::fs::metadata(&state_dir)
+                .await
                 .expect("stat state volume directory")
                 .permissions()
                 .mode()
@@ -5484,7 +5724,8 @@ mod tests {
             "the state directory's mask must carry `rwx` for the worker principal"
         );
         assert_eq!(
-            std::fs::metadata(&state_root)
+            tokio::fs::metadata(&state_root)
+                .await
                 .expect("stat state root")
                 .permissions()
                 .mode()
@@ -5495,10 +5736,115 @@ mod tests {
         );
     }
 
+    /// A state directory whose persistent TPM state blob is zero length is a
+    /// state the worker can never start against, and it is not a state the
+    /// broker may repair. The worker's header lives inside that blob, so a
+    /// headerless blob is read as a corrupt state rather than as a new one:
+    /// the worker enters a fatal power-on failure, exits, and every later
+    /// launch repeats it. The row then burns its whole restart budget on an
+    /// exit whose only text is "Could not initialize libtpms", and the launch
+    /// failure is reported long after the operator could have acted.
+    ///
+    /// So the grant refuses here instead, before it applies any ACL, and says
+    /// what a human has to decide. It must NOT delete, truncate or
+    /// re-manufacture the blob: that is the Endorsement Key's home.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn swtpm_state_dir_traversal_refuses_a_headerless_persistent_state_and_leaves_it_alone() {
+        let root = TestDir::new("swtpm-state-dir-headerless");
+        let state_root = root.join("tpm-state");
+        let state_dir = state_root.join("device-0123456789abcdef0123456789abcdef-tpm-state");
+        tokio::fs::create_dir_all(&state_dir)
+            .await
+            .expect("create state volume directory");
+        let blob = state_dir.join("tpm2-00.permall");
+        // The exact artefact a real run leaves: the blob was created, its
+        // header was never written, and every start since has failed.
+        tokio::fs::write(&blob, b"")
+            .await
+            .expect("plant the headerless blob");
+
+        let identity = crate::ops::swtpm_identity::ResourceBackedSwtpm {
+            guest: "acceptance-guest".to_owned(),
+            state_root: state_root.clone(),
+            state_volume: "device-0123456789abcdef0123456789abcdef-tpm-state".to_owned(),
+        };
+        let runtime_root = root.join("run").join("d2b");
+        let mut plan = resource_backed_swtpm_plan(&state_dir, &guest_runtime_dir(&runtime_root));
+        plan.uid = 50_123;
+        plan.seccomp_policy_ref = Some("w1-swtpm".to_owned());
+        let error = grant_swtpm_state_dir_traversal(
+            &plan,
+            Some(&identity),
+            &typed_device_worker_launch(
+                crate::ops::device_worker::StateVolumeLeaf::MustExist,
+            ),
+            &root.path,
+        )
+        .await
+        .expect_err("a headerless persistent state must refuse the launch");
+
+        let LiveHandlerError::SpawnFailed { detail } = &error else {
+            panic!("the refusal must be a spawn failure, got {error:?}");
+        };
+        assert!(
+            detail.contains("state-dir-persistent-state-headerless"),
+            "the refusal must carry the typed slug, got: {detail}"
+        );
+        assert!(
+            detail.contains("Endorsement Key"),
+            "the refusal must tell the operator why the broker is not repairing it, got: {detail}"
+        );
+        assert!(
+            blob.exists() && tokio::fs::metadata(&blob).await.expect("stat").len() == 0,
+            "the refusal must leave the bytes exactly as it found them"
+        );
+    }
+
+    /// The same check must not refuse the two states a real first launch
+    /// presents: a state directory that carries no blob at all (the worker
+    /// manufactures on its first start) and one carrying a populated blob (a
+    /// returning guest). A refusal here would strand every ordinary launch
+    /// behind a rule that only ever fires on damage.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn a_fresh_or_populated_state_directory_is_not_the_headerless_case() {
+        use crate::ops::swtpm_identity::{classify_state_dir, StateDirHealth};
+
+        let root = TestDir::new("swtpm-state-dir-healthy");
+        let state_root = root.join("tpm-state");
+        let state_dir = state_root.join("device-0123456789abcdef0123456789abcdef-tpm-state");
+        tokio::fs::create_dir_all(&state_dir)
+            .await
+            .expect("create state volume directory");
+        let identity = crate::ops::swtpm_identity::ResourceBackedSwtpm {
+            guest: "acceptance-guest".to_owned(),
+            state_root: state_root.clone(),
+            state_volume: "device-0123456789abcdef0123456789abcdef-tpm-state".to_owned(),
+        };
+
+        assert_eq!(
+            classify_state_dir(&identity).await,
+            StateDirHealth::Usable,
+            "a state directory with no blob is the first-launch case, not damage"
+        );
+
+        let blob = state_dir.join("tpm2-00.permall");
+        tokio::fs::write(&blob, b"a populated persistent state")
+            .await
+            .expect("write the blob");
+        assert_eq!(
+            classify_state_dir(&identity).await,
+            StateDirHealth::Usable,
+            "a populated blob is a returning guest, not damage"
+        );
+    }
+
     /// A launch whose state root never appeared refuses instead of spawning a
     /// worker that cannot reach the directory the bundle named for it.
-    #[test]
-    fn swtpm_state_dir_traversal_refuses_an_absent_ancestor() {
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn swtpm_state_dir_traversal_refuses_an_absent_ancestor() {
         let root = TestDir::new("swtpm-state-dir-absent");
         let identity = crate::ops::swtpm_identity::ResourceBackedSwtpm {
             guest: "acceptance-guest".to_owned(),
@@ -5520,8 +5866,8 @@ mod tests {
                 crate::ops::device_worker::StateVolumeLeaf::MustExist,
             ),
             &root.path,
-            &runtime_root,
         )
+        .await
         .expect_err("an absent state root refuses the launch");
         assert!(
             matches!(&error, LiveHandlerError::SpawnFailed { detail } if detail.contains("ancestor is absent")),
@@ -5531,8 +5877,9 @@ mod tests {
 
     /// A launch that is not a resource-backed `w1-swtpm` one has no trusted
     /// state directory to grant, and grants nothing.
-    #[test]
-    fn swtpm_state_dir_traversal_grants_nothing_for_every_other_launch() {
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn swtpm_state_dir_traversal_grants_nothing_for_every_other_launch() {
         let root = TestDir::new("swtpm-state-dir-other-role");
         for policy in [None, Some("w1-cloud-hypervisor-runner"), Some("w1-virtiofsd")] {
             let mut plan = resource_backed_swtpm_plan(
@@ -5548,8 +5895,8 @@ mod tests {
                     crate::ops::device_worker::StateVolumeLeaf::MustExist,
                 ),
                 &root.path,
-                &root.path,
             )
+            .await
             .expect("a launch with no trusted state directory is a no-op");
         }
     }
@@ -5583,9 +5930,9 @@ mod tests {
     }
 
     /// The worker opens its state by pathname, so a plan that aims it
-    /// anywhere the broker did not derive is refused before the spawn rather
-    /// than trusted with a traverse grant for a directory nobody derived. The
-    /// refusal is the typed, path-free slug.
+    /// anywhere the broker did not derive is refused by the fence before the
+    /// spawn rather than trusted with a traverse grant for a directory nobody
+    /// derived. The refusal is the typed, path-free slug.
     #[test]
     fn a_plan_naming_a_state_directory_outside_the_trusted_one_is_refused() {
         let root = TestDir::new("swtpm-state-dir-argv-fence");
@@ -5610,11 +5957,10 @@ mod tests {
             plan.uid = 50_123;
             plan.seccomp_policy_ref = Some("w1-swtpm".to_owned());
             plan.argv[4] = format!("dir={}", outside.display());
-            let error = grant_swtpm_state_dir_traversal(
+            let error = fence_device_worker_argv_paths(
                 &plan,
                 Some(&identity),
                 &launch,
-                &root.path,
                 &runtime_root,
             )
             .expect_err("a state directory the bundle did not name must refuse");
@@ -5626,13 +5972,102 @@ mod tests {
         }
     }
 
+    /// The fence has to run BEFORE any ACL, not merely before the spawn: the
+    /// socket grant creates and postures the per-Guest runtime directory, and
+    /// the traverse grant opens the state Volume to the launched principal, so
+    /// a fence that ran after them would leave both behind for a launch it
+    /// refuses. This drives the real `live_spawn_runner` and asserts that a
+    /// refused launch left neither.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn the_argv_fence_refuses_before_any_acl_is_applied() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = TestDir::new("swtpm-argv-fence-ordering");
+        let runtime_root = root.join("run").join("d2b");
+        tokio::fs::create_dir_all(runtime_root.join("vms"))
+            .await
+            .expect("create the vms parent");
+        let state_root = root.join("tpm-state");
+        let state_dir = state_root.join("device-0123456789abcdef0123456789abcdef-tpm-state");
+        tokio::fs::create_dir_all(&state_dir)
+            .await
+            .expect("create the state volume directory");
+        tokio::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o700))
+            .await
+            .expect("chmod state volume directory");
+        let identity = crate::ops::swtpm_identity::ResourceBackedSwtpm {
+            guest: "acceptance-guest".to_owned(),
+            state_root,
+            state_volume: "device-0123456789abcdef0123456789abcdef-tpm-state".to_owned(),
+        };
+        let launch =
+            typed_device_worker_launch(crate::ops::device_worker::StateVolumeLeaf::MustExist);
+        let mut composed = resource_backed_swtpm_plan(&state_dir, &guest_runtime_dir(&runtime_root));
+        // `--tpmstate` aimed at a directory the bundle never named: a refusal
+        // the fence owns, and one the socket grant has already created and
+        // postured for by the time the old ordering reached it.
+        composed.argv[4] = "dir=/etc/shadow".to_owned();
+        let plan = SpawnRunnerPlanInput {
+            binary_path: composed.binary_path,
+            argv: composed.argv,
+            uid: 50_123,
+            gid: composed.gid,
+            supplementary_groups: Vec::new(),
+            env: Vec::new(),
+            capabilities: Vec::new(),
+            namespaces: composed.namespaces,
+            seccomp_policy_ref: Some("w1-swtpm".to_owned()),
+            mount_policy: composed.mount_policy,
+            cgroup_placement: composed.cgroup_placement,
+            root_carve_out: false,
+            skip_binary_exists_check: true,
+            user_namespace: None,
+            umask: None,
+        };
+        let error = live_spawn_runner(
+            &plan,
+            Vec::new(),
+            Vec::new(),
+            None,
+            &root.path,
+            Some(&identity),
+            &launch,
+            Some(test_posture()),
+            &runtime_root,
+        )
+        .await
+        .expect_err("the argv fence refuses the launch");
+        assert!(
+            matches!(&error, LiveHandlerError::SpawnFailed { detail }
+                if detail.contains("device-worker-argv-outside-trusted-paths")),
+            "{error:?}"
+        );
+        assert!(
+            !guest_runtime_dir(&runtime_root).exists(),
+            "the socket grant is what creates and postures this directory: it \
+             must not have run for a launch the fence refuses"
+        );
+        assert_eq!(
+            tokio::fs::metadata(&state_dir)
+                .await
+                .expect("stat state volume directory")
+                .permissions()
+                .mode()
+                & 0o070,
+            0o000,
+            "the traverse grant puts `rwx` in the state directory's mask: a \
+             launch the fence refuses must leave it untouched"
+        );
+    }
+
     /// The one-shot flush exists to be admitted before the worker's state
     /// directory has landed - it connects to a socket that arrives with it -
     /// so its absence is a provisioning race this grant does not own. The
     /// long-lived worker opens that directory itself, and still refuses.
-    #[test]
+    #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn the_flush_is_admitted_before_the_state_directory_lands_and_the_worker_is_not() {
+    async fn the_flush_is_admitted_before_the_state_directory_lands_and_the_worker_is_not() {
         let root = TestDir::new("swtpm-state-dir-flush-leaf");
         let state_root = root.path.join("tpm-state");
         let identity = crate::ops::swtpm_identity::ResourceBackedSwtpm {
@@ -5650,7 +6085,9 @@ mod tests {
         // The shared state root is host-activation's and is always there;
         // what has not landed yet is this Device's own Volume directory
         // inside it, which is exactly what the flush is admitted ahead of.
-        std::fs::create_dir_all(&state_root).expect("create the state root");
+        tokio::fs::create_dir_all(&state_root)
+            .await
+            .expect("create the state root");
         assert!(
             !crate::ops::swtpm_identity::trusted_state_dir(&identity).exists(),
             "the fixture must start from a state directory that has not landed"
@@ -5668,8 +6105,8 @@ mod tests {
                 Some(&identity),
                 &typed_device_worker_launch(leaf),
                 &root.path,
-                &runtime_root,
-            );
+            )
+            .await;
             assert_eq!(
                 outcome.is_ok(),
                 admits,

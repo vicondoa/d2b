@@ -314,7 +314,7 @@ path this phase does not walk.
 | **Guest inventory** | Parsed manifest (`ManifestDocument::vms()`) | Every declared VM/net-VM name, env, `is_net_vm`, enabled component set (graphics/tpm/usbip/audio), `WorkloadProviderKind` |
 | **Storage inventory** | `storage.json` (per ADR 0034, read via `BundleResolver.storage`) | Every declared storage id, path template, kind, owner/group/mode, persistence class, restart class |
 | **Sync inventory** | `sync.json` (per ADR 0034, read via `BundleResolver.sync`) | Every declared lock id, path template, lock kind, allowed holders, acquisition order |
-| **TPM inventory** | `/var/lib/d2b/vms/<vm>/swtpm/` + `/var/lib/d2b/swtpm-markers/<vm>` for every Guest with `tpm.enable = true` | Marker presence/content digest, NVRAM directory tree digest, `previously-provisioned` fail-closed state |
+| **TPM inventory** | `/var/lib/d2b/vms/<vm>/swtpm/` for every Guest with `tpm.enable = true` | NVRAM directory tree digest. The broker's `/var/lib/d2b/swtpm-markers/<vm>` guard was removed, so there is no marker presence/content digest and no `previously-provisioned` fail-closed state to record. |
 | **Key inventory** | `<keysDir>/<vm>_ed25519{,.pub}` for every Guest; `<stateDir>/vms/<vm>/host-keys/{host.pub,user-authorized-keys}` | Fingerprint, mode/owner, staged host-keys content |
 | **Disk-image inventory** | Guest-declared disk images and writable store-overlay images under `/var/lib/d2b/vms/<vm>/` | Path, size, content digest (tree digest for large images uses a sampled/streaming digest, never a full read into memory) |
 | **Network inventory** | Declared host bridges, TAP naming intent, nftables `inet d2b` table ownership markers, NetworkManager/`systemd-networkd` coexistence markers | Bridge names, ownership-marker `comment "d2b managed: <ownership-id>"` values, NM unmanaged-config presence |
@@ -1563,7 +1563,7 @@ owns the destination.
 | `/var/lib/d2b/vms/<vm>/swtpm/` | migration-map row (TPM/swtpm section), `production-reachable` | **Adopt** (never Destroy until Phase 10 gate; never silently re-provisioned) | Controller-created TPM `Volume` per Guest | `ADR-046-provider-device-tpm` §17.3; `ADR046-device-tpm-004`; `ADR046-vl-005` |
 | `/var/lib/d2b/swtpm-markers/<vm>` | migration-map row | **Adopt**, re-keyed from `<vm>` basename to `device_uid`-based name by `volume-local` | TPM Volume identity marker (`broker-maintained` class) | `ADR-046-provider-device-tpm` §17.3 |
 | `SwtpmArgvInput`/`SwtpmIoctlFlushInput` (`d2b-host/src/swtpm_argv.rs`) | `production-reachable` | Preserve until extracted, then Destroy at Phase 10 | `d2b-provider-device-tpm/src/` | `ADR046-device-tpm-001` |
-| `PrepareSwtpmDir` broker op | `production-reachable` | Preserve (still invoked, now only by `volume-local`) | Same op, narrower caller | `ADR-046-provider-device-tpm` §18 |
+| `PrepareSwtpmDir` broker op | removed | Removed with the NVRAM tamper guard | - | - |
 | `components/tpm.nix` | `nix-emitted` | Preserve until Device Nix declaration (§17.1 of the dossier) is authored for every Guest, then Destroy | `d2b.zones.<zone>.resources.<name>` Device declaration | `ADR-046-provider-device-tpm` §17.3 |
 
 ### Store-view hardlink farm and disk images (volume-local Provider dossier)

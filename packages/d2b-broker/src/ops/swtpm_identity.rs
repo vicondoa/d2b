@@ -9,7 +9,12 @@
 //!
 //! - [`resource_backed_identity`] resolves the trusted identity of a typed
 //!   (`resource-backed`, `private_cgroup_placement`) launch, whose cgroup
-//!   subtree deliberately carries no VM identity;
+//!   subtree deliberately carries no VM identity. The Device it names is not
+//!   the launch's to choose: it is the one
+//!   [`crate::ops::device_worker::repin_launch_scope`] resolved from the
+//!   launched row's own `metadata.ownerRef` in the verified Zone bundle, and
+//!   a launch asserting any other Device or Guest was refused before it got
+//!   here;
 //! - [`legacy_runtime_dir`] derives the runtime socket directory of a
 //!   legacy VM-scoped launch by cross-checking the plan's own writable
 //!   paths against the VM its cgroup placement names.
@@ -20,7 +25,9 @@
 //! [`verify_argv_names_only_trusted_paths`] fences the launch's arguments
 //! against it: because the worker opens the directory by pathname, a
 //! launch that names anywhere else is refused rather than trusted with a
-//! grant for a directory it does not name.
+//! grant for a directory it does not name. Containment is textual, so a
+//! candidate is anchored before it is compared and a path-shaped field that
+//! is not an absolute path is refused rather than skipped.
 //!
 //! This module resolves paths; it does not provision or own them. In the v3
 //! model the TPM state Volume owns that lifecycle
@@ -31,7 +38,7 @@
 
 use std::path::{Path, PathBuf};
 
-use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
+use d2b_contracts_resource::v3::ResourceUid;
 use d2b_core::bundle_resolver::BundleResolver;
 use d2b_core::storage::StoragePathSpec;
 
@@ -104,97 +111,67 @@ pub struct ResourceBackedSwtpm {
     pub state_volume: String,
 }
 
-/// Why one resource-backed launch's trusted identity could not be pinned to
-/// the verified bundle, or why its launch arguments do not name the trusted
-/// paths.
+/// Why one resource-backed launch's arguments do not name the trusted paths.
 ///
 /// A closed set of path-free slugs: the launch-failure envelope and the
 /// `kind="critical"` audit record render the slug, never a caller-supplied
 /// path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrustedPathMismatch {
-    /// The launch asserts a Device uid that is not the durable uid the
-    /// verified Zone bundle derives for the Device it names.
-    DeviceUid { claimed: String, resolved: String },
     /// The launch arguments name a path that is neither the trusted state
     /// directory (or anything under it) nor the trusted per-Guest runtime
     /// directory (or anything under it).
     ArgvOutsideTrustedPaths,
+    /// A path-shaped argument names something that is not an anchored
+    /// absolute path: relative, or carrying a `.`/`..` component, so it is a
+    /// textual prefix of a trusted root while resolving somewhere else.
+    ArgvUnanchoredPath,
 }
 
 impl std::fmt::Display for TrustedPathMismatch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::DeviceUid { .. } => f.write_str("device-worker-scope-uid-mismatch"),
             Self::ArgvOutsideTrustedPaths => {
                 f.write_str("device-worker-argv-outside-trusted-paths")
             }
+            Self::ArgvUnanchoredPath => f.write_str("device-worker-argv-unanchored-path"),
         }
     }
 }
 
-/// The trusted identity of a resource-backed (typed) launch, or the reason it
-/// is not one.
-///
-/// `Ok(None)` is a trusted input the bundle does not resolve (no Zone bundle,
-/// no storage row, no Device row), which the caller treats as "grants
-/// nothing". `Err` is a launch that *contradicts* the verified bundle, which
-/// the caller refuses: it is never downgraded to a grant-nothing path.
-pub type TrustedIdentity = Result<Option<ResourceBackedSwtpm>, TrustedPathMismatch>;
-
 /// Resolve the trusted identity of a resource-backed `w1-swtpm` launch from
-/// the verified bundle.
+/// the verified bundle and the scope pinned against it.
 ///
-/// The granted leaf is derived from the bundle alone: the Zone resource
-/// bundle names the Device's own Guest, and the state Volume directory is
-/// named from the durable uid the framework derives for
-/// `(zone, "Device", <name>)` - never from the uid the launch carries.
-/// `asserted_device_uid` is a cross-check only: a launch that asserts
-/// another Device's uid is refused, because a scope whose own claim
-/// contradicts the bundle it was resolved against is not a scope to derive
-/// anything from.
+/// The scope is not a payload claim: it is
+/// [`crate::ops::device_worker::resolve_launch_scope`]'s own answer, which
+/// names the `Device` row that owns the *launched row* in the verified Zone
+/// resource bundle, that Device's durable uid, and the Guest that Device
+/// declares. The state Volume directory is therefore named from the launched
+/// row's own owner, so a payload that names another Device - carrying that
+/// Device's publicly derivable uid - never reaches this function: the pin
+/// refused it by name first.
+///
+/// What is left is the storage contract, and a gap in it is a gap rather than
+/// a contradiction: the state root comes from the `path:swtpm-state:<guest>`
+/// row of the pinned Guest and must be the same directory the Provider policy
+/// root `path:tpm-state` names, or no identity is derived at all.
 pub fn resource_backed_identity(
     resolver: &BundleResolver,
-    zone_uid: &ResourceUid,
-    device_ref: &ResourceRef,
-    asserted_device_uid: &ResourceUid,
-) -> TrustedIdentity {
-    if device_ref.resource_type().as_str() != "Device" {
-        return Ok(None);
-    }
-    let (zone, bundle_bytes) = match crate::ops::device_worker::zone_bundle_for_uid(resolver, zone_uid)
-    {
-        Some(resolved) => resolved,
-        None => return Ok(None),
-    };
-    let owning_uid =
-        crate::ops::device_worker::deterministic_resource_uid(&zone, "Device", device_ref.name().as_str());
-    if asserted_device_uid != &owning_uid {
-        return Err(TrustedPathMismatch::DeviceUid {
-            claimed: asserted_device_uid.to_canonical_string(),
-            resolved: owning_uid.to_canonical_string(),
-        });
-    }
-    let Some(guest) =
-        crate::ops::device_worker::device_guest_owner(bundle_bytes, device_ref.name().as_str())
-    else {
-        return Ok(None);
-    };
-    let Some(state_root) = storage_root(resolver, &format!("path:swtpm-state:{guest}")) else {
-        return Ok(None);
-    };
+    scope: &crate::ops::device_worker::DeviceWorkerScope,
+) -> Option<ResourceBackedSwtpm> {
+    let state_root = storage_root(resolver, &format!("path:swtpm-state:{}", scope.guest()))?;
     // The Provider's opaque `sourcePolicyId: "tpm-state"` resolves through the
     // storage contract's `path:tpm-state` row. If the two rows disagree, the
     // directory the worker opens is not the directory the Volume controller
     // provisions, so no trusted identity is derived.
     if storage_root(resolver, "path:tpm-state") != Some(state_root.clone()) {
-        return Ok(None);
+        return None;
     }
-    Ok(Some(ResourceBackedSwtpm {
-        guest,
+    Some(ResourceBackedSwtpm {
+        guest: scope.guest.clone(),
         state_root,
-        state_volume: state_volume_name(&owning_uid),
-    }))
+        state_volume: state_volume_name(&scope.device_uid),
+    })
 }
 
 /// The trusted TPM state row of one zone-native Guest, when the verified
@@ -251,6 +228,85 @@ pub fn trusted_state_dir(identity: &ResourceBackedSwtpm) -> PathBuf {
     identity.state_root.join(&identity.state_volume)
 }
 
+/// The worker's persistent TPM state blob, by name, inside the state
+/// directory. The worker creates it on its first start and keeps its own
+/// header inside it, so a blob of zero length is a blob whose header was
+/// never written.
+const NVRAM_BLOB_NAME: &str = "tpm2-00.permall";
+
+/// The long-lived worker's own control socket inside its per-Guest runtime
+/// directory, by name. It is the one entry a previous run of that worker can
+/// leave where the next one must bind.
+pub(crate) const WORKER_SOCKET_NAME: &str = "tpm.sock";
+
+/// Why a state directory cannot carry the worker that is about to open it.
+///
+/// A closed set of path-free slugs: the audit record and the launch-failure
+/// envelope render the slug and the errno class, never a raw path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StateDirHealth {
+    /// The directory is absent, or carries no persistent state blob at all:
+    /// the worker manufactures on its first start, and the caller's own
+    /// presence rule (`StateVolumeLeaf`) decides whether that is a refusal.
+    Usable,
+    /// The directory carries a persistent state blob of zero length. The
+    /// blob's header is inside the blob, so a headerless blob is read as a
+    /// corrupt state rather than as a new one: the worker enters a fatal
+    /// power-on failure and exits, and every later start repeats it. This is
+    /// not a state the worker can recover from, and the broker will not
+    /// touch the bytes - that blob is the Endorsement Key's home, and
+    /// guessing when discarding it is safe destroys unrecoverable key
+    /// material. Refuse, and say so.
+    HeaderlessState,
+    /// The state directory could not be read. The refusal stays path-free.
+    Unreadable(std::io::ErrorKind),
+}
+
+impl std::fmt::Display for StateDirHealth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Usable => f.write_str("state-dir-usable"),
+            Self::HeaderlessState => f.write_str("state-dir-persistent-state-headerless"),
+            Self::Unreadable(kind) => {
+                write!(f, "state-dir-unreadable:{kind:?}")
+            }
+        }
+    }
+}
+
+/// Classify the state directory a resource-backed worker is about to open,
+/// without modifying anything in it.
+///
+/// The check is deliberately narrow and deliberately non-destructive: it
+/// looks at exactly one entry, the persistent state blob, and reports a
+/// zero-length one. It never opens the blob for writing, never truncates it,
+/// never removes it, and never re-manufactures a replacement. An operator,
+/// not the broker, decides what unrecoverable key material is worth.
+///
+/// The one stat it needs runs on the async runtime's own blocking pool, the
+/// way every other filesystem read on the launch path does: this runs inside
+/// an async spawn arm, and a `std::fs` call here would block a runtime
+/// worker on the state directory's first byte.
+pub(crate) async fn classify_state_dir(identity: &ResourceBackedSwtpm) -> StateDirHealth {
+    let state_dir = trusted_state_dir(identity);
+    let blob = state_dir.join(NVRAM_BLOB_NAME);
+    let metadata = match tokio::fs::symlink_metadata(&blob).await {
+        Ok(metadata) => metadata,
+        // Absent: the worker creates it. A symlink is never followed, and one
+        // standing where the blob belongs is not a state the worker can use,
+        // so it is read as an unreadable directory rather than as a size.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return StateDirHealth::Usable,
+        Err(error) => return StateDirHealth::Unreadable(error.kind()),
+    };
+    if !metadata.is_file() {
+        return StateDirHealth::Unreadable(std::io::ErrorKind::InvalidData);
+    }
+    if metadata.len() == 0 {
+        return StateDirHealth::HeaderlessState;
+    }
+    StateDirHealth::Usable
+}
+
 /// Fence one resource-backed launch's arguments against the trusted paths the
 /// broker grants on, and refuse an argument set that names anything else.
 ///
@@ -265,6 +321,14 @@ pub fn trusted_state_dir(identity: &ResourceBackedSwtpm) -> PathBuf {
 /// consulted: the rule reads the arguments' paths, not the family that
 /// spells them, so it holds for whichever flag names them.
 ///
+/// Containment is a textual component comparison, so every candidate is
+/// *anchored* before it is compared: `/state/../etc/shadow` is a component
+/// prefix of the trusted state root while resolving at `/etc/shadow`, so an
+/// unanchored candidate is refused rather than admitted. A candidate that is
+/// not a path at all (`unixio`, `0660`, `--tpm2`) is not a target, but a
+/// value in a path-shaped field always is - a relative or empty one is
+/// refused, never skipped.
+///
 /// `argv[0]` is the launch's own executable name, not a path the launch
 /// opens, so it is not a target.
 pub fn verify_argv_names_only_trusted_paths(
@@ -274,8 +338,19 @@ pub fn verify_argv_names_only_trusted_paths(
 ) -> Result<(), TrustedPathMismatch> {
     let state_dir = trusted_state_dir(identity);
     for argument in plan.argv.iter().skip(1) {
-        for named in named_absolute_paths(argument) {
-            if !is_within(&named, &state_dir) && !is_within(&named, runtime_dir) {
+        for field in argument.split(',') {
+            let (key, value) = match field.split_once('=') {
+                Some((key, value)) => (Some(key), value),
+                None => (None, field),
+            };
+            if !names_a_path(key, value) {
+                continue;
+            }
+            let named = Path::new(value);
+            if !crate::live_handlers::is_anchored_absolute(named) {
+                return Err(TrustedPathMismatch::ArgvUnanchoredPath);
+            }
+            if !is_within(named, &state_dir) && !is_within(named, runtime_dir) {
                 return Err(TrustedPathMismatch::ArgvOutsideTrustedPaths);
             }
         }
@@ -283,14 +358,21 @@ pub fn verify_argv_names_only_trusted_paths(
     Ok(())
 }
 
-/// Every absolute path one argument names: the argument itself when it is a
-/// path, plus the value of each `key=path` field of a comma-separated option.
-fn named_absolute_paths(argument: &str) -> impl Iterator<Item = PathBuf> + '_ {
-    argument
-        .split(',')
-        .map(|field| field.rsplit_once('=').map_or(field, |(_, value)| value))
-        .filter(|value| Path::new(value).is_absolute())
-        .map(PathBuf::from)
+/// The `key=path` field names this launch vocabulary spells a path with.
+const PATH_FIELD_NAMES: [&str; 4] = ["path", "mountPath", "dir", "file"];
+
+/// Whether one field of a launch argument names a path, which is what makes
+/// its value a target the fence has to resolve.
+///
+/// A field named by [`PATH_FIELD_NAMES`] is a path claim whatever its value
+/// spells, so `dir=../../../tmp/evil` is refused instead of being read as a
+/// plain token. Every other field is judged by its value: a separator or a
+/// bare relative step names a path the worker may open, a plain word does not.
+fn names_a_path(key: Option<&str>, value: &str) -> bool {
+    if key.is_some_and(|key| PATH_FIELD_NAMES.contains(&key)) {
+        return true;
+    }
+    value.contains('/') || matches!(value, "." | "..")
 }
 
 /// Whether `candidate` is `root` itself or lives strictly inside it.
@@ -513,7 +595,9 @@ mod tests {
 #[cfg(test)]
 mod trusted_identity_tests {
     use super::*;
+    use crate::ops::device_worker::DeviceWorkerScope;
     use d2b_contracts::contract_id::{ContractId, PathTemplate};
+    use d2b_contracts_resource::v3::ResourceRef;
     use d2b_core::bundle::{Bundle, BundleGeneration};
     use d2b_core::host::HostJson;
     use d2b_core::manifest_v04::ManifestV04;
@@ -681,19 +765,28 @@ mod trusted_identity_tests {
         ResourceRef::parse(&format!("Device/{name}")).expect("device ref")
     }
 
-    /// The identity the verified bundle derives for `Device/tpm0`: the
-    /// state Volume directory named from the Device's own durable uid, never
-    /// from anything the launch carries.
+    /// The scope `device_worker::resolve_launch_scope` pins to the fixture's
+    /// `Process/swtpm-tpm0` row: the `Device` that owns it, that Device's own
+    /// durable uid, and the Guest that Device declares. It is the only Device
+    /// identity this module sees - a launch's own claim about it is re-pinned
+    /// against the bundle before it gets here, and refused if it names any
+    /// other Device or any other Guest.
+    fn pinned_scope() -> DeviceWorkerScope {
+        DeviceWorkerScope {
+            zone_uid: zone_uid(),
+            device_ref: device_ref("tpm0"),
+            device_uid: ResourceUid::parse(TPM0_UID).expect("device uid"),
+            guest: GUEST.to_owned(),
+        }
+    }
+
+    /// The identity the verified bundle derives for the pinned `Device/tpm0`:
+    /// the state Volume directory named from that Device's own durable uid,
+    /// never from anything the launch carries.
     #[test]
-    fn the_granted_leaf_is_derived_from_the_bundles_device() {
-        let identity = resource_backed_identity(
-            &resolver(),
-            &zone_uid(),
-            &device_ref("tpm0"),
-            &ResourceUid::parse(TPM0_UID).expect("device uid"),
-        )
-        .expect("the asserted uid agrees with the bundle")
-        .expect("the verified rows resolve a state directory");
+    fn the_granted_leaf_is_derived_from_the_pinned_device() {
+        let identity = resource_backed_identity(&resolver(), &pinned_scope())
+            .expect("the verified rows resolve a state directory");
         assert_eq!(identity.state_volume, TPM0_VOLUME);
         assert_eq!(
             trusted_state_dir(&identity),
@@ -702,58 +795,16 @@ mod trusted_identity_tests {
         );
     }
 
-    /// A launch that asserts ANOTHER Device's uid is refused outright: the
-    /// grant it would otherwise receive is a sibling Device's TPM state
-    /// directory under the same shared root, so a payload that can name the
-    /// uid can reach that directory. The uid is a cross-check, never the
-    /// source of the granted path.
+    /// A Guest the verified storage contract names no TPM state row for is an
+    /// unresolved trusted input, not a contradicted one: the caller grants
+    /// nothing rather than refusing a launch on a gap in the artifacts.
     #[test]
-    fn a_launch_asserting_another_devices_uid_is_refused() {
-        let foreign =
-            crate::ops::device_worker::deterministic_resource_uid("work", "Device", "gpu0");
-        let error = resource_backed_identity(&resolver(), &zone_uid(), &device_ref("tpm0"), &foreign)
-            .expect_err("a foreign Device uid must be refused, not downgraded");
-        assert_eq!(
-            error,
-            TrustedPathMismatch::DeviceUid {
-                claimed: foreign.to_canonical_string(),
-                resolved: TPM0_UID.to_owned(),
-            }
-        );
-        assert_eq!(
-            error.to_string(),
-            "device-worker-scope-uid-mismatch",
-            "the refusal is a typed, path-free slug"
-        );
-
-        // The same launch with its own uid still resolves: the refusal is the
-        // disagreement, not the shape of the claim.
-        assert!(
-            resource_backed_identity(
-                &resolver(),
-                &zone_uid(),
-                &device_ref("tpm0"),
-                &ResourceUid::parse(TPM0_UID).expect("device uid"),
-            )
-            .expect("the matching uid resolves")
-            .is_some()
-        );
-    }
-
-    /// A row no verified artifact names is an unresolved trusted input, not
-    /// a contradicted one: the caller grants nothing rather than refusing a
-    /// launch on a gap in the artifacts.
-    #[test]
-    fn a_row_no_verified_artifact_names_derives_nothing() {
-        assert_eq!(
-            resource_backed_identity(
-                &resolver(),
-                &zone_uid(),
-                &ResourceRef::parse("Process/swtpm-tpm0").expect("not a device"),
-                &ResourceUid::parse(TPM0_UID).expect("device uid"),
-            ),
-            Ok(None)
-        );
+    fn a_guest_no_storage_row_names_derives_nothing() {
+        let scope = DeviceWorkerScope {
+            guest: "other-guest".to_owned(),
+            ..pinned_scope()
+        };
+        assert_eq!(resource_backed_identity(&resolver(), &scope), None);
     }
 
     fn resource_backed_plan(state_dir: &Path, runtime_dir: &Path) -> SpawnRunnerPlan {
@@ -859,6 +910,94 @@ mod trusted_identity_tests {
             assert_eq!(
                 verify_argv_names_only_trusted_paths(&plan, &identity(), &runtime_dir),
                 Err(TrustedPathMismatch::ArgvOutsideTrustedPaths),
+                "argument {index} ({argument}) must be refused"
+            );
+        }
+    }
+
+    /// Containment is a textual component comparison, so a candidate that
+    /// merely *spells* itself as a prefix of a trusted root - by walking out
+    /// of it - must be refused, not admitted. Each shape below is one
+    /// argument the previous fence admitted, and each is asserted on its own.
+    #[test]
+    fn an_unanchored_or_out_of_root_argument_is_refused() {
+        let state_dir = trusted_state_dir(&identity());
+        let runtime_dir = PathBuf::from("/run/d2b/vms").join(GUEST);
+        let state = state_dir.display().to_string();
+        let runtime = runtime_dir.display().to_string();
+        let sibling_volume = "device-00000000000000000000000000000000-tpm-state";
+        let fence = |index: usize, argument: &str| {
+            let mut plan = resource_backed_plan(&state_dir, &runtime_dir);
+            plan.argv[index] = argument.to_owned();
+            verify_argv_names_only_trusted_paths(&plan, &identity(), &runtime_dir)
+        };
+        // `--tpmstate dir=` walking out of the trusted state directory.
+        assert_eq!(
+            fence(4, &format!("dir={state}/../../etc/shadow")),
+            Err(TrustedPathMismatch::ArgvUnanchoredPath)
+        );
+        // The same walk landing on a sibling Device's state Volume.
+        assert_eq!(
+            fence(4, &format!("dir={state}/../{STATE_ROOT}/{sibling_volume}")),
+            Err(TrustedPathMismatch::ArgvUnanchoredPath)
+        );
+        // `--server path=` walking out of the trusted runtime directory.
+        assert_eq!(
+            fence(
+                8,
+                &format!("type=unixio,path={runtime}/../../../etc/cron.d/x,mode=0777")
+            ),
+            Err(TrustedPathMismatch::ArgvUnanchoredPath)
+        );
+        // A relative value in a path-shaped field: the worker resolves it
+        // against its own cwd, which the fence never derives.
+        assert_eq!(
+            fence(8, "type=unixio,path=../../etc/shadow,mode=0660"),
+            Err(TrustedPathMismatch::ArgvUnanchoredPath)
+        );
+        // The same, in the other path-shaped field.
+        assert_eq!(
+            fence(4, "dir=../../../tmp/evil"),
+            Err(TrustedPathMismatch::ArgvUnanchoredPath)
+        );
+        // A whole argument replaced by a shell command: every path a command
+        // line names is a path the launch can open, and this one names two
+        // the grant never covers.
+        let mut shell = resource_backed_plan(&state_dir, &runtime_dir);
+        shell.argv = vec![
+            "sh".to_owned(),
+            "-c".to_owned(),
+            "cat /etc/shadow > /tmp/x".to_owned(),
+        ];
+        assert_eq!(
+            verify_argv_names_only_trusted_paths(&shell, &identity(), &runtime_dir),
+            Err(TrustedPathMismatch::ArgvUnanchoredPath)
+        );
+    }
+
+    /// A relative value is refused, not discarded: the old fence filtered
+    /// every non-absolute value out of its comparison, so a path-shaped field
+    /// that named one was read as though it named no path at all.
+    #[test]
+    fn a_relative_value_in_a_path_shaped_field_is_refused_not_discarded() {
+        let state_dir = trusted_state_dir(&identity());
+        let runtime_dir = PathBuf::from("/run/d2b/vms").join(GUEST);
+        for (argument, index) in [
+            ("path=../../etc/shadow", 8),
+            ("dir=../../../tmp/evil", 4),
+            ("file=swtpm.pid", 12),
+            ("mountPath=vms", 4),
+            // A path under a field name that is not path-shaped is still a
+            // path, and is still anchored-checked.
+            ("type=../../etc/shadow", 8),
+            // A bare relative argument, with no field name at all.
+            ("../ctrl.sock", 4),
+        ] {
+            let mut plan = resource_backed_plan(&state_dir, &runtime_dir);
+            plan.argv[index] = argument.to_owned();
+            assert_eq!(
+                verify_argv_names_only_trusted_paths(&plan, &identity(), &runtime_dir),
+                Err(TrustedPathMismatch::ArgvUnanchoredPath),
                 "argument {index} ({argument}) must be refused"
             );
         }

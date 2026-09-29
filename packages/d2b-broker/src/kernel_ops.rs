@@ -762,7 +762,7 @@ async fn spawn_process(
             .unwrap_or_default();
     let activation_input: Option<d2b_contracts_resource::v3::ActivationRunnerInput> =
         optional_parse_field(invocation.payload, "activationInput")?;
-    let device_worker = parse_device_worker(invocation.payload, &role)?;
+    let mut device_worker = parse_device_worker(invocation.payload)?;
     let mut request_fds = invocation
         .fds
         .iter()
@@ -845,60 +845,113 @@ async fn spawn_process(
     // grant. A launch that is neither a swtpm role nor a socket-binding
     // worker - and a legacy VM-scoped one whose per-VM tree host
     // activation provisions - resolves neither.
-    let swtpm_scope = device_worker.scope.as_ref().filter(|_| {
-        matches!(
-            role,
-            d2b_contracts_broker::broker_wire::RunnerRole::Swtpm
-                | d2b_contracts_broker::broker_wire::RunnerRole::SwtpmFlush
-        )
-    });
-    let runtime_scope = device_worker
-        .scope
-        .as_ref()
-        .filter(|_| device_worker.binds_runtime_socket);
-    let (swtpm_identity, guest_runtime_posture) = match swtpm_scope.or(runtime_scope) {
-        None => (None, None),
-        Some(_) => {
-            let resolver = match crate::runtime::load_kernel_resolver(&config.bundle_path) {
-                crate::runtime::BundleSlot::Loaded(resolver) => resolver,
-                crate::runtime::BundleSlot::Unavailable => {
-                    return Err(refused(
-                        "spawn-process: device worker bundle resolver unavailable",
-                    ));
-                }
-                crate::runtime::BundleSlot::Tampered { .. } => {
-                    return Err(refused("spawn-process: device worker bundle tampered"));
-                }
-            };
-            let identity = swtpm_scope
-                .map(
-                    |scope| {
-                        crate::ops::swtpm_identity::resource_backed_identity(
-                            &resolver,
-                            &scope.zone_uid,
-                            &scope.device_ref,
-                            &scope.device_uid,
-                        )
-                    },
+    //
+    // The scope the payload carries is a *claim*, and it is what selects
+    // every one of those directories, so it is re-pinned here rather than
+    // trusted: the Device, its durable uid and its Guest are re-resolved
+    // from the launched row's own `metadata.ownerRef` in the verified Zone
+    // bundle (`device_worker::repin_launch_scope`, the pin the daemon's
+    // launch arm applies, against the same resolver). A payload naming
+    // another declared Device - with that Device's publicly derivable uid -
+    // or another declared Guest is refused here, at the dispatch, instead
+    // of being handed those directories, and the launch that continues is
+    // the pin itself, never the payload's copy. Refusals are typed,
+    // path-free slugs, audited and surfaced in the launch-failure envelope.
+    let (swtpm_identity, guest_runtime_posture, state_volume_leaf) =
+        match device_worker.scope.as_ref() {
+            None => (
+                None,
+                None,
+                crate::ops::device_worker::StateVolumeLeaf::MustExist,
+            ),
+            Some(claimed) => {
+                let resolver = match crate::runtime::load_kernel_resolver(&config.bundle_path) {
+                    crate::runtime::BundleSlot::Loaded(resolver) => resolver,
+                    crate::runtime::BundleSlot::Unavailable => {
+                        return Err(refused(
+                            "spawn-process: device worker bundle resolver unavailable",
+                        ));
+                    }
+                    crate::runtime::BundleSlot::Tampered { .. } => {
+                        return Err(refused("spawn-process: device worker bundle tampered"));
+                    }
+                };
+                // A launch that names no launched row carries no row for the
+                // bundle to pin, which is the same unresolved-row refusal the
+                // pin itself issues - never a silent "grants nothing", which
+                // would launch the same worker with the scope it was never
+                // granted.
+                use crate::ops::device_worker as dw;
+                let (resource_ref, zone_uid) =
+                    match (identity.resource_ref.as_ref(), identity.zone_uid.as_ref()) {
+                        (Some(resource_ref), Some(zone_uid)) => (resource_ref, zone_uid),
+                        _ => {
+                            let unresolved = dw::DeviceWorkerScopeError::RowUnresolved;
+                            crate::live_handlers::audit_device_worker_runtime_dir(
+                                "scope-pin",
+                                "failed-closed",
+                                &unresolved.to_string(),
+                            );
+                            return Err(refused(format!(
+                                "spawn-process: device worker scope: {unresolved}"
+                            )));
+                        }
+                    };
+                let pinned = dw::repin_launch_scope(
+                    &resolver,
+                    claimed,
+                    resource_ref,
+                    zone_uid,
+                    identity.owner_ref.as_ref(),
+                    Some(&claimed.device_uid),
                 )
-                .transpose()
-                // A scope that contradicts the verified bundle is refused
-                // here, at the dispatch: the uid it asserts is the one the
-                // granted state directory is named from, so a launch that
-                // names another Device's would otherwise be handed that
-                // Device's TPM state directory. It is never downgraded to
-                // "grants nothing", which would launch the same worker with
-                // the directory it was never granted.
-                .map_err(|mismatch| {
-                    refused(format!("spawn-process: device worker scope: {mismatch}"))
-                })?
-                .flatten();
-            let posture = runtime_scope.and_then(|scope| {
-                crate::ops::device_worker::guest_runtime_dir_posture(&resolver, scope.guest())
-            });
-            (identity, posture)
-        }
-    };
+                .map_err(|error| {
+                    crate::live_handlers::audit_device_worker_runtime_dir(
+                        "scope-pin",
+                        "failed-closed",
+                        &error.to_string(),
+                    );
+                    refused(format!("spawn-process: device worker scope: {error}"))
+                })?;
+                // The presence policy of the state directory is the launched
+                // row's own fact too, and it is the wire role that a payload
+                // chooses: read here, against the row the pin just resolved,
+                // so a launch that claims the one-shot posture for the
+                // long-lived row is refused by name instead of being handed
+                // the lenient absence policy that row's own state-directory
+                // refusal exists to enforce.
+                let leaf = dw::state_volume_leaf_for_launch(
+                    &resolver,
+                    &pinned,
+                    resource_ref,
+                    &role,
+                )
+                .map_err(|slug| {
+                    crate::live_handlers::audit_device_worker_runtime_dir(
+                        "state-leaf",
+                        "failed-closed",
+                        slug,
+                    );
+                    refused(format!("spawn-process: device worker state leaf: {slug}"))
+                })?;
+                let swtpm_identity = if matches!(
+                    role,
+                    d2b_contracts_broker::broker_wire::RunnerRole::Swtpm
+                        | d2b_contracts_broker::broker_wire::RunnerRole::SwtpmFlush
+                ) {
+                    crate::ops::swtpm_identity::resource_backed_identity(&resolver, &pinned)
+                } else {
+                    None
+                };
+                let posture = if device_worker.binds_runtime_socket {
+                    crate::ops::device_worker::guest_runtime_dir_posture(&resolver, pinned.guest())
+                } else {
+                    None
+                };
+                (swtpm_identity, posture, leaf)
+            }
+        };
+    device_worker.state_volume_leaf = state_volume_leaf;
     // The stale-socket preflight cleanups (the retired arm's three
     // `cleanup_*_stale_socket` calls). The guest runtime Provider declares
     // its socket-carrying argv paths; the kernel unlinks provably-stale
@@ -1824,12 +1877,17 @@ fn integer_field(
 /// deviceUid, guest} | null, bindsRuntimeSocket: bool}`, absent meaning
 /// the default (no scope, no runtime socket).
 ///
-/// `role` decides what the row needs of its state directory's presence: the
-/// long-lived worker opens that directory itself, the one-shot flush waits
-/// for a socket that lands with it.
+/// What the launched row needs of its state directory's presence is NOT
+/// decided here: it needs the verified bundle, so it is derived where the pin
+/// resolves - `device_worker::state_volume_leaf_for_launch`, which reads the
+/// launched row the `device_worker::repin_launch_scope` pin resolved and
+/// refuses a wire `role` that disagrees with it. A launch that names no
+/// Device-worker scope keeps the strict default, which is the only variant a
+/// bundle could not have derived something more lenient from - and the grants
+/// that variant governs are all reached with a scope, so such a launch is
+/// refused at the pin before the variant is ever read.
 fn parse_device_worker(
     payload: &CanonicalJsonObject,
-    role: &d2b_contracts_broker::broker_wire::RunnerRole,
 ) -> Result<crate::ops::device_worker::DeviceWorkerLaunch, DispatchFailure> {
     let Some(value) = payload.get("deviceWorker") else {
         return Ok(crate::ops::device_worker::DeviceWorkerLaunch::default());
@@ -1888,15 +1946,7 @@ fn parse_device_worker(
     Ok(crate::ops::device_worker::DeviceWorkerLaunch {
         scope,
         binds_runtime_socket,
-        // The one-shot flush is the row that exists to be admitted before
-        // the worker has created the directory it connects to; every other
-        // role opens that directory itself and is refused when it is absent.
-        state_volume_leaf: match role {
-            d2b_contracts_broker::broker_wire::RunnerRole::SwtpmFlush => {
-                crate::ops::device_worker::StateVolumeLeaf::MayNotHaveLanded
-            }
-            _ => crate::ops::device_worker::StateVolumeLeaf::MustExist,
-        },
+        state_volume_leaf: crate::ops::device_worker::StateVolumeLeaf::default(),
     })
 }
 

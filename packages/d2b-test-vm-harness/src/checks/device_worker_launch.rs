@@ -102,10 +102,13 @@ const START_BROKER: &str = "systemctl start d2b-broker.service";
 const BUNDLE: &str = "cat /etc/d2b/zones/work/resource-bundle.json";
 
 /// The row fields the fixture's dumps and projections read, its own
-/// `ROW_FIELDS`.
+/// `ROW_FIELDS`, plus the deletion mark: a row mid-delete stays listed with
+/// it stamped, so a dump that cannot say so cannot explain a teardown that
+/// did not finish.
 const ROW_FIELDS: &str = concat!(
     "{type: .type, name: .metadata.name, owner: .metadata.ownerRef, ",
     "uid: .metadata.uid, gen: .metadata.generation, ",
+    "del: .metadata.deletionRequestedAt, ",
     "obs: .status.observedGeneration, phase: .status.phase, ",
     "template: .spec.template, resource: .status.resource}",
 );
@@ -134,7 +137,9 @@ const FLUSH_PROCESS: &str = "/run/d2b-u17-flush-process.json";
 /// The dump the teardown wait reads.
 const TEARDOWN_PROCESS: &str = "/run/d2b-u17-teardown-process.json";
 
-/// The dump the retired flush row is read out of.
+/// The dump the retired flush row is read out of. A refusing `--json` read
+/// prints its error envelope here too - the CLI renders JSON errors on
+/// stdout - so this one file carries either the row or the reason it is gone.
 const TEARDOWN_FLUSH: &str = "/run/d2b-u17-teardown-flush.json";
 
 /// The dump the Device's revision is read out of.
@@ -285,8 +290,24 @@ const TPM_ROWS_RETIRED: &str = concat!(
     "/run/d2b-u17-teardown-process.json",
 );
 
+/// The flush row the `Get` below reads by exact ref has stopped answering:
+/// the read refuses, and it refuses on `resource-not-found`. A row still
+/// mid-delete is still indexed, still stamps `deletionRequestedAt`, and still
+/// answers its `Get` with exit 0, so the refusal - not a stamped mark, and not
+/// a sibling's retirement - is what says this row retired. The class is what
+/// keeps a refused daemon from reading as a retired row.
+const FLUSH_ROW_RETIRED: &str = "grep -q resource-not-found /run/d2b-u17-teardown-flush.json";
+
 /// Whether a swtpm worker is still alive, without refusing when it is not.
 const PGREP_SWTPM: &str = "pgrep -f '[s]wtpm socket' >/dev/null";
+
+/// The deletion mark the teardown's `Get` did not refuse on: read out of the
+/// same `Get` dump, so a refusal can say whether the row was never asked to
+/// go or is still going.
+const FLUSH_DELETION_MARK: &str = concat!(
+    "jq -r '(.metadata.deletionRequestedAt // \"unstamped\")' ",
+    "/run/d2b-u17-teardown-flush.json 2>/dev/null || echo unreadable",
+);
 
 /// One declared Device worker row, the fixture's own `DECLARED_ROWS` entry:
 /// its name, its resource type, its declared template, and the Device that
@@ -566,37 +587,6 @@ pub fn assertions(control: &mut GuestControl) -> LegacyResult<()> {
     while Instant::now() < outcome_deadline {
         control.succeed(&[&format!("{}; echo OK", list_json("Process", OUTCOME_PROCESS))], None)?;
         control.succeed(&[&format!("{}; echo OK", flush_get(OUTCOME_FLUSH))], None)?;
-        // TEMPORARY DIAGNOSTIC (to be removed).
-        if let Ok(seen) = control.execute(
-            "for f in /var/lib/d2b/tpm-state/device-*-tpm-state/swtpm.log; do \
-             echo \"== $f\"; cat \"$f\" 2>&1; done; true",
-            None,
-        ) {
-            if seen.status == 0 && seen.output.trim().len() > 1 {
-                let reaped = control
-                    .execute(
-                        "grep -h ChildReaped /var/lib/d2b/audit/broker-*.jsonl 2>/dev/null | \
-                         tail -8; true",
-                        None,
-                    )
-                    .map(|out| out.output)
-                    .unwrap_or_default();
-                let acls = control
-                    .execute(
-                        "getfacl -pn /run/d2b/vms/acceptance-guest 2>&1 | head -12; \
-                         stat -c '%n %A %u:%g' /run/d2b/vms/acceptance-guest 2>&1; true",
-                        None,
-                    )
-                    .map(|out| out.output)
-                    .unwrap_or_default();
-                control.announce(&format!(
-                    "[d2b] SWTPM-LOG-CAPTURE:\n{}",
-                    seen.output
-                ));
-                control.announce(&format!("[d2b] SWTPM-REAPED:\n{reaped}"));
-                control.announce(&format!("[d2b] SWTPM-RUNDIR-ACL:\n{acls}"));
-            }
-        }
         let probed = control.succeed(&[OUTCOME_PROBE], None)?;
         // The fixture read the half before its `---` marker, which is the
         // three declared Process rows.
@@ -780,7 +770,9 @@ pub fn assertions(control: &mut GuestControl) -> LegacyResult<()> {
 
     // 6. Teardown: deleting the Device retires its declared rows through the
     //    Process controller - the process stops and the rows go away, children
-    //    first, with nothing of the Device left behind.
+    //    first, with nothing of the Device left behind. The wait covers both
+    //    declared rows, because each retires in its own delete pass: the
+    //    `Process` sibling, and the `EphemeralProcess` the `Get` below reads.
     control.stage("tpm-teardown");
     control.succeed(&[&list_json("Device", DEVICE_PRE_DELETE)], None)?;
     let revision = control.succeed(&[DEVICE_REVISION], None)?.trim().to_owned();
@@ -790,17 +782,23 @@ pub fn assertions(control: &mut GuestControl) -> LegacyResult<()> {
     )?;
     control.diag_wait(
         "tpm-teardown",
-        &format!("{} && {TPM_ROWS_RETIRED}", list_json("Process", TEARDOWN_PROCESS)),
+        &format!(
+            "{} && {TPM_ROWS_RETIRED} && ({}; test $? -ne 0) && {FLUSH_ROW_RETIRED}",
+            list_json("Process", TEARDOWN_PROCESS),
+            flush_get(TEARDOWN_FLUSH),
+        ),
         TEARDOWN,
         &rows,
         &[("d2bd.service", "swtpm"), ("d2bd.service", "delete")],
     )?;
     let flush_gone = control.execute(&flush_get(TEARDOWN_FLUSH), None)?;
     if flush_gone.status == 0 {
+        let mark = control.execute(FLUSH_DELETION_MARK, None)?;
         return Err(LegacyError::Assertion(format!(
             "the Device delete must retire EphemeralProcess/swtpm-flush-tpm0 \
-             (Get must refuse, saw exit {})",
+             (Get must refuse, saw exit {} with deletionRequestedAt {})",
             flush_gone.status,
+            mark.output.trim(),
         )));
     }
     control.announce(&format!(
@@ -1006,7 +1004,7 @@ fn row_dumps() -> Vec<(String, String)> {
     dumps.push((
         "declared flush row (Get) and zone-wide list EphemeralProcess (exec-routed)".to_owned(),
         format!(
-            "{} && jq -c '{flush_projection}' \
+            "{} || echo get-exit=$?; jq -c '{flush_projection}' \
              /run/d2b-u17-ephemeralprocess-get.json; rc=0; {} \
              || rc=$?; echo list-exit=$rc; true",
             flush_get("/run/d2b-u17-ephemeralprocess-get.json"),
@@ -1208,19 +1206,6 @@ fn row_dumps() -> Vec<(String, String)> {
         concat!(
             "find /run/d2b/vms /run/d2b-video -maxdepth 3 ",
             "-printf '%M %u:%g %p\\n' 2>/dev/null | sort | head -n 40 || true",
-        )
-        .to_owned(),
-    ));
-    // TEMPORARY DIAGNOSTIC (to be removed).
-    dumps.push((
-        "per-guest runtime dir ACL".to_owned(),
-        concat!(
-            "for d in /run/d2b /run/d2b/vms /run/d2b/vms/acceptance-guest; do ",
-            "echo \"== $d\"; stat -c '%n %A %U:%G %u:%g %i' \"$d\" 2>&1; ",
-            "getfacl -pn \"$d\" 2>&1 | head -20; done; ",
-            "echo '== swtpm log'; ",
-            "for f in /var/lib/d2b/tpm-state/device-*-tpm-state/swtpm.log; do ",
-            "echo \"== $f\"; cat \"$f\" 2>&1 | head -20; done; true",
         )
         .to_owned(),
     ));

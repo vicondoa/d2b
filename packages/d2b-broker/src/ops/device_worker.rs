@@ -22,8 +22,9 @@
 use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
 
+use d2b_contracts_broker::broker_wire::RunnerRole;
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
-use d2b_core::bundle_resolver::{BundleResolver, DEVICE_TPM_PROVIDER_REF};
+use d2b_core::bundle_resolver::{device_worker_posture, BundleResolver, DEVICE_TPM_PROVIDER_REF};
 use d2b_core::processes::ProcessRole;
 use d2b_core::storage::StoragePathKind;
 
@@ -135,6 +136,29 @@ pub enum DeviceWorkerScopeError {
     /// The owning Device declares no Guest owner, so the worker has no VM
     /// scope to derive its runtime paths from.
     GuestUnresolved { owning: String },
+    /// The launch asserts a Device scope the verified bundle does not pin to
+    /// its launched row.
+    ScopeMismatch,
+}
+
+impl std::fmt::Display for DeviceWorkerScopeError {
+    /// The closed, path-free slug a launch refusal and its audit record carry.
+    /// A raw reference or uid is deliberately absent: the field it disagrees
+    /// on is already reported by [`Self::field`], and the claim is recorded
+    /// nowhere else.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::RowUnresolved => "device-worker-row-unresolved",
+            Self::RowOwnerMissing => "device-worker-row-owner-missing",
+            Self::RowOwnerNotDevice { .. } => "device-worker-row-owner-not-a-device",
+            Self::OwnerMissing => "device-worker-owner-missing",
+            Self::OwnerMismatch { .. } => "device-worker-owner-mismatch",
+            Self::OwnerUidMissing { .. } => "device-worker-owner-uid-missing",
+            Self::OwnerUidMismatch { .. } => "device-worker-owner-uid-mismatch",
+            Self::GuestUnresolved { .. } => "device-worker-guest-unresolved",
+            Self::ScopeMismatch => "device-worker-scope-mismatch",
+        })
+    }
 }
 
 impl DeviceWorkerScopeError {
@@ -147,6 +171,7 @@ impl DeviceWorkerScopeError {
             | Self::RowOwnerMissing
             | Self::RowOwnerNotDevice { .. }
             | Self::GuestUnresolved { .. } => "resource_ref",
+            Self::ScopeMismatch => "deviceWorker.scope",
         }
     }
 
@@ -162,6 +187,7 @@ impl DeviceWorkerScopeError {
             }
             Self::OwnerUidMissing { .. } => "missing".to_owned(),
             Self::GuestUnresolved { owning } => owning.clone(),
+            Self::ScopeMismatch => "device-worker-scope-claim".to_owned(),
         }
     }
 
@@ -177,6 +203,7 @@ impl DeviceWorkerScopeError {
                 owning.clone()
             }
             Self::GuestUnresolved { .. } => "device-guest-owner".to_owned(),
+            Self::ScopeMismatch => "bundle-pinned-device-worker-scope".to_owned(),
         }
     }
 }
@@ -245,6 +272,37 @@ pub(crate) fn resolve_launch_scope(
         device_uid: owning_uid,
         guest,
     })
+}
+
+/// Re-pin one launch's asserted Device scope against the verified bundle.
+///
+/// [`resolve_launch_scope`] answers for the *launched row* alone: which `Device`
+/// row owns it, that Device's durable uid, and the Guest that Device declares.
+/// A launch that arrives over the wire also *asserts* a scope, and that claim
+/// is what a naive caller would select every Device-derived path from - so it
+/// is never trusted, only checked. The claim is compared field by field
+/// against the pin and the launch proceeds on the pin itself, so nothing
+/// downstream reads the payload's copy; a claim that does not reproduce the
+/// pin - another declared Device with its publicly derivable uid, or another
+/// declared Guest - is refused, never repaired.
+///
+/// `resource_ref` and `zone_uid` are the launched row's own identity, which
+/// the pin resolves; `owner_ref` is the launch's claim about the Device that
+/// owns it, and `owner_uid` the uid it claims for that Device, so both remain
+/// cross-checks the bundle decides.
+pub(crate) fn repin_launch_scope(
+    resolver: &BundleResolver,
+    claimed: &DeviceWorkerScope,
+    resource_ref: &ResourceRef,
+    zone_uid: &ResourceUid,
+    owner_ref: Option<&ResourceRef>,
+    owner_uid: Option<&ResourceUid>,
+) -> Result<DeviceWorkerScope, DeviceWorkerScopeError> {
+    let pinned = resolve_launch_scope(resolver, resource_ref, zone_uid, owner_ref, owner_uid)?;
+    if &pinned != claimed {
+        return Err(DeviceWorkerScopeError::ScopeMismatch);
+    }
+    Ok(pinned)
 }
 
 /// Whether a Device-owned worker row must find its state directory already
@@ -330,6 +388,112 @@ pub(crate) const fn state_volume_leaf_for_role(role: &ProcessRole) -> StateVolum
         ProcessRole::SwtpmPreStartFlush => StateVolumeLeaf::MayNotHaveLanded,
         _ => StateVolumeLeaf::MustExist,
     }
+}
+
+/// The slug a launch whose claimed role disagrees with its launched row's
+/// own state-directory presence policy is refused by.
+const LEAF_ROW_MISMATCH: &str = "device-worker-leaf-row-mismatch";
+
+/// What one *launched row* needs of its state directory's presence, decided
+/// by the row the verified Zone resource bundle declares rather than by the
+/// role a launch payload asserts.
+///
+/// The long-lived worker opens the state directory by pathname, so an absent
+/// one refuses; the one-shot pre-start flush connects to a control socket
+/// that lands with the directory, so an absent one is a race the row is
+/// admitted ahead of.
+///
+/// The launched row is the row [`resolve_launch_scope`] pins against the
+/// bundle, so every fact read here is the bundle's: the `Device` row that owns
+/// it names the Provider that declares it, and the row names the template it
+/// declares. The closed [`device_worker_posture`] table - the one the trusted
+/// runner intents are minted from - turns that declared pair into the worker
+/// role, and the presence policy follows the role exactly as
+/// [`state_volume_leaf_for_role`] does for every other Device worker. A row
+/// the bundle declares no Device worker for keeps the strict variant.
+pub(crate) fn state_volume_leaf_for_row(
+    resolver: &BundleResolver,
+    scope: &DeviceWorkerScope,
+    row_ref: &ResourceRef,
+) -> StateVolumeLeaf {
+    declared_worker_role(resolver, scope, row_ref)
+        .map(|role| state_volume_leaf_for_role(&role))
+        .unwrap_or(StateVolumeLeaf::MustExist)
+}
+
+/// The state-directory presence policy of one pinned Device-worker launch,
+/// cross-checked against the role the launch claims over the wire.
+///
+/// The kernel receives the presence policy from the wire, so deriving it from
+/// an asserted role would let any launch claim the one-shot row's lenient
+/// variant. The launched row is the fact and the claim is only a check: a
+/// launch that claims the one-shot posture for a row that is not one, or
+/// denies it to the row that is, is refused by [`LEAF_ROW_MISMATCH`] rather
+/// than repaired.
+pub(crate) fn state_volume_leaf_for_launch(
+    resolver: &BundleResolver,
+    scope: &DeviceWorkerScope,
+    row_ref: &ResourceRef,
+    claimed_role: &RunnerRole,
+) -> Result<StateVolumeLeaf, &'static str> {
+    let leaf = state_volume_leaf_for_row(resolver, scope, row_ref);
+    if matches!(claimed_role, RunnerRole::SwtpmFlush)
+        != (leaf == StateVolumeLeaf::MayNotHaveLanded)
+    {
+        return Err(LEAF_ROW_MISMATCH);
+    }
+    Ok(leaf)
+}
+
+/// The Device-worker role the verified Zone resource bundle declares for one
+/// pinned launch row, or `None` when it declares no Device worker there.
+///
+/// `scope` is [`repin_launch_scope`]'s own answer, so the owning `Device` it
+/// names is one the bundle itself pinned, and `row_ref` is the row that
+/// Device's bundle row owns. The two are found by identity - the Device by
+/// its canonical name, the worker by its own name under that Device - so
+/// nothing here reads a resource-type name, and a row that resolves to no
+/// declared template, or to a template the closed table does not know, is
+/// `None` rather than a borrowed kind.
+fn declared_worker_role(
+    resolver: &BundleResolver,
+    scope: &DeviceWorkerScope,
+    row_ref: &ResourceRef,
+) -> Option<ProcessRole> {
+    let (_, bundle_bytes) = zone_bundle_for_uid(resolver, &scope.zone_uid)?;
+    let bundle: serde_json::Value = serde_json::from_slice(bundle_bytes).ok()?;
+    let device_name = scope.device_ref.name().as_str();
+    let provider_ref = find_resource_row(&bundle, |row| {
+        row.get("type").and_then(serde_json::Value::as_str) == Some("Device")
+            && row
+                .get("metadata")
+                .and_then(|metadata| metadata.get("name"))
+                .and_then(serde_json::Value::as_str)
+                == Some(device_name)
+    })
+    .and_then(|row| spec_field(row, "providerRef"))?;
+    let row_name = row_ref.name().as_str();
+    let owner = scope.device_ref.to_canonical_string();
+    let template = find_resource_row(&bundle, |row| {
+        row.get("metadata")
+            .and_then(|metadata| metadata.get("name"))
+            .and_then(serde_json::Value::as_str)
+            == Some(row_name)
+            && row
+                .get("metadata")
+                .and_then(|metadata| metadata.get("ownerRef"))
+                .and_then(serde_json::Value::as_str)
+                == Some(owner.as_str())
+    })
+    .and_then(|row| spec_field(row, "template"))?;
+    device_worker_posture(provider_ref, template).map(|posture| posture.role().clone())
+}
+
+/// One declared `spec` field of a bundle row, as text.
+fn spec_field<'a>(row: &'a serde_json::Value, field: &str) -> Option<&'a str> {
+    row.get("spec")
+        .and_then(|spec| spec.get(field))
+        .and_then(serde_json::Value::as_str)
 }
 
 /// Why one Guest's runtime socket directory could not be derived.
@@ -719,18 +883,27 @@ mod tests {
     /// vector and the manager disagree and the pin below fails closed.
     const TPM0_UID: &str = "0940f65d-b4f7-427f-992b-a65d545ec479";
 
-    /// One authored bundle row.
+    /// One authored bundle row, carrying the `spec` fields the Device-worker
+    /// lookup reads: the Provider a `Device` row declares itself to be, and
+    /// the template a worker row declares.
     fn row(
         resource_type: &str,
         name: &str,
         owner_ref: Option<&str>,
         provider_ref: Option<&str>,
+        template: Option<&str>,
     ) -> serde_json::Value {
         let mut spec = serde_json::Map::new();
         if let Some(provider_ref) = provider_ref {
             spec.insert(
                 "providerRef".to_owned(),
                 serde_json::Value::String(provider_ref.to_owned()),
+            );
+        }
+        if let Some(template) = template {
+            spec.insert(
+                "template".to_owned(),
+                serde_json::Value::String(template.to_owned()),
             );
         }
         let mut metadata = serde_json::Map::new();
@@ -775,9 +948,12 @@ mod tests {
     }
 
     /// The fixture topology: two Devices owned by two Guests, each with the
-    /// worker row the bundle declares as its child. Only `tpm0` declares the
-    /// TPM Device Provider. The rows are sorted by `(type, name)`, and the
-    /// content hash is the one `ResourceBundle` computes for them.
+    /// long-lived worker row the bundle declares as its child, plus the one-shot
+    /// pre-start flush `tpm0` declares. Each Device declares the Provider that
+    /// owns its rows and each row declares its template, so the closed
+    /// Device-worker posture table resolves every one of them. The rows are
+    /// sorted by `(type, name)`, and the content hash is the one
+    /// `ResourceBundle` computes for them.
     fn resolver() -> BundleResolver {
         let resources = vec![
             row(
@@ -785,15 +961,36 @@ mod tests {
                 "gpu0",
                 Some("Guest/other-guest"),
                 Some("Provider/device-gpu"),
+                None,
             ),
             row(
                 "Device",
                 "tpm0",
                 Some("Guest/acceptance-guest"),
                 Some("Provider/device-tpm"),
+                None,
             ),
-            row("Process", "gpu-gpu0", Some("Device/gpu0"), None),
-            row("Process", "swtpm-tpm0", Some("Device/tpm0"), None),
+            row(
+                "EphemeralProcess",
+                "swtpm-flush-tpm0",
+                Some("Device/tpm0"),
+                None,
+                Some("swtpm-init-flush"),
+            ),
+            row(
+                "Process",
+                "gpu-gpu0",
+                Some("Device/gpu0"),
+                None,
+                Some("gpu-worker"),
+            ),
+            row(
+                "Process",
+                "swtpm-tpm0",
+                Some("Device/tpm0"),
+                None,
+                Some("swtpm-socket"),
+            ),
         ];
         let bundle = serde_json::json!({
             "schemaVersion": 3,
@@ -1125,6 +1322,228 @@ mod tests {
         )
         .expect_err("an unknown zone must be refused");
         assert_eq!(error.field(), "resource_ref");
+    }
+
+    /// The scope a launch asserts over the wire, built from the four fields
+    /// the payload carries: the Zone, the Device, that Device's durable uid,
+    /// and the Guest the runtime directories are derived from.
+    fn claimed_scope(
+        device_ref: &ResourceRef,
+        device_uid: ResourceUid,
+        guest: &str,
+    ) -> DeviceWorkerScope {
+        DeviceWorkerScope {
+            zone_uid: ResourceUid::parse(ZONE_UID).expect("zone uid"),
+            device_ref: device_ref.clone(),
+            device_uid,
+            guest: guest.to_owned(),
+        }
+    }
+
+    /// A payload that names ANOTHER declared Device is refused. The uid it
+    /// carries is that Device's own durable uid, which is publicly derivable
+    /// from `(zone, "Device", name)`, so a cross-check on the uid alone agrees
+    /// with it - only the launched row's own owning Device, which the verified
+    /// bundle names, tells the two apart. Without that pin the grant the launch
+    /// receives is the sibling Device's TPM state Volume under the same shared
+    /// root, with `rwx` on it.
+    #[test]
+    fn a_payload_naming_another_declared_device_is_refused() {
+        let (resolver, row_ref, zone_uid, device_uid) = fixture();
+        let foreign_ref = ResourceRef::parse("Device/gpu0").expect("device ref");
+        let foreign_uid = deterministic_resource_uid("work", "Device", "gpu0");
+        let owner = ResourceRef::parse("Device/tpm0").expect("owner ref");
+        // The claim is fully self-consistent - another declared Device, with
+        // that Device's own derivable uid, and the Guest that Device declares.
+        let claimed = claimed_scope(&foreign_ref, foreign_uid.clone(), "other-guest");
+
+        // Telling the truth about the launched row's owner while naming the
+        // foreign Device in the scope: the uid the launch claims for the
+        // owning Device is not that Device's durable uid.
+        let error = repin_launch_scope(
+            &resolver,
+            &claimed,
+            &row_ref,
+            &zone_uid,
+            Some(&owner),
+            Some(&foreign_uid),
+        )
+        .expect_err("a payload naming another declared Device must be refused, not downgraded");
+        assert_eq!(error.field(), "owner_uid");
+        assert_eq!(
+            error.to_string(),
+            "device-worker-owner-uid-mismatch",
+            "the refusal is a typed, path-free slug"
+        );
+
+        // Lying about the owner in the same direction is refused the same way.
+        let error = repin_launch_scope(
+            &resolver,
+            &claimed,
+            &row_ref,
+            &zone_uid,
+            Some(&foreign_ref),
+            Some(&foreign_uid),
+        )
+        .expect_err("a payload naming a Device that does not own the launched row is refused");
+        assert_eq!(error.field(), "owner_ref");
+        assert_eq!(error.to_string(), "device-worker-owner-mismatch");
+
+        // And the launched row's own scope is the one that resolves, so the
+        // Guest whose runtime tree the launch may open is the pinned one.
+        let pinned = repin_launch_scope(
+            &resolver,
+            &claimed_scope(&owner, device_uid.clone(), "acceptance-guest"),
+            &row_ref,
+            &zone_uid,
+            Some(&owner),
+            Some(&device_uid),
+        )
+        .expect("the scope that reproduces the pin resolves");
+        assert_eq!(
+            pinned.guest(),
+            "acceptance-guest",
+            "the launched row is still `Process/swtpm-tpm0`, whose own Guest \
+             the pin names - this is the grant the refused claim aimed away from"
+        );
+    }
+
+    /// A payload that names ANOTHER declared Guest is refused too: the Device
+    /// and its uid are the pinned ones, so every identity cross-check agrees,
+    /// and only the Guest - which every runtime directory is derived from -
+    /// is the payload's own.
+    #[test]
+    fn a_payload_naming_another_declared_guest_is_refused() {
+        let (resolver, row_ref, zone_uid, device_uid) = fixture();
+        let owner = ResourceRef::parse("Device/tpm0").expect("owner ref");
+        let claimed = claimed_scope(&owner, device_uid.clone(), "other-guest");
+        let error = repin_launch_scope(
+            &resolver,
+            &claimed,
+            &row_ref,
+            &zone_uid,
+            Some(&owner),
+            Some(&device_uid),
+        )
+        .expect_err("a payload naming another declared Guest must be refused");
+        assert_eq!(error, DeviceWorkerScopeError::ScopeMismatch);
+    }
+
+    /// A scope that reproduces the pin is admitted as the pin, so no
+    /// downstream derivation reads the payload's own copy of it.
+    #[test]
+    fn a_scope_that_reproduces_the_pin_resolves_to_the_pin() {
+        let (resolver, row_ref, zone_uid, device_uid) = fixture();
+        let owner = ResourceRef::parse("Device/tpm0").expect("owner ref");
+        let pinned = resolve_launch_scope(
+            &resolver,
+            &row_ref,
+            &zone_uid,
+            Some(&owner),
+            Some(&device_uid),
+        )
+        .expect("the pin resolves");
+        assert_eq!(
+            repin_launch_scope(
+                &resolver,
+                &pinned,
+                &row_ref,
+                &zone_uid,
+                Some(&owner),
+                Some(&device_uid),
+            )
+            .expect("a claim that reproduces the pin is admitted"),
+            pinned
+        );
+    }
+
+    /// What a row needs of its state directory's presence is the row's own
+    /// fact, not the role a launch claims: the long-lived worker row opens
+    /// the directory itself, and only the one-shot row is admitted ahead of
+    /// it. A payload that claims the one-shot role for the long-lived row
+    /// therefore cannot reach the lenient variant - it is refused by name
+    /// instead, on both sides of the disagreement.
+    #[test]
+    fn the_state_leaf_policy_comes_from_the_launched_row() {
+        use d2b_contracts_broker::broker_wire::RunnerRole;
+
+        let (resolver, row_ref, zone_uid, device_uid) = fixture();
+        let owner = ResourceRef::parse("Device/tpm0").expect("owner ref");
+        let pinned = resolve_launch_scope(
+            &resolver,
+            &row_ref,
+            &zone_uid,
+            Some(&owner),
+            Some(&device_uid),
+        )
+        .expect("the pin resolves");
+        assert_eq!(pinned.device_ref, owner);
+
+        assert_eq!(
+            state_volume_leaf_for_row(&resolver, &pinned, &row_ref),
+            StateVolumeLeaf::MustExist,
+            "the long-lived worker row opens the state directory itself"
+        );
+
+        // The one-shot row is pinned by the very same Device, and the bundle
+        // is what says which of the two it is: its declared template resolves
+        // through the closed Device-worker posture table to the one-shot
+        // role, and only that role is admitted ahead of the directory.
+        let flush = ResourceRef::parse("EphemeralProcess/swtpm-flush-tpm0").expect("row ref");
+        let flush_pinned = resolve_launch_scope(
+            &resolver,
+            &flush,
+            &zone_uid,
+            Some(&owner),
+            Some(&device_uid),
+        )
+        .expect("the one-shot row pins to the same Device");
+        assert_eq!(
+            state_volume_leaf_for_row(&resolver, &flush_pinned, &flush),
+            StateVolumeLeaf::MayNotHaveLanded,
+            "the one-shot row waits for the socket that lands with the directory"
+        );
+
+        for (role, row, scope) in [
+            (RunnerRole::Swtpm, &row_ref, &pinned),
+            (RunnerRole::SwtpmFlush, &flush, &flush_pinned),
+        ] {
+            assert_eq!(
+                state_volume_leaf_for_launch(&resolver, scope, row, &role),
+                Ok(if role == RunnerRole::SwtpmFlush {
+                    StateVolumeLeaf::MayNotHaveLanded
+                } else {
+                    StateVolumeLeaf::MustExist
+                }),
+                "a launch that tells the truth about its own row is admitted on the row's policy"
+            );
+        }
+
+        // The wire role is a claim the bundle overrules in both directions:
+        // claiming the one-shot posture for the long-lived row would hand it
+        // a grant the row cannot use, and denying it to the one-shot row
+        // would turn a provisioning race into a refusal.
+        for (role, row, scope) in [
+            (RunnerRole::SwtpmFlush, &row_ref, &pinned),
+            (RunnerRole::Swtpm, &flush, &flush_pinned),
+        ] {
+            assert_eq!(
+                state_volume_leaf_for_launch(&resolver, scope, row, &role),
+                Err(LEAF_ROW_MISMATCH),
+                "a role that disagrees with the launched row is refused, never repaired"
+            );
+        }
+
+        // A row the bundle declares no Device-worker template for keeps the
+        // strict variant rather than borrowing another row's posture.
+        assert_eq!(
+            state_volume_leaf_for_row(
+                &resolver,
+                &pinned,
+                &ResourceRef::parse("Process/undeclared-tpm0").expect("row ref"),
+            ),
+            StateVolumeLeaf::MustExist
+        );
     }
 
     #[test]

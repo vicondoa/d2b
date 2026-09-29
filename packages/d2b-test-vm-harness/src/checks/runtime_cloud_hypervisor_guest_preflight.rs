@@ -909,7 +909,13 @@ pub fn assertions(control: &mut GuestControl) -> LegacyResult<()> {
         CONTROLLER_SESSIONS,
         CONTROLLER_BOUND,
         &[row(&summary), row(&process_rows)],
-        &[("d2bd.service", "ResourceV3 session")],
+        &[
+            ("d2bd.service", "ResourceV3 session"),
+            // A session that never went live refuses with a stage, and the
+            // stage is the only line that says which authentication step was
+            // unavailable. The token above does not match it.
+            ("d2bd.service", "controller authentication"),
+        ],
     )?;
     // The rows hold the phase and generation the status was published for,
     // per controller row.
@@ -918,7 +924,15 @@ pub fn assertions(control: &mut GuestControl) -> LegacyResult<()> {
         VOLUME_CONTROLLER_PROCESSES,
         CONTROLLER_BOUND,
         &[row(&controller_rows), row(&summary)],
-        &[("d2bd.service", "acceptance-controller")],
+        &[
+            ("d2bd.service", "acceptance-controller"),
+            // A controller Process left Pending is a session that never came
+            // up, and the daemon's own line for that - with the Provider it
+            // was for and the handshake step it failed at - is the only
+            // record of which controller and which step. The token above
+            // names the template and appears in no journal line.
+            ("d2bd.service", "external Provider controller"),
+        ],
     )?;
     control.succeed(&[ACCEPTANCE_CONTROLLERS], None)?;
 

@@ -67,8 +67,8 @@ state.
 ### `bundleVersion` 4 → 5
 
 The trusted manifest-bundle schema version bumps from `4` to `5` for a
-new audited broker operation (`PrepareSwtpmDir`). This is internal to
-the host substrate; consumers that only use the public
+new audited broker operation (`PrepareSwtpmDir`, since removed). This is
+internal to the host substrate; consumers that only use the public
 `d2bModules` surface need no change. If you vendor or pin bundle
 artifacts directly, regenerate them after the upgrade.
 
