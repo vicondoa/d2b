@@ -2750,9 +2750,12 @@ fn device_worker_socket_grant(
 /// preflights at the top of [`live_spawn_runner`], ahead of every ACL that
 /// function applies. A launch refused here leaves no ACL behind.
 ///
-/// A launch that is not a resource-backed `w1-swtpm` one, or one the verified
-/// bundle resolves no identity for, has no trusted paths to fence against and
-/// is admitted to the (equally absent) grants below.
+/// A launch that is not a resource-backed `w1-swtpm` one is admitted to the
+/// (equally absent) grants below. A launch that *is* typed but resolves no
+/// trusted identity is refused: the fence below and the state-directory grant
+/// after it both key off that identity, so admitting it would drop the argv
+/// fence, the traverse ACL and the NVRAM health check together and leave an
+/// unfenced spawn against a directory nothing provisioned.
 fn fence_device_worker_argv_paths(
     plan: &SpawnRunnerPlan,
     swtpm_identity: Option<&crate::ops::swtpm_identity::ResourceBackedSwtpm>,
@@ -2761,6 +2764,15 @@ fn fence_device_worker_argv_paths(
 ) -> Result<(), LiveHandlerError> {
     if plan.seccomp_policy_ref.as_deref() != Some("w1-swtpm") {
         return Ok(());
+    }
+    if swtpm_identity.is_none() && device_worker.scope.is_some() {
+        audit_device_worker_runtime_dir("argv-fence", "failed-closed", "identity-unresolved");
+        return Err(LiveHandlerError::SpawnFailed {
+            detail: "device worker argv fence: typed w1-swtpm launch resolved no trusted \
+                     swtpm identity, so its argument paths cannot be fenced and its state \
+                     directory cannot be located; refusing rather than spawning unfenced"
+                .to_owned(),
+        });
     }
     let (Some(identity), Some(scope)) = (swtpm_identity, device_worker.scope.as_ref()) else {
         return Ok(());
@@ -5969,6 +5981,45 @@ mod tests {
                 "{error:?}"
             );
         }
+    }
+
+    /// A typed `w1-swtpm` launch that resolves no trusted identity must be
+    /// refused, not admitted. The identity is what this fence and the
+    /// state-directory grant after it both key off, so admitting the launch
+    /// would drop the argv fence, the traverse ACL and the NVRAM health check
+    /// together and spawn unfenced against a directory nothing provisioned.
+    /// Reachable whenever the daemon and the Volume controller disagree about
+    /// the state directory - `resource_backed_identity` returns `None` by
+    /// design on that disagreement, and the dispatch never refused it.
+    #[test]
+    fn a_typed_launch_with_no_resolved_identity_is_refused_not_admitted() {
+        let runtime_root = PathBuf::from("/run/d2b");
+        let launch =
+            typed_device_worker_launch(crate::ops::device_worker::StateVolumeLeaf::MustExist);
+
+        // Typed, w1-swtpm, identity unresolved -> refused by name.
+        let mut plan = resource_backed_swtpm_plan(
+            Path::new("/var/lib/d2b/tpm-state/device-00000000000000000000000000000000-tpm-state"),
+            &guest_runtime_dir(&runtime_root),
+        );
+        plan.seccomp_policy_ref = Some("w1-swtpm".to_owned());
+        let error = fence_device_worker_argv_paths(&plan, None, &launch, &runtime_root)
+            .expect_err("a typed launch with no trusted identity must be refused");
+        assert!(
+            matches!(&error, LiveHandlerError::SpawnFailed { detail }
+                if detail.contains("resolved no trusted swtpm identity")),
+            "{error:?}"
+        );
+
+        // The scope-less legacy path has no identity to fence against and
+        // must keep its existing pass-through.
+        let mut unscoped = launch.clone();
+        unscoped.scope = None;
+        assert!(fence_device_worker_argv_paths(&plan, None, &unscoped, &runtime_root).is_ok());
+
+        // A non-swtpm typed launch is likewise untouched by this fence.
+        plan.seccomp_policy_ref = Some("w1-wayland-proxy".to_owned());
+        assert!(fence_device_worker_argv_paths(&plan, None, &launch, &runtime_root).is_ok());
     }
 
     /// The fence has to run BEFORE any ACL, not merely before the spawn: the
