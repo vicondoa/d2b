@@ -1574,6 +1574,114 @@ fn interpreter() -> Result<PathBuf> {
     Ok(PathBuf::from("python3"))
 }
 
+/// The seam a check module's own tests drive a real [`GuestControl`]
+/// through.
+///
+/// A ported check's `assertions` are ordinary calls on this surface, so what
+/// a check's own test has to exercise is the surface itself: the console
+/// framing the guest speaks, and the report a refused assertion leaves
+/// behind. This hands a test exactly that, and nothing else - it is
+/// `#[cfg(test)]` and `pub(crate)`, so it is unreachable from a non-test
+/// build. It frames its answers with [`tests`]' own `block` and speaks the
+/// same wire form [`tests`] speaks, so the two cannot drift apart and leave a
+/// check's test asserting against a guest that does not exist.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::{Console, GuestControl, LegacyResult};
+    use std::{
+        io::{BufRead, Write},
+        os::unix::net::UnixStream,
+        path::PathBuf,
+        thread,
+    };
+
+    pub(crate) use super::tests::block;
+
+    /// Run one operation against a guest that answers each command from the
+    /// command itself, and hand back the same observations [`against`] does.
+    ///
+    /// A fixed script can only answer a diagnostic whose command is known in
+    /// advance. A check's test usually has to answer a diagnostic the way the
+    /// guest's own shell would - a `journalctl ... | grep -F -- TOKEN` dump
+    /// has to come back filtered by that token, or the test proves nothing
+    /// about the filter it meant to exercise - so the responder is given the
+    /// command the surface sent and answers it.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    pub(crate) fn answering(
+        respond: impl Fn(&str) -> (i32, String) + Send,
+        body: impl FnOnce(&mut GuestControl) -> LegacyResult<()>,
+    ) -> (LegacyResult<()>, String, Vec<String>, Vec<String>) {
+        let (surface, console) = UnixStream::pair().expect("a console socket pair");
+        thread::scope(|scope| {
+            let asked = scope.spawn(move || {
+                let mut reader = std::io::BufReader::new(
+                    console
+                        .try_clone()
+                        .expect("a console socket can be cloned for reading"),
+                );
+                let mut writer = console;
+                let mut asked = Vec::new();
+                let mut statuses = Vec::new();
+                loop {
+                    let mut line = String::new();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let (status, output) = respond(&line);
+                    let _ = writer.write_all(format!("{}\n", block(&output)).as_bytes());
+                    let mut request = String::new();
+                    if reader.read_line(&mut request).is_err() {
+                        break;
+                    }
+                    let _ = writer.write_all(format!("{status}\n").as_bytes());
+                    asked.push(line);
+                    statuses.push(request);
+                }
+                (asked, statuses)
+            });
+            let (outcome, notes) = {
+                let mut control =
+                    GuestControl::new(Console::serving(surface, PathBuf::from("/dev/null")));
+                let outcome = body(&mut control);
+                let notes = std::mem::take(&mut control.notes);
+                (outcome, notes)
+            };
+            let (asked, statuses) = asked.join().expect("the scripted guest");
+            (outcome, notes, asked, statuses)
+        })
+    }
+
+    /// The `grep -F -- TOKEN` a journal dump filters by, if that is what the
+    /// command is.
+    ///
+    /// The guest's own shell runs the filter, so a test that wants the
+    /// filtered answer has to read the token out of the command the same way
+    /// the shell would. A dump with no token is the whole unit, and yields
+    /// `None`.
+    pub(crate) fn journal_token(command: &str) -> Option<String> {
+        // The surface quotes the whole command with [`shlex_quote`], so a
+        // quote inside it arrives as the shell's own `'"'"'` escape and the
+        // token is a shell word rather than a literal substring. Undoing that
+        // escape first is what lets the token be read the way the guest's
+        // shell would read it.
+        let unescaped = command.replace("'\"'\"'", "'");
+        let marker = "grep -F -- '";
+        let start = unescaped.find(marker)? + marker.len();
+        let end = unescaped[start..].find('\'')? + start;
+        Some(unescaped[start..end].to_owned())
+    }
+
+    /// The lines of `journal` that `token` selects, the way the guest's
+    /// `grep -F` selects them.
+    pub(crate) fn lines_matching<'a>(journal: &'a str, token: Option<&str>) -> Vec<&'a str> {
+        journal
+            .lines()
+            .filter(|line| token.is_none_or(|token| line.contains(token)))
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1608,7 +1716,7 @@ mod tests {
     }
 
     /// One answer's worth of base64, the way the guest's shell frames it.
-    fn block(output: &str) -> String {
+    pub(crate) fn block(output: &str) -> String {
         const ALPHABET: &[u8; 64] =
             b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         let mut encoded = String::new();
