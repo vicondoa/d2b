@@ -760,6 +760,26 @@ const SESSION_GENERATION_ADVANCE: &str = concat!(
     "exit 1",
 );
 
+/// The journal sources that explain a refused [`SESSION_GENERATION_ADVANCE`],
+/// as the prelude's `diag_step` takes them.
+///
+/// The command can be refused four ways, and one dump answers all of them:
+/// the Guest's own session and component lines, the controller session setup
+/// warn that carries the Provider and the stage, the authentication
+/// closures that carry the stage, and the ComponentSession line the loop
+/// itself greps the generation out of.
+const SESSION_GENERATION_EXPLAIN: &[DiagRow<'static>] = &[
+    ("d2bd.service", "acceptance-guest"),
+    // A session that never went live refuses with a stage, and the stage is
+    // the only line that says which handshake step was unavailable. It
+    // carries the Provider it was for.
+    ("d2bd.service", "ResourceV3 session"),
+    ("d2bd.service", "controller authentication"),
+    // The generation the loop compares is the one the Guest's own
+    // ComponentSession logged, so that line is the loop's own input.
+    ("d2bd.service", "ComponentSession"),
+];
+
 /// The Guest's deletion, retried the fixture's own 30 attempts.
 const GUEST_DELETE: &str = concat!(
     "for attempt in $(seq 1 30); do ",
@@ -1082,16 +1102,32 @@ pub fn assertions(control: &mut GuestControl) -> LegacyResult<()> {
         None,
     )?;
     control.stage("session-generation-advance");
-    control.succeed(&[SESSION_GENERATION_ADVANCE], None)?;
-    control.succeed(
-        &[&format!("set -- $(for proc in /proc/[0-9]*; do exe=$(readlink \"$proc/exe\" \
+    // Both commands below assert a settled state, so a refusal here is a
+    // fact about the Guest rather than a wait that ran out, and it is the
+    // one failure this check cannot explain from its own output: the loop
+    // can be refused by the session, by the controller handshake behind it,
+    // or by the Process it reads back, and the count by a runner the search
+    // replaced. The journal sources are what say which, so the stage reports
+    // its own cause instead of naming only the command that noticed it.
+    control.diag_run(
+        "session-generation-advance/adopted-session-generation",
+        SESSION_GENERATION_ADVANCE,
+        &[row(&guest_rows), row(&process_rows)],
+        SESSION_GENERATION_EXPLAIN,
+    )?;
+    control.diag_run(
+        "session-generation-advance/runner-process-count",
+        &format!("set -- $(for proc in /proc/[0-9]*; do exe=$(readlink \"$proc/exe\" \
              2>/dev/null || true); case \"$exe\" in */bin/cloud-hypervisor) cmd=$(tr \
              '\\0' ' ' < \"$proc/cmdline\"); case \"$cmd\" in \
              *--api-socket*acceptance-guest*) pid=${{proc#/proc/}}; printf '%s %s ' \
              \"$pid\" \"$(awk '{{print $22}}' \"$proc/stat\")\";; esac;; esac; \
              done); test \"$#\" -eq 2 && test \"$1\" = {runner_pid} && test \"$2\" = \
-             {runner_start}")],
-        None,
+             {runner_start}"),
+        &[row(&process_rows)],
+        // The count is about the runner, and the runner's lifecycle is what
+        // the Guest's own lines record.
+        &[("d2bd.service", "acceptance-guest")],
     )?;
 
     // The Guest's teardown, then the Volume's: both drain, and neither leaves
@@ -1216,4 +1252,103 @@ fn runner_fields(runner: &str) -> LegacyResult<Vec<&str>> {
         "{complaint} (expected 2, got {})",
         fields.len()
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::legacy::test_support::{answering, journal_token, lines_matching};
+
+    /// The d2bd lines the `session-generation-advance` stage's explain
+    /// sources select, in the form the daemon writes them.
+    ///
+    /// The last line is the point of the negative case below: it is a real
+    /// `d2bd.service` line that no explain source asks for, so a report
+    /// carrying it would be a report that dumped the whole unit rather than
+    /// the sources it named.
+    const FAKE_JOURNAL: &str = concat!(
+        "Jul 29 12:00:01 host d2bd[1]: external Provider controller ResourceV3 session setup failed provider=Provider/system-minijail stage=open\n",
+        "Jul 29 12:00:02 host d2bd[1]: external Provider controller authentication failed zone=work stage=load-guest-credential\n",
+        "Jul 29 12:00:03 host d2bd[1]: Guest ComponentSession Resource API server starting generation=41\n",
+        "Jul 29 12:00:04 host d2bd[1]: unrelated broker line that names no explain source\n",
+    );
+
+    /// A guest that refuses the stage's command and answers the explanation
+    /// the way the guest's own shell would.
+    ///
+    /// The stage's command is answered with a non-zero status, which is what
+    /// makes the assertion refuse and the explanation run. The journal dumps
+    /// that follow are answered out of the fake journal and filtered by the
+    /// token each dump carries - the guest's shell is what applies that
+    /// filter, so a test that ignored it would be asserting against an
+    /// answer the real guest never gives. Anything else, the composed zone
+    /// explanation included, is refused, which is what a diagnostic is.
+    fn refusing_guest(command: &str) -> (i32, String) {
+        // A dump is the prelude's own `journalctl -u UNIT ...` form. The
+        // stage's command greps `journalctl --no-pager -b` for the
+        // generation instead, so the unit-scoped form is what tells the two
+        // apart: without it the stage's own command would be answered as a
+        // dump and would succeed.
+        if command.contains("journalctl -u ") {
+            let token = journal_token(command);
+            return (0, lines_matching(FAKE_JOURNAL, token.as_deref()).join("\n"));
+        }
+        (1, String::new())
+    }
+
+    /// The report a refused `session-generation-advance` stage leaves behind.
+    ///
+    /// The stage is driven through the same [`SESSION_GENERATION_EXPLAIN`]
+    /// the check itself passes, so what the assertions below read is the
+    /// report this stage's own explain sources produce.
+    fn session_generation_failure() -> String {
+        let (outcome, notes, asked, _) = answering(refusing_guest, |control| {
+            control
+                .diag_run(
+                    "session-generation-advance/adopted-session-generation",
+                    SESSION_GENERATION_ADVANCE,
+                    &[],
+                    SESSION_GENERATION_EXPLAIN,
+                )
+                .map(|_| ())
+        });
+        assert!(outcome.is_err(), "the stage was expected to refuse");
+        format!("{notes}{}", asked.concat())
+    }
+
+    /// A refused stage explains itself from the journal sources it named.
+    ///
+    /// This is the failure that was undiagnosable: the stage reported that
+    /// it failed and named nothing else, so learning which session,
+    /// handshake or generation had gone wrong meant reading the journal by
+    /// hand. Every line a source names must now reach the check's own report.
+    #[test]
+    fn a_refused_generation_advance_names_its_journal_sources() {
+        let report = session_generation_failure();
+        for source in [
+            "ResourceV3 session setup failed",
+            "external Provider controller authentication failed",
+            "Guest ComponentSession Resource API server starting",
+        ] {
+            assert!(
+                report.contains(source),
+                "the stage's own report must carry its journal source {source:?}:\n{report}"
+            );
+        }
+    }
+
+    /// A source that names no line the journal holds explains nothing.
+    ///
+    /// Without this the test above cannot tell a real filter from a dump of
+    /// the whole unit, which is what an empty explain list amounts to: the
+    /// journal would carry everything, and every assertion above would pass.
+    #[test]
+    fn an_explanation_reports_the_sources_it_named_and_nothing_else() {
+        let report = session_generation_failure();
+        assert!(
+            !report.contains("unrelated broker line"),
+            "a source that names no line must not drag the rest of the unit \
+             into the report:\n{report}"
+        );
+    }
 }
