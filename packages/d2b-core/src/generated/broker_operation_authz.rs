@@ -406,16 +406,6 @@ pub const BROKER_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         audit_mode: AuditMode::Yes,
     },
     OperationAuthzRow {
-        operation: "PrepareSwtpmDir",
-        subject: "fs",
-        scope: "per-VM",
-        allowed_groups: &["d2bd"],
-        destructive: Destructive::Yes,
-        secret_access: SecretAccess::MetadataOnly,
-        broker_required: BrokerRequirement::Yes,
-        audit_mode: AuditMode::Yes,
-    },
-    OperationAuthzRow {
         operation: "EnvelopeInvoke",
         subject: "envelope",
         scope: "per-operation row",

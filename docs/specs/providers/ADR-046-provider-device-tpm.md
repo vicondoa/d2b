@@ -254,8 +254,8 @@ reconcile loops and call the broker for privileged effects. This means:
 
 - No socket path, filesystem path, UID integer, GID integer, pidfd, or broker
   wire type ever crosses the controller/port boundary.
-- `PrepareSwtpmDir` and `SpawnRunner` are invoked exclusively by `volume-local`
-  and `system-minijail` respectively - never by the device-tpm controller.
+- `SpawnRunner` is invoked exclusively by `system-minijail` - never by the
+  device-tpm controller.
 - The broker remains the sole audited executor of all privileged effects.
 - The controller can be tested against `FakeTpmEffectPort` without any store,
   broker, or host.
@@ -456,10 +456,10 @@ never appear in the Volume name.
 
 ### 7.3 Identity marker and fail-closed detection
 
-The identity marker is maintained by the broker (via volume-local's
-`PrepareSwtpmDir` operation) outside the Volume tree - the broker-opaque-id-only
-and scope-authorization-required invariants on the `""` entry enforce that
-no caller below the broker can substitute or replace the swtpm directory.
+The identity marker that the broker's `PrepareSwtpmDir` operation used to
+maintain has been removed: the NVRAM tamper guard is gone, and the trusted
+`""` entry is what keeps a caller below the broker from substituting the
+swtpm directory.
 
 The `createPolicy: create-if-never-provisioned` + `repairPolicy: fail-closed`
 combination is the v3 canonical encoding of the current
@@ -1241,7 +1241,7 @@ v3: the Nix Device declaration in §17.1 replaces this option. Migration steps:
 | Current artifact | Location | v3 disposition |
 | --- | --- | --- |
 | `SwtpmArgvInput`, `SwtpmIoctlFlushInput` | `packages/d2b-host/src/swtpm_argv.rs` | Extract into `d2b-provider-device-tpm/src/`; remove caller-supplied binary path fields |
-| `PrepareSwtpmDir` | `packages/d2b-broker/src/ops/swtpm_dir.rs` | Retained; invoked only by `volume-local`; device-tpm controller never calls it |
+| `PrepareSwtpmDir` | removed | Removed with the NVRAM tamper guard; the state Volume's own lifecycle owns the directory |
 | `SpawnRunner { role: Swtpm }` | `packages/d2b-broker/src/ops/spawn_runner.rs` | Retained; invoked only by `system-minijail` |
 | `ProcessRole::Swtpm`, `::SwtpmPreStartFlush` | `packages/d2b-core/src/processes.rs` | Retire after Provider parity |
 | `minijail_swtpm_video.rs` | `packages/d2b-contract-tests/tests/` | Preserved; proves zero caps, `w1-swtpm`, user-NS long-lived only |
@@ -1278,7 +1278,7 @@ policy test must pass.
 | Field | Value |
 | --- | --- |
 | Dependency/owner | P0; blocked by ADR046-device-tpm-001; owner: device-tpm effect boundary |
-| Current source | `PrepareSwtpmDir` in `packages/d2b-broker/src/ops/swtpm_dir.rs` and `SpawnRunner { role: Swtpm }` in `packages/d2b-broker/src/ops/spawn_runner.rs` remain privileged executors, but the controller must not import broker crates |
+| Current source | `SpawnRunner { role: Swtpm }` in `packages/d2b-broker/src/ops/spawn_runner.rs` remains a privileged executor, but the controller must not import broker crates |
 | Reuse action | wrap |
 | Destination | packages/d2b-provider-device-tpm/; packages/d2b-provider-device-tpm/; production implementation in the framework-internal core Device effect adapter |
 | Detailed design | TpmEffectPort and FakeTpmEffectPort: define the effect trait, typed TPM EndpointRef handoff, and fake test port in the Provider crate; implement the production mapping only in the core adapter. Prove non-test Provider files contain no `use d2b_priv_broker::` and the controller sees only opaque resource IDs and EndpointRefs. Primary reuse disposition: `wrap`. Preserved source-plan detail: wrap privileged effects behind an injected async `TpmEffectPort`; keep broker operations only behind core Volume and Process adapters. |

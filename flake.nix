@@ -84,6 +84,61 @@
       in found;
 
       providerElfShim = import ./nix/provider-elf-shim.nix;
+
+      # Wire the Bazel-built d2b host binaries into a guest: one nix
+      # package for the bundle, one self override that hands the package to
+      # the guest's modules. Both guest entry points use it, so a guest
+      # realized from the declared-input action and a guest realized from
+      # the legacy environment handoff are built the same way.
+      mkBazelHostTools = system: rawBundle: rawCloudHypervisorController:
+        let
+          bundlePath = builtins.path {
+            path = /. + rawBundle;
+            name = "d2b-bazel-host-tools";
+          };
+          cloudHypervisorControllerPath =
+            if rawCloudHypervisorController == null then
+              null
+            else
+              builtins.path {
+                path = /. + rawCloudHypervisorController;
+                name = "d2b-bazel-cloud-hypervisor-controller";
+              };
+          tools = import ./nix/test-support/bazel-host-tools.nix {
+            pkgs = nixpkgsFor.${system};
+            rawBundle = bundlePath;
+            rawCloudHypervisorController = cloudHypervisorControllerPath;
+          };
+        in
+        {
+          inherit tools;
+          hostSelf = self // {
+            lib = self.lib // {
+              d2bHostToolOverrides = tools.d2bHostToolOverrides;
+              d2bHostToolBundle = tools.package;
+              evalGuest = args: self.lib.evalGuest (args // {
+                d2bHostToolOverrides = tools.d2bHostToolOverrides;
+              });
+            };
+            nixosModules = self.nixosModules // {
+              default = {
+                imports = [ self.nixosModules.default ];
+                _module.args.d2bHostToolOverrides = tools.d2bHostToolOverrides;
+              };
+            };
+            packages = self.packages // {
+              ${system} = self.packages.${system} // {
+                d2b-wayland-proxy = tools.package;
+              } // nixpkgs.lib.optionalAttrs
+                (tools.cloudHypervisorControllerPackage != null)
+                {
+                  d2b-cloud-hypervisor-controller =
+                    tools.cloudHypervisorControllerPackage;
+                };
+            };
+          };
+        };
+
       # The Guest static workspace mirrors the shared daemon/broker dependency
       # closure. Guest packaging contains only the shared daemon, broker,
       # and signed Provider workspace inputs.
@@ -586,100 +641,43 @@
           in builtins.listToAttrs (map mkImage imageFiles)
         else { });
 
-      # Type-G runNixOSTest integration tests (the additive real-kernel
-      # coverage layer). Each test boots a real NixOS VM with the d2b
-      # daemon surface and asserts live broker/daemon/host-posture behaviour
-      # (socket activation, SO_PEERCRED, bridge isolation, state-dir ACLs,
-      # broker privilege posture) that the fake-backed native Rust canaries and
-      # pure-eval gates cannot exercise. This is the hermetic, non-destructive
-      # successor to the `D2B_LIVE`-against-the-real-host bash scripts.
+      # The type-10 host-integration lane moved to Bazel: the lane test
+      # target (`//bazel/checks/vm:host_integration_lane_run`) builds one guest
+      # image per check as a declared-input action, boots a pool from them,
+      # and runs each check's assertions against a snapshot-restored copy of
+      # its guest. `make test-host-integration` invokes that target. The
+      # `vmChecks` flake output, its `D2B_HOST_TOOL_BUNDLE` /
+      # `D2B_CH_CONTROLLER_BUNDLE` environment handoff, and the runNixOSTest
+      # fixtures are gone with it; the one file kept under
+      # `tests/host-integration/` is `lib.nix`, which the ported checks' guest
+      # declarations still read for their provider-artifact builders.
+
+      # The guest image for the Bazel-owned host-integration lane. It is a
+      # function, not a package: the lane's guest-image action calls it
+      # with the d2b host binaries it received as declared label inputs, so
+      # the guest closure is keyed on the Bazel graph rather than on a
+      # developer's shell. The staged directories are the same bundle the
+      # legacy environment handoff passes, and the same host-tool package
+      # consumes them, so both paths realize the same guest.
       #
-      # Exposed under `vmChecks`, NOT `checks`, so the Layer-1 `nix flake check
-      # --no-build --all-systems` never realizes a VM. Selected explicitly by
-      # `make test-host-integration` (`nix build .#vmChecks.<system>.<name>`),
-      # which needs KVM (a local NixOS host; TCG fallback otherwise).
-      #
-      # Auto-discovered from tests/host-integration/*.nix (excluding lib.nix): each test is
-      # `{ pkgs, self }: pkgs.testers.runNixOSTest { ... }`, so adding a VM test
-      # is one new file - no edit here. x86_64-linux only: a runNixOSTest VM is
-      # built + booted for the builder's own system, and the hosted CI runners
-      # are x86_64 - aarch64 VM coverage needs an aarch64 builder.
-      vmChecks = forAllSystems (system:
-        if system == "x86_64-linux" then
-          let
-            pkgs = nixpkgsFor.${system};
-            hostToolBundleEnv = builtins.getEnv "D2B_HOST_TOOL_BUNDLE";
-            cloudHypervisorControllerBundleEnv =
-              builtins.getEnv "D2B_CH_CONTROLLER_BUNDLE";
-            bazelHostTools =
-              if hostToolBundleEnv == "" then
-                null
-              else
-                import ./nix/test-support/bazel-host-tools.nix {
-                  inherit pkgs;
-                  rawBundle = builtins.path {
-                    path = /. + hostToolBundleEnv;
-                    name = "d2b-bazel-host-tools";
-                  };
-                  rawCloudHypervisorController =
-                    if cloudHypervisorControllerBundleEnv == "" then null else
-                    builtins.path {
-                      path = /. + cloudHypervisorControllerBundleEnv;
-                      name = "d2b-bazel-cloud-hypervisor-controller";
-                    };
-                };
-            testSelf =
-              if bazelHostTools == null then
-                self
-              else
-                self // {
-                  lib = self.lib // {
-                    d2bHostToolOverrides =
-                      bazelHostTools.d2bHostToolOverrides;
-                    d2bHostToolBundle = bazelHostTools.package;
-                    evalGuest = args: self.lib.evalGuest (args // {
-                      d2bHostToolOverrides =
-                        bazelHostTools.d2bHostToolOverrides;
-                    });
-                  };
-                  nixosModules = self.nixosModules // {
-                    default = {
-                      imports = [ self.nixosModules.default ];
-                      _module.args.d2bHostToolOverrides =
-                        bazelHostTools.d2bHostToolOverrides;
-                    };
-                  };
-                  packages = self.packages // {
-                    ${system} = self.packages.${system}
-                      // {
-                        d2b-wayland-proxy = bazelHostTools.package;
-                      }
-                      // nixpkgs.lib.optionalAttrs
-                        (bazelHostTools.cloudHypervisorControllerPackage != null)
-                        {
-                          d2b-cloud-hypervisor-controller =
-                            bazelHostTools.cloudHypervisorControllerPackage;
-                        };
-                  };
-                };
-            testDir = ./tests/host-integration;
-            testFiles = if builtins.pathExists testDir
-              then builtins.attrNames (nixpkgs.lib.filterAttrs
-                (name: type:
-                  type == "regular"
-                  && nixpkgs.lib.hasSuffix ".nix" name
-                  && name != "lib.nix")
-                (builtins.readDir testDir))
-              else [ ];
-            mkTest = file: {
-              name = nixpkgs.lib.removeSuffix ".nix" file;
-              value = import (testDir + "/${file}") {
-                inherit pkgs;
-                self = testSelf;
-              };
-            };
-          in builtins.listToAttrs (map mkTest testFiles)
-        else { });
+      # `rawBundle` and `rawCloudHypervisorController` are paths to
+      # directories holding the binaries by output name. `extraModules`
+      # carries a check's own guest contributions. `nodeShape` names which
+      # of the re-homed node's two guest shapes to evaluate - `daemon` for
+      # the daemon/broker host checks, `writable-store` for the two that
+      # boot a nested guest - so the shape is a declared input of the image
+      # rather than a second record of the numbers behind it.
+      guestImage = forAllSystems (system:
+        { rawBundle, rawCloudHypervisorController ? null, extraModules ? [ ], nodeShape ? "daemon" }:
+        let
+          handoff = mkBazelHostTools system rawBundle rawCloudHypervisorController;
+        in
+        import ./nix/test-support/guest-image.nix {
+          inherit extraModules nodeShape rawBundle;
+          pkgs = nixpkgsFor.${system};
+          bazelHostTools = handoff.tools;
+          self = handoff.hostSelf;
+        });
 
       templates.default = {
         path = ./templates/default;

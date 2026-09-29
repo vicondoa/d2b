@@ -1,10 +1,17 @@
-# Shared node configuration for d2b runNixOSTest (type-G) integration
-# tests. These are the additive, real-kernel coverage layer: a runNixOSTest VM
-# boots a real NixOS system with the d2b daemon surface
-# (`d2b.daemonExperimental.enable`) and the test script asserts live broker
-# / daemon behaviour (socket activation, SO_PEERCRED, the public.sock wire
-# surface, audited host mutations) that the PR-tier fake-backed Rust canaries
-# and pure-eval gates cannot exercise.
+# Shared helpers for d2b runNixOSTest (type-G) integration tests. These are
+# the additive, real-kernel coverage layer: a runNixOSTest VM boots a real
+# NixOS system with the d2b daemon surface (`d2b.daemonExperimental.enable`)
+# and the test script asserts live broker / daemon behaviour (socket
+# activation, SO_PEERCRED, the public.sock wire surface, audited host
+# mutations) that the PR-tier fake-backed Rust canaries and pure-eval gates
+# cannot exercise.
+#
+# What stays here is the part bound to the test driver: the driver-coupled
+# diagnostics prelude, the nested guest systems only these fixtures boot, and
+# the provider artifacts only these fixtures install. The reusable guest
+# configuration the lane also needs moved to
+# `nix/test-support/host-integration-node.nix`, so a fixture can be removed
+# when its check ports without taking its guest declaration with it.
 #
 # This file is NOT a flake check: the VM tests live under the `vmChecks` flake
 # output (selected explicitly by `make test-host-integration`), so the Layer-1
@@ -12,31 +19,6 @@
 { self, lib, hostToolBundle ? null }:
 
 let
-  # The minimal, hermetic d2b site declaration every daemon-host node shares.
-  # Zone and Guest resources belong to the acceptance fixture that exercises
-  # them; keeping this base free of legacy VM/env authoring prevents unrelated
-  # host checks from silently materializing a second lifecycle graph.
-  daemonAcceptanceUnits = [
-    "d2bd.service"
-    "d2b-broker.socket"
-    "d2b-broker.service"
-  ];
-
-  baseD2bConfig = {
-    d2b.site = {
-      waylandUser = "alice";
-      launcherUsers = [ "alice" ];
-      yubikey.enable = false;
-      usePrebuiltHostTools = false;
-    };
-    # The daemon's v3 bundle always carries the local-root storage row. Keep
-    # the corresponding root Zone in these minimal host fixtures so the
-    # emitted topology is sealed and the daemon can enter Ready.
-    d2b.zones.local-root = { };
-    # The full daemon + broker systemd surface under test.
-    d2b.daemonExperimental.enable = true;
-  };
-
   mkGuestSystem =
     { pkgs, name, zone ? "work", modules ? [ ] }:
     self.lib.evalGuest {
@@ -507,149 +489,6 @@ let
     };
 in
 rec {
-  # A NixOS module for a runNixOSTest node that boots the d2b daemon host.
-  # `extra` is merged as an additional module so individual tests can add
-  # per-test Zone/Guest resources, tampering helpers, or a larger disk. The
-  # node provisions the `alice` operator user the base config references.
-  #
-  # Structured as an attrset-module with everything in `imports` (an attrset is
-  # a valid module): `imports` must be top-level, NOT wrapped in `lib.mkMerge`,
-  # or the module system rejects it ("option nodes.machine.imports does not
-  # exist").
-  d2bDaemonNode =
-    { extra ? { }, writableStore ? false }:
-    { config, pkgs, ... }:
-    let
-      # Dedicated state disk: the redb Zone store pays an fsync per commit
-      # on the emulated root disk, and bring-up write bursts stall the
-      # daemon writer thread ~700-900ms per write. Attaching /var/lib/d2b
-      # as its own virtio drive with cache=unsafe makes guest fsync a host
-      # page-cache no-op; the fixture VM is ephemeral, so the durability
-      # semantics that unsafe drops are irrelevant here.
-      stateDisk = pkgs.runCommand "d2b-state.img"
-        {
-          nativeBuildInputs = [ pkgs.e2fsprogs ];
-        }
-        ''
-          truncate -s 4G "$out"
-          mkfs.ext4 -q -F "$out"
-        '';
-    in
-    {
-      imports = [
-        self.nixosModules.default
-        baseD2bConfig
-        extra
-        {
-          # Headroom for building/activating the bundle + daemon closure inside
-          # the VM; the default 1024 MiB is tight once the broker spawns
-          # runners.
-          virtualisation.memorySize = 3072;
-          virtualisation.diskSize = 8192;
-          # The daemon's redb writer thread, the daemon async runtime, the
-          # broker, and three controllers all need real CPU. The 1-vCPU
-          # default serializes them and starves every 250ms handshake.
-          virtualisation.cores = 3;
-          boot.kernelModules = [ "br_netfilter" "tun" "vhost_net" ];
-
-          users.users.alice = {
-            isNormalUser = true;
-            uid = 1000;
-          };
-
-          environment.etc."d2b/daemon-acceptance-units".text =
-            lib.concatStringsSep "\n" daemonAcceptanceUnits + "\n";
-
-          # Fail VM checks promptly when daemon startup is deterministically
-          # broken instead of spending the lane timeout in a restart loop.
-          systemd.services.d2bd.unitConfig = {
-            StartLimitIntervalSec = "30s";
-            StartLimitBurst = 3;
-          };
-
-          # runNixOSTest runs first-boot activation before systemd-tmpfiles has
-          # materialized the d2b state tree. Pre-create the state directory so
-          # daemon-owned startup can rely on the same path ordering.
-          system.activationScripts.d2bTestStateDirs = {
-            deps = [ "users" ];
-            text = ''
-              install -d -m 0750 -o root -g d2bd /var/lib/d2b
-              install -d -m 0710 -o root -g d2b /var/lib/d2b/keys
-              : > /var/lib/d2b/keys/.lock
-              chown root:root /var/lib/d2b/keys/.lock
-              chmod 0600 /var/lib/d2b/keys/.lock
-            '';
-          };
-          system.stateVersion = "25.11";
-        }
-        # Opt-in writable same-fs store. ONLY needed by tests that drive the
-        # per-VM /nix/store hardlink farm (which requires /var/lib/d2b and
-        # /nix/store on the SAME filesystem - hardlinks can't cross FS - and the
-        # default runNixOSTest read-only store image splits them). It is OFF by
-        # default: `virtualisation.writableStore = true` copies the entire guest
-        # closure into a writable overlay at boot, which adds many minutes to
-        # (and can hang) VM startup. The daemon/broker activation + host-posture
-        # tests (daemon-smoke, bridge-isolation, privilege-oracle)
-        # never boot a microVM, so they never touch the farm - keep this off for
-        # a fast, reliable boot.
-        (lib.mkIf writableStore {
-          virtualisation.useBootLoader = true;
-          # The guest store-view hardlinks /nix/store into /var/lib/d2b, so
-          # both must stay on one filesystem - a separate state disk would
-          # break the hardlink farm with EXDEV. Instead, drop the root
-          # drive's cache to unsafe: every redb commit's fsync becomes a
-          # host page-cache no-op instead of a ~700-900ms stall, and the
-          # fixture VM is ephemeral, so the lost durability is irrelevant.
-          virtualisation.qemu.drives = lib.mkForce [
-            {
-              name = "root";
-              file = ''"$NIX_DISK_IMAGE"'';
-              driveExtraOpts.cache = "unsafe";
-              driveExtraOpts.werror = "report";
-              deviceExtraOpts.bootindex = "1";
-              deviceExtraOpts.serial = "root";
-            }
-          ];
-        })
-        # The state disk keeps /var/lib/d2b off the emulated root disk:
-        # cache=unsafe (host fsync no-op), noatime + nobarrier mounts.
-        # The writableStore hardlink-farm tests stay on the default
-        # same-fs layout, so this is opt-out for them.
-        (lib.mkIf (! writableStore) {
-          # The image is a `pkgs.runCommand` output, so QEMU must not need
-          # write access to it: the lane builds these checks inside the Nix
-          # sandbox, where /nix/store is mounted read-only, and a writable
-          # drive on a store path makes QEMU abort at machine start - the
-          # test driver surfaces that as a bare "Connection reset by peer".
-          # `snapshot=on` opens the backing file read-only and keeps every
-          # guest write in an ephemeral per-VM overlay under TMPDIR, which
-          # matches the fixture's ephemeral state disk either way.
-          virtualisation.qemu.options = [
-            "-drive"
-            "file=${stateDisk},format=raw,if=virtio,cache=unsafe,aio=threads,snapshot=on"
-          ];
-          fileSystems."/var/lib/d2b" = {
-            device = "/dev/vdb";
-            fsType = "ext4";
-            options = [ "noatime" "nobarrier" ];
-            # Up before activation so d2bTestStateDirs lands inside the
-            # mounted filesystem, not under the covered root mountpoint.
-            neededForBoot = true;
-          };
-        })
-      ];
-    };
-
-  # Shared host posture for every fixture that boots a Cloud Hypervisor Guest.
-  # The hardlink-backed Guest store view requires a writable host store on the
-  # same filesystem as /var/lib/d2b.
-  d2bCloudHypervisorNode =
-    { extra ? { } }:
-    d2bDaemonNode {
-      inherit extra;
-      writableStore = true;
-    };
-
   # Fixture diagnostics prelude, interpolated at the top of each VM fixture's
   # `testScript` (issue #513). The runNixOSTest driver discards
   # `machine.execute` output and never re-prints what a timed-out
@@ -668,136 +507,18 @@ rec {
   # was asserting on; `explain` entries are (journal unit or null, token) whose
   # last daemon lines explain those rows. Diagnostics only: every assertion and
   # timeout is passed through unchanged.
-  fixtureDiagnostics = ''
-      # ---- d2b fixture diagnostics (issue #513) --------------------------
-      # The test driver discards machine.execute output and does not re-print
-      # the output a timed-out wait_until_succeeds last saw, so a failed lane
-      # used to leave only the command text in the log. These helpers push the
-      # row set and the daemon explanation lines into the driver log (stdout
-      # and stderr of the test driver, that is the lane log).
-      #
-      # Diagnostics only: no assertion and no timeout is changed here.
-      import time as _diag_time
-
-      _diag_t0 = _diag_time.monotonic()
-      _diag_stage = "startup"
-
-      def _diag_elapsed():
-          return f"{_diag_time.monotonic() - _diag_t0:.1f}s"
-
-      def _diag_print(*lines):
-          for line in lines:
-              print(line, flush=True)
-
-      def stage(name):
-          global _diag_stage
-          _diag_stage = name
-          _diag_print(f"[d2b] stage={name} t={_diag_elapsed()}")
-
-      def diag(command, label="diagnostic output"):
-          try:
-              status, output = machine.execute(command, timeout=120)
-          except Exception as error:
-              _diag_print(
-                  f"[d2b] stage={_diag_stage} t={_diag_elapsed()} {label}: "
-                  f"diagnostic command failed: {error}"
-              )
-              return -1
-          _diag_print(
-              f"[d2b] stage={_diag_stage} t={_diag_elapsed()} {label} "
-              f"(exit {status}):"
-          )
-          _diag_print(command)
-          for line in output.rstrip().splitlines():
-              _diag_print("    " + line)
-          return status
-
-      def _diag_journal(unit, token):
-          scope = f"-u {unit} " if unit else ""
-          select = f"| grep -F -- {token!r} " if token else ""
-          return (
-              f"journalctl {scope}--no-pager -o cat -b -n 4000 2>/dev/null "
-              f"{select}| tail -n 60 || true"
-          )
-
-      def unit_dumps(unit):
-          """Row dumps for a systemd unit waiting to become active."""
-          return [
-              (
-                  f"{unit} status",
-                  f"systemctl status {unit} --no-pager 2>&1 | tail -n 40 "
-                  "|| true",
-              ),
-          ]
-
-      # Every fixture drives one zone as one linux user through the same
-      # public socket, so the composed explanation is available without each
-      # stage listing the rows it asserted on: `d2b debug` reads the whole
-      # zone and prints the ownership tree, the row that is not settled, and
-      # the structured failure behind it.
-      _diag_zone = "work"
-      _diag_user = "alice"
-
-      def diag_debug_zone(label="zone explanation"):
-          """The composed `d2b debug` report, always diagnostic and never
-          fatal: a failure that happened before the daemon was reachable must
-          still print its own stage rather than a diagnostic error. Bounded,
-          because a failure can happen before there is anything to explain."""
-          status = diag(
-              f"runuser -u {_diag_user} -- env "
-              f"D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
-              f"timeout 60 d2b --zone {_diag_zone} debug {_diag_zone} 2>&1 "
-              f"|| true",
-              label,
-          )
-          return status
-
-      def diag_step(name, action, rows=(), explain=(), wait=None, debug=True):
-          stage(name)
-          try:
-              return action()
-          except Exception as error:
-              labels = ", ".join(label for label, _ in rows) or "none"
-              failing = f" wait={name}" if wait else ""
-              _diag_print(
-                  f"[d2b] FAIL stage={name} t={_diag_elapsed()}{failing} "
-                  f"rows=[{labels}]: {error}"
-              )
-              if wait:
-                  _diag_print(f"[d2b] failing wait: {wait}")
-              for label, command in rows:
-                  diag(command, f"row dump: {label}")
-              for unit, token in explain:
-                  detail = f"journal {unit or 'all'}"
-                  if token:
-                      detail += f" lines matching {token!r}"
-                  diag(_diag_journal(unit, token), detail)
-              if debug:
-                  diag_debug_zone()
-              raise
-
-      def diag_unit(name, unit, timeout, debug=True):
-          """wait_for_unit with the unit status and journal on timeout."""
-          return diag_step(
-              name,
-              lambda: machine.wait_for_unit(unit, timeout=timeout),
-              unit_dumps(unit),
-              [(unit, None)],
-              debug=debug,
-          )
-
-      def diag_wait(name, command, timeout, rows=(), explain=(), debug=True):
-          return diag_step(
-              name,
-              lambda: machine.wait_until_succeeds(command, timeout=timeout),
-              rows,
-              explain,
-              command,
-              debug=debug,
-          )
-  '';
+  #
+  # The text itself lives with the lane's own assertion surface, in
+  # `packages/d2b-test-vm-harness/src/diagnostics.py`, and is read from there
+  # rather than kept here. The Bazel lane runs these very same evaluated
+  # scripts, so a check that has not been ported yet reports its failure
+  # through this text under either lane; a second copy of it would be a
+  # second dialect of the same diagnostics, and the two would drift the first
+  # time one of them gained a helper the other did not.
+  fixtureDiagnostics =
+    builtins.readFile ../../packages/d2b-test-vm-harness/src/diagnostics.py;
 
   # Re-exported so tests can assert against the shared declaration.
-  inherit baseD2bConfig mkGuestSystem mkRuntimeCloudHypervisorArtifact
+  inherit mkGuestSystem mkRuntimeCloudHypervisorArtifact
     mkAcceptanceProviderArtifact mkVolumeProviderArtifact;
 }

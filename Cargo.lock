@@ -2155,6 +2155,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-test-vm-harness"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "d2b-unsafe-local-helper"
 version = "0.0.0-bootstrap"
 dependencies = [

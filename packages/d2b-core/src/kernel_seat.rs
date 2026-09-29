@@ -172,6 +172,7 @@ mod tests {
     };
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn saturated_seat_refuses_with_busy() {
         let seat = KernelSeat::start().expect("workers start");
         let (release_tx, release_rx) = sync_channel::<()>(0);

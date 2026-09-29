@@ -133,8 +133,8 @@ first twenty lines:
 ```
 
 Use `container` for a foreign-userland or process fixture and
-`host-integration` for a NixOS/Host/Guest fixture. Run the public lanes, which
-acquire the shared heavy-test slot:
+`host-integration` for a NixOS/Host/Guest fixture. Run the public lanes
+directly - there is no shared heavy-test slot:
 
 ```bash
 make test-integration
@@ -142,7 +142,7 @@ make test-host-integration
 ```
 
 Validate physical-device behavior manually on an appropriate host. Do not add
-an evidence script or invoke an internal heavy-lane target directly.
+an evidence script or a private wrapper target around either lane.
 
 Several current Provider directories are scaffolding and intentionally have
 an integration README but no executable runtime fixture:

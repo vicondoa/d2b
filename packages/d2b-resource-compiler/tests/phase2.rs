@@ -1586,3 +1586,159 @@ fn device_worker_rows_only_bind_rows_their_own_device_provider_declares() {
         .collect::<Vec<_>>();
     assert_eq!(process_refs, vec!["Process/swtpm-tpm".to_owned()]);
 }
+
+/// A worker row's declared read-write mount must name a Volume the row's own
+/// owning Device owns; a Volume scoped to another Device is refused, and the
+/// refusal names it. A row that declares no read-write mount still compiles.
+#[test]
+fn device_worker_mounts_must_be_volumes_the_owning_device_owns() {
+    let (_, _, _, artifact) = device_worker_fixture("device-tpm", &["swtpm", "swtpm-ioctl"]);
+    let own = device_volume_name("dev", "tpm");
+    let foreign = device_volume_name("dev", "tpm2");
+
+    let row_with = |volume: &str, access: &str| {
+        let mut row = device_row(
+            "Process",
+            "swtpm-tpm",
+            "tpm",
+            "swtpm-socket",
+            device_worker_sandbox(&["mount", "pid", "user"], true),
+        );
+        row["spec"]["mounts"] = serde_json::json!([{
+            "volumeRef": volume,
+            "view": "swtpm-process",
+            "mountPath": "/state",
+            "access": access,
+            "required": true,
+        }]);
+        row
+    };
+
+    // The form a declarative projection can actually spell: the row names the
+    // child by role and the framework composes the concrete name from the
+    // row's own Device. It compiles, and resolves to that Device's Volume.
+    let row_with_own_child = |role: &str, access: &str| {
+        let mut row = device_row(
+            "Process",
+            "swtpm-tpm",
+            "tpm",
+            "swtpm-socket",
+            device_worker_sandbox(&["mount", "pid", "user"], true),
+        );
+        row["spec"]["mounts"] = serde_json::json!([{
+            "ownVolumeSuffix": role,
+            "view": "swtpm-process",
+            "mountPath": "/state",
+            "access": access,
+            "required": true,
+        }]);
+        row
+    };
+
+    let resources = device_worker_zone(
+        "device-tpm",
+        &["tpm"],
+        vec![row_with_own_child("tpm-state", "read-write")],
+    );
+    project_static_controller_processes("dev", &resources, &declared(), std::slice::from_ref(&artifact))
+        .expect("the row's own Device child Volume compiles");
+
+    // The two naming forms are alternatives: a mount carrying both is not a
+    // row that names a Volume, it is a row whose Volume is ambiguous, and the
+    // wire contract refuses it.
+    let mut both = row_with_own_child("tpm-state", "read-write");
+    both["spec"]["mounts"][0]["volumeRef"] = serde_json::json!(format!("Volume/{own}"));
+    let resources = device_worker_zone("device-tpm", &["tpm"], vec![both]);
+    let refusal =
+        project_static_controller_processes("dev", &resources, &declared(), std::slice::from_ref(&artifact))
+            .expect_err("a mount that names a Volume twice is not a mount");
+    assert_eq!(refusal.code(), "provider-device-worker-row-invalid");
+
+    // The row's own Device's Volume compiles, and the binding carries the
+    // declaration the resolver mints its policy from.
+    let resources = device_worker_zone(
+        "device-tpm",
+        &["tpm"],
+        vec![row_with(&format!("Volume/{own}"), "read-write")],
+    );
+    let projection =
+        project_static_controller_processes("dev", &resources, &declared(), std::slice::from_ref(&artifact))
+            .expect("own-device volume compiles");
+    let binding = worker_bindings(&projection)
+        .into_iter()
+        .find(|binding| binding.template().as_str() == "swtpm-socket")
+        .expect("the swtpm worker binding");
+    assert_eq!(
+        binding
+            .mounts()
+            .iter()
+            .map(|mount| mount.declared_volume_label())
+            .collect::<Vec<_>>(),
+        vec![format!("Volume/{own}")],
+        "the declared binding is carried onto the template binding"
+    );
+
+    // A Volume scoped to a *different* Device is refused, and the refusal
+    // names the binding to change.
+    let resources = device_worker_zone(
+        "device-tpm",
+        &["tpm"],
+        vec![row_with(&format!("Volume/{foreign}"), "read-write")],
+    );
+    let refusal =
+        project_static_controller_processes("dev", &resources, &declared(), std::slice::from_ref(&artifact))
+            .expect_err("a foreign device volume is refused");
+    assert_eq!(
+        refusal.code(),
+        "provider-device-worker-volume-not-admitted"
+    );
+    assert!(
+        refusal.to_string().contains(&format!("Volume/{foreign}")),
+        "the refusal names the unpermitted binding: {refusal}"
+    );
+
+    // A read-only binding on a foreign Volume grants nothing, so it is not a
+    // read-write declaration and is not refused here either.
+    let resources = device_worker_zone(
+        "device-tpm",
+        &["tpm"],
+        vec![row_with(&format!("Volume/{foreign}"), "read-only")],
+    );
+    project_static_controller_processes("dev", &resources, &declared(), std::slice::from_ref(&artifact))
+        .expect("a read-only binding grants nothing and is not a read-write claim");
+
+    // A row that declares no mount at all still compiles and binds nothing.
+    let resources = device_worker_zone(
+        "device-tpm",
+        &["tpm"],
+        vec![device_row(
+            "Process",
+            "swtpm-tpm",
+            "tpm",
+            "swtpm-socket",
+            device_worker_sandbox(&["mount", "pid", "user"], true),
+        )],
+    );
+    let projection =
+        project_static_controller_processes("dev", &resources, &declared(), &[artifact])
+            .expect("a row with no declared mount still compiles");
+    assert!(
+        worker_bindings(&projection)
+            .iter()
+            .all(|binding| binding.mounts().is_empty()),
+        "a row that declares no mount binds none"
+    );
+}
+
+/// The 32-hex segment a Device-owned Volume's name carries: the owning
+/// Device's durable uid with its UUID punctuation dropped.
+fn device_volume_name(zone: &str, device: &str) -> String {
+    let short = d2b_contracts::identity::deterministic_resource_uid(zone, "Device", device)
+        .as_str()
+        .bytes()
+        .filter(|byte| byte.is_ascii_hexdigit())
+        .take(32)
+        .map(char::from)
+        .collect::<String>();
+    format!("device-{short}-tpm-state")
+}

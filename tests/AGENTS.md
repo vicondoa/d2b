@@ -65,23 +65,16 @@ parity result.
 | # | Type | What it is | Lives in | Runs **where** |
 |---|------|------------|----------|----------------|
 | 9 | **container** | Nix-OCI image under rootless podman; proves a static binary runs on a foreign non-Nix userland | `tests/integration/containers/*.sh` + `containerImages.<sys>.*` | `make test-integration` - conditional local host lane when the changed surface needs a foreign userland |
-| 10 | **VM (runNixOSTest)** | boots a real NixOS VM; asserts live daemon/broker/socket-activation/host-posture/kernel behaviour | `tests/host-integration/*.nix` + `vmChecks.<sys>.*` | `make test-host-integration` - conditional NixOS/KVM lane when the changed surface needs host behavior |
-| 11 | **live-host** | runs against a **real deployed** d2b host; destructive/stateful | `tests/integration/live/*.sh` | through the Bazel-built xtask heavy-gate semaphore; `D2B_LIVE=1` / sudo - **manual, never CI** |
+| 10 | **VM (Bazel lane)** | boots a real NixOS VM under KVM; asserts live daemon/broker/socket-activation/host-posture/kernel behaviour, all in Rust | `bazel/checks/vm/` - the lane target `//bazel/checks/vm:host_integration_lane_run`; `tests/host-integration/lib.nix` only, for the guest nodes that import it | `make test-host-integration` - local pre-PR x86_64-linux lane; `/dev/kvm` is a declared precondition with no emulation fallback |
+| 11 | **live-host** | runs against a **real deployed** d2b host; destructive/stateful | `tests/integration/live/*.sh` | `make pre-tag` / `make smoke-lite`, or the script directly with its own opt-ins (`D2B_LIVE=1` / sudo) - **manual, never CI** |
 
-Every retained Layer-2 tier (9-11) runs behind the Bazel-built xtask heavy-gate sole-use
-semaphore, never as a raw script. Use the gated public lane target
-(`make test-integration`, `make test-host-integration`;
-`make pre-tag` / `make smoke-lite` for the live-VM smoke gate), or wrap an
-ad-hoc live script as
-`make heavy-gate-build && bazel-bin/packages/xtask/xtask heavy-gate -- env
-D2B_LIVE=1 bash tests/integration/live/<name>.sh`.
-
-Invoking a live script directly no longer bypasses the semaphore: it re-executes
-through the gate exactly once when `D2B_HEAVY_GATE` is unset, so shared Nix
-store, Bazel output tree, and KVM are not oversubscribed. **Any new live or
-performance entrypoint must carry that same self-guard block**, or the
-fail-closed inventory guard (`every_live_and_heavy_entrypoint_routes_through_the_gate`)
-fails while walking on-disk scripts and the Makefile.
+Every retained Layer-2 tier (9-11) runs its public entry point directly:
+`make test-integration`, `make test-host-integration`, or the live-VM smoke
+targets (`make pre-tag` / `make smoke-lite`). The heavy-gate semaphore that
+used to serialize these lanes, its `D2B_HEAVY_GATE` re-exec guard, and its
+host provisioning were removed; the lanes run as raw work, and nothing
+schedules or serializes them, so the caller owns avoiding concurrent heavy
+lanes on one host.
 
 ## How to add a test (decision rule)
 
@@ -134,7 +127,7 @@ tests/
 │   ├── distro-matrix/                                              distro pins/fixtures
 │   └── live/                                                        type 11 D2B_LIVE (manual)
 └── host-integration/
-    └── *.nix                                                       type 10 runNixOSTest (make test-host-integration; conditional)
+    └── lib.nix                                                      type 10 guest-node helpers for the Bazel host lane (make test-host-integration; local pre-PR)
 ```
 
 Types 2-5 (unit/integration/contract/policy-lint) are Rust and live under
@@ -202,8 +195,8 @@ add a test census, successor pin, secondary inventory, or validator.
 ### Retained Layer-2 and manual scripts
 
 Layer-2 container, VM, live-host, and performance scripts remain
-manual or conditional surfaces. They run through the documented heavy-gate
-semaphore and are not part of the Bazel Layer-1 scheduler. A shell script may
+manual or conditional surfaces that run their own work directly, and are not
+part of the Bazel Layer-1 scheduler. A shell script may
 remain under `tests/tools/` or `tests/unit/` when it is the subject of a
 native Bazel test, a fixture materializer, a generator, or a Layer-2 lane; it
 must not schedule sibling Layer-1 work.
@@ -212,9 +205,10 @@ For U20 final acceptance, both public integration targets,
 `make test-integration` and `make test-host-integration`, are mandatory and
 may be scheduled alongside the `/etc/nixos` real-host switch, d2b startup, and
 Cloud Hypervisor Guest boot. U19 only keeps their declarations and current
-inputs converged and does not run host acceptance. The host lane uses the
-existing Bazel-built host-tool bundle handoff; Nix realizes the VM check
-around those injected binaries and must not rebuild d2b binaries.
+inputs converged and does not run host acceptance. The host lane passes the
+Bazel-built host tools to the guest-image action as declared Bazel label
+inputs; Nix realizes each guest around those binaries and must not rebuild
+d2b binaries.
 
 ### Standalone Rust workspaces
 

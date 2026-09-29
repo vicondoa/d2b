@@ -1285,38 +1285,6 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: BrokerOperationName::PrepareSwtpmDir,
-        wire_variant: None,
-        owner: OperationOwner::BrokerGeneric,
-        family: None,
-        declaring_provider: None,
-        justification: Some("broker pre-spawn step: the broker provisions and hardens the per-VM swtpm state dir from its SpawnRunner step before the child starts, and the row carries that record shape only"),
-        profiles: &[BrokerProfileId::Host],
-        w3: false,
-        capabilities: false,
-        disposition: Disposition::CompileTimeOnly,
-        stub_target: None,
-        audit_fields: &["PrepareSwtpmDir"],
-        authz: BrokerAuthzFacets {
-            subject: "fs",
-            scope: "per-VM",
-            allowed_groups: &["d2bd"],
-            destructive: true,
-            secret_access: SecretAccess::MetadataOnly,
-            broker_required: BrokerRequirement::Yes,
-            audit_mode: AuditMode::Yes,
-        },
-        payload_provenance: PayloadProvenance::Wire,
-        payload_fields: &[],
-        payload_required: &[],
-        audit_join: None,
-        max_fds: 0,
-        fd_kind: None,
-        state_cell: None,
-        cell_durability: None,
-        deadline_tier: DeadlineTier::Standard,
-    },
-    BrokerOperationRow {
         operation: BrokerOperationName::EnvelopeInvoke,
         wire_variant: Some("EnvelopeInvoke"),
         owner: OperationOwner::BrokerGeneric,
@@ -1595,7 +1563,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
             audit_mode: AuditMode::Yes,
         },
         payload_provenance: PayloadProvenance::Request,
-        payload_fields: &["activationInput", "argv", "binaryPath", "capabilities", "cgroupPlacement", "deviceWorker", "env", "gid", "mountPolicy", "namespaces", "preflightSocketPaths", "role", "rootCarveOut", "runnerIdentity", "seccompPolicyRef", "servingWorker", "skipBinaryExistsCheck", "supplementaryGroups", "swtpmIdentity", "uid", "umask", "userNamespace"],
+        payload_fields: &["activationInput", "argv", "binaryPath", "capabilities", "cgroupPlacement", "deviceWorker", "env", "gid", "mountPolicy", "namespaces", "preflightSocketPaths", "role", "rootCarveOut", "runnerIdentity", "seccompPolicyRef", "servingWorker", "skipBinaryExistsCheck", "supplementaryGroups", "uid", "umask", "userNamespace"],
         payload_required: &["binaryPath", "argv", "uid", "gid", "supplementaryGroups", "env", "capabilities", "namespaces", "mountPolicy", "cgroupPlacement", "role", "servingWorker", "runnerIdentity"],
         audit_join: None,
         max_fds: 8,
@@ -2800,7 +2768,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         capabilities: true,
         disposition: Disposition::PromotedLive,
         stub_target: None,
-        audit_fields: &["PrepareStateDir", "PrepareSwtpmDir"],
+        audit_fields: &["PrepareStateDir"],
         authz: BrokerAuthzFacets {
             subject: "fs",
             scope: "global/per-VM",
@@ -2928,7 +2896,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         capabilities: false,
         disposition: Disposition::PromotedLive,
         stub_target: None,
-        audit_fields: &["SpawnRunner", "PrepareSwtpmDir"],
+        audit_fields: &["SpawnRunner"],
         authz: BrokerAuthzFacets {
             subject: "vm-runner",
             scope: "per-VM/role",
@@ -3143,4 +3111,4 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
 ];
 
 /// The number of committed operation rows.
-pub const BROKER_OPERATION_COUNT: usize = 98;
+pub const BROKER_OPERATION_COUNT: usize = 97;

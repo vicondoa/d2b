@@ -16,7 +16,8 @@ that is the binding contract; this file is the human quick-start.
   advisory; an advisory success may be a guarded skip and is not validation
   evidence.
 - **Layer 2 - integration tiers.** Real systemd / kernel / userland: podman
-  containers, runNixOSTest VMs, and live-host scripts. Used only
+  containers, KVM-booted VMs through the Bazel host lane, and live-host
+  scripts. Used only
   when Layer 1 *provably* cannot cover the behaviour. Physical-device
   validation is manual operator work, not a repository evidence script.
 
@@ -39,7 +40,7 @@ tests/
 │   ├── distro-matrix/                                           distro pins + fixtures
 │   └── live/                                                    type 11: D2B_LIVE live-host (manual)
 └── host-integration/
-    └── *.nix                                                    type 10: runNixOSTest (make test-host-integration; conditional)
+    └── lib.nix                                                  type 10: guest-node helpers for the Bazel host lane (make test-host-integration; local pre-PR)
 ```
 
 Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
@@ -67,10 +68,10 @@ The source-hygiene gate fails closed when `D2B_SHELLCHECK_BIN` is unavailable.
 | `make test-policy` | composed Bazel source, workspace/lock, supply-chain, and changelog policy suites | local + CI |
 | `make test-performance-budgets` | advisory performance canary; without `D2B_PERF_STABLE=1` it reports `SKIP` and enforces nothing | local + CI |
 | `make test-integration` | type-9 podman container tests | conditional local host lane (podman; not the PR pipeline) |
-| `make test-host-integration` | type-10 runNixOSTest VM checks; locally builds eight host tools with Bazel, injects them into the checks, and optionally uploads their built dependency closures to Attic | conditional local NixOS host lane (KVM; TCG fallback; not the PR pipeline) |
+| `make test-host-integration` | type-10 host-integration VM checks through one Bazel lane target; guests are graph outputs keyed on declared inputs and every assertion is Rust | local contributor pre-PR lane (x86_64-linux; needs `/dev/kvm`; no emulation fallback; not the PR pipeline) |
 | `make check-fast` | compatibility alias for `make check` | local + CI |
 | `make bazel-check` | Bazel aggregate suite used by `make check`. Developer Bazel and public Make aliases default to BuildBuddy remote through `.bazelrc`; CI sets `D2B_BAZEL_PROFILE=local` | local or remote |
-| `make heavy-gate-build && bazel-bin/packages/xtask/xtask heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests, through the heavy-gate semaphore | **manual, against a deployed d2b host** |
+| `make pre-tag` / `make smoke-lite`, or a live script directly with its own opt-ins (`D2B_LIVE=1`, sudo) | type-11 live-host tests | **manual, against a deployed d2b host** |
 
 `make check`, `make test-unit`, and `make bazel-check` invoke the same nested
 suite graph through one public facade label. Public Make aliases run
@@ -86,18 +87,27 @@ or required gate evidence.
 completions, protocol bindings, Nix outputs, and policy inputs in the checkout;
 it does not alter the repository-default remote profile used by `make check`.
 
-`make test-host-integration` first builds the fixed eight host tools with local
-Bazel, injects the staged bundle into the selected NixOS `vmChecks`, and then
-uploads their built dependency closures to configured Attic in one operation.
-The `vmCheck` result paths are excluded so capability skips are never cached as
-passing test results.
-If Attic or its configuration is unavailable, the lane reports an explicit
-skip and continues. If present configuration is invalid or unusable, the lane
-fails closed; an upload failure is also fatal. `D2B_VM_CHECK=<name>` builds one
-named `vmChecks` entry; `D2B_HOST_VM_CHECK=<name>` designates the validated
-selected check for the run and fails closed on an unknown name. Repeating the
-same command without source changes is the warm run and should execute zero
-Rust compilation actions.
+`make test-host-integration` runs the Bazel-owned host integration lane as one
+`bazel test` invocation. Each of the eleven checks boots its own NixOS guest,
+built as a graph output keyed on declared inputs, and the lane restores a
+pooled guest per check rather than booting one guest per check. Every
+assertion is Rust; the guest images rebuild when a guest module or a d2b host
+binary changes, and repeat runs execute no Rust compilation actions.
+
+The lane is a local, contributor-run pre-PR surface, not a CI gate, and it
+declares virtualization as a precondition: it needs `/dev/kvm` and has no
+silent emulation fallback, so on a host without KVM it stops with a message
+rather than turning very slow. It is x86_64-linux only.
+
+`D2B_VM_CHECK=<name>` runs one named check, and `bazel test --test_filter=<name>`
+works too - the lane reads Bazel's own filter as well as that variable, and the
+first of the two that names anything wins. A failing check reports under its own
+name in the lane's test output, with the stage it was in, the rows it was
+asserting on, and the guest's journal and zone dump.
+
+There is no Attic preflight or closure upload here: the guest-image action
+declares its own substituters and preflights them itself, so the cache handling
+lives with the build that needs it rather than in a second place that can drift.
 
 Run these aliases directly from a normal Nix-enabled checkout. Make enters
 the pinned `.#bazel` shell automatically when the explicit d2b shell contract
@@ -128,42 +138,21 @@ realizes the copied Guest workspace for dependency metadata, license, source,
 and audit validation; it does not compile Guest packages and is not a fifth
 repository-wide policy class or copied-workspace parity result.
 
-All Layer-2 lanes (types 9-11) run behind one sole-use semaphore (two slots
-per uid via open file description locks), so concurrent heavy lanes cannot
-oversubscribe the shared Nix store, Bazel output tree, or KVM device. The
-public lane targets above (`make test-integration`,
-`make test-host-integration`, `make perf`) acquire a slot and then delegate
-to a guarded internal `heavy-lane-*` target that fails closed if run outside
-the gate; run the public targets, not the internal ones. `make heavy-check`,
-`make heavy-flake-check`, and the `heavy-test-*` aliases run a Layer-1 gate,
-the building flake check, or a public lane under the same semaphore.
-Live-host scripts obey the same rule: use the gated `make pre-tag` /
-`make smoke-lite` live-VM smoke entrypoints, or wrap a raw live script as
-`make heavy-gate-build && bazel-bin/packages/xtask/xtask heavy-gate -- env
-D2B_LIVE=1 bash tests/integration/live/<x>.sh`. Invoking `D2B_LIVE=1 bash
-tests/integration/live/<x>.sh` directly no longer bypasses the semaphore:
-each live entrypoint, plus the enforcing path of each performance
-entrypoint, verifies its inherited slot and re-executes itself through the gate
-exactly once when no genuine slot is held. The advisory performance skip exits
-before acquiring a slot because it does no heavy work. A bare `D2B_HEAVY_GATE`
-value is not trusted, so the shared Nix store, Bazel output tree, and KVM
-device cannot be oversubscribed. The gated targets remain the documented path.
+All Layer-2 lanes (types 9-11) run their own work directly. `make
+test-integration`, `make test-host-integration`, `make perf`, `make pre-tag`,
+and `make smoke-lite` are plain invocations: there is no repository
+semaphore, no re-exec wrapper, and no internal `heavy-lane-*` targets in
+between. The heavy-gate semaphore (the `xtask heavy-gate` facade, its
+`D2B_HEAVY_GATE` re-exec guard, the `/run/d2b-heavy-gates` slot namespace,
+`make heavy-gate-provision`, and the `heavy-test-*` aliases) was removed, and
+nothing replaces it, so nothing prevents two heavy lanes from running at once
+on one host except the caller. `make heavy-check` and
+`make heavy-flake-check` survive as plain aliases that run their work
+directly, not under a gate.
 
-The semaphore uses a protected, system-provisioned namespace under
-`/run/d2b-heavy-gates`; it never falls back to a user-writable runtime or
-temporary directory. The NixOS module provisions the fixed root at boot and
-creates two private slots for each configured `d2b.site.launcherUsers` member
-that NSS can resolve during activation. An unavailable network-backed user is
-deferred rather than failing activation. After that user logs in, or on a
-development machine that does not use the module, run
-`make heavy-gate-provision` once per boot when the gate requests it. The target
-uses the caller's numeric UID without an NSS user-name lookup and uses `sudo`
-only to create the root-owned namespace and the current user's two mode-`0600`
-slot files. This per-boot step is necessary because `/run` is a tmpfs. Until it
-is complete, a missing or malformed namespace fails closed with stable code
-`heavy-gate-provisioning-required` and names that Make target as the
-remediation; do not work around it by moving the gate into `/tmp` or another
-user-owned location.
+Live-host tests are run through `make pre-tag` / `make smoke-lite`, or
+directly with the opt-in variables they require (`D2B_LIVE=1`, sudo). Those
+scripts retain their own safety checks and cleanup behavior.
 
 Current live-host scripts include `d2b-store.sh` for per-VM store
 adoption and `usbip-lifecycle.sh` for USBIP attach/detach across a `d2bd`
@@ -244,7 +233,7 @@ evidence script is required.
 The fixed workflow is committed at `.github/workflows/pr-l1-static-fast.yml`
 and exposes one stable required `check` result. Intermediate job names are
 implementation details. Layer-2 container, VM, live-host, and performance scripts
-remain conditional or manual lanes behind the heavy-gate semaphore; they are
+remain conditional or manual lanes that run their own work directly; they are
 not folded into the Layer-1 Bazel scheduler.
 
 ## Adding a test

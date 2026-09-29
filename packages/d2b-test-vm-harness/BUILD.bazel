@@ -1,0 +1,78 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load(
+    "//bazel/checks/rust:d2b_rust_rules.bzl",
+    "d2b_rust_binary",
+    "d2b_rust_library",
+    "d2b_rust_test",
+)
+
+# The lane's guest launcher is not a main-package crate: the repository's
+# test census force-registers any crate that carries a test aggregate into the
+# main package suite, and this crate's tests run as part of the lane, not as
+# part of `make check`. The lane's own suite in `bazel/checks/vm` names the
+# targets below directly, so they are still built, linted, and run.
+package(default_visibility = ["//bazel/checks:__pkg__", "//bazel/checks/vm:__pkg__"])
+
+exports_files(
+    [
+        "BUILD.bazel",
+        "Cargo.toml",
+        # The nix lane's fixtures interpolate this same text into their
+        # evaluated assertions, and they read it out of the tree by path, so
+        # the guest-image action has to be able to stage it.
+        "src/diagnostics.py",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+d2b_rust_library(
+    name = "d2b_test_vm_harness",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**/*.rs"],
+        allow_empty = True,
+    ),
+    # The two Python files the legacy guest-control surface carries, declared
+    # as compile-time data because that is what embeds them: the diagnostics
+    # prelude is the one copy the nix lane's fixtures interpolate as well, and
+    # the bridge is the `machine` object an unported check's assertions call.
+    # A check cannot be handed a lane whose diagnostics text differs from the
+    # one its fixture was evaluated with.
+    compile_data = [
+        "Cargo.toml",
+        "src/diagnostics.py",
+        "src/legacy_bridge.py",
+    ],
+    deps = all_crate_deps(normal = True, cargo_only = True),
+)
+
+d2b_rust_binary(
+    name = "d2b-test-vm-harness",
+    srcs = ["src/bin/d2b-test-vm-harness.rs"],
+    compile_data = ["Cargo.toml"],
+    deps = [
+        ":d2b_test_vm_harness",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+d2b_rust_test(
+    name = "d2b_test_vm_harness_test",
+    crate = ":d2b_test_vm_harness",
+    compile_data = ["Cargo.toml"],
+    deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

@@ -31,7 +31,8 @@ use d2b_contracts_provider::v3::{
     },
 };
 use d2b_contracts_resource::v3::{
-    ArtifactId, CanonicalJsonValue, ResourceName, ResourceRef, ResourceTypeName, ZoneId,
+    ArtifactId, CanonicalJsonValue, MountAccess, MountSpec, ResourceName, ResourceRef,
+    ResourceTypeName, ZoneId,
     canonical_digest, canonical_json_bytes,
     execution_policy::{BoundedToken, BudgetSpec, ExecutionDomain},
     process::{ExecutionSpec, ProcessClass, ProcessSpec, SandboxSpec, TelemetrySpec},
@@ -457,7 +458,7 @@ impl fmt::Debug for StaticControllerProjection {
 }
 
 /// Static controller projection refusal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StaticControllerProjectionError {
     /// The Zone name is invalid.
     InvalidZone,
@@ -482,6 +483,10 @@ pub enum StaticControllerProjectionError {
     /// A declared Device-owned worker row's sandbox disagreed with the
     /// closed posture its template declares.
     DeviceWorkerPostureMismatch,
+    /// A declared Device-owned worker row bound read-write a Volume its
+    /// template's closed posture does not permit. The refused binding is named
+    /// so the operator sees which declaration to change.
+    DeviceWorkerVolumeNotAdmitted { volume: String },
     /// The signed target artifact differed from the verified package binary.
     ArtifactDigestMismatch,
     /// A generated Process identity collided with another resource.
@@ -496,7 +501,7 @@ pub enum StaticControllerProjectionError {
 
 impl StaticControllerProjectionError {
     /// Stable compiler diagnostic code.
-    pub const fn code(self) -> &'static str {
+    pub const fn code(&self) -> &'static str {
         match self {
             Self::InvalidZone => "provider-controller-zone-invalid",
             Self::InvalidProviderResource => "provider-controller-provider-invalid",
@@ -514,13 +519,21 @@ impl StaticControllerProjectionError {
             Self::InvalidTemplate => "provider-controller-template-invalid",
             Self::Serialization => "provider-controller-process-serialization",
             Self::TemplateBindingInvalid => "provider-controller-template-binding-invalid",
+            Self::DeviceWorkerVolumeNotAdmitted { .. } => {
+                "provider-device-worker-volume-not-admitted"
+            }
         }
     }
 }
 
 impl fmt::Display for StaticControllerProjectionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.code())
+        match self {
+            Self::DeviceWorkerVolumeNotAdmitted { volume } => {
+                write!(formatter, "{}: {volume}", self.code())
+            }
+            _ => formatter.write_str(self.code()),
+        }
     }
 }
 
@@ -1089,6 +1102,8 @@ fn append_device_worker_templates(
         if !declared_device_worker_posture_matches(&posture, spec) {
             return Err(StaticControllerProjectionError::DeviceWorkerPostureMismatch);
         }
+        let mounts = declared_device_worker_mounts(spec)?;
+        declared_device_worker_mounts_admitted(zone, &owner_ref, &posture, &mounts)?;
         if spec.get("providerRef").and_then(Value::as_str) != Some("Provider/system-minijail")
             || spec.get("processClass").and_then(Value::as_str) != Some("worker")
         {
@@ -1124,7 +1139,7 @@ fn append_device_worker_templates(
             .join(EXECUTABLE_DIR)
             .join(binary_ref.as_str());
         templates.push(
-            ProcessTemplateBinding::new_with_launch_args(
+            ProcessTemplateBinding::new_with_launch_args_and_mounts(
                 process_ref,
                 provider_ref.clone(),
                 execution_ref,
@@ -1133,6 +1148,7 @@ fn append_device_worker_templates(
                 binary_ref,
                 artifact_digest.clone(),
                 binary_path.to_string_lossy().into_owned(),
+                mounts,
             )
             .map_err(|_| StaticControllerProjectionError::TemplateBindingInvalid)?,
         );
@@ -1200,6 +1216,63 @@ fn declared_device_worker_posture_matches(
         && field("oomScoreAdj").as_i64().is_none_or(|value| value == 0)
         && field("umask").as_str() == Some(&format!("{:04o}", posture.umask()))
         && field("userNamespace") == expected_user_namespace
+}
+
+/// The Volume mounts one declared worker row binds, decoded from the row's
+/// own `spec.mounts`.
+///
+/// The declared row is the only declaration surface: the binding carries
+/// these verbatim, so the launch policy the resolver mints and the row a
+/// reviewer reads cannot drift. A row that declares no mount binds none.
+fn declared_device_worker_mounts(
+    spec: &Value,
+) -> Result<Vec<MountSpec>, StaticControllerProjectionError> {
+    match spec.get("mounts") {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(mounts) => serde_json::from_value::<Vec<MountSpec>>(mounts.clone())
+            .map_err(|_| StaticControllerProjectionError::DeviceWorkerRowInvalid),
+    }
+}
+
+/// Whether every read-write mount a declared worker row binds is one its
+/// template's closed posture admits, naming the first that is not.
+///
+/// The posture states the grant as a property of the bound Volume's *owner*
+/// ([`d2b_core::bundle_resolver::DeviceWorkerVolumeGrant`]): a worker may
+/// bind a Volume its own owning Device owns. A read-only binding grants
+/// nothing, so it is never refused here - it is also never a grant, which is
+/// the resolver's rule, not this one.
+///
+/// A declared mount names its Volume either concretely or as the
+/// controller-created child of the row's own Device; the second is expanded
+/// to the concrete name here
+/// ([`d2b_core::bundle_resolver::resolve_declared_mount_volume`]) so this
+/// admission is the same ownership check the resolver runs, on the same name,
+/// from the same one derivation. A reference the framework cannot resolve
+/// names no Volume, so it is refused like any other unadmitted one.
+fn declared_device_worker_mounts_admitted(
+    zone: &ZoneId,
+    device: &ResourceRef,
+    posture: &d2b_core::bundle_resolver::DeviceWorkerPosture,
+    mounts: &[MountSpec],
+) -> Result<(), StaticControllerProjectionError> {
+    for mount in mounts {
+        if mount.access() != MountAccess::ReadWrite {
+            continue;
+        }
+        let admitted = d2b_core::bundle_resolver::resolve_declared_mount_volume(
+            zone.as_str(),
+            device,
+            mount,
+        )
+        .is_some_and(|volume| posture.volume_grant().admits(zone.as_str(), device, &volume));
+        if !admitted {
+            return Err(StaticControllerProjectionError::DeviceWorkerVolumeNotAdmitted {
+                volume: mount.declared_volume_label(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Return the deterministic resource ordering key.

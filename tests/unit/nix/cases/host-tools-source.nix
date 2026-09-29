@@ -109,11 +109,14 @@ in
         ''"d2b-provider-test-controller"''
         "inventoryShell"
       ]
-      && lib.all (needle: lib.hasInfix needle makeSource) [
-        "//packages/d2b-provider-test-controller:d2b-provider-test-controller"
-        "stage_tool packages/d2b-provider-test-controller/d2b-provider-test-controller d2b-provider-test-controller"
-        ''D2B_HOST_TOOL_BUNDLE="$$stage"''
-      ]
+      # The host tools reach the guest as declared inputs to the guest-image
+      # action, not through a `D2B_HOST_TOOL_BUNDLE` that a recipe stages
+      # beside them. This case used to assert that staging in the Makefile;
+      # the intent is unchanged - Nix realizes the guest closure around
+      # binaries Bazel built and does not rebuild them - so it now asserts
+      # that the recipe no longer carries a handoff at all.
+      && !lib.hasInfix "D2B_HOST_TOOL_BUNDLE" makeSource
+      && !lib.hasInfix "stage_tool" makeSource
       && orderedUnique acceptanceControllerBlock [
         "controller = if hostToolBundle == null then"
         "self.packages."

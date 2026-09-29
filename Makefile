@@ -17,7 +17,8 @@ D2B_MAKE_BAZEL_TARGETS := \
 	test-flake-realized test-flake-aarch64 test-flake-x86 test-nix-unit \
 	test-performance-budgets test-drift test-policy test-changelog
 D2B_MAKE_LOCAL_TARGETS := \
-	check-clippy check-ci test-integration test-host-integration perf \
+	check-clippy check-ci check-integration \
+	test-integration test-host-integration perf \
 	pre-tag smoke-lite heavy-check heavy-flake-check check-async-gate check-census \
 	check-dead-code
 # Meta helpers that invoke Bazel directly but are not Layer-1 test aliases.
@@ -71,7 +72,7 @@ else
 SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
 
 .PHONY: pre-tag smoke-lite \
-        check check-clippy check-ci check-fast check-tier0 \
+        check check-clippy check-ci check-integration check-fast check-tier0 \
         bazel-check \
         test-unit \
         test-lint test-rust test-rust-main \
@@ -85,6 +86,7 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
         test-flake-aarch64 test-flake-x86 test-nix-unit \
         test-performance-budgets \
         test-drift test-policy test-changelog \
+        check-integration \
         test-integration test-host-integration perf \
         heavy-check heavy-flake-check check-async-gate check-census \
         check-dead-code \
@@ -100,11 +102,16 @@ SYSTEM ?= $(shell nix eval --extra-experimental-features 'nix-command flakes' \
 # Test interface. Every Bazel-backed target below dispatches to the matching
 # public suite in bazel/checks/BUILD.bazel.
 #
-#   make check          complete Bazel Layer-1 gate.
+#   make check          complete Bazel Layer-1 gate. Hermetic by design: it
+#                       runs no integration lane, so it stays runnable on a
+#                       hosted CI runner and on a host with neither a
+#                       container runtime nor /dev/kvm.
+#   make check-integration  check + both integration lanes; the local
+#                       NixOS/KVM pre-PR aggregate that `check` excludes.
 #   make check-ci       check + test-integration for local/manual compatibility.
 #   make test-<layer>   focused Bazel suite.
 #   make test-integration  type-9 container integration; local host/manual pre-PR.
-#   make test-host-integration  type-10 runNixOSTest; local NixOS/KVM pre-PR.
+#   make test-host-integration  type-10 Bazel host lane; local NixOS/KVM pre-PR.
 #   make heavy-check     full Layer-1 check.
 #   make heavy-flake-check  full flake realization.
 # ===========================================================================
@@ -153,6 +160,16 @@ check-ci: check-clippy
 	$(D2B_BAZEL_TEST) //bazel/checks:check
 	$(MAKE) test-integration
 
+## check-integration - run the integration lanes, which `check` deliberately
+## leaves out. `check` stays the hermetic Layer-1 gate: the two integration
+## lanes need a container runtime (test-integration) and a KVM-capable NixOS
+## host (test-host-integration), so folding them in would make the fast gate
+## unrunnable on CI's hosted runners and on a laptop without /dev/kvm. This
+## is the pre-PR aggregate: the Layer-1 gate, then both lanes.
+check-integration: check
+	$(MAKE) test-integration
+	$(MAKE) test-host-integration
+
 ## check-fast - compatibility alias for check; check-tier0 is the fast subset.
 
 $(D2B_MAKE_BAZEL_TARGETS):
@@ -175,190 +192,49 @@ generate:
 # Additional targets (helper utilities, legacy aliases, meta gates).
 # ===========================================================================
 
-## test-host-integration - G-host: runNixOSTest VM integration tests (the
-## `vmChecks` flake output, NOT swept by `nix flake check`). Each test boots a
-## real NixOS VM with the d2b daemon surface and asserts live broker /
-## daemon / host-posture behaviour (socket activation, bridge isolation,
-## state-dir ACLs, broker privilege posture) - the hermetic, non-destructive
-## successor to the `D2B_LIVE`-against-the-real-host scripts. Needs KVM (a local
-## NixOS host; TCG software emulation is the slow fallback when /dev/kvm is
-## absent). x86_64-linux only (a same-system VM builder is required).
-## Set D2B_VM_CHECK=<name> to build one named vmChecks entry.
+## test-host-integration - G-host: the Bazel-owned host integration lane.
+##
+## Runs the eleven VM integration checks through the lane test target. Each
+## check boots its own NixOS guest with the d2b daemon surface and asserts
+## live broker / daemon / host-posture behaviour (socket activation, bridge
+## isolation, state-dir ACLs, broker privilege posture) - the hermetic,
+## non-destructive successor to the `D2B_LIVE`-against-the-real-host
+## scripts. Every assertion is Rust. The guest images are graph outputs
+## keyed on declared inputs, and the lane restores a pooled guest per check
+## rather than booting one guest per check.
+##
+## This is a local, contributor-run lane and not a CI gate: it is a
+## pre-PR surface, which is what lets the virtualization precondition be
+## asserted rather than negotiated.
+##
+## Needs KVM. The lane declares virtualization as a precondition and has no
+## silent emulation fallback, so on a host without it this target stops with
+## a message rather than turning very slow. x86_64-linux only (it needs a
+## same-system VM builder).
+##
+## Set D2B_VM_CHECK=<name> to run one named check. `bazel test
+## --test_filter=<name>` works too: the lane reads Bazel's own filter as
+## well as this variable, and the first of the two that names anything wins.
+##
+## The host tools and the guest are built under the committed `guest` profile
+## from .bazelrc, so an exported Bazel profile cannot change the guest
+## closure. The guest-image action declares its own substituters and
+## preflights them itself, so the Attic preflight and closure upload that
+## used to live here are gone with the nix recipe that needed them.
 test-host-integration:
 	@set -eu; \
 	system="$$(nix eval --raw --impure --expr builtins.currentSystem)"; \
 	if [ "$$system" != "x86_64-linux" ]; then \
-	echo "test-host-integration: vmChecks are x86_64-linux only (need a same-system VM builder); skipping on $$system"; \
+	echo "test-host-integration: the lane is x86_64-linux only (it needs a same-system VM builder); skipping on $$system"; \
 	exit 0; \
 	fi; \
 	if [ ! -e /dev/kvm ]; then \
-	echo "test-host-integration: /dev/kvm absent - runNixOSTest will fall back to slow TCG emulation"; \
-	fi; \
-	root="$$(pwd)"; \
-	if [ -n "$${D2B_VM_CHECK:-}" ]; then \
-	names="$$D2B_VM_CHECK"; \
-	else \
-	names="$$(nix eval --raw --impure --no-warn-dirty --expr "builtins.concatStringsSep \" \" (builtins.attrNames (builtins.getFlake \"git+file://$$root\").vmChecks.$$system)")"; \
-	fi; \
-	requested="$${D2B_HOST_VM_CHECK:-}"; \
-	if [ -n "$$requested" ]; then \
-	case "$$requested" in \
-	*[!A-Za-z0-9._-]*) \
-	echo "test-host-integration: invalid D2B_HOST_VM_CHECK (use one discovered vmCheck name): $$requested" >&2; \
-	exit 1;; \
-	esac; \
-	fi; \
-	if [ -z "$$names" ]; then \
-	if [ -n "$$requested" ]; then \
-	echo "test-host-integration: unknown vmCheck '$$requested' (available: none)" >&2; \
+	echo "test-host-integration: /dev/kvm is absent, and the lane declares virtualization as a precondition with no emulation fallback" >&2; \
 	exit 1; \
 	fi; \
-	echo "test-host-integration: no vmChecks present"; \
-	exit 0; \
-	fi; \
-	if [ -n "$$requested" ]; then \
-	case " $$names " in \
-	*" $$requested "*) names="$$requested";; \
-	*) \
-	echo "test-host-integration: unknown vmCheck '$$requested' (available: $$names)" >&2; \
-	exit 1;; \
-	esac; \
-	fi; \
-	run_dir="$$(mktemp -d "$${TMPDIR:-/tmp}/d2b-host-integration.XXXXXX")"; \
-	chmod 700 "$$run_dir"; \
-	cleanup() { rm -rf -- "$$run_dir"; nix-store --gc --print-roots >/dev/null 2>&1 || true; }; \
-	trap cleanup EXIT; \
-	trap 'exit 129' HUP; \
-	trap 'exit 130' INT; \
-	trap 'exit 143' TERM; \
-	trap 'exit 131' QUIT; \
-	attic_cache=""; \
-	attic_config=""; \
-	if [ -n "$${XDG_CONFIG_HOME:-}" ]; then \
-	attic_config="$$XDG_CONFIG_HOME/attic/config.toml"; \
-	elif [ -n "$${HOME:-}" ]; then \
-	attic_config="$$HOME/.config/attic/config.toml"; \
-	fi; \
-	if ! command -v attic >/dev/null 2>&1; then \
-	echo "test-host-integration: Attic unavailable - skipping closure upload"; \
-	elif [ -z "$$attic_config" ] || [ ! -e "$$attic_config" ]; then \
-	echo "test-host-integration: Attic config absent - skipping closure upload"; \
-	else \
-	fail_attic_state() { echo "test-host-integration: configured Attic state is invalid or ambiguous" >&2; exit 1; }; \
-	attic_meta="$$(ATTIC_CONFIG="$$attic_config" nix eval --impure --json --expr 'let config = builtins.fromTOML (builtins.readFile (builtins.getEnv "ATTIC_CONFIG")); names = builtins.attrNames (config.servers or {}); server = if config ? "default-server" then config."default-server" else if builtins.length names == 1 then builtins.head names else throw "ambiguous Attic servers"; endpoint = config.servers.$${server}.endpoint or (throw "missing Attic endpoint"); in { inherit server endpoint; }' 2>/dev/null)" || fail_attic_state; \
-	attic_server="$$(printf '%s' "$$attic_meta" | jq -er '.server | select(test("^[A-Za-z0-9][A-Za-z0-9._+-]*$$"))')" || fail_attic_state; \
-	attic_base="$$(printf '%s' "$$attic_meta" | jq -er '.endpoint | capture("^(?<scheme>https?)://(?<authority>[^/@?#]+)(?:/[^?#]*)?$$") | ((.scheme | ascii_downcase) + "://" + (.authority | ascii_downcase))')" || fail_attic_state; \
-	attic_name="$$(nix config show --json | jq -er --arg base "$$attic_base" '.substituters.value | if type == "string" then split(" ") else . end | map(try capture("^(?<scheme>https?)://(?<authority>[^/@?#]+)(?<path>/[^?#]*)?(?:\\?[^#]*)?$$") catch empty | select(((.scheme | ascii_downcase) + "://" + (.authority | ascii_downcase)) == $$base) | ((.path // "") | rtrimstr("/") | split("/") | last)) | map(select(test("^[A-Za-z0-9][A-Za-z0-9_+-]*$$"))) | unique | select(length == 1) | .[0]')" || fail_attic_state; \
-	attic_cache="$$attic_server:$$attic_name"; \
-	if ! attic cache info "$$attic_cache" >"$$run_dir/attic-info.log" 2>&1; then \
-	echo "test-host-integration: configured Attic cache preflight failed" >&2; \
-	exit 1; \
-	fi; \
-	echo "test-host-integration: Attic cache preflight passed"; \
-	fi; \
-	echo "test-host-integration: building host tools with local Bazel"; \
-	'$(BAZEL_BIN)' build --config=local \
-	//packages/d2b:d2b \
-	//packages/d2bd:d2bd \
-	//packages/d2b-broker-composition:d2b-broker \
-	//packages/d2b-host:d2b-activation-helper \
-	//packages/d2b-host-activation-helper:d2b-host-activation-helper \
-	//packages/d2b-unsafe-local-helper:d2b-unsafe-local-helper \
-	//packages/d2b-resource-compiler:d2b-resource-compiler \
-	//packages/d2b-provider-display-wayland:d2b-wayland-proxy \
-	//packages/d2b-provider-test-controller:d2b-provider-test-controller \
-	//packages/d2b-provider-guest-cloud-hypervisor:d2b-cloud-hypervisor-controller; \
-	bazel_bin="$$(realpath -e "$$('$(BAZEL_BIN)' info --config=local bazel-bin)")"; \
-	stage="$$run_dir/bundle"; \
-	controller_stage="$$run_dir/cloud-hypervisor-controller"; \
-	mkdir -m 700 "$$stage"; \
-	mkdir -m 700 "$$controller_stage"; \
-	stage_tool() { source="$$(realpath -e "$$bazel_bin/$$1")"; case "$$source" in "$$bazel_bin"/*) ;; *) echo "test-host-integration: Bazel output escaped bazel-bin" >&2; return 1;; esac; [ -f "$$source" ] && [ -x "$$source" ] || { echo "test-host-integration: invalid Bazel output $$1" >&2; return 1; }; install -m 755 "$$source" "$$stage/$$2"; }; \
-	stage_tool packages/d2b/d2b d2b; \
-	stage_tool packages/d2bd/d2bd d2bd; \
-	stage_tool packages/d2b-broker-composition/d2b-broker d2b-broker; \
-	stage_tool packages/d2b-host/d2b-activation-helper d2b-activation-helper; \
-	stage_tool packages/d2b-host-activation-helper/d2b-host-activation-helper d2b-host-activation-helper; \
-	stage_tool packages/d2b-unsafe-local-helper/d2b-unsafe-local-helper d2b-unsafe-local-helper; \
-	stage_tool packages/d2b-resource-compiler/d2b-resource-compiler d2b-resource-compiler; \
-	stage_tool packages/d2b-provider-display-wayland/d2b-wayland-proxy d2b-wayland-proxy; \
-	stage_tool packages/d2b-provider-test-controller/d2b-provider-test-controller d2b-provider-test-controller; \
-	source="$$(realpath -e "$$bazel_bin/packages/d2b-provider-guest-cloud-hypervisor/d2b-cloud-hypervisor-controller")"; \
-	case "$$source" in "$$bazel_bin"/*) ;; *) echo "test-host-integration: Cloud Hypervisor controller escaped bazel-bin" >&2; exit 1;; esac; \
-	[ -f "$$source" ] && [ -x "$$source" ] || { echo "test-host-integration: invalid Bazel Cloud Hypervisor controller" >&2; exit 1; }; \
-	install -m 755 "$$source" "$$controller_stage/d2b-cloud-hypervisor-controller"; \
-	echo "test-host-integration: staged Bazel host-tool bundle"; \
-	echo "test-host-integration: building vmChecks serially: $$names"; \
-	: >"$$run_dir/outputs"; \
-	: >"$$run_dir/summary"; \
-	lane_rc=0; \
-	max_jobs="$${D2B_HOST_VM_JOBS:-1}"; \
-	case "$$max_jobs" in ''|*[!0-9]*) echo "test-host-integration: invalid D2B_HOST_VM_JOBS (want a positive integer)" >&2; exit 1;; esac; \
-	if [ "$$max_jobs" -lt 1 ]; then echo "test-host-integration: D2B_HOST_VM_JOBS must be at least 1" >&2; exit 1; fi; \
-	echo "test-host-integration: building vmChecks (jobs=$$max_jobs): $$names"; \
-	: >"$$run_dir/failed"; \
-	run_vm_check() { \
-	name="$$1"; \
-	check_start="$$(date +%s)"; \
-	rc=0; \
-	D2B_HOST_TOOL_BUNDLE="$$stage" D2B_CH_CONTROLLER_BUNDLE="$$controller_stage" \
-	D2B_HOST_RUNTIME_PATH="$$run_dir/absent-host-runtime.json" \
-	sudo -A -E nix build --option build-users-group "" --option extra-sandbox-paths "/dev/vhost-vsock" --impure --out-link "$$run_dir/result-$$name" --print-build-logs --print-out-paths "git+file://$$root#vmChecks.$$system.$$name" >"$$run_dir/$$name.outputs" 2>"$$run_dir/$$name.log" || rc=$$?; \
-	check_duration="$$(( $$(date +%s) - check_start ))"; \
-	if [ "$$rc" -eq 0 ]; then \
-	status=PASS; \
-	cat "$$run_dir/$$name.outputs" >>"$$run_dir/outputs"; \
-	else \
-	status=FAIL; \
-	printf '%s\n' "$$name" >>"$$run_dir/failed"; \
-	fi; \
-	printf 'test-host-integration: vmCheck %-42s %s  %ss\n' "$$name" "$$status" "$$check_duration" | tee -a "$$run_dir/summary"; \
-	if [ "$$rc" -ne 0 ]; then \
-	printf 'test-host-integration: %s tail of %s:\n' "$$name" "$$run_dir/$$name.log" >&2; \
-	tail -20 "$$run_dir/$$name.log" >&2 || true; \
-	fi; \
-	}; \
-	running=0; \
-	for name in $$names; do \
-	if [ "$$running" -ge "$$max_jobs" ]; then wait || true; running=0; fi; \
-	run_vm_check "$$name" & \
-	running="$$((running + 1))"; \
-	done; \
-	wait || true; \
-	if [ -s "$$run_dir/failed" ]; then lane_rc=1; fi; \
-	echo "test-host-integration: vmCheck summary (name, status, wall time):"; \
-	cat "$$run_dir/summary"; \
-	if [ -n "$$attic_cache" ]; then \
-	: >"$$run_dir/attic-closure-all"; \
-	while IFS= read -r output; do \
-	drv="$$(nix-store -qd "$$output")" || { \
-	echo "test-host-integration: could not resolve a vmCheck derivation for Attic" >&2; \
-	exit 1; \
-	}; \
-	if [ "$$drv" = "unknown-deriver" ]; then \
-	continue; \
-	fi; \
-	if ! nix-store -qR --include-outputs "$$drv" >>"$$run_dir/attic-closure-all"; then \
-	echo "test-host-integration: could not resolve a vmCheck dependency closure for Attic" >&2; \
-	exit 1; \
-	fi; \
-	done <"$$run_dir/outputs"; \
-	sort -u -o "$$run_dir/attic-closure-all" "$$run_dir/attic-closure-all"; \
-	awk 'NR == FNR { skip[$$0] = 1; next } !skip[$$0]' \
-	"$$run_dir/outputs" "$$run_dir/attic-closure-all" >"$$run_dir/attic-closure"; \
-	if [ ! -s "$$run_dir/attic-closure" ]; then \
-	echo "test-host-integration: no Attic closure paths to upload (vmChecks satisfied from substituters)"; \
-	elif ! timeout 60s attic push --jobs 16 --no-closure --stdin "$$attic_cache" <"$$run_dir/attic-closure" >"$$run_dir/attic-push.log" 2>&1; then \
-	echo "test-host-integration: warning: Attic closure upload failed" >&2; \
-	cat "$$run_dir/attic-push.log" >&2; \
-	else \
-	echo "test-host-integration: Attic closure upload succeeded"; \
-	fi; \
-	fi; \
-	if [ "$$lane_rc" -ne 0 ]; then \
-	echo "test-host-integration: at least one vmCheck failed (see the summary above)" >&2; \
-	exit "$$lane_rc"; \
-	fi
+	$(D2B_BAZEL_TEST) --config=guest \
+	--test_env=D2B_VM_CHECK="$${D2B_VM_CHECK:-}" \
+	$(if $(strip $(D2B_VM_CHECK)),//bazel/checks/vm:host_integration_lane_run_$(D2B_VM_CHECK),//bazel/checks/vm:host_integration_lane_run)
 
 ## perf - run the advisory performance budget suite.
 perf:

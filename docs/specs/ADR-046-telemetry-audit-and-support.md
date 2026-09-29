@@ -1235,10 +1235,11 @@ ResourceType/resource names, arbitration internals, or `exportKey`.
 
 Adapts existing `OpAuditRecord` from
 `packages/d2b-broker/src/ops/audit_op.rs`. No raw paths, device
-identifiers, or broker operation arguments. Current `SwtpmDirAudit` fields
-(`base_dir_hash`, `result`, `mode`, `owner_uid`, `marker_result`) are
-preserved by encoding them into `resource_context_digest` plus a
-`swtpm_dir_fields` sub-object that carries the closed-set enums without paths.
+identifiers, or broker operation arguments. The `SwtpmDirAudit` fields
+(`base_dir_hash`, `result`, `mode`, `owner_uid`, `marker_result`) went with
+the removed NVRAM tamper guard, so there is no `swtpm_dir_fields` sub-object
+to carry; the state-directory posture the TPM state Volume declares is
+recorded through `resource_context_digest` alone.
 
 #### ProcessEffect
 

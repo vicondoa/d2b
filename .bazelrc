@@ -41,6 +41,18 @@ build:local --@rules_rust//rust/settings:extra_exec_rustc_flags=
 build:local --action_env=PATH
 build:local --test_env=PATH
 
+# The host-integration lane's guest build profile. The lane builds the d2b
+# host binaries that reach the guest through this config, named here
+# rather than at a call site so a contributor's exported Bazel profile
+# cannot change the guest closure: the guest image action realizes the
+# binaries this config produces, whatever the caller set.
+build:guest --config=local
+# The guest binaries are content-addressed inputs of the guest image, so a
+# caller-inherited action environment would change the guest closure. The
+# profile pins the environment those builds see, the same way the remote
+# profile pins it.
+build:guest --action_env=PATH=/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
 # Remote profiles use the d2b BuildBuddy workspace. Authentication is
 # the credential helper only. Direct API-key headers leak into BEP.
 build:remote --remote_executor=grpcs://d2b.buildbuddy.io

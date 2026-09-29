@@ -25,7 +25,7 @@ target and where the test lives.
 | That a config **builds** / a schema is strict | **F** | `test-flake` | `flake.checks` (realized via `nix build`) |
 | One of the four global policy classes: source hygiene, workspace/lock integrity, supply chain, or changelog | **H** | `test-policy` | the corresponding narrow global policy target |
 | Foreign-userland portability for static binaries | **G-container** | `test-integration` | `tests/integration/containers/*.sh` under rootless podman; local host/manual pre-PR, not the PR pipeline |
-| Real-kernel runtime behaviour with **no physical device** (broker sockets, cgroups, pidfd, store, network, audit, ACL, swtpm) | **G-host** | `test-host-integration` | `tests/host-integration/*.nix` runNixOSTest VM checks; local NixOS/KVM host/manual pre-PR, not the PR pipeline |
+| Real-kernel runtime behaviour with **no physical device** (broker sockets, cgroups, pidfd, store, network, audit, ACL, swtpm) | **G-host** | `test-host-integration` | the type-10 Bazel host lane (`//bazel/checks/vm:host_integration_lane_run`), all assertions in Rust; x86_64-linux, needs `/dev/kvm`; local host/manual pre-PR, not the PR pipeline |
 
 ### Group F resource caveat
 

@@ -341,22 +341,6 @@ let
       sensitivity = "private";
       invariants = [ "no-symlink" "broker-opaque-id-only" ];
     })
-  ] ++ lib.optionals (tpmVms != { }) [
-    (mkPath {
-      id = "path:swtpm-marker-root";
-      scope = "host";
-      path = "${toString cfg.site.stateDir}/swtpm-markers";
-      owner = principal "user" "root";
-      group = principal "group" "root";
-      mode = "0700";
-      creator = actor "broker" "d2b-broker";
-      writers = [ (actor "broker" "d2b-broker") ];
-      readers = [ (actor "broker" "d2b-broker") ];
-      cleanupPolicy = "never";
-      repairPolicy = "broker-fail-closed";
-      sensitivity = "secret-adjacent";
-      invariants = [ "no-symlink" "broker-opaque-id-only" "root-owned-parent" ];
-    })
   ] ++ map
     (file: mkPath {
       id = "path:daemon-state:${file}";
@@ -649,22 +633,6 @@ let
         sensitivity = "secret-adjacent";
         invariants = [ "no-symlink" "broker-opaque-id-only" "scope-authorization-required" ];
       })
-      (mkPath {
-        id = "path:swtpm-marker:${name}";
-        scope = "vm:${name}";
-        path = "${toString cfg.site.stateDir}/swtpm-markers/${name}";
-        kind = "regular-file";
-        owner = principal "user" "root";
-        group = principal "group" "root";
-        mode = "0600";
-        creator = actor "broker" "d2b-broker";
-        writers = [ (actor "broker" "d2b-broker") ];
-        readers = [ (actor "broker" "d2b-broker") ];
-        cleanupPolicy = "never";
-        repairPolicy = "broker-fail-closed";
-        sensitivity = "secret-adjacent";
-        invariants = [ "no-symlink" "root-owned-parent" "broker-opaque-id-only" "scope-authorization-required" ];
-      })
     ])
     tpmVms);
 
@@ -934,6 +902,41 @@ let
 
   perZoneGuestTpmStoragePaths = lib.flatten (map
     (name: [
+      # The per-guest runtime tree a device worker binds its socket under.
+      #
+      # A legacy VM declares this as `path:vm-run:<vm>`, created by tmpfiles
+      # at activation. A zone-native Device owner did not, and a guest name
+      # is not known to the host's static tmpfiles rules either - so this
+      # row is the DECLARATION the broker acts on: the device worker's socket
+      # grant reads the posture below out of the verified contract and
+      # creates /run/d2b/vms/<name> with it, right before it opens the
+      # directory to the worker's principal. The shared parent is the one
+      # static tmpfiles rule does own (`d /run/d2b/vms 1770 d2bd d2b`,
+      # host-daemon.nix); an absent parent, or a directory the broker cannot
+      # posture, refuses the launch rather than letting the worker fail
+      # later. That is why only the roles whose posture binds a runtime
+      # socket were affected while the one-shot flush, which binds none, was
+      # admitted. Same path as the legacy row, so it reuses the legacy id
+      # rather than inventing a second vocabulary for one directory.
+      (mkPath {
+        id = "path:vm-run:${name}";
+        scope = "vm:${name}";
+        path = "/run/d2b/vms/${name}";
+        lifecycle = "boot-scoped-readoptable";
+        persistence = "boot-scoped";
+        owner = principal "user" "d2bd";
+        group = principal "group" "d2b";
+        mode = "1770";
+        creator = actor "nix-module" "tmpfiles";
+        writers = [
+          (actor "daemon" "d2bd")
+          (actor "broker" "d2b-broker")
+        ];
+        cleanupPolicy = "boot";
+        repairPolicy = "nix-activation";
+        leaseClass = "process-pidfd";
+        invariants = [ "no-symlink" "scope-authorization-required" ];
+      })
       (mkPath {
         id = "path:swtpm-state:${name}";
         scope = "vm:${name}";
@@ -951,22 +954,6 @@ let
         repairPolicy = "broker-fail-closed";
         sensitivity = "secret-adjacent";
         invariants = [ "no-symlink" "broker-opaque-id-only" "scope-authorization-required" ];
-      })
-      (mkPath {
-        id = "path:swtpm-marker:${name}";
-        scope = "vm:${name}";
-        path = "${toString cfg.site.stateDir}/swtpm-markers/${name}";
-        kind = "regular-file";
-        owner = principal "user" "root";
-        group = principal "group" "root";
-        mode = "0600";
-        creator = actor "broker" "d2b-broker";
-        writers = [ (actor "broker" "d2b-broker") ];
-        readers = [ (actor "broker" "d2b-broker") ];
-        cleanupPolicy = "never";
-        repairPolicy = "broker-fail-closed";
-        sensitivity = "secret-adjacent";
-        invariants = [ "no-symlink" "root-owned-parent" "broker-opaque-id-only" "scope-authorization-required" ];
       })
     ])
     zoneGuestDeviceOwners)

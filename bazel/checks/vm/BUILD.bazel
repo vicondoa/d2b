@@ -1,0 +1,263 @@
+load(":defs.bzl", "guest_boot_test", "guest_image", "lane_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# Everything the guest evaluation reads. A guest image rebuilds when one
+# of these changes, so the set names what the guest is made of - the
+# flake, the d2b module tree, the host-tool sources, and the node
+# configuration - rather than the whole workspace.
+_GUEST_SOURCES = [
+    "//:Cargo.lock",
+    "//:flake.lock",
+    "//:flake.nix",
+    "//:nix_workspace_sources",
+    "//:nixos_modules_workspace_sources",
+    "//:packages_workspace_sources",
+    # The manpages, read out of the staged tree by the d2b module tree:
+    # `nixos-modules/host-daemon.nix` installs `../docs/manpages/d2b.1`,
+    # so a per-check guest resolves a path out of the docs tree that the
+    # two shape images never needed. An input reached by a relative path
+    # out of another input is an input, and the action copies declared
+    # sources and nothing else.
+    "//:docs_workspace_sources",
+    # The shell completions, for the same reason as the manpages above: the
+    # d2b module tree installs `../completions/d2b.{bash,fish,zsh}`.
+    "//:completions_workspace_sources",
+    # The packaging tree, reached as `../pkgs/signoz*` by the observability
+    # modules the per-check guests import.
+    "//:pkgs_workspace_sources",
+    # The host-integration fixtures themselves. A per-check guest is built
+    # from its own fixture, so the fixtures are inputs to every image: a
+    # change to a check's node or to its assertions rebuilds that check's
+    # guest, which is the only way the guest and the check it runs can be
+    # said to come from one declaration.
+    "//:tests_root_sources",
+    # The provider acceptance manifests the check fixtures sign their
+    # artifacts against. `//:tests_root_sources` globs `tests/**/*` but does
+    # not cross a package boundary, and `tests/fixtures` is a Bazel package,
+    # so this tree is a second declared input rather than part of that one.
+    "//tests/fixtures:fixture_sources",
+    # The diagnostics prelude the fixtures interpolate and the lane's own
+    # guest-control surface embeds, read out of the tree by both.
+    "//packages/d2b-test-vm-harness:src/diagnostics.py",
+    # The provider manifests the acceptance fixtures sign their artifacts
+    # against, read by path out of the tree by the fixtures' own helpers.
+    "//packages/d2b-provider-guest-cloud-hypervisor:provider-manifest.json",
+    "//packages/d2b-provider-guest-cloud-hypervisor:root-config.schema.json",
+    "//packages/d2b-broker:src/ops/state-posture-contract.json",
+    "//:rust-toolchain.toml",
+]
+
+# The d2b host binaries every guest image is built against.
+_HOST_TOOLS = [
+    "//packages/d2b:d2b",
+    "//packages/d2bd:d2bd",
+    "//packages/d2b-broker-composition:d2b-broker",
+    "//packages/d2b-host:d2b-activation-helper",
+    "//packages/d2b-host-activation-helper:d2b-host-activation-helper",
+    "//packages/d2b-unsafe-local-helper:d2b-unsafe-local-helper",
+    "//packages/d2b-resource-compiler:d2b-resource-compiler",
+    "//packages/d2b-provider-display-wayland:d2b-wayland-proxy",
+    "//packages/d2b-provider-test-controller:d2b-provider-test-controller",
+]
+
+# The Cloud Hypervisor controller the nested-guest checks enroll.
+_CONTROLLER = "//packages/d2b-provider-guest-cloud-hypervisor:d2b-cloud-hypervisor-controller"
+
+# The image action realizes a guest closure through nix, which cannot build
+# inside a sandboxed action, so the action is unsandboxed, local, and
+# uncacheable on any remote cache.
+_IMAGE_TAGS = [
+    "exclusive",
+    "local",
+    "no-remote-cache",
+    "no-remote-exec",
+    "no-sandbox",
+]
+
+# The default guest shape: the node the daemon and broker host checks boot.
+guest_image(
+    name = "guest_image",
+    srcs = _GUEST_SOURCES,
+    cloud_hypervisor_controller = _CONTROLLER,
+    flake = "//:flake.nix",
+    flake_lock = "//:flake.lock",
+    host_tools = _HOST_TOOLS,
+    nix = "@nix//:bin/nix",
+    node_shape = "daemon",
+    substituters = "https://cache.nixos.org/",
+    tags = _IMAGE_TAGS,
+)
+
+# The writable-store shape: the node the two nested-guest checks boot, which
+# replaces the root drive with a writable overlay on an installed system
+# image and boots through a bootloader. It is a second graph output rather
+# than a runtime switch, so a guest is always built from the shape its
+# configuration declared.
+guest_image(
+    name = "guest_image_writable_store",
+    srcs = _GUEST_SOURCES,
+    cloud_hypervisor_controller = _CONTROLLER,
+    flake = "//:flake.nix",
+    flake_lock = "//:flake.lock",
+    host_tools = _HOST_TOOLS,
+    nix = "@nix//:bin/nix",
+    node_shape = "writable-store",
+    substituters = "https://cache.nixos.org/",
+    tags = _IMAGE_TAGS,
+)
+
+# One guest per check, built from that check's own fixture - or, for a check
+# whose assertions have moved to the lane's own Rust, from the node the
+# reusable node module declares for it by name.
+#
+# The list is the lane's check inventory and nothing else: an unported entry
+# names the fixture the guest is read out of, and the guest's memory, vCPU
+# count, disk, drives, device options and assertions all come out of that file
+# during the evaluation. Three of these checks boot a plain NixOS node with
+# no d2b daemon host at all, two turn nftables on, two install acceptance
+# artifacts, and two boot a nested guest on the writable-store shape; that
+# is exactly why the lane cannot serve them from one image, and why this list
+# has no column for any of it.
+#
+# The target name is the check's own name - the `vmChecks` attribute name,
+# which is what `D2B_VM_CHECK` and `D2B_HOST_VM_CHECK` carry - so a
+# contributor can name the target they want without a second naming scheme.
+_CHECKS = [
+    "bridge-isolation",
+    "daemon-smoke",
+    "device-worker-launch",
+    "guest-agent-cap-confinement",
+    "guest-shell-service",
+    "privilege-oracle",
+    "resource-operator-activation",
+    "state-posture-contract",
+    "runtime-cloud-hypervisor-guest-preflight",
+    "virtiofsd-volume-runtime",
+    "wayland-proxy",
+]
+
+# The checks that assert in Rust. Each one's fixture is retired in the same
+# change as its port, so there is no fixture left to read its guest out of:
+# the node it boots is declared with the reusable nodes
+# (`nix/test-support/host-integration-node.nix`), and the image carries no
+# `check.py` - the lane runs the Rust module the check is declared in. Moving
+# a check here and deleting its fixture is the whole of what a port costs this
+# list; the image is built from the check's name, which is the shape its node
+# is declared under.
+_PORTED_CHECKS = [
+    "bridge-isolation",
+    "daemon-smoke",
+    "device-worker-launch",
+    "guest-agent-cap-confinement",
+    "guest-shell-service",
+    "privilege-oracle",
+    "resource-operator-activation",
+    "runtime-cloud-hypervisor-guest-preflight",
+    "state-posture-contract",
+    "virtiofsd-volume-runtime",
+    "wayland-proxy",
+]
+
+[
+    guest_image(
+        name = "guest_image_" + check,
+        # An unported check's guest and assertions are read out of its own
+        # fixture; a ported check has no fixture left, and the evaluation finds
+        # the node the check boots in the reusable node module instead.
+        check = "" if check in _PORTED_CHECKS else "tests/host-integration/%s.nix" % check,
+        srcs = _GUEST_SOURCES,
+        cloud_hypervisor_controller = _CONTROLLER,
+        flake = "//:flake.nix",
+        flake_lock = "//:flake.lock",
+        host_tools = _HOST_TOOLS,
+        nix = "@nix//:bin/nix",
+        node_shape = check,
+        substituters = "https://cache.nixos.org/",
+        tags = _IMAGE_TAGS,
+    )
+    for check in _CHECKS
+]
+
+_CHECK_IMAGES = [":guest_image_" + check for check in _CHECKS]
+
+
+# The emulator every lane guest boots, taken from the same pinned nix
+# package set the guest closure is realized from, so the emulator and the
+# guest are at one nixpkgs revision and a snapshot taken by one version is
+# never assumed restorable by another.
+_EMULATOR = "@qemu_kvm//:bin/qemu-kvm"
+
+# The lane's harness, which is the thing that spawns a guest.
+_HARNESS = "//packages/d2b-test-vm-harness:d2b-test-vm-harness"
+
+guest_boot_test(
+    name = "guest_boot_daemon",
+    emulator = _EMULATOR,
+    harness = _HARNESS,
+    image = ":guest_image",
+)
+
+guest_boot_test(
+    name = "guest_boot_writable_store",
+    emulator = _EMULATOR,
+    harness = _HARNESS,
+    image = ":guest_image_writable_store",
+)
+
+# The lane. It owns the whole run: it reads every check's own guest image,
+# groups them by the emulator invocation they declare, sizes a pool from the
+# distinct invocations against the host budget the guest configurations
+# declared, and runs each selected check against a snapshot-restored copy of
+# the guest that check was built for.
+lane_test(
+    name = "host_integration_lane_run",
+    images = _CHECK_IMAGES,
+    emulator = _EMULATOR,
+    harness = _HARNESS,
+    python = "@python3//:bin/python3",
+)
+
+# One target per check, carrying that check's single image.
+#
+# `images` is a build attribute and the `lane_test` macro expands it when the
+# target is declared, so the image set cannot be a `select()` on a flag the
+# test only sees at run time. That made the one target above the only way in,
+# and a single-check run built all eleven guests to boot one - the property
+# the flake path had for free, where `D2B_VM_CHECK` picked one `vmChecks`
+# entry and Nix realized only what that entry referenced. These targets give
+# that back: `D2B_VM_CHECK=<name>` runs
+# `host_integration_lane_run_<name>`, which depends on one image, and an
+# unset `D2B_VM_CHECK` still runs the full lane above.
+#
+# They are `manual` so a wildcard over the package does not pull eleven lane
+# targets into the hermetic check suite; they are the pre-PR lane entry
+# points, not unit tests.
+[
+    lane_test(
+        name = "host_integration_lane_run_" + check,
+        images = [":guest_image_" + check],
+        emulator = _EMULATOR,
+        harness = _HARNESS,
+        python = "@python3//:bin/python3",
+        tags = ["manual"],
+    )
+    for check in _CHECKS
+]
+
+# The lane's own suite. The harness crate deliberately carries no test
+# aggregate - the repository's test census would force-register such a crate
+# into the main package suite - so the targets that lint and exercise it are
+# named here instead, and the crate is still covered by the repository's
+# Rust gates.
+test_suite(
+    name = "host_integration_lane",
+    tests = [
+        "//packages/d2b-test-vm-harness:d2b-test-vm-harness_clippy",
+        "//packages/d2b-test-vm-harness:d2b_test_vm_harness_clippy",
+        "//packages/d2b-test-vm-harness:d2b_test_vm_harness_test",
+        ":guest_boot_daemon",
+        ":guest_boot_writable_store",
+        ":host_integration_lane_run",
+    ],
+)

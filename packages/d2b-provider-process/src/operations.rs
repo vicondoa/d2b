@@ -1512,8 +1512,7 @@ async fn executable_matches(actual: Option<&str>, expected: &Path) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// The Device-worker scope and swtpm identity (ported from the retired broker
-// arm)
+// The Device-worker launch scope (ported from the retired broker arm)
 // ---------------------------------------------------------------------------
 
 /// The pinned owning-Device scope of one Device-owned worker launch.
@@ -1523,14 +1522,6 @@ struct DeviceWorkerScope {
     device_ref: ResourceRef,
     device_uid: ResourceUid,
     guest: String,
-}
-
-/// The trusted identity of one resource-backed `w1-swtpm` launch.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ResourceBackedSwtpm {
-    guest: String,
-    state_root: PathBuf,
-    state_volume: Option<String>,
 }
 
 /// The Device-worker launch scope of one spawn request.
@@ -1738,68 +1729,6 @@ fn resolve_device_worker_launch(
         scope: Some(scope),
         binds_runtime_socket,
     })
-}
-
-/// The directory one trusted storage row names, refusing any row whose
-/// template is not an anchored absolute path.
-fn storage_path(spec: &d2b_core::storage::StoragePathSpec) -> Option<PathBuf> {
-    let path = PathBuf::from(spec.path_template.as_str());
-    if !path.is_absolute()
-        || path
-            .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
-        return None;
-    }
-    Some(path)
-}
-
-/// The TPM Provider's own state Volume naming for one Device.
-fn state_volume_name(device_uid: &ResourceUid) -> String {
-    let short: String = device_uid
-        .as_str()
-        .bytes()
-        .filter(|byte| byte.is_ascii_hexdigit())
-        .take(32)
-        .map(char::from)
-        .collect();
-    format!("device-{short}-tpm-state")
-}
-
-/// The trusted identity of one resource-backed `w1-swtpm` launch.
-///
-/// Every field is resolved from verified bundle artifacts - the Zone
-/// resource bundle's `Device` row and the host storage contract - never from
-/// the request's caller-supplied fields (the retired broker arm's
-/// `resource_backed_swtpm_identity` derivation).
-fn resource_backed_swtpm_identity(
-    resolver: &BundleResolver,
-    req: &SpawnRunnerRequest,
-    device_worker: &DeviceWorkerLaunch,
-) -> Option<ResourceBackedSwtpm> {
-    if !matches!(req.role, RunnerRole::Swtpm | RunnerRole::SwtpmFlush) {
-        return None;
-    }
-    let scope = device_worker.scope.as_ref()?;
-    if scope.device_ref.resource_type().as_str() != "Device" {
-        return None;
-    }
-    let (_zone, bundle_bytes) = zone_bundle_for_uid(resolver, &scope.zone_uid)?;
-    let guest = device_guest_owner(bundle_bytes, scope.device_ref.name().as_str())?;
-    let state_root = storage_root(resolver, &format!("path:swtpm-state:{guest}"))?;
-    if storage_root(resolver, "path:tpm-state")? != state_root {
-        return None;
-    }
-    Some(ResourceBackedSwtpm {
-        guest,
-        state_root,
-        state_volume: Some(state_volume_name(&scope.device_uid)),
-    })
-}
-
-/// The directory one trusted storage row names.
-fn storage_root(resolver: &BundleResolver, id: &str) -> Option<PathBuf> {
-    storage_path(resolver.find_storage_path_spec(id)?)
 }
 
 // ---------------------------------------------------------------------------
@@ -2655,8 +2584,6 @@ impl OperationHandler for SpawnRunnerHandler {
                 "hostGidForZero": spec.host_gid_for_zero,
             })
         });
-        let swtpm_identity =
-            resource_backed_swtpm_identity(&kernel.bundle, &request, &device_worker);
         let reply = invoke_kernel_nested(
             &ctx,
             "spawn-process",
@@ -2677,11 +2604,6 @@ impl OperationHandler for SpawnRunnerHandler {
                 "userNamespace": runner_user_namespace,
                 "umask": intent.umask,
                 "activationInput": request.activation_input,
-                "swtpmIdentity": swtpm_identity.map(|identity| serde_json::json!({
-                    "guest": identity.guest,
-                    "stateRoot": identity.state_root.display().to_string(),
-                    "stateVolume": identity.state_volume,
-                })),
                 // The stale-socket preflight paths the guest runtime
                 // Provider declares from its own argv; the broker's spawn
                 // kernel unlinks provably-stale sockets before spawning.

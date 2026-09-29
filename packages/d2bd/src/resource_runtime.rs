@@ -109,8 +109,9 @@ use d2b_session::{
 };
 use d2b_session_unix::{
     AncillaryCapacity, CONTROLLER_BOOTSTRAP_TIMEOUT, PeerCredentials, SeqpacketSocket,
-    VerifiedUnixPeer, controller_bootstrap_attachment_policy, controller_credit_scopes,
-    controller_resource_endpoint_policy, credential_provider_endpoint_policy,
+    UnixSessionError, VerifiedUnixPeer, controller_bootstrap_attachment_policy,
+    controller_credit_scopes, controller_resource_endpoint_policy,
+    credential_provider_endpoint_policy,
 };
 use d2bd_runtime::authority_persistence::{
     AuthorityOwnerProvenance, ZoneAuthorityLedger,
@@ -1053,6 +1054,27 @@ impl ControllerSession {
 enum ControllerAssignmentRefreshError {
     Retryable,
     Failed(ResourceRuntimeError),
+}
+
+/// One controller-session establish refusal, with the handshake step that
+/// produced it.
+///
+/// The refusal itself collapses every step to one
+/// `ResourceRuntimeError` (see
+/// `ResourceRuntimeError::AuthenticationUnavailable`), so the step travels
+/// beside it: the reconcile warn names the step that failed instead of
+/// leaving the reader to reconstruct it from a neighbouring log line.
+#[derive(Debug, Clone, Copy)]
+struct ControllerSessionEstablishError {
+    stage: &'static str,
+    error: ResourceRuntimeError,
+}
+
+impl ControllerSessionEstablishError {
+    /// A refusal at a named step, kept with its own typed cause.
+    const fn at(stage: &'static str, error: ResourceRuntimeError) -> Self {
+        Self { stage, error }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -7054,7 +7076,9 @@ impl ControllerSessionCoordinator {
                     // of orphaning the controller.
                     providers.rearm_controller_bootstrap(endpoint);
                     tracing::warn!(
-                        error = %error,
+                        provider = %context.provider_owner_ref().to_canonical_string(),
+                        stage = error.stage,
+                        error = %error.error,
                         "external Provider controller ResourceV3 session setup failed",
                     );
                 }
@@ -7685,6 +7709,7 @@ impl ControllerSessionCoordinator {
         result.map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)
     }
 
+
     #[allow(clippy::type_complexity)]
     async fn establish_controller_session(
         &self,
@@ -7701,7 +7726,7 @@ impl ControllerSessionCoordinator {
             d2b_session::AuthenticatedSessionRouteBinding,
             Option<Arc<dyn crate::process_provider_runtime::GuestCredentialBackendLease>>,
         ),
-        ResourceRuntimeError,
+        ControllerSessionEstablishError,
     > {
         let authentication_error = |stage: &'static str| {
             tracing::warn!(
@@ -7709,18 +7734,24 @@ impl ControllerSessionCoordinator {
                 stage,
                 "external Provider controller authentication failed",
             );
-            ResourceRuntimeError::AuthenticationUnavailable
+            ControllerSessionEstablishError::at(
+                stage,
+                ResourceRuntimeError::AuthenticationUnavailable,
+            )
         };
         // Capture the underlying handshake cause alongside the stage; a
         // bare stage cannot distinguish load flakes from real breakage.
-        let authentication_error_caused = |stage: &'static str, error: &dyn core::fmt::Debug| {
+        let authentication_error_caused = |stage: &'static str, error: &dyn core::fmt::Display| {
             tracing::warn!(
                 zone = %self.zone.as_str(),
                 stage,
-                error = ?error,
+                error = %error,
                 "external Provider controller authentication failed",
             );
-            ResourceRuntimeError::AuthenticationUnavailable
+            ControllerSessionEstablishError::at(
+                stage,
+                ResourceRuntimeError::AuthenticationUnavailable,
+            )
         };
         let context = endpoint.context().clone();
         let (delivery_key_handoff, backend_lease) = endpoint.handles();
@@ -7800,7 +7831,8 @@ impl ControllerSessionCoordinator {
             crate::interaction_composition::policy_channel_binding_digest(&policy)
                 .ok_or_else(|| authentication_error("binding-digest"))?,
         );
-        let transport = unix_transport(resource_socket, &policy)?;
+        let transport = unix_transport(resource_socket, &policy)
+            .map_err(|error| authentication_error_caused("resource-transport", &error))?;
         let mut responder = SessionEngine::establish_responder(
             transport,
             policy,
@@ -7919,8 +7951,25 @@ impl ControllerSessionCoordinator {
                 .issue_authenticated_subject(route.context().clone(), authorization_state)
                 .map_err(|_| authentication_error("authenticated-subject"))?;
             let service = Arc::new(
-                ResourceBusAdapter::bind_component_session(self.api()?, subject)
-                    .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?,
+                ResourceBusAdapter::bind_component_session(
+                    self.api()
+                        .map_err(|error| {
+                            ControllerSessionEstablishError::at("resource-api", error)
+                        })?,
+                    subject,
+                )
+                .map_err(|error| {
+                    tracing::warn!(
+                        zone = %self.zone.as_str(),
+                        stage = "component-service-bind",
+                        error = ?error,
+                        "external Provider controller component service bind failed",
+                    );
+                    ControllerSessionEstablishError::at(
+                        "component-service-bind",
+                        ResourceRuntimeError::ResourceApiBindFailed,
+                    )
+                })?,
             );
             let resource_client = Some(Arc::new(service.client()));
             let services = Arc::clone(&service).ttrpc_services();
@@ -9015,14 +9064,63 @@ async fn committed_resource_uid(
     Ok(resource.uid)
 }
 
+/// Why one controller bootstrap frame could not be turned into a session
+/// endpoint.
+///
+/// Every variant collapses to the same `AuthenticationUnavailable` at the
+/// caller, so the cause travels beside it: the stage line names the step
+/// and this names what that step saw. Without it, a closed peer, a timed-out
+/// send and a superseded frame are one line of log and three different
+/// recoveries.
+#[derive(Debug, Clone, Copy)]
+enum ControllerBootstrapReceiveError {
+    /// The pre-armed endpoint refused the read, or the frame it carried
+    /// failed the socket contract.
+    Endpoint(UnixSessionError),
+    /// No frame arrived inside the bounded read.
+    TimedOut,
+    /// The endpoint carried this many frames where the contract allows one.
+    ///
+    /// A controller retries its bootstrap on the same pre-armed endpoint, so
+    /// a count above one is a retry that arrived before the previous frame
+    /// was read - not a contract breach by the sender.
+    UnexpectedFrames { count: usize },
+    /// The frame was readable and well-formed and did not carry the
+    /// bootstrap contract.
+    Contract(&'static str),
+}
+
+impl From<UnixSessionError> for ControllerBootstrapReceiveError {
+    fn from(error: UnixSessionError) -> Self {
+        Self::Endpoint(error)
+    }
+}
+
+impl core::fmt::Display for ControllerBootstrapReceiveError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Endpoint(error) => {
+                write!(formatter, "controller-bootstrap-endpoint({error})")
+            }
+            Self::TimedOut => formatter.write_str("controller-bootstrap-read-timed-out"),
+            Self::UnexpectedFrames { count } => {
+                write!(formatter, "controller-bootstrap-unexpected-frames({count})")
+            }
+            Self::Contract(reason) => {
+                write!(formatter, "controller-bootstrap-contract({reason})")
+            }
+        }
+    }
+}
+
 async fn receive_controller_bootstrap(
     daemon_socket: &SeqpacketSocket,
-) -> Result<(SeqpacketSocket, PeerCredentials), ResourceRuntimeError> {
+) -> Result<(SeqpacketSocket, PeerCredentials), ControllerBootstrapReceiveError> {
     let policy = controller_bootstrap_attachment_policy();
-    let capacity = AncillaryCapacity::from_policy(policy)
-        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
-    let scopes =
-        controller_credit_scopes().map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+    let capacity =
+        AncillaryCapacity::from_policy(policy).map_err(ControllerBootstrapReceiveError::from)?;
+    let scopes = controller_credit_scopes()
+        .map_err(|_| ControllerBootstrapReceiveError::Endpoint(UnixSessionError::CreditExceeded))?;
     let burst = tokio::time::timeout(
         CONTROLLER_BOOTSTRAP_TIMEOUT,
         daemon_socket.recv_burst(
@@ -9033,30 +9131,36 @@ async fn receive_controller_bootstrap(
         ),
     )
     .await
-    .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
-    .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+    .map_err(|_| ControllerBootstrapReceiveError::TimedOut)?
+    .map_err(ControllerBootstrapReceiveError::from)?;
     if burst.packets.len() != 1 {
-        return Err(ResourceRuntimeError::AuthenticationUnavailable);
+        return Err(ControllerBootstrapReceiveError::UnexpectedFrames {
+            count: burst.packets.len(),
+        });
     }
     let packet = burst
         .packets
         .into_iter()
         .next()
-        .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+        .ok_or(ControllerBootstrapReceiveError::UnexpectedFrames { count: 0 })?;
     if packet.payload() != d2b_session_unix::CONTROLLER_BOOTSTRAP_PROTOCOL_MARKER {
-        return Err(ResourceRuntimeError::AuthenticationUnavailable);
+        return Err(ControllerBootstrapReceiveError::Contract(
+            "bootstrap-protocol-marker",
+        ));
     }
     let (resource_fd, credentials) = packet
         .into_single_file_and_credentials()
-        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        .map_err(ControllerBootstrapReceiveError::from)?;
     let resource_socket = SeqpacketSocket::from_parent_prearmed(resource_fd)
-        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        .map_err(ControllerBootstrapReceiveError::from)?;
     if resource_socket
         .acceptor_peer_credentials()
-        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+        .map_err(ControllerBootstrapReceiveError::from)?
         != credentials
     {
-        return Err(ResourceRuntimeError::AuthenticationUnavailable);
+        return Err(ControllerBootstrapReceiveError::Contract(
+            "bootstrap-peer-credentials",
+        ));
     }
     Ok((resource_socket, credentials))
 }
@@ -12064,7 +12168,7 @@ mod tests {
         );
         assert!(matches!(
             receive_controller_bootstrap(&receiver).await,
-            Err(ResourceRuntimeError::AuthenticationUnavailable)
+            Err(ControllerBootstrapReceiveError::UnexpectedFrames { count: 2 })
         ));
     }
 

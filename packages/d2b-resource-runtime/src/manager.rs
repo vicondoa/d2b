@@ -497,23 +497,17 @@ struct WatchEntry {
 /// Deterministic stable uid for a key (R8): owned-child graphs and adoption
 /// identities reconstruct identically after restart.
 ///
-/// Cross-crate contract: the v3 plane's composition derives the same value
-/// for a row the manager has not persisted yet (the KTD7 controller seed),
-/// so this derivation changes only together with every reader that
-/// reconstructs an identity from a key.
+/// The derivation itself lives beside [`ResourceUid`] in `d2b-contracts`
+/// ([`d2b_contracts::identity::deterministic_resource_uid_bytes`]) because
+/// the v3 plane's composition and the bundle resolver's Device-owned
+/// resource-naming check reconstruct the same value from a key. This is one
+/// function, so those readers cannot drift apart.
 pub fn deterministic_uid(key: &ResourceKey) -> [u8; 16] {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(b"d2b-resource-uid/v1\x00");
-    hasher.update(key.zone.as_bytes());
-    hasher.update([0u8]);
-    hasher.update(key.type_name.as_bytes());
-    hasher.update([0u8]);
-    hasher.update(key.name.as_bytes());
-    let digest = hasher.finalize();
-    let mut uid = [0u8; 16];
-    uid.copy_from_slice(&digest[..16]);
-    uid
+    d2b_contracts::identity::deterministic_resource_uid_bytes(
+        &key.zone,
+        &key.type_name,
+        &key.name,
+    )
 }
 
 impl ResourceManagerState {

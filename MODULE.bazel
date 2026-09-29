@@ -69,7 +69,15 @@ nix_packages.attr(
     attr = "python3",
     repo = "@nixpkgs",
 )
-use_repo(nix_packages, "nix", "nix_eval_jobs", "nix_unit", "python3")
+# The host-integration lane's emulator, taken from the same pinned nix
+# package set the guest image is realized from, so the emulator and the
+# guest stay at one nixpkgs revision.
+nix_packages.attr(
+    name = "qemu_kvm",
+    attr = "qemu_kvm",
+    repo = "@nixpkgs",
+)
+use_repo(nix_packages, "nix", "nix_eval_jobs", "nix_unit", "python3", "qemu_kvm")
 
 buildbuddy = use_extension("@toolchains_buildbuddy//:extensions.bzl", "buildbuddy")
 

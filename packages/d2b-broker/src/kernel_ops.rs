@@ -762,8 +762,7 @@ async fn spawn_process(
             .unwrap_or_default();
     let activation_input: Option<d2b_contracts_resource::v3::ActivationRunnerInput> =
         optional_parse_field(invocation.payload, "activationInput")?;
-    let swtpm_identity = optional_parse_swtpm_identity(invocation.payload)?;
-    let device_worker = parse_device_worker(invocation.payload)?;
+    let mut device_worker = parse_device_worker(invocation.payload)?;
     let mut request_fds = invocation
         .fds
         .iter()
@@ -833,6 +832,126 @@ async fn spawn_process(
             ))
         })?;
     }
+
+    // The two Device-owned derivations - the per-Guest runtime directory a
+    // worker binds its socket in, and the swtpm worker's trusted state
+    // directory - both come from verified bundle artifacts, so one reload
+    // of the captured bundle path (the same per-request reload authority
+    // the USBIP branch above uses) feeds both. Neither rides the launch
+    // plan: the runtime posture comes from the storage contract's
+    // `path:vm-run:<guest>` row, and the swtpm identity from the Zone
+    // bundle's `Device` row plus the `path:swtpm-state:<guest>` and
+    // `path:tpm-state` rows, so no daemon-asserted path ever reaches a
+    // grant. A launch that is neither a swtpm role nor a socket-binding
+    // worker - and a legacy VM-scoped one whose per-VM tree host
+    // activation provisions - resolves neither.
+    //
+    // The scope the payload carries is a *claim*, and it is what selects
+    // every one of those directories, so it is re-pinned here rather than
+    // trusted: the Device, its durable uid and its Guest are re-resolved
+    // from the launched row's own `metadata.ownerRef` in the verified Zone
+    // bundle (`device_worker::repin_launch_scope`, the pin the daemon's
+    // launch arm applies, against the same resolver). A payload naming
+    // another declared Device - with that Device's publicly derivable uid -
+    // or another declared Guest is refused here, at the dispatch, instead
+    // of being handed those directories, and the launch that continues is
+    // the pin itself, never the payload's copy. Refusals are typed,
+    // path-free slugs, audited and surfaced in the launch-failure envelope.
+    let (swtpm_identity, guest_runtime_posture, state_volume_leaf) =
+        match device_worker.scope.as_ref() {
+            None => (
+                None,
+                None,
+                crate::ops::device_worker::StateVolumeLeaf::MustExist,
+            ),
+            Some(claimed) => {
+                let resolver = match crate::runtime::load_kernel_resolver(&config.bundle_path) {
+                    crate::runtime::BundleSlot::Loaded(resolver) => resolver,
+                    crate::runtime::BundleSlot::Unavailable => {
+                        return Err(refused(
+                            "spawn-process: device worker bundle resolver unavailable",
+                        ));
+                    }
+                    crate::runtime::BundleSlot::Tampered { .. } => {
+                        return Err(refused("spawn-process: device worker bundle tampered"));
+                    }
+                };
+                // A launch that names no launched row carries no row for the
+                // bundle to pin, which is the same unresolved-row refusal the
+                // pin itself issues - never a silent "grants nothing", which
+                // would launch the same worker with the scope it was never
+                // granted.
+                use crate::ops::device_worker as dw;
+                let (resource_ref, zone_uid) =
+                    match (identity.resource_ref.as_ref(), identity.zone_uid.as_ref()) {
+                        (Some(resource_ref), Some(zone_uid)) => (resource_ref, zone_uid),
+                        _ => {
+                            let unresolved = dw::DeviceWorkerScopeError::RowUnresolved;
+                            crate::live_handlers::audit_device_worker_runtime_dir(
+                                "scope-pin",
+                                "failed-closed",
+                                &unresolved.to_string(),
+                            );
+                            return Err(refused(format!(
+                                "spawn-process: device worker scope: {unresolved}"
+                            )));
+                        }
+                    };
+                let pinned = dw::repin_launch_scope(
+                    &resolver,
+                    claimed,
+                    resource_ref,
+                    zone_uid,
+                    identity.owner_ref.as_ref(),
+                    Some(&claimed.device_uid),
+                )
+                .map_err(|error| {
+                    crate::live_handlers::audit_device_worker_runtime_dir(
+                        "scope-pin",
+                        "failed-closed",
+                        &error.to_string(),
+                    );
+                    refused(format!("spawn-process: device worker scope: {error}"))
+                })?;
+                // The presence policy of the state directory is the launched
+                // row's own fact too, and it is the wire role that a payload
+                // chooses: read here, against the row the pin just resolved,
+                // so a launch that claims the one-shot posture for the
+                // long-lived row is refused by name instead of being handed
+                // the lenient absence policy that row's own state-directory
+                // refusal exists to enforce.
+                let leaf = dw::state_volume_leaf_for_launch(
+                    &resolver,
+                    &pinned,
+                    resource_ref,
+                    &role,
+                )
+                .map_err(|slug| {
+                    crate::live_handlers::audit_device_worker_runtime_dir(
+                        "state-leaf",
+                        "failed-closed",
+                        slug,
+                    );
+                    refused(format!("spawn-process: device worker state leaf: {slug}"))
+                })?;
+                let swtpm_identity = if matches!(
+                    role,
+                    d2b_contracts_broker::broker_wire::RunnerRole::Swtpm
+                        | d2b_contracts_broker::broker_wire::RunnerRole::SwtpmFlush
+                ) {
+                    crate::ops::swtpm_identity::resource_backed_identity(&resolver, &pinned)
+                } else {
+                    None
+                };
+                let posture = if device_worker.binds_runtime_socket {
+                    crate::ops::device_worker::guest_runtime_dir_posture(&resolver, pinned.guest())
+                } else {
+                    None
+                };
+                (swtpm_identity, posture, leaf)
+            }
+        };
+    device_worker.state_volume_leaf = state_volume_leaf;
     // The stale-socket preflight cleanups (the retired arm's three
     // `cleanup_*_stale_socket` calls). The guest runtime Provider declares
     // its socket-carrying argv paths; the kernel unlinks provably-stale
@@ -901,6 +1020,7 @@ async fn spawn_process(
         &config.state_dir,
         swtpm_identity.as_ref(),
         &device_worker,
+        guest_runtime_posture,
         &config.runtime_root,
     )
     .await
@@ -1005,10 +1125,6 @@ async fn spawn_process(
     if !plan_input.mount_policy.device_binds.is_empty() {
         result["deviceBinds"] = serde_json::to_value(&plan_input.mount_policy.device_binds)
             .map_err(|error| errored(format!("spawn-process device binds: {error}")))?;
-    }
-    if let Some(audit) = &outcome.swtpm_dir_audit {
-        result["swtpmDirAudit"] = serde_json::to_value(audit)
-            .map_err(|error| errored(format!("spawn-process swtpm audit: {error}")))?;
     }
     Ok(DispatchOutcome {
         result: canonical(result)?,
@@ -1757,49 +1873,19 @@ fn integer_field(
     }
 }
 
-/// The optional swtpm identity: `{guest, stateRoot, stateVolume}`.
-fn optional_parse_swtpm_identity(
-    payload: &CanonicalJsonObject,
-) -> Result<Option<crate::ops::swtpm_dir::ResourceBackedSwtpm>, DispatchFailure> {
-    let Some(value) = payload.get("swtpmIdentity") else {
-        return Ok(None);
-    };
-    // The daemon's family handler always carries the derived field, so an
-    // absent resolver derivation serializes as JSON null - treat it as
-    // absent like the kernel's other optional parsers.
-    if matches!(value, CanonicalJsonValue::Null) {
-        return Ok(None);
-    }
-    let CanonicalJsonValue::Object(fields) = value else {
-        return Err(refused("swtpmIdentity: expected an object"));
-    };
-    let guest = match fields.get("guest") {
-        Some(CanonicalJsonValue::String(guest)) => guest.clone(),
-        _ => return Err(refused("swtpmIdentity.guest: expected a string")),
-    };
-    let state_root = match fields.get("stateRoot") {
-        Some(CanonicalJsonValue::String(root)) => PathBuf::from(root),
-        _ => return Err(refused("swtpmIdentity.stateRoot: expected a string")),
-    };
-    let state_volume = match fields.get("stateVolume") {
-        Some(CanonicalJsonValue::String(volume)) => Some(volume.clone()),
-        Some(CanonicalJsonValue::Null) | None => None,
-        _ => {
-            return Err(refused(
-                "swtpmIdentity.stateVolume: expected a string or null",
-            ));
-        }
-    };
-    Ok(Some(crate::ops::swtpm_dir::ResourceBackedSwtpm {
-        guest,
-        state_root,
-        state_volume,
-    }))
-}
-
 /// The Device-worker launch scope: `{scope: {zoneUid, deviceRef,
 /// deviceUid, guest} | null, bindsRuntimeSocket: bool}`, absent meaning
 /// the default (no scope, no runtime socket).
+///
+/// What the launched row needs of its state directory's presence is NOT
+/// decided here: it needs the verified bundle, so it is derived where the pin
+/// resolves - `device_worker::state_volume_leaf_for_launch`, which reads the
+/// launched row the `device_worker::repin_launch_scope` pin resolved and
+/// refuses a wire `role` that disagrees with it. A launch that names no
+/// Device-worker scope keeps the strict default, which is the only variant a
+/// bundle could not have derived something more lenient from - and the grants
+/// that variant governs are all reached with a scope, so such a launch is
+/// refused at the pin before the variant is ever read.
 fn parse_device_worker(
     payload: &CanonicalJsonObject,
 ) -> Result<crate::ops::device_worker::DeviceWorkerLaunch, DispatchFailure> {
@@ -1860,6 +1946,7 @@ fn parse_device_worker(
     Ok(crate::ops::device_worker::DeviceWorkerLaunch {
         scope,
         binds_runtime_socket,
+        state_volume_leaf: crate::ops::device_worker::StateVolumeLeaf::default(),
     })
 }
 

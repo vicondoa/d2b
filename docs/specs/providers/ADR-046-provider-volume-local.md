@@ -71,7 +71,7 @@ The v3 target name appears in parentheses or an explicit mapping.
 | Reconciled ResourceType | `Volume` - exported as volume-local's primary ResourceType; reconciles physical state (layout, ACL, quota, identity marker) for all assigned Volumes; operators create/delete ordinary Volumes via Resource API; **core ProviderDeployment** creates/deletes component state Volumes before/after component Processes; volume-local never issues Volume create/delete API calls; component Processes consume their required view only |
 | Source kinds | `local-path`, `block-image`, `tmpfs` |
 | Controller component | `volume-local-controller`; `Process` under `Host/host-system`, `domain: system`; `controllerExecutionRef: Host/host-system` |
-| Effect operations | `ProvisionLayoutEntry`, `RepairLayoutEntry`, `CleanupLayoutEntry`, `PrepareSwtpmDir`, `StoreSyncComplete`, `MountTmpfs`, `ProvisionBlockImage`, `RotateSealingKey` (all via injected `VolumeEffectPort`; no direct broker connection) |
+| Effect operations | `ProvisionLayoutEntry`, `RepairLayoutEntry`, `CleanupLayoutEntry`, `StoreSyncComplete`, `MountTmpfs`, `ProvisionBlockImage`, `RotateSealingKey` (all via injected `VolumeEffectPort`; no direct broker connection) |
 | Permissions | No special host-path permission; all host path resolution in core/broker adapter; broker ops not called directly from Provider process |
 | ProviderStateSet | Optional query-time logical grouping (not a ResourceType): `{ v : Volume \| ownerRef == "Provider/volume-local" }`; **empty** - volume-local declares no state Volume of its own (its bounded non-secret operational state lives in `status`/the core Operation ledger, D087). Volume-local is the **sole reconciler** for all assigned Volumes carrying `providerRef: Provider/volume-local` (operator-created Volumes and other Providers' *declared* state Volumes; Volume is its exported type) and never issues Volume create/delete API calls; **core ProviderDeployment** creates/deletes other Providers' declared state Volume instances before/after their component Processes; a declared component state Volume is created only when its payload passes the storage-need test; Nix-preprovisioned `User/<name>` layout principals; no cross-component sharing; no empty identity-only Volume |
 | Finalizers | `volume-local.d2bus.org/layout` |
@@ -1097,7 +1097,6 @@ UID. Every path is derived by the adapter from opaque IDs via the private bundle
 | `ProvisionLayoutEntry` | Create or verify-create a layout entry (file, directory, symlink, unix-socket) | Volume UID, entry type, owner UID digest |
 | `RepairLayoutEntry` | Reconcile owner/group/mode and ACLs for an existing entry | Volume UID, entry type, repair action class |
 | `CleanupLayoutEntry` | Remove a layout entry at the declared relative path | Volume UID, entry type, cleanup trigger |
-| `PrepareSwtpmDir` | Provision or reconcile a TPM state directory with fail-closed marker | VM (Volume) UID, result class: `provisioned`, `reconciled`, `quarantined` |
 | `StoreSyncComplete` | Complete a hardlink farm sync cycle; acquire OFD lock, build farm, release | Volume UID, generation number |
 | `MountTmpfs` | Mount or unmount a tmpfs at the Volume root with quota limits | Volume UID, action: `mount` \| `umount` |
 | `ProvisionBlockImage` | Create or verify an image file at declared size | Volume UID, action: `create` \| `verify` |
@@ -2127,7 +2126,6 @@ and must not contain host paths, secret content, process data, or terminal bytes
 | `volume-marker-check` | Marker verification result | zone, volume-ref, result-class |
 | `volume-quota-exceeded` | Write rejected due to quota | zone, volume-ref |
 | `volume-store-sync-complete` | Hardlink farm sync finished | zone, volume-ref, generation-number |
-| `PrepareSwtpmDir` (broker) | TPM dir provisioned/reconciled/quarantined | VM (Volume) UID, result-class |
 | `ProvisionLayoutEntry` (broker) | Entry created | Volume UID, entry type, owner UID digest |
 | `RepairLayoutEntry` (broker) | Entry repaired | Volume UID, entry type, repair action class |
 | `CleanupLayoutEntry` (broker) | Entry removed | Volume UID, entry type, cleanup trigger |

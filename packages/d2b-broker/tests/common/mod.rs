@@ -306,6 +306,7 @@ impl TestBroker {
 /// socket file can exist before the listener is live (and a crashed broker
 /// leaves a stale file behind), so this probes the actual readiness
 /// condition instead of the file's existence.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn socket_is_connectable(path: &Path) -> bool {
     use nix::sys::socket::{AddressFamily, SockFlag, SockType, UnixAddr, connect, socket};
     use std::os::fd::AsRawFd;

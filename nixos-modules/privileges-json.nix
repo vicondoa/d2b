@@ -931,18 +931,6 @@ let
     "auditMode": "yes"
   },
   {
-    "operation": "PrepareSwtpmDir",
-    "subject": "fs",
-    "scope": "per-VM",
-    "allowedGroups": [
-      "d2bd"
-    ],
-    "destructive": "yes",
-    "secretAccess": "metadata-only",
-    "brokerRequired": "yes",
-    "auditMode": "yes"
-  },
-  {
     "operation": "MigrateLegacySwtpmState",
     "subject": "fs",
     "scope": "per-VM",

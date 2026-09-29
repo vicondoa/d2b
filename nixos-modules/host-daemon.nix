@@ -147,6 +147,21 @@ in
         "d /run/d2b/locks 0700 d2bd d2bd -"
         "d /run/d2b/locks/usbip 0750 root d2bd -"
         "d /run/d2b/state 0700 d2bd d2bd -"
+        # The shared parent of the per-guest runtime tree a Device's worker
+        # binds its control socket under. A guest name is not known to any
+        # static tmpfiles rule, so this rule owns the parent and the
+        # broker's socket grant owns each `/run/d2b/vms/<guest>` leaf, which
+        # it creates from the `path:vm-run:<guest>` storage row this path is
+        # declared by. Without this rule the parent does not exist, the
+        # grant refuses every worker that binds a runtime socket - which is
+        # every worker except the one-shot flush, so the failure looks like
+        # a TPM problem and is not one.
+        #
+        # Mode and ownership match the storage row exactly (1770 d2bd:d2b):
+        # the worker enters as d2bd through the d2b group, and the two
+        # declarations of this directory have to agree or the grant refuses
+        # on posture rather than on absence.
+        "d /run/d2b/vms 1770 d2bd d2b -"
       ]
       ++ posture.tmpfilesRule "state-root" "."
       ++ [

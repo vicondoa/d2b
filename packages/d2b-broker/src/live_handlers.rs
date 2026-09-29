@@ -95,14 +95,6 @@ pub enum LiveHandlerError {
     /// A foreign or ambiguous NetworkManager ownership marker occupied the
     /// d2b-managed file.
     NmOwnershipConflict,
-    /// swtpm-dir first-run hardening (issue #64) refused to proceed.
-    /// Carries the path-free [`SwtpmDirAudit`] (with `result ==
-    /// FailedClosed`) so the dispatch layer can emit the terminal
-    /// `PrepareSwtpmDir` audit record on the fail-closed path.
-    SwtpmDirHardening {
-        audit: crate::ops::audit_op::SwtpmDirAudit,
-        reason: &'static str,
-    },
 }
 
 impl std::fmt::Display for LiveHandlerError {
@@ -136,10 +128,6 @@ impl std::fmt::Display for LiveHandlerError {
                 write!(f, "NetworkManager unmanaged file ownership: {detail}")
             }
             Self::NmOwnershipConflict => f.write_str("nm-managed-foreign-conflict"),
-            Self::SwtpmDirHardening { reason, .. } => {
-                // PATH-FREE: only the closed-set reason slug.
-                write!(f, "swtpm-dir hardening failed: {reason}")
-            }
         }
     }
 }
@@ -174,8 +162,7 @@ impl LiveHandlerError {
             | Self::HostKey(_)
             | Self::NmReload(_)
             | Self::NmFileOwnership(_)
-            | Self::NmOwnershipConflict
-            | Self::SwtpmDirHardening { .. } => None,
+            | Self::NmOwnershipConflict => None,
         }
     }
 }
@@ -880,10 +867,6 @@ pub struct SpawnRunnerResult {
     /// instead of the preferred `clone3(CLONE_PIDFD)`. Used for
     /// audit-record bookkeeping.
     pub used_fork_fallback: bool,
-    /// Path-free swtpm-dir hardening audit (issue #64), present only
-    /// for the `w1-swtpm` role. The dispatch layer emits a terminal
-    /// `PrepareSwtpmDir` `OpAuditRecord` from this on the success path.
-    pub swtpm_dir_audit: Option<crate::ops::audit_op::SwtpmDirAudit>,
 }
 
 fn parse_runner_cgroup_subtree(subtree: &str) -> Result<Option<Vec<String>>, LiveHandlerError> {
@@ -1320,6 +1303,24 @@ enum AclPathKind {
 
 fn setfacl_fd_safe(path: &Path, acl_spec: &str, kind: AclPathKind) -> Result<(), String> {
     setfacl_fd_safe_op(path, "-m", acl_spec, kind).map(|_| ())
+}
+
+/// Like [`setfacl_fd_safe`] but refusing an absent path, returning the
+/// resolved `(dev, ino)` of the inode the ACL landed on.
+///
+/// [`setfacl_fd_safe`]'s `Ok(None)`-on-absent tolerance is for the targets
+/// that are genuinely optional: an audio socket a role never bound, the
+/// component-session socket cloud-hypervisor has not created yet. A runner
+/// tree's leaf is none of those - it is the directory the launch is about to
+/// use, so an absent one is a grant that could not be applied, and the only
+/// honest outcomes are to refuse the launch or to spawn a worker that fails
+/// later with an opaque error. This is the second fence behind
+/// [`runner_tree_acl_targets`]' own presence check: the target list is proved
+/// present before any mutation, and this proves it still is.
+fn setfacl_required(path: &Path, acl_spec: &str, kind: AclPathKind) -> Result<(u64, u64), String> {
+    setfacl_fd_safe_op(path, "-m", acl_spec, kind)?.ok_or_else(|| {
+        format!("refusing absent path {}: the grant could not be applied", path.display())
+    })
 }
 
 /// The fd-safe setfacl stage that failed. A closed-set classification so
@@ -2113,13 +2114,19 @@ async fn refresh_spawn_runner_acls(
             .ok_or_else(|| LiveHandlerError::SpawnFailed {
                 detail: "cloud-hypervisor api socket has no state-directory parent".to_owned(),
             })?;
-        grant_runner_tree_acls(state_dir, broker_state_dir, plan.uid).map_err(|detail| {
-            LiveHandlerError::SpawnFailed {
-                detail: format!(
-                    "refresh cloud-hypervisor state-directory ACL for runner uid {}: {detail}",
-                    plan.uid
-                ),
-            }
+        grant_runner_tree_acls(
+            state_dir,
+            broker_state_dir,
+            plan.uid,
+            // cloud-hypervisor creates its own state directory; the broker
+            // grants it but never provisions it.
+            RunnerTreeLeaf::Foreign,
+        )
+        .map_err(|detail| LiveHandlerError::SpawnFailed {
+            detail: format!(
+                "refresh cloud-hypervisor state-directory ACL for runner uid {}: {detail}",
+                plan.uid
+            ),
         })?;
     }
     refresh_obs_vsock_acl(plan).await?;
@@ -2137,6 +2144,33 @@ fn cloud_hypervisor_api_socket(plan: &SpawnRunnerPlan) -> Option<PathBuf> {
         .find_map(|pair| (pair[0] == "--api-socket").then(|| PathBuf::from(&pair[1])))
 }
 
+
+/// Who provisions the LEAF of a runner tree, and therefore whether an
+/// absent leaf is a grant that could not be applied or a provisioning race
+/// this grant does not own.
+///
+/// The ancestors are required either way - a partially-open chain can never
+/// be granted silently, and nothing but the broker's own provisioning
+/// creates them. The leaf is the caller's business, because the broker
+/// creates some leaves and merely grants others.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunnerTreeLeaf {
+    /// The grant created the leaf itself, moments ago, from the trusted
+    /// storage row. An absent one means the create did not land (or the
+    /// directory was swapped out from under it), so the ACL has nowhere to
+    /// go and the launch is refused instead of spawning a worker whose only
+    /// error would come from the worker.
+    Owned,
+    /// Another trusted actor provisions the leaf: the daemon realizes a
+    /// serving worker's private socket directory while it composes the
+    /// launch argv, and cloud-hypervisor creates its own state directory.
+    /// This grant does not own either, so their absence is a
+    /// provisioning-order race rather than a grant it failed to apply -
+    /// refusing on it would turn "the directory is not there yet" into a
+    /// launch refusal the row can only resolve by racing the other actor.
+    Foreign,
+}
+
 /// Per-runner ACL targets for one runner path tree the broker must open to
 /// a runner principal: search (`u:<uid>:--x`) on every ancestor that no
 /// unprivileged principal can already search, and full `u:<uid>:rwx` on the
@@ -2148,11 +2182,14 @@ fn cloud_hypervisor_api_socket(plan: &SpawnRunnerPlan) -> Option<PathBuf> {
 /// broker runtime directory for a runner's private socket tree). Ancestors
 /// already world-searchable need no entry - every principal can already
 /// reach them. A missing ancestor is refused instead of skipped, so a
-/// partially-open chain can never be granted silently.
+/// partially-open chain can never be granted silently. `leaf_owner` says
+/// who provisions the leaf: an [`RunnerTreeLeaf::Owned`] leaf that is not
+/// there refuses the launch, an [`RunnerTreeLeaf::Foreign`] one is skipped.
 fn runner_tree_acl_targets(
     leaf: &Path,
     bound: &Path,
     uid: u32,
+    leaf_owner: RunnerTreeLeaf,
 ) -> Result<Vec<(PathBuf, String)>, String> {
     if !leaf.is_absolute() || !bound.is_absolute() {
         return Err("runner ACL paths must be absolute".to_owned());
@@ -2205,15 +2242,44 @@ fn runner_tree_acl_targets(
                 }
             }
         } else {
-            targets.push((directory, format!("u:{uid}:rwx")));
+            // The leaf is the directory the launch is about to use. When the
+            // grant created it, an absent one is a grant that could not be
+            // applied, so it refuses on the same footing as a missing
+            // ancestor rather than letting the walk continue and leaving
+            // the worker to fail later with an opaque error. When another
+            // actor provisions it there is nothing to refuse: the entry is
+            // not applied, and the next attempt applies it.
+            match dir_needs_traverse_grant(&directory).map_err(|failure| failure.legacy_detail)? {
+                Some(_) => targets.push((directory, format!("u:{uid}:rwx"))),
+                None if leaf_owner == RunnerTreeLeaf::Owned => {
+                    return Err(format!(
+                        "runner path leaf is absent: {}",
+                        directory.display()
+                    ));
+                }
+                None => {}
+            }
         }
     }
     Ok(targets)
 }
 
-fn grant_runner_tree_acls(leaf: &Path, bound: &Path, uid: u32) -> Result<(), String> {
-    for (directory, acl) in runner_tree_acl_targets(leaf, bound, uid)? {
-        setfacl_fd_safe(&directory, &acl, AclPathKind::Directory)?;
+/// Open one runner path tree to a runner principal, or refuse.
+///
+/// Fails closed on the chain at both fences: the target list is proved
+/// complete - every ancestor present - before any mutation, and each
+/// application refuses an absent path, so a tree that loses a directory
+/// between the two refuses instead of being granted nothing and spawning a
+/// worker that cannot use it. Whether the LEAF must be there is the
+/// caller's: see [`RunnerTreeLeaf`].
+fn grant_runner_tree_acls(
+    leaf: &Path,
+    bound: &Path,
+    uid: u32,
+    leaf_owner: RunnerTreeLeaf,
+) -> Result<(), String> {
+    for (directory, acl) in runner_tree_acl_targets(leaf, bound, uid, leaf_owner)? {
+        setfacl_required(&directory, &acl, AclPathKind::Directory)?;
     }
     Ok(())
 }
@@ -2235,7 +2301,7 @@ struct ServingWorkerLaunchPaths {
 /// A `.`/`..` component is refused outright wherever the broker fences a
 /// caller-named path with a `starts_with` comparison: `/run/d2b/../etc` is
 /// a component prefix of `/run/d2b` while resolving outside it.
-fn is_anchored_absolute(path: &Path) -> bool {
+pub(crate) fn is_anchored_absolute(path: &Path) -> bool {
     path.is_absolute()
         && !path.components().any(|component| {
             matches!(
@@ -2404,10 +2470,19 @@ pub(crate) fn grant_serving_worker_launch_acls(
     // root is unusable must not leave a half-opened socket tree behind.
     validate_served_view_root(&paths.shared_dir)
         .map_err(|detail| LiveHandlerError::SpawnFailed { detail })?;
-    grant_runner_tree_acls(&paths.socket_dir, runtime_root, uid).map_err(|detail| {
-        LiveHandlerError::SpawnFailed {
-            detail: format!("serving worker private socket directory ACL: {detail}"),
-        }
+    grant_runner_tree_acls(
+        &paths.socket_dir,
+        runtime_root,
+        uid,
+        // The daemon realizes this directory (and the broker's device-worker
+        // grant postures it) while composing the argv, so a launch that
+        // reaches the broker before either of them has is a provisioning
+        // race this grant does not own - refusing it would make the row's
+        // only recovery a race against its own sibling launch.
+        RunnerTreeLeaf::Foreign,
+    )
+    .map_err(|detail| LiveHandlerError::SpawnFailed {
+        detail: format!("serving worker private socket directory ACL: {detail}"),
     })?;
     for (directory, acl) in served_view_root_acl_targets(&paths.shared_dir, uid, paths.read_only)
         .map_err(|detail| LiveHandlerError::SpawnFailed { detail })?
@@ -2443,29 +2518,43 @@ pub(crate) struct DeviceWorkerSocketGrant {
     runtime_root: PathBuf,
     /// Directory the worker binds its socket in, strictly inside the root.
     directory: PathBuf,
+    /// The posture the trusted `path:vm-run:<guest>` storage row declares for
+    /// this directory, resolved by the dispatch arm from the verified
+    /// contract. `None` for a launch whose own trusted derivation names the
+    /// directory but for which no trusted row was resolved: the broker will
+    /// not invent a posture, and the grant below still refuses an absent
+    /// leaf.
+    posture: Option<crate::ops::device_worker::GuestRuntimeDirPosture>,
 }
 
 impl DeviceWorkerSocketGrant {
     /// The per-Guest socket directory of one pinned owning-Device scope:
-    /// `<runtime_root>/vms/<guest>`.
-    fn for_guest(runtime_root: &Path, guest: &str) -> Result<Self, String> {
+    /// `<runtime_root>/vms/<guest>`, postured to what the contract row for
+    /// that very Guest declares.
+    fn for_guest(
+        runtime_root: &Path,
+        guest: &str,
+        posture: crate::ops::device_worker::GuestRuntimeDirPosture,
+    ) -> Result<Self, String> {
         let directory = crate::ops::device_worker::guest_socket_directory(runtime_root, guest)
             .map_err(|e| e.to_string())?;
         Ok(Self {
             runtime_root: runtime_root.to_path_buf(),
             directory,
+            posture: Some(posture),
         })
     }
 
     /// The legacy VM-scoped worker's socket directory: the runtime directory
     /// the plan's own trusted derivation names
-    /// ([`crate::ops::swtpm_dir::derive_paths`] cross-checks the cgroup
-    /// placement's VM against the plan's writable paths, so this never reads
-    /// an argument).
+    /// ([`crate::ops::swtpm_identity::legacy_runtime_dir`] cross-checks the
+    /// cgroup placement's VM against the plan's writable paths, so this never
+    /// reads an argument). Host activation's per-VM tmpfiles rule provisions
+    /// this tree, so no posture row is carried for it and the broker creates
+    /// nothing.
     fn for_legacy_plan(plan: &SpawnRunnerPlan, runtime_root: &Path) -> Result<Self, String> {
-        let paths = crate::ops::swtpm_dir::derive_paths(plan)
+        let directory = crate::ops::swtpm_identity::legacy_runtime_dir(plan)
             .map_err(|reason| format!("device worker runtime directory: {reason}"))?;
-        let directory = paths.runtime_dir;
         if !is_anchored_absolute(&directory) {
             return Err(
                 "device worker runtime directory is not an absolute normalized path".to_owned(),
@@ -2481,13 +2570,114 @@ impl DeviceWorkerSocketGrant {
         Ok(Self {
             runtime_root: runtime_root.to_path_buf(),
             directory,
+            posture: None,
         })
     }
 
-    /// Open the directory (and the non-world-searchable ancestors up to the
-    /// runtime root) to the launched principal.
+    /// Posture the directory to its declared identity, then open it (and the
+    /// non-world-searchable ancestors up to the runtime root) to the
+    /// launched principal.
+    ///
+    /// The posture step runs first and refuses: an ACL granted on a
+    /// directory the broker has not established has nowhere to land, and an
+    /// absent leaf used to make the whole grant a silent no-op that let the
+    /// launch proceed and the worker fail later with an opaque error. Both
+    /// outcomes are audited, path-free, on the create and on the refusal.
     fn apply(&self, uid: u32) -> Result<(), String> {
-        grant_runner_tree_acls(&self.directory, &self.runtime_root, uid)
+        if let Some(posture) = self.posture {
+            match crate::ops::device_worker::create_guest_runtime_dir(&self.directory, posture) {
+                Ok((dev, ino)) => audit_device_worker_runtime_dir(
+                    "posture",
+                    "ok",
+                    &acl_diff_hash("device-worker-runtime-dir", "posture", "runtime-dir", dev, ino),
+                ),
+                Err(error) => {
+                    audit_device_worker_runtime_dir("posture", "failed-closed", &error.to_string());
+                    return Err(error.to_string());
+                }
+            }
+        }
+        // The refusal's detail carries the path the launch-failure envelope
+        // needs; the audit record carries only the closed-set slug, so the
+        // record stays path-free.
+        grant_runner_tree_acls(
+            &self.directory,
+            &self.runtime_root,
+            uid,
+            RunnerTreeLeaf::Owned,
+        )
+        .inspect_err(|_| {
+            audit_device_worker_runtime_dir("grant", "failed-closed", "runner-tree-grant-refused")
+        })?;
+        // Last step before the spawn, as it was when this lived in the retired
+        // `swtpm_dir` harden pass: the directory is now postured and open, so
+        // the only thing left that can make this worker's own `bind(2)` fail
+        // is an entry a previous run of it left behind.
+        // The refusal is audited inside the step; the detail carries the
+        // path the launch-failure envelope needs.
+        self.unlink_stale_worker_socket()
+    }
+
+    /// Clear the one stale artefact a previous run of this worker can leave
+    /// behind in its own socket directory: the named socket a worker that was
+    /// superseded before its clean shutdown never unlinked. `bind(2)` on a
+    /// path that already exists fails with `EADDRINUSE`, so every relaunch
+    /// would die on a socket it is entitled to create, and the row would burn
+    /// its restart budget on an error that names nothing.
+    ///
+    /// Only that one entry is removed, fd-relative under the same path-safety
+    /// rules the grant itself uses (`openat2` no-symlink/beneath on the
+    /// directory, `fstatat` without following a final symlink), and the
+    /// directory's own posture, its ACL and every sibling entry are left
+    /// untouched. An absent directory is a no-op rather than an error: the
+    /// grant that owns it runs first, and a directory that is not there is
+    /// that grant's own refusal, not this step's.
+    fn unlink_stale_worker_socket(&self) -> Result<(), String> {
+        const S_IFMT_MASK: u32 = 0o170000;
+        const S_IF_SOCK: u32 = 0o140000;
+        let directory_fd = match crate::sys::path_safe::open_dir_path_safe(&self.directory) {
+            Ok(fd) => fd,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(format!(
+                    "device worker socket directory unreadable: {:?}",
+                    error.kind()
+                ))
+            }
+        };
+        match crate::sys::path_safe::fstatat_nofollow(
+            &directory_fd,
+            crate::ops::swtpm_identity::WORKER_SOCKET_NAME,
+        ) {
+            // A SOCKET is never removed. This step runs on every relaunch of
+            // the row, not once per start, so a retry that overlaps a
+            // predecessor that is still alive would unlink the very endpoint
+            // that predecessor is serving: the worker keeps running with no
+            // reachable socket, and the row is what times out. Only an entry
+            // that is not a socket - a regular file left where the socket
+            // belongs, which `bind(2)` collides with exactly as hard - is
+            // cleared.
+            // `S_IFMT` / `S_IFSOCK` are the POSIX file-type bits of the
+            // mode this probe already returned; nothing here opens the entry.
+            Ok(Some(stat)) if stat.st_mode & S_IFMT_MASK != S_IF_SOCK => {
+                crate::sys::path_safe::remove_path_safe(
+                    &directory_fd,
+                    crate::ops::swtpm_identity::WORKER_SOCKET_NAME,
+                )
+                    .map_err(|error| {
+                        format!("stale socket removal failed: {:?}", error.kind())
+                    })
+                    .inspect_err(|_| {
+                        audit_device_worker_runtime_dir(
+                            "stale-socket",
+                            "failed-closed",
+                            "stale-socket-removal-refused",
+                        )
+                    })
+            }
+            Ok(_) => Ok(()),
+            Err(error) => Err(format!("stale socket probe failed: {:?}", error.kind())),
+        }
     }
 }
 
@@ -2495,27 +2685,178 @@ impl DeviceWorkerSocketGrant {
 /// launch, when its role binds a socket under the runtime root.
 ///
 /// A typed launch's directory comes from the owning Device the launch arm
-/// pinned against the verified bundle (`DeviceWorkerLaunch::scope`); a legacy
-/// VM-scoped launch's comes from the plan's own trusted swtpm-dir derivation
-/// (`for_legacy_plan`). A role that binds no such socket - the one-shot flush
-/// (ctrl socket in the state Volume) and the video sidecar (its own
-/// `/run/d2b-video` runtime directory) - grants nothing.
+/// pinned against the verified bundle (`DeviceWorkerLaunch::scope`), and its
+/// posture from the `path:vm-run:<guest>` row the dispatch arm resolved out
+/// of that Guest's verified storage contract; a legacy VM-scoped launch's
+/// comes from the plan's own trusted swtpm-dir derivation
+/// (`for_legacy_plan`), whose per-VM tree host activation provisions. A role
+/// that binds no such socket - the one-shot flush (ctrl socket in the state
+/// Volume) and the video sidecar (its own `/run/d2b-video` runtime
+/// directory) - grants nothing.
+///
+/// A typed launch whose posture row did not resolve refuses: the broker will
+/// not create the directory with an identity of its own. This is the one
+/// grant that OWNS its leaf - it created the directory from the trusted row
+/// on the line above - so an absent one here is a grant that could not be
+/// applied and the launch is refused rather than granted nothing.
 fn device_worker_socket_grant(
     plan: &SpawnRunnerPlan,
     device_worker: &crate::ops::device_worker::DeviceWorkerLaunch,
     runtime_root: &Path,
+    guest_runtime_posture: Option<crate::ops::device_worker::GuestRuntimeDirPosture>,
 ) -> Result<Option<DeviceWorkerSocketGrant>, LiveHandlerError> {
     if !device_worker.binds_runtime_socket {
         return Ok(None);
     }
-    let grant = match device_worker.scope.as_ref() {
-        Some(scope) => DeviceWorkerSocketGrant::for_guest(runtime_root, scope.guest()),
-        None => DeviceWorkerSocketGrant::for_legacy_plan(plan, runtime_root),
+    let grant = match (device_worker.scope.as_ref(), guest_runtime_posture) {
+        (Some(scope), Some(posture)) => {
+            DeviceWorkerSocketGrant::for_guest(runtime_root, scope.guest(), posture)
+        }
+        (Some(scope), None) => {
+            let unresolved = crate::ops::device_worker::RuntimeDirPostureError::RowUnresolved;
+            audit_device_worker_runtime_dir("posture", "failed-closed", &unresolved.to_string());
+            return Err(LiveHandlerError::SpawnFailed {
+                detail: format!(
+                    "device worker runtime directory for {}: {unresolved}",
+                    scope.guest()
+                ),
+            });
+        }
+        (None, _) => DeviceWorkerSocketGrant::for_legacy_plan(plan, runtime_root),
     }
     .map_err(|detail| LiveHandlerError::SpawnFailed {
         detail: format!("device worker socket directory: {detail}"),
     })?;
     Ok(Some(grant))
+}
+
+/// Fence one resource-backed `w1-swtpm` launch's arguments against the paths
+/// the broker is about to grant on, and refuse an argument set that names
+/// anything else.
+///
+/// The worker opens its state **by pathname** (the broker skips
+/// `apply_mount_actions` under a user namespace), so the traverse grant below
+/// is only a grant for the directory the launch actually names. Every path
+/// the arguments carry - the argument itself, or the value of a
+/// comma-separated `key=path` field - must be an anchored absolute path under
+/// the trusted state directory or the trusted per-Guest runtime directory of
+/// the scope pinned against the verified bundle. A relative or `.`/`..`
+/// spelling, a sibling Device's state Volume, and a path the payload chose
+/// outright are each refused, before the socket directory is created,
+/// postured and opened, and before the state directory is opened at all.
+///
+/// This fence is pure - it derives the runtime directory and reads the
+/// arguments, and touches nothing on disk - so it runs with the other typed
+/// preflights at the top of [`live_spawn_runner`], ahead of every ACL that
+/// function applies. A launch refused here leaves no ACL behind.
+///
+/// A launch that is not a resource-backed `w1-swtpm` one, or one the verified
+/// bundle resolves no identity for, has no trusted paths to fence against and
+/// is admitted to the (equally absent) grants below.
+fn fence_device_worker_argv_paths(
+    plan: &SpawnRunnerPlan,
+    swtpm_identity: Option<&crate::ops::swtpm_identity::ResourceBackedSwtpm>,
+    device_worker: &crate::ops::device_worker::DeviceWorkerLaunch,
+    runtime_root: &Path,
+) -> Result<(), LiveHandlerError> {
+    if plan.seccomp_policy_ref.as_deref() != Some("w1-swtpm") {
+        return Ok(());
+    }
+    let (Some(identity), Some(scope)) = (swtpm_identity, device_worker.scope.as_ref()) else {
+        return Ok(());
+    };
+    let runtime_dir = scope.socket_directory(runtime_root).map_err(|error| {
+        audit_device_worker_runtime_dir("argv-fence", "failed-closed", &error.to_string());
+        LiveHandlerError::SpawnFailed {
+            detail: format!("device worker argv fence: {error}"),
+        }
+    })?;
+    crate::ops::swtpm_identity::verify_argv_names_only_trusted_paths(plan, identity, &runtime_dir)
+        .map_err(|mismatch| {
+            audit_device_worker_runtime_dir("argv-fence", "failed-closed", &mismatch.to_string());
+            LiveHandlerError::SpawnFailed {
+                detail: format!("device worker argv fence: {mismatch}"),
+            }
+        })
+}
+
+/// Open the TPM worker's trusted state Volume directory to its own principal,
+/// search-only on every non-world-traversable ancestor. The launch's own
+/// arguments are already fenced by [`fence_device_worker_argv_paths`], which
+/// runs before any ACL this spawn applies.
+///
+/// The state root above the Volume directory is declared mode 0700, so the only
+/// non-owner access it can carry is a named traverse ACL. POSIX rewrites the
+/// ACL mask from a file's group bits on every `chmod`, so any pass that
+/// re-asserts that declared 0700 nullifies every named entry (each one goes
+/// `#effective:---`) and the worker loses search over the whole chain - its
+/// first `open` of the state directory then fails with `EACCES`. Re-asserting
+/// the grant here, after the typed fences and immediately before the spawn, is
+/// what keeps the worker's own principal able to reach its directory. It is
+/// the same grant [`DeviceWorkerSocketGrant::apply`] and the
+/// cloud-hypervisor state directory take, and it fails closed: an absent
+/// ancestor refuses the launch rather than spawning a worker that cannot
+/// reach the directory the bundle named for it.
+///
+/// A launch that is not a resource-backed `w1-swtpm` one has no trusted state
+/// directory to grant, and grants nothing.
+async fn grant_swtpm_state_dir_traversal(
+    plan: &SpawnRunnerPlan,
+    swtpm_identity: Option<&crate::ops::swtpm_identity::ResourceBackedSwtpm>,
+    device_worker: &crate::ops::device_worker::DeviceWorkerLaunch,
+    broker_state_dir: &Path,
+) -> Result<(), LiveHandlerError> {
+    if plan.seccomp_policy_ref.as_deref() != Some("w1-swtpm") {
+        return Ok(());
+    }
+    let Some(identity) = swtpm_identity else {
+        return Ok(());
+    };
+    if device_worker.scope.is_none() {
+        return Ok(());
+    }
+    let state_dir = crate::ops::swtpm_identity::trusted_state_dir(identity);
+    // A state directory the worker cannot start against is refused here,
+    // before the traverse grant, so the refusal costs no ACL and the
+    // operator is told what it is instead of watching the row burn its
+    // restart budget on an exit that names nothing. The check reads one
+    // entry and changes nothing: a headerless persistent-state blob is
+    // unrecoverable key material, and the broker does not decide what that
+    // is worth.
+    let health = crate::ops::swtpm_identity::classify_state_dir(identity).await;
+    if health != crate::ops::swtpm_identity::StateDirHealth::Usable {
+        audit_device_worker_runtime_dir("state-health", "failed-closed", &health.to_string());
+        return Err(LiveHandlerError::SpawnFailed {
+            detail: format!(
+                "state directory is not usable for this worker: {health}; the volume's \
+                 persistent TPM state is incomplete, so every launch will fail until an \
+                 operator inspects it by hand - the broker will not delete or re-create \
+                 it, because that state holds the TPM Endorsement Key"
+            ),
+        });
+    }
+    grant_runner_tree_acls(
+        &state_dir,
+        broker_state_dir,
+        plan.uid,
+        // The state Volume's `create-if-never-provisioned` lifecycle owns
+        // the leaf. The long-lived worker opens the directory itself, so for
+        // that row an absent one is a grant that could not be applied and the
+        // launch refuses. The one-shot flush only connects to a control
+        // socket that lands with it, and the row exists to be admitted
+        // before that socket does, so for the flush the same absence is a
+        // provisioning race this grant does not own.
+        match device_worker.state_volume_leaf {
+            crate::ops::device_worker::StateVolumeLeaf::MustExist => RunnerTreeLeaf::Owned,
+            crate::ops::device_worker::StateVolumeLeaf::MayNotHaveLanded => RunnerTreeLeaf::Foreign,
+        },
+    )
+    .map_err(|detail| LiveHandlerError::SpawnFailed {
+        detail: format!(
+            "swtpm state directory ACL for runner uid {}: {detail}",
+            plan.uid
+        ),
+    })
 }
 
 /// How long one daemon API-socket / component-session vsock ACL refresh
@@ -2626,17 +2967,20 @@ fn cloud_hypervisor_component_session_socket_arg(plan: &SpawnRunnerPlan) -> Opti
     })
 }
 
-/// Path-free digest of a component-session vsock ACL mutation, for audit.
+/// Path-free digest of one ACL or directory-posture mutation, for audit.
 ///
-/// Returns `sha256:<hex>` over the operation, the target class, and the
-/// target's resolved `(dev, ino)` - never the raw socket / state-dir
-/// path. The component-session observability contract forbids raw vsock /
-/// socket / state-dir paths in spans, logs, metrics, and audit.
-fn component_session_acl_diff_hash(op: &str, target_class: &str, dev: u64, ino: u64) -> String {
+/// Returns `sha256:<hex>` over the subsystem, the operation, the target
+/// class, and the target's resolved `(dev, ino)` - never the raw socket /
+/// state-dir / runtime-dir path. The component-session observability
+/// contract forbids raw vsock / socket / state-dir paths in spans, logs,
+/// metrics, and audit, and the device-worker runtime directory is held to
+/// the same rule.
+fn acl_diff_hash(subsystem: &str, op: &str, target_class: &str, dev: u64, ino: u64) -> String {
     use sha2::Digest as _;
     use std::fmt::Write as _;
     let mut hasher = sha2::Sha256::new();
-    hasher.update(b"component-session-vsock-acl\0");
+    hasher.update(subsystem.as_bytes());
+    hasher.update([0]);
     hasher.update(op.as_bytes());
     hasher.update([0]);
     hasher.update(target_class.as_bytes());
@@ -2651,6 +2995,23 @@ fn component_session_acl_diff_hash(op: &str, target_class: &str, dev: u64, ino: 
     out
 }
 
+/// Emit the audit event for one per-Guest runtime directory create /
+/// reconcile, or for the fail-closed refusal of one.
+///
+/// Closed-enum labels only: the success path carries the postured inode's
+/// digest, never the path, the uid, or the acl-spec; the refusal path
+/// carries the typed slug the launch refuses with.
+pub(crate) fn audit_device_worker_runtime_dir(op: &str, result: &str, target: &str) {
+    tracing::info!(
+        kind = "critical",
+        subsystem = "device-worker-runtime-dir",
+        op = op,
+        result = result,
+        target = target,
+        "device-worker per-Guest runtime directory posture",
+    );
+}
+
 /// Emit a hash-only audit event for a component-session vsock ACL mutation.
 /// Closed-enum labels only; no raw paths, uids-by-value, or content.
 fn audit_component_session_vsock_acl(op: &str, target_class: &str, dev: u64, ino: u64) {
@@ -2660,7 +3021,13 @@ fn audit_component_session_vsock_acl(op: &str, target_class: &str, dev: u64, ino
         op = op,
         daemon_principal = COMPONENT_SESSION_DAEMON_PRINCIPAL,
         target_class = target_class,
-        acl_diff_hash = %component_session_acl_diff_hash(op, target_class, dev, ino),
+        acl_diff_hash = %acl_diff_hash(
+            "component-session-vsock-acl",
+            op,
+            target_class,
+            dev,
+            ino
+        ),
         result = "ok",
         "component-session vsock daemon ACL mutation",
     );
@@ -2897,12 +3264,18 @@ pub async fn live_spawn_runner(
     broker_state_dir: &Path,
     // Trusted identity of a resource-backed `w1-swtpm` launch, resolved from
     // the verified bundle by the dispatch layer (`None` for every other
-    // launch); the swtpm-dir fence uses it instead of the cgroup placement.
-    swtpm_identity: Option<&crate::ops::swtpm_dir::ResourceBackedSwtpm>,
+    // launch). It names the state Volume directory the traverse grant
+    // opens to the launched principal.
+    swtpm_identity: Option<&crate::ops::swtpm_identity::ResourceBackedSwtpm>,
     // Device-owned worker scope (pinned owning Device + whether this role
     // binds a socket under `runtime_root`) resolved by the dispatch layer;
     // `default()` for every other launch.
     device_worker: &crate::ops::device_worker::DeviceWorkerLaunch,
+    // The posture the verified storage contract's `path:vm-run:<guest>` row
+    // declares for a typed Device worker's per-Guest runtime directory,
+    // resolved by the dispatch layer (which owns the bundle resolver) so
+    // this handler stays bundle-free; `None` for every other launch.
+    guest_runtime_posture: Option<crate::ops::device_worker::GuestRuntimeDirPosture>,
     // Broker runtime root: the tree the worker's per-Guest socket directory
     // must strictly live under before this handler opens it.
     runtime_root: &Path,
@@ -2931,19 +3304,21 @@ pub async fn live_spawn_runner(
         }
     })?;
 
+    // The argv fence runs with the other typed preflights, before the first
+    // ACL this function touches: it is pure (it reads the plan's arguments
+    // and the pinned scope's own runtime directory, and creates nothing), so
+    // a launch it refuses leaves no ACL, no created directory and no posture
+    // behind it. Everything below it - the runner-tree refresh, the worker's
+    // socket directory, its state-directory traverse grant - only runs for an
+    // argument set already shown to name nothing but the trusted paths.
+    fence_device_worker_argv_paths(&plan, swtpm_identity, device_worker, runtime_root)?;
+
     let (binary, argv, env) =
         build_cstring_vectors(&plan).map_err(LiveHandlerError::SpawnPreflight)?;
     let seccomp_program = load_runner_seccomp(&plan).await?;
     let cgroup_fds = prepare_runner_cgroup_fds(&plan.cgroup_placement)?;
     refresh_spawn_runner_acls(&plan, broker_state_dir).await?;
 
-    // swtpm-dir first-run hardening (issue #64). Gated on the
-    // `w1-swtpm` role and run BEFORE clone3 so the persistent TPM2
-    // NVRAM dir is provisioned + identity-bound (or fails closed)
-    // before swtpm - which opens the NVRAM by pathname under its user
-    // namespace - is ever spawned. ONLY the persistent state dir is
-    // touched; the `/run` runtime-socket-dir posture is left intact.
-    let swtpm_dir_audit = maybe_harden_swtpm_dir(&plan, swtpm_identity).await?;
     let api_socket_acl_path = cloud_hypervisor_api_socket(&plan);
 
     // Pre-open /dev/dri/renderD128 for gpu-render-node broker-pre-NS
@@ -3010,19 +3385,24 @@ pub async fn live_spawn_runner(
         .await?;
     }
 
-    // Every typed fence above passed (the swtpm-dir hardening, the GPU plan
-    // validation, the memlock budget): only now is the worker's trusted
-    // socket directory opened to its principal. A launch the broker refuses
-    // therefore leaves no ACL behind, and the directory is derived from
-    // trusted identity - the pinned owning Device's Guest, or the legacy
-    // plan's own trusted runtime directory - never from a launch argument.
-    if let Some(grant) = device_worker_socket_grant(&plan, device_worker, runtime_root)? {
+    // Every typed fence above passed (the argv fence, the swtpm-dir
+    // hardening, the GPU plan validation, the memlock budget) and no ACL has
+    // been touched yet: only now is the worker's trusted socket directory
+    // created, postured to the posture the storage contract declares for it,
+    // and opened to its principal. The directory is derived from trusted
+    // identity - the pinned owning Device's Guest, or the legacy plan's own
+    // trusted runtime directory - never from a launch argument.
+    if let Some(grant) =
+        device_worker_socket_grant(&plan, device_worker, runtime_root, guest_runtime_posture)?
+    {
         grant
             .apply(plan.uid)
             .map_err(|detail| LiveHandlerError::SpawnFailed {
                 detail: format!("device worker socket directory ACL: {detail}"),
             })?;
     }
+
+    grant_swtpm_state_dir_traversal(&plan, swtpm_identity, device_worker, broker_state_dir).await?;
 
     let isolation = crate::sys::pidfd_sys::RunnerIsolationSpec {
         capabilities: plan.capabilities.clone(),
@@ -3089,106 +3469,9 @@ pub async fn live_spawn_runner(
         pid: outcome.pid,
         start_time_ticks,
         used_fork_fallback: outcome.used_fork_fallback,
-        swtpm_dir_audit,
     })
 }
 
-/// Run the swtpm-dir first-run hardening step for the `w1-swtpm` role.
-/// Returns `Ok(None)` for every other role (no-op), `Ok(Some(audit))`
-/// on success, and a path-free [`LiveHandlerError::SwtpmDirHardening`]
-/// on fail-closed so the dispatch layer can emit the terminal
-/// `PrepareSwtpmDir` record from the carried audit.
-///
-/// Two placements exist:
-///
-/// - a **VM-scoped** placement (`d2b.slice/<vm>/...`, the legacy VM DAG) is
-///   provisioned and identity-bound here, exactly as before;
-/// - a **resource-backed** placement (`d2b.slice/process-<64hex>/...`,
-///   `private_cgroup_placement`) carries no VM identity in the cgroup and the
-///   typed Device-worker intent ships no writable paths, so the identity comes
-///   from the verified bundle (`resource_backed`) and the launch is fenced
-///   against it. Provisioning is NOT done here: in the v3 model the TPM state
-///   Volume owns that lifecycle (`createPolicy: create-if-never-provisioned`,
-///   `repairPolicy: fail-closed`, `packages/d2b-provider-volume-local`), and
-///   the trusted root is shared by every Device of the host, so a per-launch
-///   ownership stamp would be wrong. The hook's job for those launches is to
-///   refuse any launch whose declared paths or argv do not name the trusted
-///   directory.
-async fn maybe_harden_swtpm_dir(
-    plan: &SpawnRunnerPlan,
-    resource_backed: Option<&crate::ops::swtpm_dir::ResourceBackedSwtpm>,
-) -> Result<Option<crate::ops::audit_op::SwtpmDirAudit>, LiveHandlerError> {
-    if plan.seccomp_policy_ref.as_deref() != Some("w1-swtpm") {
-        return Ok(None);
-    }
-    let placement = crate::ops::swtpm_dir::parse_placement_segment(&plan.cgroup_placement.subtree);
-    if let Some(crate::ops::swtpm_dir::PlacementSegment::RuntimeScope(_)) = placement {
-        // Fail closed when no trusted identity resolved: an unidentifiable
-        // resource-backed swtpm launch must not run against a directory no
-        // trusted artifact names.
-        let identity = resource_backed.ok_or_else(|| {
-            hardening_refusal(plan, crate::ops::swtpm_dir::reasons::DERIVATION_FAILED)
-        })?;
-        crate::ops::swtpm_dir::derive_resource_backed_paths(plan, identity)
-            .map_err(|reason| hardening_refusal(plan, reason))?;
-        // The long-lived worker (`--tpmstate dir=...`) opens its state
-        // directory for the log and pid file the moment it starts, so a launch
-        // racing the Volume's layout must fail retryably here instead of
-        // burning the row's restart budget on a child that dies on its first
-        // write. The one-shot flush (`--unix <dir>/ctrl.sock`) only connects
-        // to the worker's control socket inside that directory: it is admitted
-        // and waits for the socket, so refusing it would spend the row's one
-        // attempt on a race it can win. Presence is a filesystem fact, so it
-        // stays out of the pure derivation above.
-        if plan.argv.iter().any(|arg| arg == "--tpmstate")
-            && !crate::ops::swtpm_dir::trusted_state_dir(identity).is_dir()
-        {
-            return Err(hardening_refusal(
-                plan,
-                crate::ops::swtpm_dir::reasons::STATE_DIR_NOT_PROVISIONED,
-            ));
-        }
-        return Ok(None);
-    }
-    let paths = crate::ops::swtpm_dir::derive_paths(plan)
-        .map_err(|reason| hardening_refusal(plan, reason))?;
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    let cfg = crate::ops::swtpm_dir::SwtpmHardenConfig {
-        expected_uid: plan.uid,
-        expected_gid: plan.gid,
-        marker_owner_uid: 0,
-        marker_owner_gid: 0,
-        now_ms,
-        enforce_root_parents: true,
-    };
-    match crate::ops::swtpm_dir::harden(&paths, &cfg).await {
-        Ok(audit) => Ok(Some(audit)),
-        Err(err) => Err(LiveHandlerError::SwtpmDirHardening {
-            audit: err.audit,
-            reason: err.reason,
-        }),
-    }
-}
-
-/// The path-free fail-closed envelope for one swtpm-dir derivation refusal.
-fn hardening_refusal(plan: &SpawnRunnerPlan, reason: &'static str) -> LiveHandlerError {
-    LiveHandlerError::SwtpmDirHardening {
-        audit: crate::ops::audit_op::SwtpmDirAudit {
-            vm_id: String::new(),
-            base_dir_hash: String::new(),
-            result: crate::ops::audit_op::SwtpmDirResult::FailedClosed,
-            mode: 0o700,
-            owner_uid: plan.uid,
-            owner_gid: plan.gid,
-            marker_result: crate::ops::audit_op::SwtpmMarkerResult::FailedClosed,
-            fail_reason: Some(reason.to_owned()),
-        },
-        reason,
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -4133,111 +4416,6 @@ mod tests {
         plan
     }
 
-    #[tokio::test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    async fn resource_backed_swtpm_launch_is_fenced_against_the_trusted_identity() {
-        use crate::ops::swtpm_dir::{ResourceBackedSwtpm, reasons};
-        // The state Volume's layout creates the directory; the fence reads
-        // that fact from the filesystem, so the fixture owns a real one.
-        let scratch = tempfile::tempdir().expect("scratch");
-        let identity = ResourceBackedSwtpm {
-            guest: "acceptance-guest".to_owned(),
-            state_root: scratch.path().join("tpm-state"),
-            state_volume: Some("device-6f9619ff8b864d01b42d00cf4fc964ff-tpm-state".to_owned()),
-        };
-        let state_dir = identity
-            .state_root
-            .join(identity.state_volume.as_deref().expect("volume name"));
-        let runtime_dir = PathBuf::from("/run/d2b/vms/acceptance-guest");
-
-        // A launch naming exactly the trusted directories passes the fence
-        // once its state Volume directory exists: in v3 that Volume's
-        // `create-if-never-provisioned`/`fail-closed` lifecycle owns the
-        // directory, and the spawn hook fences identity plus the presence the
-        // lifecycle leaves behind.
-        tokio::fs::create_dir_all(&state_dir).await.expect("state volume directory");
-        let plan = resource_backed_swtpm_plan(&state_dir, &runtime_dir);
-        assert!(
-            maybe_harden_swtpm_dir(&plan, Some(&identity))
-                .await
-                .expect("trusted launch passes")
-                .is_none()
-        );
-
-        // A launch racing the Volume's layout (the directory is not there yet)
-        // fails closed retryably instead of starting a child that dies on its
-        // first log write and burns the row's restart budget.
-        std::fs::remove_dir(&state_dir).expect("drop the state volume directory");
-        let refusal = maybe_harden_swtpm_dir(&plan, Some(&identity))
-            .await
-            .expect_err("unprovisioned refuses");
-        assert!(matches!(
-            refusal,
-            LiveHandlerError::SwtpmDirHardening { reason, .. }
-                if reason == reasons::STATE_DIR_NOT_PROVISIONED
-        ));
-        tokio::fs::create_dir_all(&state_dir).await.expect("restore the state volume directory");
-
-        // The one-shot flush opens the worker's control socket inside that
-        // same directory instead of writing into it, so it is admitted while
-        // the layout is still absent: it waits for the socket, and refusing it
-        // would spend the row's single launch attempt on a race it can win.
-        std::fs::remove_dir(&state_dir).expect("drop the state volume directory");
-        let mut flush = test_spawn_plan_with_argv(
-            vec![
-                "swtpm-ioctl".to_owned(),
-                "flush".to_owned(),
-                "--unix".to_owned(),
-                state_dir.join("ctrl.sock").display().to_string(),
-            ],
-            "w1-swtpm",
-        );
-        flush.cgroup_placement.subtree =
-            format!("d2b.slice/{}/swtpm", "process-".to_owned() + &"c".repeat(64));
-        assert!(
-            maybe_harden_swtpm_dir(&flush, Some(&identity))
-                .await
-                .expect("one-shot flush passes")
-                .is_none()
-        );
-        tokio::fs::create_dir_all(&state_dir).await.expect("restore the state volume directory");
-
-        // Without a trusted identity the launch fails closed by derivation.
-        let refusal = maybe_harden_swtpm_dir(&plan, None)
-            .await
-            .expect_err("missing identity refuses");
-        assert!(matches!(
-            refusal,
-            LiveHandlerError::SwtpmDirHardening { reason, .. }
-                if reason == reasons::DERIVATION_FAILED
-        ));
-
-        // A launch opening another directory fails closed with the named
-        // identity-mismatch reason and a matching path-free audit.
-        let foreign = resource_backed_swtpm_plan(
-            Path::new("/var/lib/d2b/tpm-state/device-foreign-tpm-state"),
-            &runtime_dir,
-        );
-        let refusal = maybe_harden_swtpm_dir(&foreign, Some(&identity))
-            .await
-            .expect_err("mismatch refuses");
-        assert!(matches!(
-            refusal,
-            LiveHandlerError::SwtpmDirHardening { reason, audit }
-                if reason == reasons::IDENTITY_MISMATCH
-                    && audit.fail_reason.as_deref() == Some(reasons::IDENTITY_MISMATCH)
-        ));
-
-        // Roles other than w1-swtpm are a no-op.
-        let mut other = plan.clone();
-        other.seccomp_policy_ref = Some("w1-gpu".to_owned());
-        assert!(
-            maybe_harden_swtpm_dir(&other, Some(&identity))
-                .await
-                .expect("other roles no-op")
-                .is_none()
-        );
-    }
 
     #[test]
     fn ensure_runner_cgroup_leaf_uses_delegated_parent_slice() {
@@ -4350,6 +4528,7 @@ mod tests {
             Path::new("/var/lib/d2b"),
             None,
             &crate::ops::device_worker::DeviceWorkerLaunch::default(),
+            None,
             Path::new("/run/d2b"),
         )
         .await
@@ -4597,10 +4776,12 @@ mod tests {
     }
 
     #[test]
-    fn component_session_acl_diff_hash_is_path_free_and_stable() {
-        let h1 = component_session_acl_diff_hash("grant", "vsock-socket", 0x10, 0x20);
-        let h2 = component_session_acl_diff_hash("grant", "vsock-socket", 0x10, 0x20);
-        let h3 = component_session_acl_diff_hash("revoke", "vsock-socket", 0x10, 0x20);
+    fn acl_diff_hash_is_path_free_and_stable() {
+        let h1 = acl_diff_hash("component-session-vsock-acl", "grant", "vsock-socket", 0x10, 0x20);
+        let h2 = acl_diff_hash("component-session-vsock-acl", "grant", "vsock-socket", 0x10, 0x20);
+        let h3 = acl_diff_hash("component-session-vsock-acl", "revoke", "vsock-socket", 0x10, 0x20);
+        let h4 = acl_diff_hash("device-worker-runtime-dir", "grant", "vsock-socket", 0x10, 0x20);
+        assert_ne!(h1, h4, "subsystem must affect the hash");
         assert_eq!(h1, h2, "hash must be deterministic for identical inputs");
         assert_ne!(h1, h3, "op must affect the hash");
         assert!(h1.starts_with("sha256:"));
@@ -4732,7 +4913,7 @@ mod tests {
         std::fs::set_permissions(&world_x, std::fs::Permissions::from_mode(0o755))
             .expect("make ancestor world traversable");
 
-        let targets = runner_tree_acl_targets(&state_dir, &owned_root, 4242)
+        let targets = runner_tree_acl_targets(&state_dir, &owned_root, 4242, RunnerTreeLeaf::Owned)
             .expect("derive bounded runner ACL targets");
         assert_eq!(
             targets,
@@ -4759,7 +4940,7 @@ mod tests {
         let owned_root = root.join("d2b");
         let outside = root.join("other").join("desktop");
         assert!(
-            runner_tree_acl_targets(&outside, &owned_root, 4242).is_err(),
+            runner_tree_acl_targets(&outside, &owned_root, 4242, RunnerTreeLeaf::Owned).is_err(),
             "runner ACL planning must fail closed outside the configured state root"
         );
     }
@@ -5116,17 +5297,20 @@ mod tests {
         let root = TestDir::new("device-worker-acl-apply");
         let runtime_root = root.join("run").join("d2b");
         let socket_dir = runtime_root.join("vms").join("acceptance-guest");
-        std::fs::create_dir_all(&socket_dir).expect("create socket dir");
+        // Only the `vms` parent exists - the per-Guest leaf is the grant's
+        // own responsibility, which is what makes the assertions below
+        // about the create rather than about a fixture.
+        std::fs::create_dir_all(runtime_root.join("vms")).expect("create the vms parent");
         std::fs::set_permissions(&runtime_root, std::fs::Permissions::from_mode(0o700))
             .expect("chmod runtime root");
-        std::fs::set_permissions(&socket_dir, std::fs::Permissions::from_mode(0o700))
-            .expect("chmod socket dir");
 
         let uid = 50_123;
-        let grant = DeviceWorkerSocketGrant::for_guest(&runtime_root, "acceptance-guest")
-            .expect("the trusted Guest scope names the socket directory");
+        let grant =
+            DeviceWorkerSocketGrant::for_guest(&runtime_root, "acceptance-guest", test_posture())
+                .expect("the trusted Guest scope names the socket directory");
         assert_eq!(grant.directory, socket_dir);
-        grant.apply(uid).expect("grant ACLs");
+        assert!(!socket_dir.exists(), "the leaf must start absent");
+        grant.apply(uid).expect("posture the directory and grant ACLs");
 
         let fd = crate::sys::path_safe::open_dir_path_safe(&socket_dir).expect("open dir");
         assert_eq!(
@@ -5145,6 +5329,791 @@ mod tests {
         );
     }
 
+    /// A worker superseded before its clean shutdown leaves its `tpm.sock`
+    /// behind, and `bind(2)` on a path that already exists fails with
+    /// `EADDRINUSE` - so every relaunch of that row dies on a socket it is
+    /// entitled to create and the row burns its restart budget on an error
+    /// that names nothing. The grant is the last step before the spawn, so
+    /// this is where that entry goes.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn device_worker_socket_grant_clears_the_socket_a_previous_run_left_behind() {
+        if ![
+            "/run/current-system/sw/bin/setfacl",
+            "/usr/bin/setfacl",
+            "/bin/setfacl",
+        ]
+        .iter()
+        .any(|candidate| Path::new(candidate).exists())
+        {
+            eprintln!("skipping stale-socket test: no setfacl binary");
+            return;
+        }
+
+        let root = TestDir::new("device-worker-stale-socket");
+        let runtime_root = root.join("run").join("d2b");
+        let socket_dir = runtime_root.join("vms").join("acceptance-guest");
+        std::fs::create_dir_all(&socket_dir).expect("create the socket directory");
+
+        // A regular file where the socket belongs: `bind(2)` collides with it
+        // exactly as it would with a socket, and it is the shape a worker that
+        // died before `bind(2)` left. This is the only shape this step clears
+        // - see the guard in `unlink_stale_worker_socket`.
+        std::fs::write(socket_dir.join("tpm.sock"), b"not a socket")
+            .expect("plant a non-socket entry at the socket's name");
+        let sibling = socket_dir.join("gpu.sock");
+        std::fs::write(&sibling, b"a sibling entry the grant must not touch")
+            .expect("plant a sibling entry");
+        assert!(socket_dir.join("tpm.sock").exists());
+
+        let grant =
+            DeviceWorkerSocketGrant::for_guest(&runtime_root, "acceptance-guest", test_posture())
+                .expect("the trusted Guest scope names the socket directory");
+        grant.apply(50_123).expect("posture, grant and clear the stale entry");
+
+        assert!(
+            !socket_dir.join("tpm.sock").exists(),
+            "the socket the previous run left must not survive into this launch"
+        );
+        assert!(
+            sibling.exists(),
+            "clearing the one stale socket must not touch any sibling entry"
+        );
+    }
+
+    /// A relaunch that overlaps a predecessor that is still alive must NOT
+    /// unlink the endpoint that predecessor is serving. This step runs on
+    /// every retry of the row, not once per start, so a socket left by a live
+    /// worker is the one entry that has to survive: the worker keeps running
+    /// with no reachable socket, and the row is what times out.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn clearing_a_stale_socket_never_removes_a_live_sockets_endpoint() {
+        let root = TestDir::new("device-worker-live-socket");
+        let runtime_root = root.join("run").join("d2b");
+        let socket_dir = runtime_root.join("vms").join("acceptance-guest");
+        std::fs::create_dir_all(&socket_dir).expect("create the socket directory");
+
+        // A real `AF_UNIX` socket, bound on a path short enough for
+        // `sockaddr_un.sun_path` (108 bytes). The system temp dir is used
+        // rather than a directory under the crate root because Bazel runs
+        // tests from an execroot deep enough to overflow `sun_path`.
+        let short = std::env::temp_dir().join(format!(
+            "d2b-live-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock before epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&short).expect("create the short staging dir");
+        let staged = short.join("tpm.sock");
+        let listener =
+            std::os::unix::net::UnixListener::bind(&staged).expect("bind a live socket");
+        std::fs::hard_link(&staged, socket_dir.join("tpm.sock"))
+            .expect("link it into the directory under test");
+
+        let grant =
+            DeviceWorkerSocketGrant::for_guest(&runtime_root, "acceptance-guest", test_posture())
+                .expect("the trusted Guest scope names the socket directory");
+        grant
+            .unlink_stale_worker_socket()
+            .expect("a live socket is not a stale entry to clear");
+
+        assert!(
+            socket_dir.join("tpm.sock").exists(),
+            "the endpoint a live worker is serving must survive a relaunch's grant"
+        );
+        drop(listener);
+        let _ = std::fs::remove_dir_all(&short);
+    }
+
+    /// The same step, on a directory that is not there: the grant owns the
+    /// directory and refuses it before this runs, so an absent one here is
+    /// the grant's refusal, not a second one, and this step must not add a
+    /// failure of its own on the way out.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn clearing_a_stale_socket_on_an_absent_directory_is_a_no_op() {
+        let root = TestDir::new("device-worker-stale-socket-absent");
+        let runtime_root = root.join("run").join("d2b");
+        std::fs::create_dir_all(runtime_root.join("vms")).expect("create the vms parent");
+
+        let grant =
+            DeviceWorkerSocketGrant::for_guest(&runtime_root, "acceptance-guest", test_posture())
+                .expect("the trusted Guest scope names the socket directory");
+        grant
+            .unlink_stale_worker_socket()
+            .expect("an absent socket directory has no stale entry to clear");
+        assert!(!grant.directory.exists());
+    }
+
+    /// The posture the trusted `path:vm-run:<guest>` row declares on a real
+    /// host, with the mode the row declares and the principals the test uid
+    /// can actually create with (a non-root test cannot `chown` to `d2bd`).
+    /// The mode is the row's own `1770`, so the assertions below are about
+    /// the declared value and not a convenient one.
+    fn test_posture() -> crate::ops::device_worker::GuestRuntimeDirPosture {
+        crate::ops::device_worker::GuestRuntimeDirPosture {
+            owner_uid: nix::unistd::Uid::current().as_raw(),
+            owner_gid: nix::unistd::Gid::current().as_raw(),
+            mode: 0o1770,
+        }
+    }
+
+    /// The per-Guest runtime directory is not provisioned by anything on a
+    /// zone-native host: the storage contract declares its identity
+    /// (`path:vm-run:<guest>`, `1770 d2bd:d2b`) and the broker's socket grant
+    /// is what creates it. This asserts the create really happens and that
+    /// the directory lands on the declared mode and ownership - the two
+    /// halves of "created from the trusted row", because an undeclared
+    /// posture would be a directory the broker invented.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn device_worker_socket_grant_creates_the_directory_with_the_declared_posture() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let root = TestDir::new("device-worker-runtime-dir-create");
+        let runtime_root = root.join("run").join("d2b");
+        let socket_dir = runtime_root.join("vms").join("acceptance-guest");
+        std::fs::create_dir_all(runtime_root.join("vms")).expect("create the vms parent");
+        let posture = test_posture();
+
+        let grant =
+            DeviceWorkerSocketGrant::for_guest(&runtime_root, "acceptance-guest", posture)
+                .expect("the trusted Guest scope names the socket directory");
+        assert!(
+            !socket_dir.exists(),
+            "the fixture must start from an absent leaf, or it proves nothing"
+        );
+        crate::ops::device_worker::create_guest_runtime_dir(&grant.directory, posture)
+            .expect("create and posture the declared runtime directory");
+
+        let stat = std::fs::metadata(&socket_dir).expect("stat the created directory");
+        assert_eq!(
+            stat.mode() & 0o7777,
+            posture.mode,
+            "the created directory must carry the mode the storage row declares"
+        );
+        assert_eq!(stat.uid(), posture.owner_uid, "declared owner user");
+        assert_eq!(stat.gid(), posture.owner_gid, "declared owning group");
+    }
+
+    /// The grant has to refuse a directory it cannot create, not leave the
+    /// launch to fail later with an opaque error from the worker. Here the
+    /// `vms` parent host activation provisions is a regular file, so the
+    /// per-Guest directory can never be opened or created under it: the
+    /// refusal is the typed `per-guest-dir-posture-failed` slug,
+    /// and no ACL is left behind.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn device_worker_socket_grant_refuses_a_directory_it_cannot_posture() {
+        let root = TestDir::new("device-worker-runtime-dir-unposturable");
+        let runtime_root = root.join("run").join("d2b");
+        std::fs::create_dir_all(&runtime_root).expect("create the runtime root");
+        std::fs::write(runtime_root.join("vms"), b"not a directory")
+            .expect("occupy the vms parent with a regular file");
+
+        let grant = DeviceWorkerSocketGrant::for_guest(&runtime_root, "acceptance-guest", test_posture())
+            .expect("the trusted Guest scope names the socket directory");
+        let error = grant
+            .apply(50_123)
+            .expect_err("a directory the broker cannot posture must refuse the launch");
+        assert!(
+            error.starts_with("per-guest-dir-posture-"),
+            "the refusal must be the typed path-free slug, got: {error}"
+        );
+    }
+
+    /// A typed Device worker whose Guest the verified storage contract names
+    /// no `path:vm-run:<guest>` row for has no declared posture, and the
+    /// broker refuses rather than creating the directory with an identity of
+    /// its own.
+    #[test]
+    fn device_worker_socket_grant_refuses_a_guest_with_no_declared_posture_row() {
+        use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
+
+        let dir = TestDir::new("device-worker-unresolved-posture");
+        let runtime_root = dir.join("run").join("d2b");
+        let launch = crate::ops::device_worker::DeviceWorkerLaunch {
+            scope: Some(crate::ops::device_worker::DeviceWorkerScope {
+                zone_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+                    .expect("zone uid"),
+                device_ref: ResourceRef::parse("Device/tpm0").expect("device ref"),
+                device_uid: ResourceUid::parse("0940f65d-b4f7-427f-992b-a65d545ec479")
+                    .expect("device uid"),
+                guest: "acceptance-guest".to_owned(),
+            }),
+            binds_runtime_socket: true,
+            state_volume_leaf: crate::ops::device_worker::StateVolumeLeaf::MustExist,
+        };
+        let plan = legacy_swtpm_plan(&runtime_root.join("vms"), "acceptance-guest");
+        let error = device_worker_socket_grant(&plan, &launch, &runtime_root, None)
+            .expect_err("a Guest with no declared posture row must refuse the launch");
+        assert!(
+            matches!(
+                &error,
+                LiveHandlerError::SpawnFailed { detail }
+                    if detail.contains("per-guest-dir-posture-row-unresolved")
+            ),
+            "{error:?}"
+        );
+    }
+
+    /// The grant that CREATES its leaf - the device worker's per-Guest
+    /// runtime directory, postured from the trusted `path:vm-run:<guest>` row
+    /// on the line before - must still refuse an absent one. An absent leaf
+    /// used to make the whole runner-tree grant a silent no-op: `setfacl`
+    /// returns `Ok(None)` for a path that is not there, so the launch
+    /// proceeded with no ACL anywhere and the worker failed later with an
+    /// error that named nothing the broker could act on.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn device_worker_socket_grant_refuses_an_absent_leaf_instead_of_granting_nothing() {
+        let root = TestDir::new("device-worker-absent-leaf");
+        let runtime_root = root.join("run").join("d2b");
+        std::fs::create_dir_all(runtime_root.join("vms")).expect("create the vms parent");
+        let leaf = runtime_root.join("vms").join("acceptance-guest");
+
+        assert_eq!(
+            setfacl_fd_safe(&leaf, "u:50123:rwx", AclPathKind::Directory),
+            Ok(()),
+            "the optional-target tolerance is what an absent path still returns"
+        );
+        let error = grant_runner_tree_acls(&leaf, &runtime_root, 50_123, RunnerTreeLeaf::Owned)
+            .expect_err("an absent leaf the grant owns must refuse, not no-op");
+        assert!(
+            error.contains("leaf is absent"),
+            "the refusal must name the missing leaf, got: {error}"
+        );
+    }
+
+    /// A grant that does NOT own its leaf must not refuse on it. The serving
+    /// worker's private socket directory is the per-Guest runtime directory
+    /// the device worker's grant creates and the daemon realizes, so a
+    /// serving worker that reaches the broker before either of them has is a
+    /// provisioning race, not a grant that could not be applied - and a
+    /// refusal there turns a self-healing retry into a launch the row can
+    /// only escape by racing its own sibling. The absent-ancestor refusal is
+    /// unchanged: a partially-open chain still refuses.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_foreign_leaf_does_not_refuse_the_launch_but_an_absent_ancestor_still_does() {
+        let root = TestDir::new("runner-tree-foreign-leaf");
+        let runtime_root = root.join("run").join("d2b");
+        std::fs::create_dir_all(runtime_root.join("vms")).expect("create the vms parent");
+        let leaf = runtime_root.join("vms").join("acceptance-guest");
+        assert!(!leaf.exists(), "the fixture must start from an absent leaf");
+
+        grant_runner_tree_acls(&leaf, &runtime_root, 50_123, RunnerTreeLeaf::Foreign)
+            .expect("a leaf another actor provisions is not this grant's to refuse");
+        grant_runner_tree_acls(&leaf, &runtime_root, 50_123, RunnerTreeLeaf::Owned)
+            .expect_err("the same absent leaf still refuses the grant that owns it");
+
+        // The chain above the leaf is the broker's own: an absent ancestor is
+        // a partially-open chain and still refuses, under either leaf policy.
+        let chainless_root = root.join("chainless").join("d2b");
+        std::fs::create_dir_all(&chainless_root).expect("create a runtime root with no vms");
+        for policy in [RunnerTreeLeaf::Owned, RunnerTreeLeaf::Foreign] {
+            let error = grant_runner_tree_acls(
+                &chainless_root.join("vms").join("acceptance-guest"),
+                &chainless_root,
+                50_123,
+                policy,
+            )
+            .expect_err("an absent vms parent must still refuse");
+            assert!(error.contains("ancestor is absent"), "{policy:?}: {error}");
+        }
+    }
+
+    /// Install one access ACL entry on a directory through the broker's own
+    /// `setfacl`-on-fd path, so the fixture and the production grant apply the
+    /// ACL the same way.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn test_setfacl(path: &Path, acl_spec: &str) {
+        let fd = crate::sys::path_safe::open_dir_path_safe(path).expect("open directory");
+        crate::sys::pidfd_sys::run_setfacl_op_on_fd(fd.as_fd(), "-m", acl_spec)
+            .expect("apply ACL");
+    }
+
+    /// The TPM worker's state root is declared mode 0700, so the traverse the
+    /// worker needs is a named ACL entry - and a `chmod` that re-asserts that
+    /// 0700 rewrites the ACL mask to zero, which is exactly what nullifies it
+    /// and leaves the worker unable to open its own state directory. The grant
+    /// has to put the traverse back, and it has to be effective (a non-zero
+    /// mask), not merely present.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn swtpm_state_dir_traversal_is_effective_after_the_root_mode_is_reasserted() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        if ![
+            "/run/current-system/sw/bin/setfacl",
+            "/usr/bin/setfacl",
+            "/bin/setfacl",
+        ]
+        .iter()
+        .any(|candidate| Path::new(candidate).exists())
+        {
+            eprintln!("skipping swtpm state-directory ACL test: no setfacl binary");
+            return;
+        }
+
+        let root = TestDir::new("swtpm-state-dir-traversal");
+        let state_root = root.join("tpm-state");
+        let state_dir = state_root.join("device-0123456789abcdef0123456789abcdef-tpm-state");
+        tokio::fs::create_dir_all(&state_dir)
+            .await
+            .expect("create state volume directory");
+        tokio::fs::set_permissions(&state_root, std::fs::Permissions::from_mode(0o700))
+            .await
+            .expect("chmod state root");
+        tokio::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o700))
+            .await
+            .expect("chmod state volume directory");
+
+        let uid = 50_123;
+        // The shape the host actually presents: the traverse entry is already
+        // installed on the 0700 root, and re-asserting the declared mode has
+        // zeroed the mask, so the entry is present but not effective.
+        test_setfacl(&state_root, &format!("u:{uid}:--x"));
+        tokio::fs::set_permissions(&state_root, std::fs::Permissions::from_mode(0o700))
+            .await
+            .expect("re-assert the declared state-root mode");
+        assert_eq!(
+            tokio::fs::metadata(&state_root)
+                .await
+                .expect("stat state root")
+                .permissions()
+                .mode()
+                & 0o070,
+            0o000,
+            "the fixture must start from a nulled mask, or it proves nothing"
+        );
+
+        let identity = crate::ops::swtpm_identity::ResourceBackedSwtpm {
+            guest: "acceptance-guest".to_owned(),
+            state_root: state_root.clone(),
+            state_volume: "device-0123456789abcdef0123456789abcdef-tpm-state".to_owned(),
+        };
+        let runtime_root = root.join("run").join("d2b");
+        let mut plan = resource_backed_swtpm_plan(&state_dir, &guest_runtime_dir(&runtime_root));
+        plan.uid = uid;
+        plan.seccomp_policy_ref = Some("w1-swtpm".to_owned());
+        grant_swtpm_state_dir_traversal(
+            &plan,
+            Some(&identity),
+            &typed_device_worker_launch(
+                crate::ops::device_worker::StateVolumeLeaf::MustExist,
+            ),
+            &root.path,
+        )
+        .await
+        .expect("the trusted state directory grants");
+
+        // `rwx` on the leaf, `--x` on the root - and a mask that makes the
+        // root's traverse entry effective rather than present-but-nullified.
+        assert_eq!(
+            tokio::fs::metadata(&state_dir)
+                .await
+                .expect("stat state volume directory")
+                .permissions()
+                .mode()
+                & 0o070,
+            0o070,
+            "the state directory's mask must carry `rwx` for the worker principal"
+        );
+        assert_eq!(
+            tokio::fs::metadata(&state_root)
+                .await
+                .expect("stat state root")
+                .permissions()
+                .mode()
+                & 0o070,
+            0o010,
+            "the state root's mask must carry `x`, or the worker still cannot \
+             reach the state directory and fails its first open with EACCES"
+        );
+    }
+
+    /// A state directory whose persistent TPM state blob is zero length is a
+    /// state the worker can never start against, and it is not a state the
+    /// broker may repair. The worker's header lives inside that blob, so a
+    /// headerless blob is read as a corrupt state rather than as a new one:
+    /// the worker enters a fatal power-on failure, exits, and every later
+    /// launch repeats it. The row then burns its whole restart budget on an
+    /// exit whose only text is "Could not initialize libtpms", and the launch
+    /// failure is reported long after the operator could have acted.
+    ///
+    /// So the grant refuses here instead, before it applies any ACL, and says
+    /// what a human has to decide. It must NOT delete, truncate or
+    /// re-manufacture the blob: that is the Endorsement Key's home.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn swtpm_state_dir_traversal_refuses_a_headerless_persistent_state_and_leaves_it_alone() {
+        let root = TestDir::new("swtpm-state-dir-headerless");
+        let state_root = root.join("tpm-state");
+        let state_dir = state_root.join("device-0123456789abcdef0123456789abcdef-tpm-state");
+        tokio::fs::create_dir_all(&state_dir)
+            .await
+            .expect("create state volume directory");
+        let blob = state_dir.join("tpm2-00.permall");
+        // The exact artefact a real run leaves: the blob was created, its
+        // header was never written, and every start since has failed.
+        tokio::fs::write(&blob, b"")
+            .await
+            .expect("plant the headerless blob");
+
+        let identity = crate::ops::swtpm_identity::ResourceBackedSwtpm {
+            guest: "acceptance-guest".to_owned(),
+            state_root: state_root.clone(),
+            state_volume: "device-0123456789abcdef0123456789abcdef-tpm-state".to_owned(),
+        };
+        let runtime_root = root.join("run").join("d2b");
+        let mut plan = resource_backed_swtpm_plan(&state_dir, &guest_runtime_dir(&runtime_root));
+        plan.uid = 50_123;
+        plan.seccomp_policy_ref = Some("w1-swtpm".to_owned());
+        let error = grant_swtpm_state_dir_traversal(
+            &plan,
+            Some(&identity),
+            &typed_device_worker_launch(
+                crate::ops::device_worker::StateVolumeLeaf::MustExist,
+            ),
+            &root.path,
+        )
+        .await
+        .expect_err("a headerless persistent state must refuse the launch");
+
+        let LiveHandlerError::SpawnFailed { detail } = &error else {
+            panic!("the refusal must be a spawn failure, got {error:?}");
+        };
+        assert!(
+            detail.contains("state-dir-persistent-state-headerless"),
+            "the refusal must carry the typed slug, got: {detail}"
+        );
+        assert!(
+            detail.contains("Endorsement Key"),
+            "the refusal must tell the operator why the broker is not repairing it, got: {detail}"
+        );
+        assert!(
+            blob.exists() && tokio::fs::metadata(&blob).await.expect("stat").len() == 0,
+            "the refusal must leave the bytes exactly as it found them"
+        );
+    }
+
+    /// The same check must not refuse the two states a real first launch
+    /// presents: a state directory that carries no blob at all (the worker
+    /// manufactures on its first start) and one carrying a populated blob (a
+    /// returning guest). A refusal here would strand every ordinary launch
+    /// behind a rule that only ever fires on damage.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn a_fresh_or_populated_state_directory_is_not_the_headerless_case() {
+        use crate::ops::swtpm_identity::{classify_state_dir, StateDirHealth};
+
+        let root = TestDir::new("swtpm-state-dir-healthy");
+        let state_root = root.join("tpm-state");
+        let state_dir = state_root.join("device-0123456789abcdef0123456789abcdef-tpm-state");
+        tokio::fs::create_dir_all(&state_dir)
+            .await
+            .expect("create state volume directory");
+        let identity = crate::ops::swtpm_identity::ResourceBackedSwtpm {
+            guest: "acceptance-guest".to_owned(),
+            state_root: state_root.clone(),
+            state_volume: "device-0123456789abcdef0123456789abcdef-tpm-state".to_owned(),
+        };
+
+        assert_eq!(
+            classify_state_dir(&identity).await,
+            StateDirHealth::Usable,
+            "a state directory with no blob is the first-launch case, not damage"
+        );
+
+        let blob = state_dir.join("tpm2-00.permall");
+        tokio::fs::write(&blob, b"a populated persistent state")
+            .await
+            .expect("write the blob");
+        assert_eq!(
+            classify_state_dir(&identity).await,
+            StateDirHealth::Usable,
+            "a populated blob is a returning guest, not damage"
+        );
+    }
+
+    /// A launch whose state root never appeared refuses instead of spawning a
+    /// worker that cannot reach the directory the bundle named for it.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn swtpm_state_dir_traversal_refuses_an_absent_ancestor() {
+        let root = TestDir::new("swtpm-state-dir-absent");
+        let identity = crate::ops::swtpm_identity::ResourceBackedSwtpm {
+            guest: "acceptance-guest".to_owned(),
+            state_root: root.join("tpm-state"),
+            state_volume: "device-0123456789abcdef0123456789abcdef-tpm-state".to_owned(),
+        };
+        let runtime_root = root.join("run").join("d2b");
+        let mut plan = resource_backed_swtpm_plan(
+            &root.path.join("tpm-state")
+                .join("device-0123456789abcdef0123456789abcdef-tpm-state"),
+            &guest_runtime_dir(&runtime_root),
+        );
+        plan.uid = 50_123;
+        plan.seccomp_policy_ref = Some("w1-swtpm".to_owned());
+        let error = grant_swtpm_state_dir_traversal(
+            &plan,
+            Some(&identity),
+            &typed_device_worker_launch(
+                crate::ops::device_worker::StateVolumeLeaf::MustExist,
+            ),
+            &root.path,
+        )
+        .await
+        .expect_err("an absent state root refuses the launch");
+        assert!(
+            matches!(&error, LiveHandlerError::SpawnFailed { detail } if detail.contains("ancestor is absent")),
+            "{error:?}"
+        );
+    }
+
+    /// A launch that is not a resource-backed `w1-swtpm` one has no trusted
+    /// state directory to grant, and grants nothing.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn swtpm_state_dir_traversal_grants_nothing_for_every_other_launch() {
+        let root = TestDir::new("swtpm-state-dir-other-role");
+        for policy in [None, Some("w1-cloud-hypervisor-runner"), Some("w1-virtiofsd")] {
+            let mut plan = resource_backed_swtpm_plan(
+                &root.join("state"),
+                Path::new("/run/d2b/vms"),
+            );
+            plan.uid = 50_123;
+            plan.seccomp_policy_ref = policy.map(str::to_owned);
+            grant_swtpm_state_dir_traversal(
+                &plan,
+                None,
+                &typed_device_worker_launch(
+                    crate::ops::device_worker::StateVolumeLeaf::MustExist,
+                ),
+                &root.path,
+            )
+            .await
+            .expect("a launch with no trusted state directory is a no-op");
+        }
+    }
+
+    /// The per-Guest runtime socket directory the pinned scope's Guest owns
+    /// under one broker runtime root.
+    fn guest_runtime_dir(runtime_root: &Path) -> PathBuf {
+        runtime_root.join("vms").join("acceptance-guest")
+    }
+
+    /// The typed Device-worker launch the dispatch arm resolves for a
+    /// resource-backed TPM row: the pinned owning Device's scope, and the
+    /// state-directory policy that row's own role decides.
+    fn typed_device_worker_launch(
+        leaf: crate::ops::device_worker::StateVolumeLeaf,
+    ) -> crate::ops::device_worker::DeviceWorkerLaunch {
+        use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
+
+        crate::ops::device_worker::DeviceWorkerLaunch {
+            scope: Some(crate::ops::device_worker::DeviceWorkerScope {
+                zone_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+                    .expect("zone uid"),
+                device_ref: ResourceRef::parse("Device/tpm0").expect("device ref"),
+                device_uid: ResourceUid::parse("0940f65d-b4f7-427f-992b-a65d545ec479")
+                    .expect("device uid"),
+                guest: "acceptance-guest".to_owned(),
+            }),
+            binds_runtime_socket: true,
+            state_volume_leaf: leaf,
+        }
+    }
+
+    /// The worker opens its state by pathname, so a plan that aims it
+    /// anywhere the broker did not derive is refused by the fence before the
+    /// spawn rather than trusted with a traverse grant for a directory nobody
+    /// derived. The refusal is the typed, path-free slug.
+    #[test]
+    fn a_plan_naming_a_state_directory_outside_the_trusted_one_is_refused() {
+        let root = TestDir::new("swtpm-state-dir-argv-fence");
+        let state_root = root.path.join("tpm-state");
+        let state_dir = state_root.join("device-0123456789abcdef0123456789abcdef-tpm-state");
+        let identity = crate::ops::swtpm_identity::ResourceBackedSwtpm {
+            guest: "acceptance-guest".to_owned(),
+            state_root: state_root.clone(),
+            state_volume: "device-0123456789abcdef0123456789abcdef-tpm-state".to_owned(),
+        };
+        let runtime_root = root.path.join("run").join("d2b");
+        let launch =
+            typed_device_worker_launch(crate::ops::device_worker::StateVolumeLeaf::MustExist);
+        for outside in [
+            // A sibling Device's state Volume under the same shared root.
+            state_root.join("device-00000000000000000000000000000000-tpm-state"),
+            // A directory the payload chose outright.
+            PathBuf::from("/var/lib/d2b/elsewhere"),
+        ] {
+            let mut plan =
+                resource_backed_swtpm_plan(&state_dir, &guest_runtime_dir(&runtime_root));
+            plan.uid = 50_123;
+            plan.seccomp_policy_ref = Some("w1-swtpm".to_owned());
+            plan.argv[4] = format!("dir={}", outside.display());
+            let error = fence_device_worker_argv_paths(
+                &plan,
+                Some(&identity),
+                &launch,
+                &runtime_root,
+            )
+            .expect_err("a state directory the bundle did not name must refuse");
+            assert!(
+                matches!(&error, LiveHandlerError::SpawnFailed { detail }
+                    if detail.contains("device-worker-argv-outside-trusted-paths")),
+                "{error:?}"
+            );
+        }
+    }
+
+    /// The fence has to run BEFORE any ACL, not merely before the spawn: the
+    /// socket grant creates and postures the per-Guest runtime directory, and
+    /// the traverse grant opens the state Volume to the launched principal, so
+    /// a fence that ran after them would leave both behind for a launch it
+    /// refuses. This drives the real `live_spawn_runner` and asserts that a
+    /// refused launch left neither.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn the_argv_fence_refuses_before_any_acl_is_applied() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = TestDir::new("swtpm-argv-fence-ordering");
+        let runtime_root = root.join("run").join("d2b");
+        tokio::fs::create_dir_all(runtime_root.join("vms"))
+            .await
+            .expect("create the vms parent");
+        let state_root = root.join("tpm-state");
+        let state_dir = state_root.join("device-0123456789abcdef0123456789abcdef-tpm-state");
+        tokio::fs::create_dir_all(&state_dir)
+            .await
+            .expect("create the state volume directory");
+        tokio::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o700))
+            .await
+            .expect("chmod state volume directory");
+        let identity = crate::ops::swtpm_identity::ResourceBackedSwtpm {
+            guest: "acceptance-guest".to_owned(),
+            state_root,
+            state_volume: "device-0123456789abcdef0123456789abcdef-tpm-state".to_owned(),
+        };
+        let launch =
+            typed_device_worker_launch(crate::ops::device_worker::StateVolumeLeaf::MustExist);
+        let mut composed = resource_backed_swtpm_plan(&state_dir, &guest_runtime_dir(&runtime_root));
+        // `--tpmstate` aimed at a directory the bundle never named: a refusal
+        // the fence owns, and one the socket grant has already created and
+        // postured for by the time the old ordering reached it.
+        composed.argv[4] = "dir=/etc/shadow".to_owned();
+        let plan = SpawnRunnerPlanInput {
+            binary_path: composed.binary_path,
+            argv: composed.argv,
+            uid: 50_123,
+            gid: composed.gid,
+            supplementary_groups: Vec::new(),
+            env: Vec::new(),
+            capabilities: Vec::new(),
+            namespaces: composed.namespaces,
+            seccomp_policy_ref: Some("w1-swtpm".to_owned()),
+            mount_policy: composed.mount_policy,
+            cgroup_placement: composed.cgroup_placement,
+            root_carve_out: false,
+            skip_binary_exists_check: true,
+            user_namespace: None,
+            umask: None,
+        };
+        let error = live_spawn_runner(
+            &plan,
+            Vec::new(),
+            Vec::new(),
+            None,
+            &root.path,
+            Some(&identity),
+            &launch,
+            Some(test_posture()),
+            &runtime_root,
+        )
+        .await
+        .expect_err("the argv fence refuses the launch");
+        assert!(
+            matches!(&error, LiveHandlerError::SpawnFailed { detail }
+                if detail.contains("device-worker-argv-outside-trusted-paths")),
+            "{error:?}"
+        );
+        assert!(
+            !guest_runtime_dir(&runtime_root).exists(),
+            "the socket grant is what creates and postures this directory: it \
+             must not have run for a launch the fence refuses"
+        );
+        assert_eq!(
+            tokio::fs::metadata(&state_dir)
+                .await
+                .expect("stat state volume directory")
+                .permissions()
+                .mode()
+                & 0o070,
+            0o000,
+            "the traverse grant puts `rwx` in the state directory's mask: a \
+             launch the fence refuses must leave it untouched"
+        );
+    }
+
+    /// The one-shot flush exists to be admitted before the worker's state
+    /// directory has landed - it connects to a socket that arrives with it -
+    /// so its absence is a provisioning race this grant does not own. The
+    /// long-lived worker opens that directory itself, and still refuses.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn the_flush_is_admitted_before_the_state_directory_lands_and_the_worker_is_not() {
+        let root = TestDir::new("swtpm-state-dir-flush-leaf");
+        let state_root = root.path.join("tpm-state");
+        let identity = crate::ops::swtpm_identity::ResourceBackedSwtpm {
+            guest: "acceptance-guest".to_owned(),
+            state_root: state_root.clone(),
+            state_volume: "device-0123456789abcdef0123456789abcdef-tpm-state".to_owned(),
+        };
+        let runtime_root = root.path.join("run").join("d2b");
+        let mut plan = resource_backed_swtpm_plan(
+            &state_root.join("device-0123456789abcdef0123456789abcdef-tpm-state"),
+            &guest_runtime_dir(&runtime_root),
+        );
+        plan.uid = 50_123;
+        plan.seccomp_policy_ref = Some("w1-swtpm".to_owned());
+        // The shared state root is host-activation's and is always there;
+        // what has not landed yet is this Device's own Volume directory
+        // inside it, which is exactly what the flush is admitted ahead of.
+        tokio::fs::create_dir_all(&state_root)
+            .await
+            .expect("create the state root");
+        assert!(
+            !crate::ops::swtpm_identity::trusted_state_dir(&identity).exists(),
+            "the fixture must start from a state directory that has not landed"
+        );
+
+        for (leaf, admits) in [
+            (
+                crate::ops::device_worker::StateVolumeLeaf::MayNotHaveLanded,
+                true,
+            ),
+            (crate::ops::device_worker::StateVolumeLeaf::MustExist, false),
+        ] {
+            let outcome = grant_swtpm_state_dir_traversal(
+                &plan,
+                Some(&identity),
+                &typed_device_worker_launch(leaf),
+                &root.path,
+            )
+            .await;
+            assert_eq!(
+                outcome.is_ok(),
+                admits,
+                "{leaf:?}: the flush waits for the directory, the worker does not"
+            );
+        }
+    }
+
     /// The grant may only ever reach a directory strictly inside the broker's
     /// own runtime root, named by a plain Guest component: a Guest name that
     /// escapes the per-Guest directory - or a runtime root that is not an
@@ -5153,7 +6122,7 @@ mod tests {
     fn device_worker_socket_grant_refuses_a_directory_outside_the_runtime_root() {
         let runtime_root = PathBuf::from("/run/d2b");
         for guest in ["", ".", "..", "../foreign", "a/b", "/etc"] {
-            let error = DeviceWorkerSocketGrant::for_guest(&runtime_root, guest)
+            let error = DeviceWorkerSocketGrant::for_guest(&runtime_root, guest, test_posture())
                 .expect_err("an escaping Guest name must be refused");
             assert!(
                 error.contains("not-a-plain-name") || error.contains("outside the runtime root"),
@@ -5161,8 +6130,9 @@ mod tests {
             );
         }
         for root in [PathBuf::from("run/d2b"), PathBuf::from("/run/d2b/../etc")] {
-            let error = DeviceWorkerSocketGrant::for_guest(&root, "acceptance-guest")
-                .expect_err("an unanchored runtime root must be refused");
+            let error =
+                DeviceWorkerSocketGrant::for_guest(&root, "acceptance-guest", test_posture())
+                    .expect_err("an unanchored runtime root must be refused");
             assert!(error.contains("not-anchored"), "{error}");
         }
 
@@ -5207,9 +6177,10 @@ mod tests {
         let no_socket = crate::ops::device_worker::DeviceWorkerLaunch {
             scope: None,
             binds_runtime_socket: false,
+            state_volume_leaf: crate::ops::device_worker::StateVolumeLeaf::MustExist,
         };
         assert!(
-            device_worker_socket_grant(&plan, &no_socket, &runtime_root)
+            device_worker_socket_grant(&plan, &no_socket, &runtime_root, None)
                 .expect("no socket bound")
                 .is_none()
         );
@@ -5369,6 +6340,7 @@ mod tests {
             Path::new("/var/lib/d2b"),
             None,
             &crate::ops::device_worker::DeviceWorkerLaunch::default(),
+            None,
             Path::new("/run/d2b"),
         )
         .await

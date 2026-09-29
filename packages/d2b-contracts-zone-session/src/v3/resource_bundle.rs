@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use d2b_contracts_provider::v3::{ArtifactDigest, BinaryRef};
 use d2b_contracts_resource::v3::{
-    ArtifactId, ResourceRef, ResourceTypeName, ResourceUid, ZoneId,
+    ArtifactId, MountSpec, ResourceRef, ResourceTypeName, ResourceUid, ZoneId,
     execution_policy::BoundedToken,
     resource_schema::{
         CanonicalJsonObject, CanonicalJsonValue, canonical_json_bytes, framed_canonical_digest,
@@ -30,6 +30,11 @@ pub const ARTIFACT_CATALOG_DOMAIN_TAG: &str = "d2b:v3:artifact-catalog";
 pub const MAX_BUNDLE_RESOURCES: usize = 16_384;
 /// Maximum schema/provider fingerprint entries in a private bundle.
 pub const MAX_BUNDLE_FINGERPRINTS: usize = 256;
+/// Maximum Volume mounts one template binding may carry. The public Process
+/// row caps its own `mounts` at the same bound
+/// (`nixos-modules/resources-zones-processes.nix`), so a binding never
+/// carries more mounts than the row it mirrors declared.
+pub const MAX_BUNDLE_TEMPLATE_MOUNTS: usize = 64;
 /// Bundle schema version accepted by the Zone runtime.
 pub const RESOURCE_BUNDLE_SCHEMA_VERSION: u32 = 3;
 /// Bundle envelope version accepted by the Zone runtime.
@@ -236,6 +241,15 @@ pub struct ProcessTemplateBinding {
     /// not declare it refuse any supplied arguments fail-closed.
     #[serde(default, skip_serializing_if = "is_false")]
     launch_args: bool,
+    /// The Volume mounts the declared row binds.
+    ///
+    /// Carried from the row the resource compiler reads so the runtime
+    /// resolver can mint the launch policy a declared read-write binding
+    /// implies, without a second declaration surface that could drift from
+    /// the row. A binding that declares no mount is the empty set, so a
+    /// bundle written before this field still deserializes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    mounts: Vec<MountSpec>,
 }
 
 impl ProcessTemplateBinding {
@@ -262,6 +276,7 @@ impl ProcessTemplateBinding {
             binary_path,
             false,
             false,
+            Vec::new(),
         )
     }
 
@@ -290,6 +305,7 @@ impl ProcessTemplateBinding {
             binary_path,
             true,
             false,
+            Vec::new(),
         )
     }
 
@@ -317,6 +333,7 @@ impl ProcessTemplateBinding {
             binary_path,
             true,
             true,
+            Vec::new(),
         )
     }
 
@@ -350,8 +367,44 @@ impl ProcessTemplateBinding {
             binary_path,
             false,
             true,
+            Vec::new(),
         )
     }
+
+    /// Construct a *declared-row* template that also carries the Volume
+    /// mounts its row binds.
+    ///
+    /// The mounts are the row's own declaration, carried verbatim so the
+    /// runtime resolver mints the launch policy from the same declaration the
+    /// row states. The resolver - not this crate - authorizes which of them a
+    /// given template may bind read-write.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_launch_args_and_mounts(
+        process_ref: ResourceRef,
+        owner_ref: ResourceRef,
+        execution_ref: ResourceRef,
+        template: BoundedToken,
+        artifact_id: ArtifactId,
+        binary_ref: BinaryRef,
+        artifact_digest: ArtifactDigest,
+        binary_path: impl Into<String>,
+        mounts: Vec<MountSpec>,
+    ) -> Result<Self, ResourceBundleError> {
+        Self::new_inner(
+            process_ref,
+            owner_ref,
+            execution_ref,
+            template,
+            artifact_id,
+            binary_ref,
+            artifact_digest,
+            binary_path,
+            false,
+            true,
+            mounts,
+        )
+    }
+
 
     #[allow(clippy::too_many_arguments)]
     fn new_inner(
@@ -365,7 +418,11 @@ impl ProcessTemplateBinding {
         binary_path: impl Into<String>,
         dynamic: bool,
         launch_args: bool,
+        mounts: Vec<MountSpec>,
     ) -> Result<Self, ResourceBundleError> {
+        if mounts.len() > MAX_BUNDLE_TEMPLATE_MOUNTS {
+            return Err(ResourceBundleError::InvalidProcessTemplate);
+        }
         let binary_path = binary_path.into();
         if !matches!(
             process_ref.resource_type().as_str(),
@@ -396,6 +453,7 @@ impl ProcessTemplateBinding {
             binary_path,
             dynamic,
             launch_args,
+            mounts,
         })
     }
 
@@ -448,6 +506,11 @@ impl ProcessTemplateBinding {
     pub const fn admits_launch_args(&self) -> bool {
         self.launch_args
     }
+
+    /// Borrow the Volume mounts the declared row binds.
+    pub fn mounts(&self) -> &[MountSpec] {
+        &self.mounts
+    }
 }
 
 impl core::fmt::Debug for ProcessTemplateBinding {
@@ -472,6 +535,8 @@ wire_deserialize!(
         dynamic: bool,
         #[serde(default)]
         launch_args: bool,
+        #[serde(default)]
+        mounts: Vec<MountSpec>,
     },
     wire,
     Self::new_inner(
@@ -485,6 +550,7 @@ wire_deserialize!(
         wire.binary_path,
         wire.dynamic,
         wire.launch_args,
+        wire.mounts,
     )
     .map_err(serde::de::Error::custom)
 );

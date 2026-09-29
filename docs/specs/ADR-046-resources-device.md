@@ -433,7 +433,7 @@ opaque requests to the Zone privileged broker:
 
 | Provider semantic owner | Core-adapter broker operation | Effect | Audit |
 | --- | --- | --- | --- |
-| `device-tpm` | `PrepareStateDir` (via `PrepareRuntimeDir`/`PrepareSwtpmDir` broker hook) | Provision/harden swtpm state dir, verify tamper marker | Yes |
+| `device-tpm` | `PrepareStateDir` | Record the trusted swtpm state Volume posture without creating anything | Yes |
 | `device-tpm` | `SpawnRunner` (swtpm role) | Spawn swtpm Process in user namespace | Yes |
 | `device-usbip` | `ApplyNftablesProjection { action: Apply \| Remove }` (D-NETWORK-004) | Apply or remove the exact per-Network/per-busid nftables projection, byte-preserving sibling markers | Yes |
 | `device-usbip` | `SpawnRunner` (usbip role) | Spawn usbipd/bind Process | Yes |
@@ -484,10 +484,10 @@ The swtpm state directory (`<stateDir>/vms/<vm>/swtpm`) is identity-bound:
 
 - Mode 0700, owner `d2b-<vm>-swtpm`.
 - Per-VM sticky 3770 root prevents non-owner rename/replace.
-- Root-owned tamper-guard marker at `/var/lib/d2b/swtpm-markers/<vm>` records
-  `st_dev`/`st_ino` + first-provision stamp.
-- A missing or mismatched marker fails VM start closed
-  (`previously-provisioned-swtpm-state-missing`).
+- The broker's NVRAM tamper guard (the `/var/lib/d2b/swtpm-markers/<vm>`
+  identity marker and its fail-closed spawn refusal) has been removed at the
+  user's direction, so the directory is no longer identity-bound and a
+  replaced one is no longer detected at start.
 - Wiping state is treated as device tampering by IdPs (Entra ID, Intune);
   the Device finalizer never deletes swtpm NVRAM.
 
@@ -679,7 +679,8 @@ accidental deletion cascade.
 
 ### Broker operations consumed
 
-- `PrepareSwtpmDir` (hardening/tamper-marker) - once per start cycle.
+- `SpawnRunner` opens the state Volume directory to the launched principal.
+  The NVRAM tamper guard that `PrepareSwtpmDir` carried has been removed.
 - `SpawnRunner` (swtpm role) - for each long-lived swtpm Process.
 
 ### Nix options (v3 successors)
@@ -719,8 +720,8 @@ The guest NixOS module wiring (`--tpm socket=...`, `tpm_crb` kernel module,
 - `packages/d2b-contract-tests/tests/minijail_swtpm_video.rs`: swtpm profile
   shape, user namespace propagation, zero host caps.
 - `packages/d2b-contract-tests/tests/policy_swtpm_readiness.rs`: readiness contract.
-- `packages/d2b-broker/src/ops/swtpm_dir.rs` unit tests: tamper marker,
-  fresh/existing dir, symlink/mismatch fail-closed.
+- `packages/d2b-broker/src/ops/swtpm_identity.rs` unit tests: trusted
+  state-directory derivation and placement parsing.
 - `packages/d2b-host/src/swtpm_argv.rs` unit tests: argv golden vectors.
 - New: Device reconcile state-machine test (flush → swtpm → Ready).
 - New: Tamper-marker failure closes VM start (does not recreate empty TPM).

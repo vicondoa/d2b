@@ -23,8 +23,8 @@ Required host permissions for the state farms and shared directories are a
   derives the `shared-run-dir`/`state-root` tmpfiles lines from the rows
   (`nixos-modules/host-daemon.nix` via `nixos-modules/state-posture-contract.nix`),
   and the live validation asserts the host against every row
-  (`tests/host-integration/state-posture-contract.nix`, run by
-  `make test-host-integration` with `D2B_VM_CHECK=state-posture-contract`).
+  (`make test-host-integration` with `D2B_VM_CHECK=state-posture-contract`,
+  the lane's Rust check against its Bazel-built guest image).
   Do not restate a posture value in prose: edit the declaration.
 
 The declaration also names the **anchor-open rule**: an anchor component of a

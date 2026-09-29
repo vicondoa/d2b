@@ -202,7 +202,6 @@ fn declared_child(document: Value) -> Result<(ResourceRef, ChildEnsure), TpmReso
 struct DeclaredTpmRows<'a> {
     children: &'a dyn SharedProviderChildSurface,
     zone: String,
-    device_uid: ResourceUid,
     device_ref: ResourceRef,
     execution_ref: ResourceRef,
 }
@@ -254,7 +253,6 @@ impl DeclaredTpmRows<'_> {
         &self,
     ) -> Result<(ResourceRef, ChildEnsure), TpmResourceEffectError> {
         let document = crate::build_tpm_state_volume_resource(
-            &self.device_uid,
             &self.device_ref,
             &self.zone,
             &self.execution_ref,
@@ -725,7 +723,6 @@ impl AdmittedTpmDevice {
             rows: DeclaredTpmRows {
                 children,
                 zone: self.zone.clone(),
-                device_uid: self.device_uid.clone(),
                 device_ref: self.device_ref.clone(),
                 execution_ref: self.execution_ref.clone(),
             },
@@ -811,7 +808,17 @@ mod tests {
     const ZONE: &str = "work";
     const DEVICE_REF: &str = "Device/tpm-0";
     const EXECUTION_REF: &str = "Host/host-system";
-    const STATE_VOLUME: &str = "Volume/device-123e4567e89b42d3a456426614174000-tpm-state";
+    /// The state Volume the framework names for this Device, composed by
+    /// the same rule the Provider uses - so the fixture cannot state a name
+    /// the production path would never produce.
+    fn state_volume_fixture() -> String {
+        d2b_core::bundle_resolver::device_child_volume_name(
+            ZONE,
+            &ResourceRef::parse(DEVICE_REF).expect("device ref"),
+            "tpm-state",
+        )
+        .expect("a Device-scoped child name")
+    }
 
     /// Scripted manager-over-child-surface double: rows keyed by canonical
     /// reference, plus the ensure/delete call log.
@@ -952,7 +959,6 @@ mod tests {
         DeclaredTpmRows {
             children,
             zone: ZONE.to_owned(),
-            device_uid: ResourceUid::parse(DEVICE_UID).expect("device uid"),
             device_ref,
             execution_ref: ResourceRef::parse(EXECUTION_REF).expect("execution ref"),
         }
@@ -979,7 +985,7 @@ mod tests {
         );
         assert_eq!(
             rows.state_volume().expect("volume").0.to_canonical_string(),
-            STATE_VOLUME
+            state_volume_fixture()
         );
     }
 
@@ -989,16 +995,16 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn only_the_state_volume_is_ensured() {
         let children = RecordingChildSurface::for_device(&ResourceRef::parse(DEVICE_REF).unwrap());
-        children.publish(STATE_VOLUME, ResourceStatus::Ready);
+        children.publish(&state_volume_fixture(), ResourceStatus::Ready);
         let rows = rows(&children);
         assert_eq!(
             rows.ensure_state_volume()
                 .await
                 .expect("volume")
                 .to_canonical_string(),
-            STATE_VOLUME
+            state_volume_fixture()
         );
-        assert_eq!(children.ensured(), vec![STATE_VOLUME.to_owned()]);
+        assert_eq!(children.ensured(), vec![state_volume_fixture()]);
         // The declared worker rows are read straight from the manager.
         assert_eq!(rows.wait_ready(&rows.process_ref().unwrap()).await, Err(TpmResourceEffectError::Transient));
     }
@@ -1229,7 +1235,7 @@ async fn deletion_targets_the_declared_rows() {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn the_lifecycle_lease_is_consumed_at_most_once() {
         let children = RecordingChildSurface::for_device(&ResourceRef::parse(DEVICE_REF).unwrap());
-        children.publish(STATE_VOLUME, ResourceStatus::Ready);
+        children.publish(&state_volume_fixture(), ResourceStatus::Ready);
         children.publish("Process/swtpm-tpm-0", ResourceStatus::Ready);
 
         let runtime = Arc::new(RecordingRuntime::default());
@@ -1238,7 +1244,7 @@ async fn deletion_targets_the_declared_rows() {
         let port = make_port(facets, &children, decision, "legacy-swtpm:vm:work");
         let uid = ResourceUid::parse(DEVICE_UID).unwrap();
         let execution = ResourceRef::parse(EXECUTION_REF).unwrap();
-        let volume = ResourceRef::parse(STATE_VOLUME).unwrap();
+        let volume = ResourceRef::parse(&state_volume_fixture()).expect("fixture volume");
         for _ in 0..2 {
             assert_eq!(
                 port

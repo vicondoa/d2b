@@ -2,7 +2,7 @@
 #
 # TPM state and socket details are resolved by the controller. The Nix
 # projection carries only the Device-owned Process intents and typed Device
-# reference; no Volume or filesystem locator is authored here.
+# and Volume references; no filesystem locator is authored here.
 { config, lib, ... }:
 
 let
@@ -79,6 +79,30 @@ let
     userNamespace = null;
   };
 
+  # The Device's own TPM state Volume, declared structurally.
+  #
+  # The Volume row is created by the Device controller at runtime
+  # (`build_tpm_state_volume_resource`, `managedBy = "controller"`), so it is
+  # never a declared row this projection could name. Its concrete name is
+  # `device-<uid>-<role>`, and `<uid>` is the owning Device's deterministic
+  # resource uid - a SHA-256 over NUL-separated identity fields, which a Nix
+  # string cannot hold at all. So the projection states WHICH child it means,
+  # the Device that owns the row plus the role within that Device's private
+  # child set, and the framework materializes the name: the shared process
+  # module admits the declaration here, and
+  # `d2b_core::bundle_resolver::resolve_declared_mount_volume` expands it
+  # before the ownership check and the path grant. No declarative layer
+  # derives a resource uid, and no projection can name a sibling Device's
+  # child because the owning Device is the row's own `ownerRef`, not a field
+  # of the mount.
+  stateVolumeMount = {
+    ownVolumeSuffix = "tpm-state";
+    view = "swtpm-process";
+    mountPath = "/state";
+    access = "read-write";
+    required = true;
+  };
+
   deviceRows = zoneName:
     let executionRef = providerExecutionRef zoneName;
     in if executionRef == null
@@ -109,6 +133,11 @@ let
         domain = "system";
         processClass = "worker";
         template = "swtpm-socket";
+        # swtpm writes NVRAM and binds its TPM/control sockets under the
+        # state directory, so the worker needs it writable. Declared, not
+        # assumed: the bundle resolver expands this Device's own child Volume
+        # and authorizes it before the path reaches the launch policy.
+        mounts = [ stateVolumeMount ];
         sandbox = swtpmSandbox;
         desiredLifecycle = "running";
         deviceUsage = [ ];

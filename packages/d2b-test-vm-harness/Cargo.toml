@@ -1,0 +1,32 @@
+[package]
+name = "d2b-test-vm-harness"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license.workspace = true
+
+# The lane's guest launcher. It reproduces the emulator invocation a check's
+# guest configuration declares, boots it, waits for the guest's activation
+# contract, and tears it down - the boot responsibility the nix test driver
+# used to own.
+#
+# The crate carries no test aggregate on purpose: the repository's test census
+# force-registers any crate that has one into the main package suite, and this
+# crate is not a main-package test. The lane's own suite names its clippy
+# targets and its guest-boot targets directly, so it is still linted and still
+# run by the repository's gates.
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+disallowed_methods = "deny"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[[bin]]
+name = "d2b-test-vm-harness"
+path = "src/bin/d2b-test-vm-harness.rs"

@@ -972,14 +972,14 @@ Excluded from audit: `source.settings.sourcePolicyId`, entry paths, ACL grant
 values, layout entry content, virtiofsd socket paths, secret-adjacent entry
 paths, guest mount paths, process data, terminal bytes, credential material.
 
-Broker path-free audit ops (current: `PrepareSwtpmDir`):
+Broker path-free audit ops (the `PrepareSwtpmDir` row was removed with the
+NVRAM tamper guard; none remain for the TPM state directory):
 
 | Op | Fields logged |
 | --- | --- |
 | `ProvisionLayoutEntry` | Volume UID, entry type, owner UID digest (not path) |
 | `RepairLayoutEntry` | Volume UID, entry type, repair action class |
 | `CleanupLayoutEntry` | Volume UID, entry type, cleanup trigger |
-| `PrepareSwtpmDir` | VM UID, result class (provisioned/reconciled/quarantined) |
 | `VirtiofsdLaunch` | Volume UID, attachment executionRef digest |
 | `StoreSyncComplete` | Volume UID, generation number |
 
@@ -1015,7 +1015,7 @@ store's own authority over layout/attachment status.
 | ResourceTypes | Volume (layout + views; no attachment transport) |
 | Source kinds | `local-path`, `block-image`, `tmpfs` |
 | Controller component | `volume-local-controller`; Process under Host/system-core |
-| Broker ops (dispatched via `VolumeLayoutEffectPort`/ProviderSupervisor, never called by the Provider process itself) | `ProvisionLayoutEntry`, `RepairLayoutEntry`, `CleanupLayoutEntry`, `StoreSyncComplete`, `PrepareSwtpmDir` |
+| Broker ops (dispatched via `VolumeLayoutEffectPort`/ProviderSupervisor, never called by the Provider process itself) | `ProvisionLayoutEntry`, `RepairLayoutEntry`, `CleanupLayoutEntry`, `StoreSyncComplete` |
 | State | Volume's own layout root; per-Volume provisioning marker for `state` kind |
 | Permissions | `volume-local/source-policy-resolve` (authorizes only a `VolumeSourceEffectPort` FD resolution call); never ambient path access; never a broker import in the Provider process |
 | Finalizers | `volume-local.d2bus.org/layout` |
@@ -1144,7 +1144,6 @@ The virtiofsd worker is tested by:
 | `path:store-view-current:<vm>` | `.../store-view/meta/current` | LayoutEntry `meta/current` | symlink, noFollow: false |
 | `path:store-sync-lock:<vm>` | `.../store-view/sync.lock` | LayoutEntry `sync.lock` | file, leaseClass: none (OFD) |
 | `path:swtpm-state:<vm>` | `$storeStateDir/<vm>/swtpm` | `Volume/swtpm-<vm>` root | volume-local, kind: state, secret-adjacent |
-| `path:swtpm-marker:<vm>` | `$stateDir/swtpm-markers/<vm>` | LayoutEntry in swtpm-markers host path | volume-local or system-core path |
 | `path:vm-audio-state-dir:<vm>` | `$storeStateDir/<vm>/state` | LayoutEntry in Guest state Volume | audio-pipewire Provider mounts view |
 | `path:vm-audio-state-file:<vm>` | `.../state/audio-state.json` | LayoutEntry file in Guest state Volume | same |
 | `path:vm-audio-lock:<vm>` | `/run/d2b/locks/audio-<vm>.lock` | OFD lock file in Zone runtime; LayoutEntry with `leaseClass: file-record`; path not exposed in spec/status | audio-pipewire Provider owns |

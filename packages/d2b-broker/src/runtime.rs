@@ -550,17 +550,6 @@ pub(crate) enum BrokerError {
         profile: BrokerProfile,
         operation: &'static str,
     },
-    /// swtpm-dir first-run hardening (issue #64) refused to proceed.
-    /// Carries the path-free [`OperationFields::PrepareSwtpmDir`] audit
-    /// so the SpawnRunner dispatch arm emits exactly one terminal
-    /// `PrepareSwtpmDir` record (its [`BrokerError::audit`] is a no-op,
-    /// mirroring `StoreSyncFailed`). The wire envelope surfaces only the
-    /// closed-set, path-free `reason` slug.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
-    SwtpmDirHardening {
-        audit: crate::ops::audit_op::SwtpmDirAudit,
-        reason: &'static str,
-    },
     RequestValidation {
         operation: &'static str,
         reason: &'static str,
@@ -3144,18 +3133,9 @@ async fn dispatch_request_with_request_fds(
     request_fds: Vec<OwnedFd>,
 ) -> Result<DispatchResult, BrokerError> {
     let backend = LiveDispatchBackend {
-        daemon_uid: config.d2bd_uid,
         daemon_gid: config.d2bd_gid,
         profile: config.profile,
-        state_dir: config.state_dir.clone(),
         forward_socket_path: config.forward_socket_path.clone(),
-        // The tree the broker's own private socket lives in: the bound every
-        // Device-owned worker's per-Guest socket directory is derived under.
-        runtime_root: config
-            .socket_path
-            .parent()
-            .unwrap_or_else(|| Path::new(DEFAULT_BROKER_RUNTIME_DIR))
-            .to_path_buf(),
     };
     dispatch_request_with_backend_and_request_fds(
         request,
@@ -6381,22 +6361,6 @@ trait DispatchBackend {
         signal: d2b_contracts_broker::broker_wire::RunnerSignal,
     ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>>;
 
-    fn spawn_runner<'a>(
-        &'a self,
-        runner_id: &'a str,
-        plan_input: &'a crate::ops::spawn_runner::SpawnRunnerPlanInput,
-        resolver: &'a BundleResolver,
-        req: &'a d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
-        // Launch posture resolved from the trusted intent by the dispatch
-        // arm; the backend must not re-derive it from the request.
-        posture: LaunchPosture,
-        // Device-owned worker scope resolved (and pinned) by the dispatch arm
-        // from the verified bundle; `default()` for every other launch.
-        device_worker: &'a crate::ops::device_worker::DeviceWorkerLaunch,
-        request_fds: Vec<OwnedFd>,
-        audit_log: &'a crate::audit::AuditLog,
-    ) -> Pin<Box<dyn Future<Output = Result<crate::live_handlers::SpawnRunnerResult, BrokerError>> + Send + 'a>>;
-
     fn apply_host_generation_handoff<'a>(
         &'a self,
         state_dir: &'a std::path::Path,
@@ -6483,14 +6447,8 @@ trait DispatchBackend {
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 struct LiveDispatchBackend {
-    daemon_uid: u32,
     daemon_gid: u32,
     profile: BrokerProfile,
-    state_dir: PathBuf,
-    /// Broker runtime root (the private socket's directory): the tree a
-    /// Device-owned worker's per-Guest socket directory must strictly live
-    /// under before the broker opens it to the worker's principal.
-    runtime_root: PathBuf,
     /// The declaring process that serves family-owned operation handlers, as
     /// the server resolved it from its configuration.
     forward_socket_path: Option<PathBuf>,
@@ -6846,116 +6804,6 @@ impl DispatchBackend for LiveDispatchBackend {
         signal: d2b_contracts_broker::broker_wire::RunnerSignal,
     ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
         Box::pin(async move { signal_registered_runner(runner_id, signal) })
-    }
-
-    fn spawn_runner<'a>(
-        &'a self,
-        runner_id: &'a str,
-        plan_input: &'a crate::ops::spawn_runner::SpawnRunnerPlanInput,
-        resolver: &'a BundleResolver,
-        req: &'a d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
-        posture: LaunchPosture,
-        device_worker: &'a crate::ops::device_worker::DeviceWorkerLaunch,
-        mut request_fds: Vec<OwnedFd>,
-        audit_log: &'a crate::audit::AuditLog,
-    ) -> Pin<Box<dyn Future<Output = Result<crate::live_handlers::SpawnRunnerResult, BrokerError>> + Send + 'a>> {
-        Box::pin(async move {
-        // Reserve the runner_id BEFORE spawning the child: refuse a
-        // duplicate active registration up front so we never create an
-        // orphan child (see `reserve_runner_id_for_spawn`).
-        #[cfg(not(feature = "layer1-bootstrap"))]
-        reserve_runner_id_for_spawn(runner_id)?;
-        let preopened = prepare_runner_preopened_fds(
-            plan_input,
-            resolver,
-            req,
-            audit_log,
-            self.daemon_uid,
-            self.daemon_gid,
-        )
-        .await?;
-        // The escrow descriptor is retained as registry custody only: no
-        // duplicate rides the answer leg (a dup of the caller's own
-        // descriptor is refused by the forward carrier's anti-replay
-        // fence with the fd-leg code; the daemon keeps its own copy of
-        // the daemon end to wait on).
-        let retained_controller_bootstrap = if posture.carries_controller_escrow() {
-            let retained = request_fds.pop().ok_or_else(|| {
-                BrokerError::Protocol(
-                    "ProviderController bootstrap escrow fd is missing".to_owned(),
-                )
-            })?;
-            Some(retained)
-        } else {
-            None
-        };
-        if !request_fds.is_empty() && !preopened.child_fds.is_empty() {
-            return Err(BrokerError::Protocol(
-                "request inherited fds cannot combine with broker-preopened fds".to_owned(),
-            ));
-        }
-        let swtpm_identity = resource_backed_swtpm_identity(resolver, req, device_worker);
-        let mut outcome = crate::live_handlers::live_spawn_runner(
-            plan_input,
-            preopened.child_fds,
-            request_fds,
-            req.activation_input.as_ref(),
-            &self.state_dir,
-            swtpm_identity.as_ref(),
-            device_worker,
-            &self.runtime_root,
-        )
-        .await
-        .map_err(|err| {
-            // Log the actual LiveHandlerError detail before wrapping it
-            // in the opaque BrokerError::LiveHandler envelope so
-            // operators can see WHY the spawn failed in journalctl.
-            tracing::error!(
-                runner_id = %runner_id,
-                error = %err,
-                "live_spawn_runner failed"
-            );
-            // swtpm-dir hardening fail-closed carries a structured,
-            // path-free audit that the dispatch arm must emit as a
-            // terminal PrepareSwtpmDir record; preserve it instead of
-            // collapsing to the opaque LiveHandler envelope.
-            match err {
-                crate::live_handlers::LiveHandlerError::SwtpmDirHardening { audit, reason } => {
-                    BrokerError::SwtpmDirHardening { audit, reason }
-                }
-                other => BrokerError::LiveHandler(other.to_string()),
-            }
-        })?;
-        outcome.extra_response_fds = preopened.response_fds;
-        register_runner_pidfd(runner_id, &outcome.pidfd).inspect_err(|_err| {
-            // Registration failed: the broker is about to drop this
-            // just-spawned child's pidfd. Reap it now (targeted,
-            // non-blocking) so a child that has already exited cannot
-            // leak as a zombie. Best-effort; the registry entry is
-            // already absent on the failure path.
-            #[cfg(not(feature = "layer1-bootstrap"))]
-            targeted_reap_runner(runner_id, outcome.pidfd.as_fd());
-        })?;
-        if let Some(bootstrap) = retained_controller_bootstrap {
-            controller_bootstrap_registry()
-                .try_lock()
-                .map_err(|_| {
-                    BrokerError::Protocol(
-                        "controller bootstrap registry busy (tokio try-lock)".to_owned(),
-                    )
-                })?
-                .insert(runner_id.to_owned(), bootstrap);
-        }
-        // Close the registration-window race: if the child exited
-        // between clone3 and the registry insertion above, its SIGCHLD
-        // may have already been coalesced/consumed by a reap pass that
-        // ran before the entry existed. A targeted, generation-exact
-        // (pidfd-keyed) non-blocking reap here guarantees the child is
-        // reaped regardless of SIGCHLD timing.
-        #[cfg(not(feature = "layer1-bootstrap"))]
-        targeted_reap_runner(runner_id, outcome.pidfd.as_fd());
-        Ok(outcome)
-        })
     }
 
     fn apply_host_generation_handoff<'a>(
@@ -9542,36 +9390,6 @@ fn private_cgroup_placement(
     Ok(private)
 }
 
-/// The trusted identity of one resource-backed `w1-swtpm` launch.
-///
-/// A resource-backed (typed) Process launch is placed under a private cgroup
-/// scope (`private_cgroup_placement`) that deliberately carries no VM name,
-/// and the Device-worker template intent ships no writable paths, so the
-/// spawn-time swtpm-dir fence cannot read the VM identity from the plan.
-/// Resolve it from the owning Device the launch arm already pinned against the
-/// verified bundle ([`crate::ops::device_worker::DeviceWorkerScope`]): the
-/// Device's declared Guest owner names the VM, and the trusted
-/// `path:swtpm-state:<guest>` storage row names the state root (which must
-/// equal the Provider's `path:tpm-state` policy root). The Device ref and uid
-/// read here are the pinned ones, never the request's claim. `None` leaves the
-/// launch to the hardening's fail-closed refusal.
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn resource_backed_swtpm_identity(
-    resolver: &BundleResolver,
-    req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
-    device_worker: &crate::ops::device_worker::DeviceWorkerLaunch,
-) -> Option<crate::ops::swtpm_dir::ResourceBackedSwtpm> {
-    if !matches!(req.role, RunnerRole::Swtpm | RunnerRole::SwtpmFlush) {
-        return None;
-    }
-    let scope = device_worker.scope.as_ref()?;
-    crate::ops::swtpm_dir::resource_backed_identity(
-        resolver,
-        &scope.zone_uid,
-        &scope.device_ref,
-        Some(&scope.device_uid),
-    )
-}
 
 /// What one launch arm resolved for a Device-owned worker row.
 ///
@@ -9585,12 +9403,13 @@ fn resolve_device_worker_launch(
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
 ) -> Result<crate::ops::device_worker::DeviceWorkerLaunch, BrokerError> {
     use crate::ops::device_worker::{
-        DeviceWorkerLaunch, binds_runtime_socket, resolve_launch_scope,
+        DeviceWorkerLaunch, binds_runtime_socket, resolve_launch_scope, state_volume_leaf_for_role,
     };
     if !d2b_core::bundle_resolver::is_device_worker_role(&intent.role) {
         return Ok(DeviceWorkerLaunch::default());
     }
     let binds_runtime_socket = binds_runtime_socket(&intent.role);
+    let state_volume_leaf = state_volume_leaf_for_role(&intent.role);
     // A legacy VM-scoped Device worker (the `swtpm` role of a manifest VM)
     // launches without a typed Process identity: it carries no resource row,
     // so there is no owning Device to pin. Its runtime socket directory is
@@ -9602,6 +9421,7 @@ fn resolve_device_worker_launch(
         return Ok(DeviceWorkerLaunch {
             scope: None,
             binds_runtime_socket,
+            state_volume_leaf,
         });
     };
     let scope = resolve_launch_scope(
@@ -9619,6 +9439,7 @@ fn resolve_device_worker_launch(
     Ok(DeviceWorkerLaunch {
         scope: Some(scope),
         binds_runtime_socket,
+        state_volume_leaf,
     })
 }
 
@@ -10712,7 +10533,6 @@ impl BrokerError {
                 | Self::CarveoutOrderingViolation(_)
                 | Self::NftablesDriftDetected { .. }
                 | Self::StoreSyncFailed { .. }
-                | Self::SwtpmDirHardening { .. }
                 | Self::RequestValidation { .. }
                 | Self::ProfileOperationRefused { .. }
         );
@@ -11201,12 +11021,6 @@ impl BrokerError {
             // terminal record per attempt). Writing the generic error entry
             // here would emit a duplicate, so this is a deliberate no-op.
             Self::StoreSyncFailed { .. } => {}
-            // The SpawnRunner dispatch arm already wrote the terminal
-            // path-free `PrepareSwtpmDir` record for the fail-closed
-            // hardening step; writing the generic error entry here would
-            // duplicate it, so this is a deliberate no-op (mirrors
-            // `StoreSyncFailed`).
-            Self::SwtpmDirHardening { .. } => {}
             Self::RequestValidation {
                 operation: op,
                 reason,
@@ -11446,15 +11260,6 @@ impl BrokerError {
                 None,
                 &format!("StoreSync failed ({error_stage}): {message}"),
                 "Inspect the signed StoreSync audit record (operation_fields.error_stage) for the failing phase; retry after resolving the underlying condition.",
-            ),
-            Self::SwtpmDirHardening { reason, .. } => error_response(
-                "Broker.SwtpmDirHardening",
-                "PrepareSwtpmDir",
-                None,
-                // PATH-FREE: only the closed-set reason slug reaches the
-                // wire envelope.
-                &format!("swtpm-dir hardening refused: {reason}"),
-                "Inspect the signed PrepareSwtpmDir audit record (operation_fields.fail_reason) for the refusal cause; do NOT delete or recreate the per-VM swtpm state dir - that destroys the TPM2 NVRAM and forces IdP re-enrollment.",
             ),
             Self::RequestValidation { operation, reason } => error_response(
                 "Broker.RequestValidation",
@@ -12253,44 +12058,6 @@ mod tests {
             .is_err(),
             "the legacy all-none tap shape must fail the typed payload parse"
         );
-    }
-
-    #[test]
-    fn swtpm_hardening_failure_uses_the_typed_path_free_operation() {
-        let error = BrokerError::SwtpmDirHardening {
-            audit: crate::ops::audit_op::SwtpmDirAudit {
-                vm_id: "work-vm".to_owned(),
-                base_dir_hash: "fnv1a64:0000000000000000".to_owned(),
-                result: crate::ops::audit_op::SwtpmDirResult::FailedClosed,
-                mode: 0o700,
-                owner_uid: 1000,
-                owner_gid: 1000,
-                marker_result: crate::ops::audit_op::SwtpmMarkerResult::FailedClosed,
-                fail_reason: Some("swtpm-dir-marker-mismatch".to_owned()),
-            },
-            reason: "swtpm-dir-marker-mismatch",
-        };
-
-        #[cfg(feature = "layer1-bootstrap")]
-        assert!(matches!(
-            error.into_response(),
-            BrokerResponse::Error {
-                kind,
-                operation,
-                message,
-                ..
-            } if kind == "Broker.SwtpmDirHardening"
-                && operation == "PrepareSwtpmDir"
-                && !message.contains('/')
-        ));
-        #[cfg(not(feature = "layer1-bootstrap"))]
-        assert!(matches!(
-            error.into_response(),
-            BrokerResponse::Error(response)
-                if response.kind == "Broker.SwtpmDirHardening"
-                    && response.operation == "PrepareSwtpmDir"
-                    && !response.message.contains('/')
-        ));
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
@@ -14386,32 +14153,6 @@ mod tests {
                     runner_id: runner_id.to_owned(),
                 })
             }
-        
-            })
-        }
-
-        fn spawn_runner<'a>(
-            &'a self,
-            runner_id: &'a str,
-            _plan_input: &'a crate::ops::spawn_runner::SpawnRunnerPlanInput,
-            _resolver: &'a BundleResolver,
-            _req: &'a d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
-            _posture: LaunchPosture,
-            _device_worker: &'a crate::ops::device_worker::DeviceWorkerLaunch,
-            request_fds: Vec<OwnedFd>,
-            _audit_log: &'a crate::audit::AuditLog,
-        ) -> Pin<Box<dyn Future<Output = Result<crate::live_handlers::SpawnRunnerResult, BrokerError>> + Send + 'a>> {
-            Box::pin(async move {
-            drop(request_fds);
-            self.remember_runner(runner_id)?;
-            Ok(crate::live_handlers::SpawnRunnerResult {
-                pidfd: dummy_fd(),
-                extra_response_fds: Vec::new(),
-                pid: 4242,
-                start_time_ticks: 123456,
-                used_fork_fallback: false,
-                swtpm_dir_audit: None,
-            })
         
             })
         }

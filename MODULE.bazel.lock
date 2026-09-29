@@ -727,7 +727,7 @@
     "@@rules_nixpkgs_core+//extensions:package.bzl%nix_pkg": {
       "general": {
         "bzlTransitiveDigest": "2alEQC7q9PgrArc8ZeI662VmDHLGfuswqnzBJvVDnmg=",
-        "usagesDigest": "6f3lRgiMjLBysWeJGXZcKvEj4vtUKWpW+sjuFii+FBs=",
+        "usagesDigest": "PGNwR252ac/ou5hUxvwUPK/xMBbtgVRTpETRma9B5bU=",
         "recordedInputs": [
           "REPO_MAPPING:,nixpkgs rules_nixpkgs_core++nix_repo+nixpkgs",
           "REPO_MAPPING:rules_nixpkgs_core+,bazel_skylib bazel_skylib+"
@@ -792,6 +792,21 @@
               "quiet": false,
               "fail_not_supported": true
             }
+          },
+          "qemu_kvm": {
+            "repoRuleId": "@@rules_nixpkgs_core+//:nixpkgs.bzl%_nixpkgs_package",
+            "attributes": {
+              "unmangled_name": "qemu_kvm",
+              "attribute_path": "qemu_kvm",
+              "nix_file_deps": {},
+              "nix_file_content": "",
+              "repository": "@@rules_nixpkgs_core++nix_repo+nixpkgs//:nixpkgs",
+              "repositories": {},
+              "build_file_content": "",
+              "nixopts": [],
+              "quiet": false,
+              "fail_not_supported": true
+            }
           }
         },
         "moduleExtensionMetadata": {
@@ -799,7 +814,8 @@
             "nix",
             "nix_unit",
             "nix_eval_jobs",
-            "python3"
+            "python3",
+            "qemu_kvm"
           ],
           "explicitRootModuleDirectDevDeps": [],
           "useAllRepos": "NO",

@@ -39,8 +39,8 @@ pub(crate) mod nm;
 pub(crate) mod route;
 pub(crate) mod state_dir;
 pub(crate) mod storage_contract;
-// Per-VM swtpm state-dir first-run hardening (issue #64).
-pub(crate) mod swtpm_dir;
+// Trusted identity + derived directories of one `w1-swtpm` launch.
+pub(crate) mod swtpm_identity;
 pub(crate) mod sysctl;
 pub(crate) mod tap;
 // Nftables + USBIP firewall skeleton ops.

@@ -30,10 +30,12 @@ consumer configuration. The acceptance sequence is owned by the host lane:
 5. boot a Cloud Hypervisor Guest.
 
 The U20 `make test-host-integration` lane builds the d2b host-tool set with
-local Bazel, stages it as `D2B_HOST_TOOL_BUNDLE`, and injects it into the
-selected NixOS `vmChecks`. Nix must realize the test harness around those
-binaries rather than rebuild `d2b`, `d2bd`, `d2b-broker`, or the injected
-helper tools.
+local Bazel and passes it to the guest-image action as declared Bazel label
+inputs; Nix must realize the guest closure around those binaries rather than
+rebuild `d2b`, `d2bd`, `d2b-broker`, or the injected helper tools. The lane
+runs as `//bazel/checks/vm:host_integration_lane_run`, is x86_64-linux only,
+and declares `/dev/kvm` as a precondition with no emulation fallback.
+`D2B_VM_CHECK=<name>` or `bazel test --test_filter=<name>` selects one check.
 
 U19 does not claim that host acceptance or any remote Provider acceptance has
 passed. U20 must run both `make test-host-integration` and

@@ -1633,45 +1633,6 @@
       "method": "security-key-apply-udev-rules"
     },
     {
-      "operation": "PrepareSwtpmDir",
-      "owner": "broker-generic",
-      "family": null,
-      "declaringProvider": null,
-      "justification": "broker pre-spawn step: the broker provisions and hardens the per-VM swtpm state dir from its SpawnRunner step before the child starts, and the row carries that record shape only",
-      "profiles": [
-        "host"
-      ],
-      "w3": false,
-      "capabilities": false,
-      "disposition": "compile-time-only",
-      "dispositionTarget": "broker `SpawnRunner` side-effect",
-      "authz": {
-        "subject": "fs",
-        "scope": "per-VM",
-        "allowedGroups": [
-          "d2bd"
-        ],
-        "destructive": true,
-        "secretAccess": "MetadataOnly",
-        "brokerRequired": "Yes",
-        "auditMode": "Yes"
-      },
-      "audit": {
-        "fields": [
-          "PrepareSwtpmDir"
-        ],
-        "required": true,
-        "mode": "yes"
-      },
-      "payload": {
-        "provenance": "wire",
-        "schema": null
-      },
-      "deadline": {
-        "tier": "standard"
-      }
-    },
-    {
       "operation": "EnvelopeInvoke",
       "wireVariant": "EnvelopeInvoke",
       "owner": "broker-generic",
@@ -2285,7 +2246,6 @@
               },
               "type": "array"
             },
-            "swtpmIdentity": {},
             "uid": {
               "type": "integer"
             },
@@ -5126,8 +5086,7 @@
       },
       "audit": {
         "fields": [
-          "PrepareStateDir",
-          "PrepareSwtpmDir"
+          "PrepareStateDir"
         ],
         "required": true,
         "mode": "yes"
@@ -5435,8 +5394,7 @@
       },
       "audit": {
         "fields": [
-          "SpawnRunner",
-          "PrepareSwtpmDir"
+          "SpawnRunner"
         ],
         "required": true,
         "mode": "yes"

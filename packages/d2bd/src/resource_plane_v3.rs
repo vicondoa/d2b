@@ -189,6 +189,35 @@ fn interaction_driver_args<T: d2b_provider_wayland_policy::InteractionType>(
 /// Preserved reconcile backoff for the plane's resource actors (R13).
 const PLANE_BACKOFF: Duration = d2b_resource_runtime::DEFAULT_REQUEUE_BACKOFF;
 
+/// The id a `User/<name>` or `Group/<name>` principal resolves to.
+///
+/// The closed Volume contract requires these principals to be real host
+/// accounts, resolved through NSS: `build_tpm_state_volume_spec` documents
+/// that "each principal must be a real host account the state-layout effect
+/// resolves through NSS", and `host-users.nix` materializes exactly those
+/// accounts from `d2bLib.deviceTpmPrincipals`, with the uid the worker row
+/// actually runs as (`deviceWorkerPrincipalId`, the triple-derived id
+/// `mint_template_intent` mirrors). A name that does not resolve is a
+/// provisioning gap, not something to paper over.
+///
+/// An earlier revision fell back to a name-derived stable id here. That was
+/// wrong twice over: the accounts do exist, so the fallback never ran; and on
+/// the path it was meant to cover it would have granted a uid no process ever
+/// holds, so a missing account would have become a silent permission grant
+/// rather than the loud refusal the contract wants. It is reverted.
+fn principal_id_for(
+    name: &str,
+    group: bool,
+) -> Result<u32, d2b_provider_volume_local::VolumeLocalError> {
+    let id = if group {
+        nix::unistd::Group::from_name(name).map(|entry| entry.map(|g| g.gid.as_raw()))
+    } else {
+        nix::unistd::User::from_name(name).map(|entry| entry.map(|u| u.uid.as_raw()))
+    };
+    id.map_err(|_| d2b_provider_volume_local::VolumeLocalError::EffectFailed)?
+        .ok_or(d2b_provider_volume_local::VolumeLocalError::EffectFailed)
+}
+
 /// Bounded wait budget for the binding-owned virtiofsd socket bind: the
 /// worker Process child binds the private socket after its launch, and the
 /// daemon's socket facet waits this budget before reporting a retryable
@@ -911,13 +940,20 @@ async fn register_anchor_row(
 ) {
     match row.key.type_name.as_str() {
         "Volume" => {
+            let uid = resource_uid_string(&row.uid);
+            // Log after the insert, not before: an earlier placement made a
+            // registration look like it had already landed while the write
+            // was still queued behind the registry lock, and the resulting
+            // log ordering read as "registered, then missed".
             registry
-               .register_volume(
-                    &resource_uid_string(&row.uid),
-                    &row.key.name,
-                    volume_anchor_from_row(row),
-                )
+               .register_volume(&uid, &row.key.name, volume_anchor_from_row(row))
                .await;
+            tracing::info!(
+                zone = %zone_token.as_str(),
+                volume = %row.key.name.as_str(),
+                uid = %uid,
+                "anchor projection registered a Volume"
+            );
         }
         "VolumeBinding" => register_binding_row(registry, zone_token, row).await,
         _ => {}
@@ -1386,6 +1422,26 @@ impl ZoneVolumeRootResolver {
         d2b_provider_volume_local::VolumeLocalError::SourceUnresolved
     }
 
+    /// [`Self::source_unresolved`] carrying the provider's own error code.
+    /// Constructing the anchored root reports through `?` without a stage, so
+    /// without this the error code that distinguishes "the root would not
+    /// stat" from "the marker root would not stat" never reaches a log.
+    fn source_unresolved_err(
+        &self,
+        stage: &'static str,
+        volume_uid: &d2b_contracts_resource::v3::ResourceUid,
+        error: d2b_provider_volume_local::VolumeLocalError,
+    ) -> d2b_provider_volume_local::VolumeLocalError {
+        tracing::warn!(
+            zone = %self.zone.as_str(),
+            volume = %volume_uid.as_str(),
+            stage,
+            error = ?error,
+            "v3 Volume source resolution failed"
+        );
+        error
+    }
+
     /// [`Self::source_unresolved`] for an anchored open that failed with a
     /// concrete OS error. The errno is the only evidence that distinguishes a
     /// farm that does not exist yet, a mode/ownership denial, and a mount
@@ -1520,8 +1576,12 @@ impl d2b_provider_volume_local::VolumeRootResolver for ZoneVolumeRootResolver {
         system_artifact_id: Option<&BoundedToken>,
         kind: SourceKind,
     ) -> Result<d2b_provider_volume_local::ResolvedVolumeRoot, d2b_provider_volume_local::VolumeLocalError> {
+        // Name the uid that missed, not "?". A registration gap and a
+        // uid-representation gap both surface here, and the uid is the only
+        // datum that tells them apart - without it the stage name is all a
+        // reader has, and this failure is otherwise undiagnosable.
         let Some(anchor) = self.registry.lookup_anchor(volume_uid) else {
-            return Err(self.source_unresolved("volume-anchor", "?"));
+            return Err(self.source_unresolved("volume-anchor", volume_uid.as_str()));
         };
         if kind == SourceKind::NixClosure {
             if source_policy_id.is_some() {
@@ -1577,8 +1637,15 @@ impl d2b_provider_volume_local::VolumeRootResolver for ZoneVolumeRootResolver {
        .map_err(|_| self.source_unresolved("storage-subdir-open", &anchor.volume_name))?;
         let marker_file = open_anchored_directory(&self.marker_root)
            .map_err(|_| self.source_unresolved("marker-root", &anchor.volume_name))?;
-        d2b_provider_volume_local::ResolvedVolumeRoot::new(file, volume_uid.clone())?
-           .with_marker_root(marker_file)
+        // Every other refusal in this function names its stage through
+        // `source_unresolved`, but these two propagate bare. A root that will
+        // not construct reached the driver as a plain "a provider layout
+        // effect failed" with no stage at all, so it was indistinguishable
+        // from a layout entry that would not provision.
+        d2b_provider_volume_local::ResolvedVolumeRoot::new(file, volume_uid.clone())
+            .map_err(|error| self.source_unresolved_err("volume-root-construct", volume_uid, error))?
+            .with_marker_root(marker_file)
+            .map_err(|error| self.source_unresolved_err("marker-root-construct", volume_uid, error))
     }
 
     fn resolve_principal(
@@ -1588,10 +1655,22 @@ impl d2b_provider_volume_local::VolumeRootResolver for ZoneVolumeRootResolver {
         if reference.resource_type().as_str() != "User" {
             return Err(d2b_provider_volume_local::VolumeLocalError::InvalidSpec);
         }
-        nix::unistd::User::from_name(reference.name().as_str())
-           .map_err(|_| d2b_provider_volume_local::VolumeLocalError::EffectFailed)?
-           .map(|user| user.uid.as_raw())
-           .ok_or(d2b_provider_volume_local::VolumeLocalError::EffectFailed)
+        principal_id_for(reference.name().as_str(), false)
+    }
+
+    fn resolve_group(
+        &self,
+        reference: &ResourceRef,
+    ) -> Result<u32, d2b_provider_volume_local::VolumeLocalError> {
+        // A layout entry names its group with a `User/<name>` reference as
+        // often as a `Group/<name>` one - the closed contract's own fixtures
+        // declare `groupRef: "User/d2bd"`. Refusing anything but `Group` here
+        // rejected every Volume that spells it that way, which is all of them.
+        let kind = reference.resource_type().as_str();
+        if kind != "Group" && kind != "User" {
+            return Err(d2b_provider_volume_local::VolumeLocalError::InvalidSpec);
+        }
+        principal_id_for(reference.name().as_str(), kind == "Group")
     }
 }
 
@@ -3512,6 +3591,44 @@ use d2b_provider_system_core::MinijailPlatformGate;
     use d2b_provider_system_core::UserIdentityDigest;
     use d2b_resource_runtime::revision::ManualClock;
     use d2b_resource_runtime::watch::{ChangeKind, ChangeNotice, WatchHubConfig};
+
+    /// A principal that is not a real host account must be refused, not
+    /// resolved to a guessed id. The closed contract requires these
+    /// principals to be real accounts, and `host-users.nix` materializes the
+    /// Device TPM ones from `d2bLib.deviceTpmPrincipals` with the uid the
+    /// worker row runs as. A name that does not resolve is therefore a
+    /// provisioning gap; answering it with a name-derived hash would turn a
+    /// loud refusal into a silent permission grant for a uid no process
+    /// holds, which is the harder failure to diagnose later.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_principal_without_an_account_is_refused() {
+        for name in [
+            "d2b-acceptance-guest-swtpm",
+            "d2b-acceptance-guest-swtpm-flush",
+            "d2b-no-such-account-probe",
+        ] {
+            assert!(
+                principal_id_for(name, false).is_err(),
+                "{name} has no host account and must not resolve to a guessed id"
+            );
+        }
+    }
+
+    /// A principal that is a real account resolves to the account's own id.
+    /// These are the same ids `host-users.nix` assigns the Device TPM
+    /// accounts, so this is the path the state Volume's ACL grants ride.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_principal_that_is_an_account_resolves_to_its_real_id() {
+        let Some(user) = nix::unistd::User::from_name("root").ok().flatten() else {
+            return;
+        };
+        assert_eq!(
+            principal_id_for("root", false).expect("root is a host account"),
+            user.uid.as_raw()
+        );
+    }
 
     /// One machinery-test rig for the anchor projection subscription: a
     /// small hub (so Missed and Expired are reachable), a store, and a
