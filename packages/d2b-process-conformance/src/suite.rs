@@ -341,6 +341,252 @@ pub fn assert_status_is_redacted<P: ProcessProvider>(provider: &P, provider_name
     );
 }
 
+
+/// Both Process lifetimes resolve one plan through one policy path.
+///
+/// AE20 and AE28: the binding prepares against the committed consumer identity
+/// before the consumer runs, and a long-running and a run-to-completion
+/// instance differ only in the kind the admitted execution records.
+#[cfg(any(test, feature = "test-support"))]
+pub fn assert_one_policy_path_for_both_lifetimes() {
+    use d2b_contracts_resource::v3::ResourceRef;
+    use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+    use d2b_contracts_resource::v3::execution_policy_resource::{
+        ExecutionInstanceKind, PolicyAuthorization,
+    };
+
+    use crate::plan::{BindingPreparation, ProcessPlanRequest};
+    use crate::testing::plan_fixtures as fixtures;
+
+    let build = |reference: &str, kind: ExecutionInstanceKind| {
+        let consumer = ResourceRef::parse(reference).expect("a canonical fixture reference");
+        ProcessPlanRequest::new(
+            fixtures::subject(reference),
+            BoundedToken::parse("process").expect("a canonical token"),
+            fixtures::instance(kind),
+            fixtures::requirements(),
+            fixtures::policy(),
+            PolicyAuthorization::granted(),
+            fixtures::backend_support(),
+            fixtures::ceiling(),
+            vec![fixtures::volume_claim(&consumer)],
+            vec![fixtures::prepared_binding(&consumer, BindingPreparation::Prepared)],
+            Vec::new(),
+        )
+        .expect("the fixture request is well formed")
+    };
+
+    // A one-shot and a long-running instance go through the same function with
+    // the same argument shape; the only difference the plan records is the
+    // lifetime the instance declared.
+    let one_shot = build("EphemeralProcess/flush", ExecutionInstanceKind::OneShot);
+    let long_running = build("Process/worker", ExecutionInstanceKind::LongRunning);
+    assert_eq!(
+        one_shot
+            .admit_execution()
+            .expect("the one policy path admits a one-shot instance")
+            .kind(),
+        ExecutionInstanceKind::OneShot
+    );
+    assert_eq!(
+        long_running
+            .admit_execution()
+            .expect("the same policy path admits a long-running instance")
+            .kind(),
+        ExecutionInstanceKind::LongRunning
+    );
+}
+
+/// A plan is refused unless its source side is prepared, so a consumer never
+/// starts against access that does not exist yet.
+#[cfg(any(test, feature = "test-support"))]
+pub fn assert_preparation_completes_before_the_consumer_runs() {
+    use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+    use d2b_contracts_resource::v3::execution_policy_resource::{
+        ExecutionInstanceKind, PolicyAuthorization,
+    };
+    use crate::plan::{BindingPreparation, ProcessPlanRequest, ProcessPlanValues, resolve_process_plan};
+    use crate::testing::plan_fixtures as fixtures;
+
+    let consumer = fixtures::consumer();
+    let values = ProcessPlanValues::from_execution_plan(&fixtures::resolved_execution(&consumer));
+    let incomplete = ProcessPlanRequest::new(
+        fixtures::subject("Process/worker"),
+        BoundedToken::parse("process").expect("a canonical token"),
+        fixtures::instance(ExecutionInstanceKind::LongRunning),
+        fixtures::requirements(),
+        fixtures::policy(),
+        PolicyAuthorization::granted(),
+        fixtures::backend_support(),
+        fixtures::ceiling(),
+        vec![fixtures::volume_claim(&consumer)],
+        vec![fixtures::prepared_binding(&consumer, BindingPreparation::Incomplete)],
+        Vec::new(),
+    )
+    .expect("the fixture request is well formed");
+    assert!(
+        resolve_process_plan(&incomplete, &values).is_err(),
+        "an unprepared source side may not start a consumer"
+    );
+
+    let prepared = ProcessPlanRequest::new(
+        fixtures::subject("Process/worker"),
+        BoundedToken::parse("process").expect("a canonical token"),
+        fixtures::instance(ExecutionInstanceKind::LongRunning),
+        fixtures::requirements(),
+        fixtures::policy(),
+        PolicyAuthorization::granted(),
+        fixtures::backend_support(),
+        fixtures::ceiling(),
+        vec![fixtures::volume_claim(&consumer)],
+        vec![fixtures::prepared_binding(&consumer, BindingPreparation::Prepared)],
+        Vec::new(),
+    )
+    .expect("the fixture request is well formed");
+    let plan = resolve_process_plan(&prepared, &values).expect("a prepared plan resolves");
+    assert!(plan.admits_start());
+}
+
+/// A restart or an adoption matches all five independent evidence facts, and a
+/// candidate that diverges in any one of them is refused by name.
+#[cfg(any(test, feature = "test-support"))]
+pub fn assert_adoption_matches_every_launch_evidence_fact() {
+    use d2b_contracts_resource::v3::ResourceRef;
+    use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+    use d2b_contracts_resource::v3::execution_policy_resource::{
+        ExecutionInstanceKind, PolicyAuthorization,
+    };
+    use crate::plan::{BindingPreparation, ProcessPlanRequest, ProcessPlanValues, resolve_process_plan};
+    use crate::testing::plan_fixtures as fixtures;
+
+    let build = |reference: &str, provider: &str| {
+        let consumer = ResourceRef::parse(reference).expect("a canonical fixture reference");
+        let request = ProcessPlanRequest::new(
+            fixtures::subject(reference),
+            BoundedToken::parse(provider).expect("a canonical token"),
+            fixtures::instance(ExecutionInstanceKind::LongRunning),
+            fixtures::requirements(),
+            fixtures::policy(),
+            PolicyAuthorization::granted(),
+            fixtures::backend_support(),
+            fixtures::ceiling(),
+            vec![fixtures::volume_claim(&consumer)],
+            vec![fixtures::prepared_binding(&consumer, BindingPreparation::Prepared)],
+            Vec::new(),
+        )
+        .expect("the fixture request is well formed");
+        let values =
+            ProcessPlanValues::from_execution_plan(&fixtures::resolved_execution(&consumer));
+        resolve_process_plan(&request, &values).expect("the fixture plan resolves")
+    };
+
+    let first = build("Process/worker", "process");
+    first
+        .evidence()
+        .admit_candidate(first.evidence())
+        .expect("the same evidence is the same launch");
+
+    // A different assigned Provider is a different launch, even though
+    // nothing else about it moved.
+    assert!(first
+        .evidence()
+        .admit_candidate(build("Process/worker", "other").evidence())
+        .is_err());
+}
+
+/// A supplied launch argument cannot replace a binding-selected source, and
+/// the refusal - not a silent drop - is what the caller is told.
+#[cfg(any(test, feature = "test-support"))]
+pub fn assert_supplied_arguments_cannot_redirect_a_source() {
+    use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+    use d2b_contracts_resource::v3::execution_policy_resource::{
+        ExecutionInstanceKind, PolicyAuthorization,
+    };
+    use crate::plan::{BindingPreparation, ProcessPlanRequest, ProcessPlanValues, resolve_process_plan};
+    use crate::testing::plan_fixtures as fixtures;
+
+    let consumer = fixtures::consumer();
+    let values = ProcessPlanValues::from_execution_plan(&fixtures::resolved_execution(&consumer));
+    let request = |arguments: Vec<String>| {
+        ProcessPlanRequest::new(
+            fixtures::subject("Process/worker"),
+            BoundedToken::parse("process").expect("a canonical token"),
+            fixtures::instance(ExecutionInstanceKind::LongRunning),
+            fixtures::requirements(),
+            fixtures::policy(),
+            PolicyAuthorization::granted(),
+            fixtures::backend_support(),
+            fixtures::ceiling(),
+            vec![fixtures::volume_claim(&consumer)],
+            vec![fixtures::prepared_binding(&consumer, BindingPreparation::Prepared)],
+            arguments,
+        )
+        .expect("the fixture request is well formed")
+    };
+
+    // The destination the broker resolved, and the source it resolved behind
+    // it, are both unreachable by name from a supplied argument.
+    for hostile in [
+        fixtures::DESTINATION_PATH.to_owned(),
+        format!("--root={}", fixtures::DESTINATION_PATH),
+        fixtures::SOURCE_PATH.to_owned(),
+    ] {
+        assert!(
+            resolve_process_plan(&request(vec![hostile.clone()]), &values).is_err(),
+            "argument {hostile:?} must not redirect a source"
+        );
+    }
+
+    // An argument that names nothing the plan resolved is still admitted: the
+    // screen matches resolved paths, not substrings, so a legitimate template
+    // value is not caught by the redirect refusal.
+    let admitted = resolve_process_plan(&request(vec!["--serve".to_owned()]), &values)
+        .expect("an argument naming no resolved source is admitted");
+    assert_eq!(admitted.arguments().values(), ["--serve"]);
+}
+
+/// A failed launch gives back only the relationships it prepared and refuses
+/// to stop a runner it did not start.
+#[cfg(any(test, feature = "test-support"))]
+pub fn assert_failed_launch_releases_only_its_own_effects() {
+    use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+    use d2b_contracts_resource::v3::execution_policy_resource::{
+        ExecutionInstanceKind, PolicyAuthorization,
+    };
+    use crate::identity::ProcessIdentityDigest;
+    use crate::plan::{BindingPreparation, ProcessPlanRequest, ProcessPlanValues, resolve_process_plan};
+    use crate::testing::plan_fixtures as fixtures;
+
+    let consumer = fixtures::consumer();
+    let values = ProcessPlanValues::from_execution_plan(&fixtures::resolved_execution(&consumer));
+    let request = ProcessPlanRequest::new(
+        fixtures::subject("Process/worker"),
+        BoundedToken::parse("process").expect("a canonical token"),
+        fixtures::instance(ExecutionInstanceKind::LongRunning),
+        fixtures::requirements(),
+        fixtures::policy(),
+        PolicyAuthorization::granted(),
+        fixtures::backend_support(),
+        fixtures::ceiling(),
+        vec![fixtures::volume_claim(&consumer)],
+        vec![fixtures::prepared_binding(&consumer, BindingPreparation::Prepared)],
+        Vec::new(),
+    )
+    .expect("the fixture request is well formed");
+    let plan = resolve_process_plan(&request, &values).expect("the fixture plan resolves");
+
+    let mut scope = plan.launch_scope();
+    let own = ProcessIdentityDigest::from_bytes([0x11; 32]);
+    scope.record_runner(own).expect("the launch recorded its own runner");
+    assert_eq!(scope.release_for(&own).expect("its own runner").slots().len(), 1);
+    assert!(
+        scope
+            .release_for(&ProcessIdentityDigest::from_bytes([0x22; 32]))
+            .is_err(),
+        "an existing runner is never released by a failed launch"
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

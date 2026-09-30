@@ -693,8 +693,7 @@ pub mod plan_fixtures {
     /// closed list rather than restating it.
     pub fn one_shot_leg_is_unbindable() -> bool {
         !d2b_contracts_zone_session::v3::role_binding::BINDABLE_SUBJECT_TYPES
-            .iter()
-            .any(|candidate| *candidate == "EphemeralProcess")
+            .contains(&"EphemeralProcess")
     }
 
     /// A confinement policy that admits a namespace-isolated, read-only-root

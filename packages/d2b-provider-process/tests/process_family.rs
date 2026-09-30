@@ -250,3 +250,34 @@ async fn the_registry_serves_one_factory_per_member_type() {
         "an unregistered type has no driver"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The one resolved plan (U12)
+// ---------------------------------------------------------------------------
+
+/// The family's own registry path does not change what a Process and an
+/// EphemeralProcess are: both resolve one plan through one policy path, both
+/// prepare their bindings against the committed consumer identity before it
+/// runs, and neither has a kind-specific branch the other lacks (AE20, AE28).
+#[test]
+fn both_member_types_share_one_resolved_plan_path() {
+    d2b_process_conformance::suite::assert_one_policy_path_for_both_lifetimes();
+    d2b_process_conformance::suite::assert_preparation_completes_before_the_consumer_runs();
+}
+
+/// A restart or adoption matches the executable, resource, Provider, policy,
+/// and binding evidence rather than cached readiness, and a failed launch
+/// releases only its own prepared effects (R41, R42).
+#[test]
+fn launch_evidence_and_failure_release_are_bounded_by_the_plan() {
+    d2b_process_conformance::suite::assert_adoption_matches_every_launch_evidence_fact();
+    d2b_process_conformance::suite::assert_failed_launch_releases_only_its_own_effects();
+}
+
+/// A supplied launch argument cannot replace a binding-selected source: the
+/// resolved plan's destinations and sources come from the broker's own
+/// accepted graph, and the screen refuses rather than silently drops.
+#[test]
+fn supplied_arguments_cannot_redirect_a_source() {
+    d2b_process_conformance::suite::assert_supplied_arguments_cannot_redirect_a_source();
+}

@@ -23,7 +23,7 @@ use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 use d2b_contracts_zone_session::v3::resource_bundle::ResourceBundle;
 use d2b_core::bundle_resolver::{BundleResolver, intent_id_legacy_runner};
 use d2b_core::processes::ProcessRole;
-use d2b_process_conformance::runtime_scope_commitment;
+use d2b_process_conformance::{ProcessLaunchArguments, runtime_scope_commitment};
 use d2b_provider_process::{
     BackendLaunch, BackendObservation, IdentityBinding, LaunchedSnapshot, ObservedIdentity,
     ProcessEffectBackend, ProcessEffectError, ProcessIdentityDigest, ProcessLaunchRequest,
@@ -1240,6 +1240,28 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         // Controller-supplied arguments are admitted only by the resolved
         // template's own declaration; every other template refuses them here
         // (and the broker re-checks the same fence).
+        // The resolved plan is the only place a launch argument can be
+        // screened against the destinations the broker resolved. A supplied
+        // argument that names one is refused here - at the privileged
+        // boundary, before any spawn - rather than passed through and dropped
+        // downstream, because a dropped positional value runs the process
+        // with a different meaning than the row asked for (KTD8, R50).
+        if let Some(plan) = request.ticket().resolved_plan() {
+            let screened = ProcessLaunchArguments::screen(
+                request.ticket().launch_args(),
+                plan.values().destinations(),
+                plan.values().sources(),
+            );
+            if let Err(refusal) = screened {
+                warn!(
+                    provider = "supervisor",
+                    resource = %request.ticket().process_ref().to_canonical_string(),
+                    refusal = %refusal,
+                    "launch rejected: a supplied argument names a binding-selected source"
+                );
+                return Err(ProcessEffectError::ResolutionFailed);
+            }
+        }
         let launch_args = if request.ticket().launch_args().is_empty() {
             None
         } else if intent.accepts_launch_args {

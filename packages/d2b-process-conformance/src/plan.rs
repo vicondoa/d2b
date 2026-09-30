@@ -455,6 +455,10 @@ impl ProcessPlanRequest {
     /// slot here, so a claim whose evidence is absent simply resolves to
     /// [`ProcessPlanRefusalReason::BindingNotPrepared`] at resolution rather
     /// than being silently dropped here.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one closed launch-request fact per argument"
+    )]
     pub fn new(
         subject: ProcessSubject,
         provider: BoundedToken,
@@ -636,6 +640,10 @@ impl PreparedBinding {
     /// Refuses when the admission is for a different relationship, when it does
     /// not admit the claimed right, or when the reservation does not belong to
     /// the same Zone and source this leg names.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one closed prepared-relationship fact per argument"
+    )]
     pub fn new(
         source_ref: ResourceRef,
         source_uid: ResourceUid,
@@ -2062,7 +2070,7 @@ mod tests {
             fixtures::policy().capabilities().clone(),
             true,
             fixtures::policy().identity().clone(),
-            fixtures::policy().root().clone(),
+            *fixtures::policy().root(),
             fixtures::policy().seccomp().clone(),
             Some(0o077),
         )

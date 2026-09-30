@@ -23,6 +23,7 @@ pub const MAX_LAUNCH_ARGS_TOTAL_BYTES: usize = 16 * 1024;
 use crate::error::ProcessConformanceError;
 use crate::identity::{ConfigurationDigest, IdentityBinding, ProcessIdentityDigest};
 use crate::launch_identity::LaunchIdentity;
+use crate::plan::{ProcessSubject, ResolvedProcessPlan};
 use crate::sandbox::SandboxPlan;
 
 /// Maximum launch deadline, matching the frozen resource-API request
@@ -393,7 +394,7 @@ struct RuntimeScopeBinding {
 /// plus the exact Provider/session/epoch fence. Nothing in it names an
 /// executable, a host path, a numeric UID or GID, a cgroup path, a broker
 /// operation, or an environment value.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 pub struct LaunchTicket {
     process_ref: ResourceRef,
     process_uid: ResourceUid,
@@ -430,6 +431,11 @@ pub struct LaunchTicket {
     controller_launch: Option<ControllerLaunchBinding>,
     assignment: Option<ControllerAssignmentBinding>,
     execution_commitment: Option<ConfigurationDigest>,
+    /// The one resolved plan this launch runs against, when the launch was
+    /// admitted through the graph. Its presence is what tells a Provider the
+    /// policy, the relationships, and the destinations came from the broker
+    /// rather than from this ticket's digests.
+    resolved_plan: Option<ResolvedProcessPlan>,
 }
 
 impl LaunchTicket {
@@ -525,6 +531,7 @@ impl LaunchTicket {
             controller_launch: None,
             assignment: None,
             execution_commitment: None,
+            resolved_plan: None,
         })
     }
 
@@ -730,6 +737,50 @@ impl LaunchTicket {
             resource_client_binding,
         });
         Ok(self)
+    }
+
+    /// Attach the one resolved plan this launch runs against.
+    ///
+    /// The plan is the authority under the new model: its admitted execution
+    /// is the only policy a Provider may enforce, its bindings are the only
+    /// relationships the launch depends on, and its destinations are the only
+    /// presentation this consumer receives. A ticket that carried both a plan
+    /// and a separately authored [`SandboxPlan`] would describe two postures
+    /// at once, so the two are mutually exclusive: attaching a plan removes
+    /// the compiled sandbox rather than leaving a second one to choose between.
+    pub fn with_resolved_plan(
+        mut self,
+        plan: ResolvedProcessPlan,
+    ) -> Result<Self, ProcessConformanceError> {
+        if self.resolved_plan.is_some()
+            || self.process_ref != *plan.subject().process_ref()
+            || self.process_uid != *plan.subject().process_uid()
+        {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
+        let committed = ProcessSubject::new(
+            self.process_ref.clone(),
+            self.process_uid.clone(),
+            plan.subject().zone().clone(),
+            self.resource_revision.unwrap_or_else(|| plan.subject().resource_revision()),
+        )
+        .map_err(|_| ProcessConformanceError::InvalidTicket)?;
+        plan.prepared_against(&committed)
+            .map_err(|_| ProcessConformanceError::InvalidTicket)?;
+        self.sandbox = None;
+        self.resolved_plan = Some(plan);
+        Ok(self)
+    }
+
+    /// Borrow the resolved plan, when this launch was admitted through the
+    /// graph.
+    pub const fn resolved_plan(&self) -> Option<&ResolvedProcessPlan> {
+        self.resolved_plan.as_ref()
+    }
+
+    /// Whether this launch carries the one resolved plan.
+    pub const fn has_resolved_plan(&self) -> bool {
+        self.resolved_plan.is_some()
     }
 
     /// Validate this ticket before handing it to an effect adapter.

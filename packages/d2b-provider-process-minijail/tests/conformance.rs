@@ -329,3 +329,50 @@ fn controller_authority_requires_a_committed_revision_before_launch() {
     );
     assert!(provider.port().calls().is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// The one resolved plan (U12)
+// ---------------------------------------------------------------------------
+
+/// Both Process lifetimes take the same policy path and prepare their
+/// bindings against the committed consumer identity before it runs (AE20,
+/// AE28). `system-minijail` is the backend that makes that admission
+/// enforceable, so the obligation is asserted here rather than in a shared
+/// crate that cannot compile one.
+#[test]
+fn both_lifetimes_share_one_policy_path() {
+    d2b_process_conformance::suite::assert_one_policy_path_for_both_lifetimes();
+}
+
+/// A consumer starts only once its required pre-start conditions hold: a
+/// relationship whose source side is not prepared refuses the launch (R40,
+/// AE20).
+#[test]
+fn preparation_completes_before_the_consumer_starts() {
+    d2b_process_conformance::suite::assert_preparation_completes_before_the_consumer_runs();
+}
+
+/// A restart or adoption matches the executable, the committed resource, the
+/// assigned Provider, the selected policy, and the exact prepared bindings -
+/// not cached readiness (R41).
+#[test]
+fn adoption_matches_every_launch_evidence_fact() {
+    d2b_process_conformance::suite::assert_adoption_matches_every_launch_evidence_fact();
+}
+
+/// A caller-supplied launch argument cannot replace a binding-selected
+/// source. The argument is **refused**, not ignored: the destination comes
+/// from the resolved plan, and silently dropping a positional value would run
+/// the process with a different meaning than the row asked for while telling
+/// the author nothing (KTD8, R50).
+#[test]
+fn a_supplied_argument_cannot_redirect_a_source() {
+    d2b_process_conformance::suite::assert_supplied_arguments_cannot_redirect_a_source();
+}
+
+/// A failed launch gives back only the relationships it prepared and refuses
+/// to stop a runner it did not start.
+#[test]
+fn a_failed_launch_releases_only_its_own_effects() {
+    d2b_process_conformance::suite::assert_failed_launch_releases_only_its_own_effects();
+}

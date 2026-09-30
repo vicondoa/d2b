@@ -1040,3 +1040,25 @@ async fn ready_process_launches_reach_the_provider_adapter_in_parallel() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// The one resolved plan (U12)
+// ---------------------------------------------------------------------------
+
+/// The production adapter enforces the same four obligations as every other
+/// Process backend: one policy path for both lifetimes, preparation against a
+/// committed consumer identity, five-way launch evidence, and a launch
+/// argument that cannot redirect a source.
+///
+/// The argument is **refused** at the privileged boundary rather than ignored:
+/// the destination came from the resolved plan, and a silently dropped
+/// positional value runs the process with a different meaning than the row
+/// asked for (KTD8, R50).
+#[test]
+fn the_adapter_enforces_the_one_resolved_plan() {
+    d2b_process_conformance::suite::assert_one_policy_path_for_both_lifetimes();
+    d2b_process_conformance::suite::assert_preparation_completes_before_the_consumer_runs();
+    d2b_process_conformance::suite::assert_adoption_matches_every_launch_evidence_fact();
+    d2b_process_conformance::suite::assert_supplied_arguments_cannot_redirect_a_source();
+    d2b_process_conformance::suite::assert_failed_launch_releases_only_its_own_effects();
+}
