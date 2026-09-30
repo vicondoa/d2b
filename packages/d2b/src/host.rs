@@ -28,6 +28,7 @@ pub(crate) enum HostCommand {
     Doctor(HostDoctorArgs),
     Reconcile(HostReconcileArgs),
     Validate(HostValidateArgs),
+    Reset(HostResetArgs),
 }
 
 #[derive(Debug, Args, Clone)]
@@ -60,6 +61,40 @@ pub(crate) struct HostValidateArgs {
     pub(crate) operator_signature: Option<String>,
 }
 
+/// `d2b host reset`: the offline, ownership-bounded clean break (U32,
+/// KTD15).
+///
+/// The verb resolves no Zone and opens no daemon socket. It runs the
+/// one-shot broker ownership runner, which admits the reset Operation from
+/// the verified new deployment graph under explicit local operator
+/// authority and never opens the previous release's SpecStore. `--dry-run`
+/// reports the exact inventory; `--apply` is the only way to remove it.
+#[derive(Debug, Args, Clone)]
+pub(crate) struct HostResetArgs {
+    #[arg(long, conflicts_with = "apply")]
+    pub(crate) dry_run: bool,
+    #[arg(long, conflicts_with = "dry_run")]
+    pub(crate) apply: bool,
+    /// The deployment root this reset is bounded to. It defaults to the
+    /// broker's own state directory.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) state_root: Option<std::path::PathBuf>,
+    /// The cgroup hierarchy root the live-drain probe walks. It defaults
+    /// to the broker's own managed slice.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) cgroup_root: Option<std::path::PathBuf>,
+}
+
+/// The one-shot broker ownership runner `d2b host reset` invokes.
+///
+/// An operator override for a non-default install prefix, in the shape of
+/// the existing `D2B_PUBLIC_SOCKET` and `D2B_BROKER_SOCKET_PATH` overrides.
+const BROKER_BIN_ENV: &str = "D2B_BROKER_BIN";
+
+/// The Tier-0 install path of the composed broker binary, the same
+/// convention `d2bd` and the activation helper use.
+const DEFAULT_BROKER_BIN: &str = "/run/current-system/sw/bin/d2b-broker";
+
 #[derive(Debug, Args, Clone)]
 pub(crate) struct HostReconcileArgs {
     #[arg(long)]
@@ -83,6 +118,7 @@ pub(crate) fn missing_mutation_mode(command: &HostCommand) -> Option<&'static st
         HostCommand::Destroy(args) => ("host destroy", args.dry_run, args.apply),
         HostCommand::Reconcile(args) => ("host reconcile", args.dry_run, args.apply),
         HostCommand::Validate(args) => ("host validate", args.dry_run, args.apply),
+        HostCommand::Reset(args) => ("host reset", args.dry_run, args.apply),
         HostCommand::Get(_) | HostCommand::List(_) | HostCommand::Status(_) => return None,
         HostCommand::Doctor(_) => return None,
     };
@@ -189,7 +225,181 @@ pub(crate) fn run(
         }
         HostCommand::Validate(args) => validate(args, mode),
         HostCommand::Reconcile(args) => reconcile(context, args, mode, deadline),
+        // `reset` is dispatched offline, ahead of Zone discovery and ahead
+        // of this function; a Zone-resolved `host` run is by definition not
+        // the clean-break path, so refusing here keeps the two routes
+        // impossible to confuse rather than quietly running the wrong one.
+        HostCommand::Reset(_) => Err(CliFailure::new(
+            1,
+            "reset-needs-the-offline-dispatch: `d2b host reset` does not resolve a Zone",
+        )),
     }
+}
+
+/// Run the offline ownership-bounded reset (U32, KTD15).
+///
+/// `d2b host reset` resolves no Zone and opens no daemon socket: it
+/// spawns the one-shot broker ownership runner, which admits the reset
+/// Operation from the verified new deployment graph under explicit local
+/// operator authority, and relays the runner's single envelope unchanged.
+/// The `--dry-run`/`--apply` boundary is enforced here first, so a
+/// missing mode is refused at exit 78 even on a host with no broker and no
+/// d2bd at all - which is exactly the host this verb exists for.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+pub(crate) fn run_reset(args: &HostResetArgs, mode: OutputMode) -> Result<i32, CliFailure> {
+    if !args.dry_run && !args.apply {
+        return emit_host_error(
+            &crate::dispatch::missing_mutation_flag_envelope("host reset"),
+            mode.is_json(),
+        );
+    }
+    let broker = broker_binary();
+    let mut command = std::process::Command::new(&broker);
+    command.arg("reset");
+    if args.apply {
+        command.arg("--apply");
+    } else {
+        command.arg("--dry-run");
+    }
+    if let Some(state_root) = args.state_root.as_ref() {
+        command.arg("--state-dir").arg(state_root);
+    }
+    if let Some(cgroup_root) = args.cgroup_root.as_ref() {
+        command.arg("--cgroup-root").arg(cgroup_root);
+    }
+    let output = command.output().map_err(|error| {
+        CliFailure::new(
+            1,
+            format!(
+                "reset-runner-unavailable: {}: {error}",
+                broker.display()
+            ),
+        )
+    })?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let envelope = stdout
+        .lines()
+        .last()
+        .filter(|line| !line.trim().is_empty())
+        .and_then(|line| serde_json::from_str::<Value>(line).ok());
+    match envelope {
+        Some(value) => {
+            if mode.is_json() {
+                print_json(&value)?;
+            } else {
+                print_stdout(&render_reset_human(&value));
+            }
+            Ok(exit_code_for(&value, output.status.code()))
+        }
+        None => Err(CliFailure::new(
+            1,
+            format!(
+                "reset-runner-produced-no-envelope: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        )),
+    }
+}
+
+/// The one-shot broker ownership runner's binary.
+fn broker_binary() -> std::path::PathBuf {
+    std::env::var_os(BROKER_BIN_ENV)
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(DEFAULT_BROKER_BIN))
+}
+
+/// The process exit code the runner's envelope implies.
+///
+/// A refused boundary keeps the runner's own refusal code, so the caller
+/// reports the reason rather than a transport failure that would send an
+/// operator looking at the daemon.
+fn exit_code_for(envelope: &Value, status: Option<i32>) -> i32 {
+    if envelope.get("ok").and_then(Value::as_bool) == Some(true) {
+        return 0;
+    }
+    status.unwrap_or(1)
+}
+
+/// Render the runner's envelope for a terminal.
+///
+/// Every field is already operator-facing and bounded: the inventory is a
+/// path list the runner decided on, and the refusal carries the exact code
+/// the boundary refused with.
+fn render_reset_human(envelope: &Value) -> String {
+    let mut out = String::new();
+    if envelope.get("ok").and_then(Value::as_bool) == Some(true) {
+        let mode = envelope
+            .get("mode")
+            .and_then(Value::as_str)
+            .unwrap_or("inspect");
+        out.push_str(&format!(
+            "d2b host reset: ownership boundary verified ({mode})\n"
+        ));
+        if let Some(root) = envelope.get("deploymentRoot").and_then(Value::as_str) {
+            out.push_str(&format!("  deployment root : {root}\n"));
+        }
+        if let Some(id) = envelope.get("ownershipId").and_then(Value::as_str) {
+            out.push_str(&format!("  ownership id     : {id}\n"));
+        }
+        let empty = Vec::new();
+        let inventory = envelope
+            .get("inventory")
+            .and_then(Value::as_array)
+            .unwrap_or(&empty);
+        out.push_str(&format!(
+            "  inventory        : {} owned path(s), {} present\n",
+            inventory.len(),
+            inventory
+                .iter()
+                .filter(|entry| entry.get("present").and_then(Value::as_bool) == Some(true))
+                .count()
+        ));
+        for entry in inventory {
+            let path = entry.get("path").and_then(Value::as_str).unwrap_or("");
+            let kind = entry.get("kind").and_then(Value::as_str).unwrap_or("");
+            let removed = entry
+                .get("removed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let state = if removed {
+                "removed"
+            } else if entry.get("present").and_then(Value::as_bool) == Some(true) {
+                "present"
+            } else {
+                "absent"
+            };
+            out.push_str(&format!("    [{kind}] {path} ({state})\n"));
+        }
+        for source in envelope
+            .get("externalSources")
+            .and_then(Value::as_array)
+            .unwrap_or(&empty)
+        {
+            if let Some(path) = source.as_str() {
+                out.push_str(&format!("  external source  : {path} (untouched)\n"));
+            }
+        }
+        if let Some(incarnation) = envelope.get("incarnation")
+            && let Some(store) = incarnation.get("storeIncarnation").and_then(Value::as_str)
+        {
+            out.push_str(&format!("  new incarnation  : {store}\n"));
+        }
+    } else {
+        let code = envelope.get("code").and_then(Value::as_str).unwrap_or("unknown");
+        let detail = envelope
+            .get("detail")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        out.push_str(&format!("d2b host reset refused: {code}\n"));
+        if let Some(path) = envelope.get("path").and_then(Value::as_str) {
+            out.push_str(&format!("  path             : {path}\n"));
+        }
+        out.push_str(&format!("  detail           : {detail}\n"));
+        out.push_str(
+            "  remediation      : nothing was removed. Resolve the refusal above, or re-run `d2b host reset --dry-run` for the exact inventory.\n",
+        );
+    }
+    out
 }
 
 fn can_fallback_to_local_state(error: &CliFailure) -> bool {

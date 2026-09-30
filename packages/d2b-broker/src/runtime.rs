@@ -510,12 +510,31 @@ pub struct ServerConfig {
     pub retired_wire_variants: &'static [RetiredWireVariant],
 }
 
+/// The one-shot ownership-bounded reset (U32, KTD15).
+///
+/// It is a broker process mode rather than a wire operation because it is
+/// deliberately OFFLINE: `d2b host reset` runs it with `d2bd` stopped, it
+/// never opens the previous release's SpecStore, and it exits as soon as
+/// the verified ownership boundary has been decided and - when asked -
+/// acted on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResetOptions {
+    /// Inspect and report the exact inventory without removing anything.
+    /// `--apply` selects the destructive half instead.
+    pub dry_run: bool,
+    /// The deployment root this reset is bounded to.
+    pub deployment_root: PathBuf,
+    /// The cgroup hierarchy root the live-drain probe walks.
+    pub cgroup_root: PathBuf,
+}
+
 /// The process mode selected by [`parse_command`]: host or guest serving,
-/// or a bootstrap probe.
+/// a one-shot ownership-bounded reset, or a bootstrap probe.
 #[derive(Debug, Clone)]
 pub enum BrokerMode {
     Host(ServerConfig),
     Guest(ServerConfig),
+    Reset(ResetOptions),
     #[cfg(feature = "layer1-bootstrap")]
     ProbeHello {
         socket_path: PathBuf,
@@ -542,6 +561,10 @@ pub enum RunError {
     Usage(String),
     Io(io::Error),
     Protocol(String),
+    /// The one-shot ownership-bounded reset declined to act. The envelope
+    /// is structured so the composition root renders the refusal code and
+    /// the offline `d2b host reset` caller reports it unchanged.
+    Reset(crate::ops::host_reset::ResetFailureReport),
 }
 
 impl From<io::Error> for RunError {
@@ -737,6 +760,9 @@ where
             });
         }
         _ => {}
+    }
+    if subcommand == "reset" {
+        return parse_reset_options(args.collect());
     }
     let profile = match subcommand.as_str() {
         "host" => BrokerProfile::Host,
@@ -935,6 +961,71 @@ where
     })
 }
 
+/// Parse the one-shot `reset` subcommand's flags.
+///
+/// `d2b-broker reset` serves nothing and binds nothing: it runs the
+/// ownership-bounded reset once and exits, which is why it needs neither a
+/// socket nor a running daemon. The default is the inspect half; the
+/// destructive half requires the explicit `--apply`, so a mistyped
+/// invocation cannot delete.
+fn parse_reset_options(rest: Vec<String>) -> Result<BrokerMode, RunError> {
+    let mut options = ResetOptions {
+        dry_run: true,
+        deployment_root: PathBuf::from(DEFAULT_STATE_DIR),
+        cgroup_root: d2b_host::cgroup::d2b_slice_path(),
+    };
+    let mut index = 0;
+    while index < rest.len() {
+        match rest[index].as_str() {
+            "--apply" => {
+                options.dry_run = false;
+            }
+            "--dry-run" => {
+                options.dry_run = true;
+            }
+            "--state-dir" => {
+                index += 1;
+                options.deployment_root =
+                    PathBuf::from(expect_arg(&rest, index, "--state-dir")?);
+            }
+            "--cgroup-root" => {
+                index += 1;
+                options.cgroup_root =
+                    PathBuf::from(expect_arg(&rest, index, "--cgroup-root")?);
+            }
+            other => {
+                return Err(RunError::Usage(format!("unknown reset flag: {other}")));
+            }
+        }
+        index += 1;
+    }
+    Ok(BrokerMode::Reset(options))
+}
+
+/// Run the one-shot ownership-bounded reset and print its envelope.
+///
+/// The envelope goes to stdout so the offline `d2b host reset` dispatcher
+/// can relay it verbatim; a refusal is a typed [`RunError::Reset`] rather
+/// than a bare exit so the composition root renders the same code the
+/// caller reports.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn run_reset(options: &ResetOptions) -> Result<(), RunError> {
+    use crate::ops::host_reset::{ResetRequest, run_owned_reset};
+    let mut request = ResetRequest::inspect(&options.deployment_root, &options.cgroup_root);
+    if !options.dry_run {
+        request = request.applying();
+    }
+    match run_owned_reset(&request) {
+        Ok(report) => {
+            let rendered = serde_json::to_string(&report)
+                .map_err(|error| RunError::Protocol(format!("reset-report: {error}")))?;
+            println!("{rendered}");
+            Ok(())
+        }
+        Err(failure) => Err(RunError::Reset(failure.report())),
+    }
+}
+
 /// Run the broker in the parsed [`BrokerMode`], serving until termination.
 ///
 /// # Errors
@@ -944,6 +1035,8 @@ where
 /// fatally, and [`RunError::Usage`] for a malformed probe invocation.
 pub fn run(command: BrokerMode) -> Result<(), RunError> {
     match command {
+        #[cfg(not(feature = "layer1-bootstrap"))]
+        BrokerMode::Reset(options) => run_reset(&options),
         BrokerMode::Host(config) | BrokerMode::Guest(config) => run_server(config),
         #[cfg(feature = "layer1-bootstrap")]
         BrokerMode::ProbeHello {

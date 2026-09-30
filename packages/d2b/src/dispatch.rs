@@ -973,6 +973,28 @@ pub(crate) fn modern_run(raw_args: Vec<OsString>) -> i32 {
             Err(error) => report_dispatch_failure(None, &cli, mode, error),
         };
     }
+    // `d2b host reset` is OFFLINE (KTD15). It resolves no Zone, opens no
+    // daemon socket, and requires no running d2bd: it runs the one-shot
+    // broker ownership runner against the verified new deployment graph
+    // under explicit local operator authority. Dispatching it here, ahead
+    // of Zone discovery and ahead of the mutation-mode sweep below, is what
+    // makes a host with no daemon a host the clean break can still be
+    // performed on. Its own `--dry-run`/`--apply` boundary is enforced
+    // inside the handler, so the missing-mode refusal lands at exit 78
+    // whether or not a broker exists.
+    if let ModernCommand::Host(host::HostArgs {
+        command: host::HostCommand::Reset(args),
+    }) = &cli.command
+    {
+        let mode = match output_mode(cli.json, cli.human) {
+            Ok(mode) => mode,
+            Err(error) => return crate::report_failure(error),
+        };
+        return match host::run_reset(args, mode) {
+            Ok(code) => code,
+            Err(error) => report_dispatch_failure(None, &cli, mode, error),
+        };
+    }
     // A mutating `host` verb that selected no mode is a usage error the
     // operator is owed before any connection. Refusing it here keeps
     // `--apply-or-dry-run-required` at exit 78 whether or not the public

@@ -146,6 +146,19 @@ d2b_rust_test(
 )
 
 d2b_rust_test(
+    name = "owned_reset",
+    srcs = ["tests/owned_reset.rs"],
+    compile_data = ["Cargo.toml"],
+    tags = broker_test_tags(),
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_broker",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-host:d2b_host",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
     name = "volume_presentation",
     srcs = ["tests/volume_presentation.rs"],
     compile_data = ["Cargo.toml"],

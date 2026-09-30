@@ -84,6 +84,11 @@ pub(crate) mod exec_reconcile;
 pub mod audit_op;
 // Broker-owned source-to-target NixOS generation handoff journal and replay.
 pub(crate) mod host_generation_handoff;
+// The one-shot ownership-bounded reset runner (U32, KTD15): the offline
+// `d2b host reset` path that removes the previous release's host state
+// without opening its SpecStore and without a running daemon.
+// Public arm: `tests/owned_reset.rs` imports it from outside the crate.
+pub mod host_reset;
 
 // Typed broker op that hardlink-farms per-VM closures into
 // `/var/lib/d2b/vms/<vm>/store/` and atomically swaps the `current`
