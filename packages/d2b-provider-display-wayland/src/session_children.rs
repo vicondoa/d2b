@@ -281,7 +281,9 @@ fn endpoint_fingerprint(base: &'static str, reconnect_generation: u64) -> String
 /// The row is decoded here because this crate owns the endpoint vocabulary:
 /// the consumer of a relationship must read the source's own contract, not
 /// its own idea of it.
-pub fn decode_endpoint_spec(spec: &Value) -> Result<EndpointSpec, WorkerEffectError> {
+pub fn decode_endpoint_spec(
+    spec: &Value,
+) -> Result<EndpointSpec, WorkerEffectError> {
     serde_json::from_value(spec.clone()).map_err(|_| WorkerEffectError::LaunchRejected)
 }
 
@@ -891,7 +893,7 @@ mod tests {
         .expect("session spec");
         let intents = display_owned_child_intents(&zone, &session_ref, &session_uid, &spec, 4);
         let intents = intents.expect("display child intents");
-        assert_eq!(intents.len(), 4);
+        assert_eq!(intents.len(), 5);
         assert_eq!(
             intents
                 .iter()
@@ -904,7 +906,9 @@ mod tests {
                 .iter()
                 .filter(|intent| intent.target().resource_type().as_str() == "Endpoint")
                 .count(),
-            2
+            3,
+            "the proxy's own cross-domain Endpoint, the host compositor \
+             Endpoint, and the frontend's Endpoint"
         );
         for intent in intents {
             let value: serde_json::Value =

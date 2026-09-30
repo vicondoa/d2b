@@ -39,6 +39,7 @@ pub use session_children::{
     display_endpoint_bindings,
     durable_compositor_endpoint_ref,
 };
+pub use d2b_provider_endpoint::endpoint::EndpointSpec;
 pub use runtime::{
     DisplayProcessEffectPort, DisplayRuntime, DisplayRuntimeError, FinalizationReport,
     WorkerEffectError, WorkerLaunchReceipt,

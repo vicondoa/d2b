@@ -1627,6 +1627,26 @@ mod tests {
     }
 
     #[test]
+    fn finalizer_revokes_endpoint_access_before_a_helper_stops() {
+        let decision = DisplayController::finalize(FinalizationInput::new(
+            StopRequest::Requested,
+            WorkerState::Starting,
+            WorkerState::Starting,
+            VolumeState::Present,
+            CleanupState::Complete,
+            CleanupState::Complete,
+            CleanupState::Pending,
+            GraceState::Active,
+        ));
+        assert!(decision.revoke_endpoint);
+        assert!(!decision.stop_proxy);
+        assert!(!decision.stop_frontend);
+        assert!(!decision.delete_runtime_volume);
+        assert!(!decision.remove_finalizer);
+        assert!(!decision.ambiguous);
+    }
+
+    #[test]
     fn finalizer_removes_ownership_only_after_all_cleanup_evidence() {
         let decision = DisplayController::finalize(FinalizationInput::new(
             StopRequest::Requested,
@@ -1683,10 +1703,11 @@ mod tests {
             VolumeState::Present,
             CleanupState::Pending,
             CleanupState::Pending,
-            CleanupState::Pending,
+            CleanupState::Complete,
             GraceState::Active,
         ));
         assert_eq!(decision.phase, Phase::Terminating);
+        assert!(!decision.revoke_endpoint);
         assert!(decision.stop_proxy);
         assert!(decision.stop_frontend);
         assert!(!decision.delete_runtime_volume);
@@ -1703,7 +1724,7 @@ mod tests {
             VolumeState::Present,
             CleanupState::Pending,
             CleanupState::Pending,
-            CleanupState::Pending,
+            CleanupState::Complete,
             GraceState::Active,
         ));
         assert_eq!(decision.phase, Phase::Terminating);

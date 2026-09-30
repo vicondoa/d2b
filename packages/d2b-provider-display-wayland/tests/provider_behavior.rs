@@ -435,7 +435,7 @@ fn derived_endpoints(
     spec: &WaylandSessionSpec,
     uid: &d2b_contracts_resource::v3::ResourceUid,
     generation: u64,
-) -> Vec<(ResourceRef, d2b_provider_endpoint::endpoint::EndpointSpec)> {
+) -> Vec<(ResourceRef, d2b_provider_display_wayland::EndpointSpec)> {
     d2b_provider_display_wayland::session_children::display_owned_child_intents(
         &zone(),
         &ResourceRef::parse("display-wayland.d2bus.org.WaylandSession/demo").unwrap(),
@@ -556,7 +556,7 @@ fn every_worker_reaches_only_the_endpoint_its_relationship_names() {
 fn observed(
     generation: u64,
     user: Option<ResourceRef>,
-    endpoint_spec: &d2b_provider_endpoint::endpoint::EndpointSpec,
+    endpoint_spec: &d2b_provider_display_wayland::EndpointSpec,
 ) -> d2b_provider_display_wayland::DisplayEndpointObservation<'_> {
     d2b_provider_display_wayland::DisplayEndpointObservation {
         spec: endpoint_spec,
@@ -724,7 +724,7 @@ fn an_absolute_display_string_cannot_expand_admitted_access() {
         .into_iter()
         .find(|(reference, _)| reference == compositor.source_ref())
         .unwrap();
-    let sibling = d2b_provider_endpoint::endpoint::EndpointSpec::new(
+    let sibling = d2b_provider_display_wayland::EndpointSpec::new(
         endpoint.provider_ref().clone(),
         endpoint.producer_ref().clone(),
         endpoint.endpoint_class(),
@@ -733,7 +733,7 @@ fn an_absolute_display_string_cannot_expand_admitted_access() {
         endpoint.service_fingerprint().cloned(),
         endpoint.locality(),
         endpoint.visibility(),
-        endpoint.attachment_policy().clone(),
+        *endpoint.attachment_policy(),
         endpoint.consumer_policy().clone(),
         endpoint.lifecycle_policy(),
     )

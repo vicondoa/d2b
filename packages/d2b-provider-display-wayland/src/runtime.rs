@@ -806,6 +806,7 @@ where
         grace: GraceState,
     ) -> Result<FinalizationReport, DisplayRuntimeError> {
         self.stop_requested = true;
+        let mut endpoint = self.portal;
         let revoking = DisplayController::finalize(FinalizationInput::from_supervisor(
             StopRequest::Requested,
             self.observation.proxy,
@@ -813,20 +814,20 @@ where
             self.volume,
             self.authority,
             self.principal,
-            CleanupState::Complete,
+            endpoint,
             grace,
         ))
         .revoke_endpoint;
         if revoking {
-            self.portal = self
+            endpoint = self
                 .effects
                 .revoke_portal()
                 .map_err(|e| {
                     tracing::warn!(error = %e, "endpoint access revocation effect failed during finalization");
                     DisplayRuntimeError::Effect(e)
                 })?;
+            self.portal = endpoint;
         }
-        let endpoint = self.portal;
         let stop_proxy = endpoint == CleanupState::Complete
             && !(self.observation.proxy.is_terminal() && self.observation.proxy.is_deleted());
         let stop_frontend = endpoint == CleanupState::Complete
@@ -1194,7 +1195,7 @@ mod tests {
         );
 
         let pending = runtime.finalize(GraceState::Active).unwrap();
-        assert_eq!(pending.decision.revoke_endpoint, true);
+        assert!(pending.decision.revoke_endpoint);
         assert!(!pending.stop_proxy);
         assert!(!pending.stop_frontend);
         assert!(!pending.decision.remove_finalizer);
@@ -1243,7 +1244,9 @@ mod tests {
         assert!(report.decision.remove_finalizer);
         assert_eq!(
             runtime.effects.cleanup,
-            vec!["volume", "portal", "principal", "authority"]
+            // Endpoint access is revoked before the transient volume and the
+            // remaining authority are released.
+            vec!["portal", "volume", "principal", "authority"]
         );
         let _ = spec;
     }
