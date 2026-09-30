@@ -300,10 +300,35 @@ let
   # Role and the Process provider's self-binding. They are ordinary graph
   # rows with canonical admitted bytes, evaluated by the one admission
   # evaluator, exactly as every other Role and RoleBinding is.
-  deploymentProviderProjections = import ./generated/provider-projections.nix;
-  deploymentImplementations =
-    builtins.attrNames deploymentProviderProjections.owners
-    ++ [ "system-minijail" "systemd" ];
+  # The implementation identities this deployment publishes, read from the
+  # same per-crate `registrations.json` declarations the daemon's generated
+  # provider registration table is emitted from. Reading the declarations
+  # themselves rather than any projection-owner or catalog list is what
+  # keeps the two sides from drifting: there is no second inventory to
+  # maintain, and the two framework execution providers the foundation seed
+  # binds are added from their own crate declarations.
+  deploymentProviderCrates = builtins.filter
+    (name: lib.hasPrefix "d2b-provider-" name && builtins.pathExists (
+      ./../packages/${name}/registrations.json
+    ))
+    (builtins.attrNames (builtins.readDir ../packages));
+  deploymentRegistrations = builtins.map
+    (name:
+      (builtins.fromJSON (builtins.readFile (
+        ./../packages/${name}/registrations.json
+      ))).provider)
+    deploymentProviderCrates;
+  # The generated registration table spells a provider family by its bare id,
+  # so the framework execution providers contribute the same spelling rather
+  # than the `Provider/<name>` resource reference their rows commit under.
+  implementationId = reference: lib.removePrefix "Provider/" reference;
+  deploymentImplementations = builtins.sort builtins.compareStrings (
+    deploymentRegistrations
+    ++ [
+      (implementationId "Provider/system-minijail")
+      (implementationId "Provider/systemd")
+    ]
+  );
   publisherRole = {
     rules = [
       {
@@ -336,8 +361,7 @@ let
     zone = "system";
     storeIncarnation = "foundation-1";
     stateVolume = "Volume/d2b-state";
-    implementations = builtins.sort builtins.compareStrings
-      deploymentImplementations;
+    implementations = deploymentImplementations;
     roles = builtins.filter (row: builtins.match "^Role/" row.reference != null)
       foundationAuthorityRows;
     roleBindings =
