@@ -162,8 +162,20 @@ wire_deserialize!(
 /// The destination is a location inside the consumer. It is never the source:
 /// a host source path is resolved privately from the admitted source and its
 /// named view, never authored here.
+// `rename_all_fields` is what makes the serialized form match the wire form
+// this enum's decoder accepts.  Without it the block variant emits
+// `device_slot` while `wire_deserialize!` reads `deviceSlot`, so a committed
+// canonical request carrying a block presentation could not be read back and
+// its row would declare no relationship at all.  The `schemars` attribute
+// repeats the casing on the variant because schemars 0.8 reads `rename_all`
+// on a variant but not the container-level `rename_all_fields`.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields, tag = "presentation")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields,
+    tag = "presentation"
+)]
 pub enum VolumePresentation {
     /// The exact named view presented at a destination inside the consumer.
     #[serde(rename = "filesystem")]
@@ -173,6 +185,7 @@ pub enum VolumePresentation {
     },
     /// The exact named view presented as a block device in a consumer slot.
     #[serde(rename = "block-device")]
+    #[schemars(rename_all = "camelCase")]
     BlockDevice {
         /// The consumer-side device slot.
         device_slot: u16,

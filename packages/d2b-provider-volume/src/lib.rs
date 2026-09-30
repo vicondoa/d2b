@@ -33,8 +33,8 @@ mod facets;
 pub mod test_support;
 
 pub use driver::{
-    VOLUME_CREATIONS, VOLUME_TYPE_NAME, VolumeDriverArgs, VolumeDriverEffects, volume_descriptor,
-    volume_spec_decoder,
+    CanonicalBindingChild, VOLUME_CREATIONS, VOLUME_TYPE_NAME, VolumeDriverArgs,
+    VolumeDriverEffects, canonical_binding_children, volume_descriptor, volume_spec_decoder,
 };
 pub use effects_service::{
     VOLUME_EFFECTS_SERVICE, VolumeEffectsService, VolumeEffectsServiceFactory,

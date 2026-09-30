@@ -31,13 +31,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use d2b_contracts_resource::v3::{
-    ResourceName, ResourceRef, ResourceSpec, ResourceTypeName as ContractResourceTypeName,
-    ResourceUid,
+    BindingContractError, ResourceName, ResourceRef, ResourceSpec,
+    ResourceTypeName as ContractResourceTypeName, ResourceUid,
     volume::VolumeSpec,
 };
 use crate::effects_service::{VOLUME_EFFECTS_SERVICE, VolumeEffectsService};
 use crate::facets::VolumeEffectFacets;
-use d2b_provider_volume_local::desired_binding_intents;
+use d2b_provider_volume_local::{
+    AdmittedVolumeBinding, canonical_binding_row, desired_binding_intents,
+};
 use d2b_resource_runtime::context::{
     ChildEnsure, ResourceContext, SpecDecoder, typed_spec_decoder,
 };
@@ -305,6 +307,46 @@ pub(crate) struct DesiredBindingChild {
     /// Exact child spec envelope bytes (neutral binding + serving Provider
     /// reference; no provider extension, KTD1).
     pub(crate) spec: Vec<u8>,
+}
+
+/// One canonical `VolumeBinding` child derived from an admitted source
+/// relationship (U14).
+///
+/// The desired bytes are the consumer's own `VolumeBindingRequest`, so the
+/// committed row is the declaration the consumer authored rather than a
+/// second description translated out of an attachment list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanonicalBindingChild {
+    /// Deterministic child name derived from the relationship's identities.
+    pub name: String,
+    /// Exact canonical request bytes committed as the child's base spec.
+    pub spec: Vec<u8>,
+}
+
+/// Derive the canonical `VolumeBinding` children the source owns.
+///
+/// Every admitted relationship becomes exactly one row, named from the
+/// KTD3 key rather than from a declaration position, so the same relationship
+/// keeps one identity across restarts and two relationships never collide by
+/// ordering.
+///
+/// # Errors
+///
+/// Returns [`BindingContractError::InvalidField`] when a derived row name is
+/// not a bounded token.
+pub fn canonical_binding_children(
+    admitted: &[AdmittedVolumeBinding],
+) -> Result<Vec<CanonicalBindingChild>, BindingContractError> {
+    admitted
+        .iter()
+        .map(|admitted| {
+            let row = canonical_binding_row(admitted)?;
+            Ok(CanonicalBindingChild {
+                name: row.name().as_str().to_owned(),
+                spec: row.spec().to_vec(),
+            })
+        })
+        .collect()
 }
 
 impl VolumeDriver {
@@ -1241,6 +1283,155 @@ mod tests {
         let mut d = driver(RecordingRuntime::new()).await;
         let failure = d.reconcile(&mut f.ctx).await.expect_err("terminal");
         assert_eq!(failure.class(), FailureClass::Terminal);
+    }
+
+    // -- canonical binding children (U14) ------------------------------------
+
+    use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+    use d2b_contracts_resource::v3::volume::{AttachmentAccess, VolumeSpec};
+    use d2b_contracts_resource::v3::{
+        BindingAuthorization, BindingRealizationFacet, BindingRealizationSupport, BindingSlot,
+        DesiredDigest, DesiredRevision, FreshnessTuple, ResourceUid, StoreIncarnation,
+        VolumeBindingRequest, VolumePresentation, ZoneId, canonical_json_bytes,
+    };
+    use d2b_provider_volume_local::{
+        VolumeAdmissionGrant, VolumeConsumerRequest, admit_consumer_requests,
+        VolumeAdmissionSource,
+    };
+    use d2b_resource_runtime::relations::DecodedBindingRequest;
+
+    use super::canonical_binding_children;
+
+    const VOLUME_UID_VALUE: &str = "6f9619ff-8b86-4d01-b42d-00cf4fc964ff";
+    const PROCESS_UID: &str = "323e4567-e89b-42d3-a456-426614174002";
+    const GUEST_UID: &str = "123e4567-e89b-42d3-a456-426614174000";
+
+    fn canonical_graph_volume() -> VolumeSpec {
+        serde_json::from_value(serde_json::json!({
+            "source": {
+                "executionRef": "Host/host-system",
+                "settings": { "kind": "local-path", "sourcePolicyId": "state-root" },
+            },
+            "kind": "durable",
+            "layout": [],
+            "views": {
+                "controller": { "path": "", "rights": ["read", "write", "traverse"] },
+            },
+        }))
+        .expect("conformant Volume spec")
+    }
+
+    /// One admitted relationship per consumer kind, admitted through the one
+    /// source-side path.
+    fn admitted_set() -> Vec<d2b_provider_volume_local::AdmittedVolumeBinding> {
+        let zone = ZoneId::parse("work").expect("zone");
+        let volume_ref =
+            d2b_contracts_resource::v3::ResourceRef::parse("Volume/state").expect("volume");
+        let volume_uid = ResourceUid::parse(VOLUME_UID_VALUE).expect("uid");
+        let support = BindingRealizationSupport::new(vec![
+            BindingRealizationFacet::FilesystemPresentation,
+            BindingRealizationFacet::ConsumerDeviceSlot,
+        ])
+        .expect("support set");
+        let authorization = BindingAuthorization::granted();
+        let fence: Vec<FreshnessTuple> = [
+            ("Volume/state", VOLUME_UID_VALUE),
+            ("Process/worker", PROCESS_UID),
+            ("Guest/work-vm", GUEST_UID),
+        ]
+        .into_iter()
+        .map(|(name, identity)| {
+            FreshnessTuple::new(
+                zone.clone(),
+                StoreIncarnation::parse("store-one").expect("incarnation"),
+                d2b_contracts_resource::v3::ResourceRef::parse(name).expect("reference"),
+                ResourceUid::parse(identity).expect("uid"),
+                DesiredRevision::INITIAL,
+                DesiredDigest::of(name.as_bytes()),
+            )
+        })
+        .collect();
+        let grant = VolumeAdmissionGrant::new(&support, &authorization, &fence);
+        let spec = canonical_graph_volume();
+        let source =
+            VolumeAdmissionSource::new(&zone, &volume_ref, &volume_uid, &spec, false, &grant);
+        let requests = [
+            VolumeConsumerRequest::new(
+                ResourceUid::parse(PROCESS_UID).expect("uid"),
+                VolumeBindingRequest::new(
+                    volume_ref.clone(),
+                    d2b_contracts_resource::v3::ResourceRef::parse("Process/worker")
+                        .expect("consumer"),
+                    BindingSlot::parse("work").expect("slot"),
+                    BoundedToken::parse("controller").expect("view"),
+                    AttachmentAccess::ReadWrite,
+                    VolumePresentation::filesystem("/srv/work").expect("destination"),
+                )
+                .expect("canonical request"),
+            ),
+            VolumeConsumerRequest::new(
+                ResourceUid::parse(GUEST_UID).expect("uid"),
+                VolumeBindingRequest::new(
+                    volume_ref.clone(),
+                    d2b_contracts_resource::v3::ResourceRef::parse("Guest/work-vm")
+                        .expect("consumer"),
+                    BindingSlot::parse("state").expect("slot"),
+                    BoundedToken::parse("controller").expect("view"),
+                    AttachmentAccess::ReadOnly,
+                    VolumePresentation::block_device(1).expect("device slot"),
+                )
+                .expect("canonical request"),
+            ),
+        ];
+        admit_consumer_requests(&source, &requests).expect("admitted")
+    }
+
+    #[test]
+    fn one_admitted_relationship_commits_exactly_one_canonical_row() {
+        let admitted = admitted_set();
+        let children = canonical_binding_children(&admitted).expect("derived rows");
+        assert_eq!(children.len(), admitted.len());
+        for (child, relationship) in children.iter().zip(&admitted) {
+            // The committed bytes ARE the consumer's request, so the row the
+            // graph reads back is the declaration that was admitted.
+            let decoded = DecodedBindingRequest::decode("VolumeBinding", &child.spec)
+                .expect("the committed row is a canonical request");
+            assert_eq!(decoded.consumer_ref(), relationship.request().consumer_ref());
+            assert_eq!(decoded.slot(), relationship.request().slot());
+            assert_eq!(
+                decoded.fingerprint(),
+                &relationship.request().fingerprint()
+            );
+            let rendered: serde_json::Value =
+                serde_json::from_slice(&canonical_json_bytes(relationship.request()).expect("bytes"))
+                    .expect("canonical request value");
+            let committed: serde_json::Value =
+                serde_json::from_slice(&child.spec).expect("committed row value");
+            // Only the presentation differs in shape; the rest is identical.
+            assert_eq!(committed["sourceRef"], rendered["sourceRef"]);
+            assert_eq!(committed["consumerRef"], rendered["consumerRef"]);
+            assert_eq!(committed["slot"], rendered["slot"]);
+            assert_eq!(committed["view"], rendered["view"]);
+            assert_eq!(committed["access"], rendered["access"]);
+            assert_eq!(committed["presentation"], rendered["presentation"]);
+        }
+    }
+
+    #[test]
+    fn a_relationship_keeps_one_row_name_across_passes_and_consumers() {
+        let admitted = admitted_set();
+        let first = canonical_binding_children(&admitted).expect("derived rows");
+        // Deriving again from the same admitted set changes nothing, so a
+        // restart re-ensures the same rows instead of churning identities.
+        let second = canonical_binding_children(&admitted).expect("derived rows");
+        assert_eq!(first, second);
+        // Distinct relationships - here two different consumer kinds - never
+        // collide on one row name.
+        let names: std::collections::BTreeSet<&str> = first
+            .iter()
+            .map(|child| child.name.as_str())
+            .collect();
+        assert_eq!(names.len(), first.len());
     }
 
 }

@@ -7,8 +7,9 @@
 //! publishes, and the typed spec parse. Neither touches a store, and both
 //! fail closed on a row they cannot read.
 
-use d2b_contracts_resource::v3::volume_binding::{VolumeBindingSpec, VolumeBindingStatusResource};
 use d2b_contracts_resource::v3::StoredResource;
+use d2b_contracts_resource::v3::volume_binding::{VolumeBindingSpec, VolumeBindingStatusResource};
+use d2b_contracts_resource::v3::VolumeBindingRequest;
 
 /// Whether one stored VolumeBinding carries a current fenced readiness
 /// projection.  Unparseable or unfenced projections fail closed.
@@ -44,6 +45,21 @@ pub fn parsed_binding_spec(binding: &StoredResource) -> Option<VolumeBindingSpec
         }
     }
     serde_json::from_value::<VolumeBindingSpec>(spec).ok()
+}
+
+/// Parse a stored `VolumeBinding` row as the canonical consumer request.
+///
+/// The canonical row's base spec is the consumer's own
+/// `VolumeBindingRequest`, so this is the same declaration read back out of
+/// committed bytes rather than a translated copy of an attachment list.  A
+/// row in the old attachment shape simply is not a canonical request, and
+/// this returns `None` for it instead of guessing a relationship out of one.
+pub fn parsed_consumer_request(binding: &StoredResource) -> Option<VolumeBindingRequest> {
+    let spec = serde_json::from_slice::<serde_json::Value>(&binding.canonical_json)
+        .ok()?
+        .get("spec")?
+        .clone();
+    serde_json::from_value::<VolumeBindingRequest>(spec).ok()
 }
 
 #[cfg(test)]

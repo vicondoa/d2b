@@ -69,9 +69,14 @@ pub use controller::{
     volume_runner_contract,
 };
 pub use error::VolumeLocalError;
-pub use bindings::{BindingIntent, desired_binding_intents};
+pub use bindings::{
+    AdmittedVolumeBinding, BindingIntent, BindingRow, VolumeAdmissionGrant, VolumeAdmissionSource,
+    VolumeConsumerRequest, admit_consumer_request, admit_consumer_requests, binding_row_name,
+    canonical_binding_row, desired_binding_intents,
+};
 pub use finalization::{
-    FinalizationAction, FinalizationObservation, FinalizationResult, finalization_plan,
+    FinalizationAction, FinalizationObservation, FinalizationResult, SourceReleaseDecision,
+    SourceReleaseObservation, decide_source_release, finalization_plan,
 };
 pub use identity::{AnchoredRoot, EntryDigest, MarkerState, OwnerProof, VolumeRootHandle, VolumeRootHandleView};
 pub use layout::{
@@ -86,4 +91,8 @@ pub use source::{
 };
 pub use status::{AttachmentState, AttachmentStatus, LayoutPhase, VolumeStatusReport};
 pub use store_view::{STORE_VIEW_VOLUME_NAME_PREFIX, StoreViewMarkerEvidence};
-pub use views::{AttachmentPlan, admit_access, admit_attachments, is_read_only, resolve_view};
+pub use views::{
+    VOLUME_CONSUMER_KINDS, AttachmentPlan, access_for_rights, admit_access, admit_attachments,
+    admit_consumer_kind, admit_view_request, destination_collides, is_read_only,
+    normalize_consumer_request, resolve_view, view_requested_rights, view_subdirectory,
+};

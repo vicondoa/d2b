@@ -30,6 +30,10 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "ti
 tracing = "0.1"
 
 [[test]]
+name = "consumer_bindings"
+path = "tests/consumer_bindings.rs"
+
+[[test]]
 name = "registration"
 path = "tests/registration.rs"
 required-features = ["test-support"]
