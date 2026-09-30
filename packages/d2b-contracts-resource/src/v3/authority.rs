@@ -518,6 +518,15 @@ pub enum RefusalReason {
     SeccompIncompatible,
     /// The requested limit exceeds an admitted ceiling.
     LimitExceedsCeiling,
+    /// An admitted emergency reduction is blocking new use.
+    ///
+    /// A Zone's `EmergencyPolicy` row is a committed policy reduction, so a
+    /// request that arrives while it is enforced is refused at the revoking
+    /// stage even though the same request was admitted against the earlier
+    /// graph. The reason is its own so an operator can tell a policy
+    /// reduction from a quota ceiling; the flag itself stays in the policy
+    /// row, never in the refusal.
+    EmergencyReductionActive,
     /// The target support ceiling does not admit the requested capability.
     TargetSupportMissing,
     /// The requested relationship conflicts with an existing declaration.

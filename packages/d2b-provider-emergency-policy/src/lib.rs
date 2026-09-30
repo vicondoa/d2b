@@ -9,10 +9,17 @@
 //!
 //! `EmergencyPolicy` carries a zone's emergency posture: the driver converges
 //! it as metadata once its desired state is admitted, and the authority class
-//! the policy scopes is arbitrated by the quota crate's authority index.
+//! the policy scopes is arbitrated by the quota crate's authority index. The
+//! type's enforcement - what a reduction refuses, and the ordered typed
+//! release it drives existing use through - is in [`driver`] and is decided
+//! here, not in the daemon composition.
 
 #![deny(missing_docs)]
 
 mod driver;
 
-pub use driver::emergency_policy_descriptor;
+pub use driver::{
+    DrainStep, EmergencyDrainPlan, EmergencyReduction, EnforcementState, NewUseState, OpenUse,
+    OpenUseCensus, ProviderProcessState, ReservationDrain, ZoneLinkState,
+    emergency_drain_finalizer, emergency_policy_descriptor, plan_drain,
+};

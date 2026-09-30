@@ -17,7 +17,8 @@
 
 mod driver;
 
-/// The Quota ResourceType spec and status shapes owned by this crate.
+/// The Quota ResourceType spec and status shapes owned by this crate, and the
+/// admission decision its ceilings make (U40, R8/R36).
 pub mod quota;
 
-pub use driver::quota_descriptor;
+pub use driver::{quota_descriptor, quota_policy_of_spec};

@@ -17,6 +17,12 @@ await_holding_refcell_ref = "deny"
 test-support = []
 
 [dependencies]
+# U40: the type's own enforcement speaks the canonical refusal vocabulary and
+# the canonical EmergencyPolicy contract. Neither is re-declared here: the
+# provider owns when a reduction refuses and drains, the contracts own what a
+# policy row says and what a refusal is called.
+d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
+d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
 d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap" }
 
 [dev-dependencies]

@@ -21,6 +21,8 @@ d2b_rust_library(
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-resource-types:d2b_resource_types",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
@@ -31,6 +33,8 @@ d2b_rust_library(
     crate_features = ["test-support"],
     crate_name = "d2b_provider_emergency_policy",
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-resource-types:d2b_resource_types_test_support",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
@@ -41,6 +45,8 @@ d2b_rust_test(
     srcs = ["tests/registration.rs"],
     compile_data = ["Cargo.toml"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-resource-types:d2b_resource_types_test_support",
         ":d2b_provider_emergency_policy_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
