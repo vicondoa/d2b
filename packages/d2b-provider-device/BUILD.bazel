@@ -83,6 +83,16 @@ d2b_rust_test(
 )
 
 d2b_rust_test(
+    name = "device_binding",
+    srcs = ["tests/device_binding.rs"],
+    compile_data = ["Cargo.toml"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-provider-device:d2b_provider_device",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
     name = "device_family_integration",
     srcs = ["integration/device_family.rs"],
     compile_data = ["Cargo.toml"],

@@ -13,11 +13,24 @@ use d2b_provider_device::{
     DEVICE_REGISTRATIONS, DeviceComponent, DeviceDriverArgs, DeviceResourceState,
     device_descriptor,
 };
-use d2b_provider_device::facets::{DeviceEffectFacets, DeviceRuntime};
+use d2b_provider_device::facets::{DeviceEffectFacets, DeviceInventorySource, DeviceRuntime};
 use d2b_provider_toolkit::{
     SharedProviderEffectOutcome, SharedProviderEffectError, SharedProviderEffectPhase,
     SharedProviderEffectRequest, SharedProviderFinalize,
 };
+
+/// A row whose trusted host inventory cannot be resolved admits nothing.
+struct UnavailableInventory;
+
+#[async_trait::async_trait]
+impl DeviceInventorySource for UnavailableInventory {
+    async fn device_inventory(
+        &self,
+        _request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<d2b_provider_device::binding::DeviceInventory, SharedProviderEffectError> {
+        Err(SharedProviderEffectError::InvalidResource)
+    }
+}
 
 struct UnavailableRuntime;
 
@@ -51,6 +64,7 @@ fn the_device_type_registers_one_driver_over_four_provider_rows() {
         controller_generation: ControllerGeneration::new(1).expect("generation"),
         facets: DeviceEffectFacets {
             runtime: Arc::new(UnavailableRuntime),
+            inventory: Arc::new(UnavailableInventory),
         },
     });
     let registered = descriptor

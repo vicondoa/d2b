@@ -42,6 +42,14 @@ impl WellKnownType {
     pub const NETWORK: Self = Self("Network");
     /// A host device backing.
     pub const DEVICE: Self = Self("Device");
+    /// The binding that attaches a device capability to a consumer.
+    ///
+    /// The name is in the vocabulary because the per-type driver crate
+    /// declares its descriptor by it. It is deliberately not in [`ALL`]:
+    /// that list is the projection of the generated converted-type
+    /// authority, and registering the type there is the cutover unit's
+    /// change, not a second edit here.
+    pub const DEVICE_BINDING: Self = Self("DeviceBinding");
     /// A USB/IP service instance.
     pub const USB_SERVICE: Self = Self("usb.d2bus.org.UsbService");
     /// The binding that attaches a USB backing to a guest.

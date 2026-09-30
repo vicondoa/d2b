@@ -2113,6 +2113,8 @@ impl ConstructionInputs {
         let device_facets = d2b_provider_device::facets::DeviceEffectFacets {
             runtime: Arc::clone(&shared_provider_effects)
                 as Arc<dyn d2b_provider_device::facets::DeviceRuntime>,
+            inventory: Arc::clone(&shared_provider_effects)
+                as Arc<dyn d2b_provider_device::facets::DeviceInventorySource>,
         };
         let tpm_facets = d2b_provider_device_tpm::facets::TpmEffectFacets {
             runtime: Arc::clone(&shared_provider_effects)

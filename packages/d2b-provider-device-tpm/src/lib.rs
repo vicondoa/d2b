@@ -26,8 +26,9 @@ pub use resource_controller::{
 };
 pub use resource_effect::{TpmResourceEffectError, TpmResourceEffectPort};
 pub use resources::{
-    build_swtpm_flush_spec, build_swtpm_process_spec, build_tpm_state_volume_resource,
-    build_tpm_state_volume_spec,
+    build_swtpm_flush_spec, build_swtpm_process_spec, build_tpm_flush_state_request,
+    build_tpm_state_volume_resource, build_tpm_state_volume_spec, build_tpm_worker_state_request,
+    tpm_state_volume_ref, TpmStateIdentity,
 };
 pub use runner::SwtpmSettings;
 pub use swtpm_argv::{

@@ -12,8 +12,81 @@ use d2b_provider_toolkit::{
     SharedProviderEffectRequest, SharedProviderFinalize,
 };
 
-use crate::driver::{DeviceComponent, DeviceResourceState};
-use crate::facets::{DeviceEffectFacets, DeviceRuntime};
+use crate::binding::{DeviceInventory, DeviceInventoryEntry, DevicePresence};
+use crate::driver::{
+    DeviceComponent, DeviceResourceState, component_for_provider, declared_device_functions,
+};
+use crate::facets::{DeviceEffectFacets, DeviceInventorySource, DeviceRuntime};
+
+/// Recording [`DeviceInventorySource`] double: resolves the declared
+/// vocabulary of a Device row to present capabilities with distinct
+/// authority keys, so a test can drive binding admission without a host
+/// inventory.
+#[derive(Default)]
+pub struct RecordingInventory;
+
+#[async_trait]
+impl DeviceInventorySource for RecordingInventory {
+    async fn device_inventory(
+        &self,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<DeviceInventory, SharedProviderEffectError> {
+        let provider_ref = request
+            .spec
+            .get("providerRef")
+            .and_then(serde_json::Value::as_str)
+            .ok_or(SharedProviderEffectError::InvalidResource)?;
+        let component =
+            component_for_provider(provider_ref).ok_or(SharedProviderEffectError::InvalidResource)?;
+        let spec = recorded_spec(component);
+        let entries = declared_device_functions(component, &spec)
+            .into_iter()
+            .enumerate()
+            .map(|(index, function)| {
+                DeviceInventoryEntry::new(
+                    function,
+                    d2b_contracts_resource::v3::DeviceAuthorityKey::from_core([index as u8 + 1; 32]),
+                    d2b_contracts_resource::v3::DeviceAuthorityArbitration::Exclusive,
+                    DevicePresence::Present,
+                )
+            })
+            .collect();
+        DeviceInventory::new(entries)
+            .map_err(|_| SharedProviderEffectError::InvalidResource)
+    }
+}
+
+/// The recorded minimal Device spec for one family.
+pub fn recorded_spec(component: DeviceComponent) -> d2b_contracts_resource::v3::DeviceSpec {
+    use d2b_contracts_resource::v3::{
+        DeviceArbitration, DeviceClass, DeviceSpec, InventorySelector, InventorySpec,
+        execution_policy::BoundedToken,
+    };
+    let label = BoundedToken::parse("recorded").expect("bounded token");
+    let selector = match component {
+        DeviceComponent::Tpm => Some(InventorySelector::Tpm { label, index: 0 }),
+        DeviceComponent::Usbip => Some(InventorySelector::Usb {
+            label,
+            vendor_id: None,
+            product_id: None,
+            serial: None,
+        }),
+        DeviceComponent::SecurityKey => Some(InventorySelector::Hidraw {
+            label,
+            vendor_id: None,
+            product_id: None,
+            serial: None,
+        }),
+        DeviceComponent::Gpu => Some(InventorySelector::Drm { label, pci_slot: None }),
+    };
+    DeviceSpec::new(
+        DeviceClass::Physical,
+        DeviceArbitration::Exclusive,
+        1,
+        InventorySpec::new(selector),
+    )
+    .expect("the recorded Device spec is always valid")
+}
 
 /// Recording [`DeviceRuntime`] double: answers Pending/Complete for every
 /// effect call and records the driven components, so `d2bd`'s plane tests
@@ -57,5 +130,8 @@ impl DeviceRuntime for RecordingRuntime {
 
 /// Build a Device facet set from a recording runtime double.
 pub fn recording_facets(runtime: Arc<RecordingRuntime>) -> DeviceEffectFacets {
-    DeviceEffectFacets { runtime }
+    DeviceEffectFacets {
+        runtime,
+        inventory: Arc::new(RecordingInventory),
+    }
 }

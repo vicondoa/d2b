@@ -3697,17 +3697,6 @@ fn device_worker_launch_args(
                 state_dir: params.state_dir.to_string_lossy().into_owned(),
                 ctrl_socket_path: params.ctrl_socket_path.to_string_lossy().into_owned(),
                 server_socket_path: params.server_socket_path.to_string_lossy().into_owned(),
-                // No socket owner: this launch runs in a user namespace, and
-                // swtpm chowns each socket to the id it is handed. Naming the
-                // in-namespace id here still fails - the chown is refused
-                // with EPERM and swtpm exits 1 before it binds the data
-                // socket ("Could not change ownership of UnixIO socket to
-                // 0:0 Operation not permitted"), leaving the state directory
-                // with no log, no pid file and no NVRAM. Reproduced with this
-                // exact artifact binary. Omitting the owner leaves each
-                // socket owned by the uid swtpm itself runs as.
-                uid: None,
-                gid: None,
                 log_path: params
                     .state_dir
                     .join("swtpm.log")
@@ -3720,7 +3709,6 @@ fn device_worker_launch_args(
                     .to_string_lossy()
                     .into_owned(),
                 startup_clear: true,
-                extra_args: Vec::new(),
             })
             .map_err(|_| "provider-ticket:device-worker-argv-invalid:swtpm".to_owned())?
         }
@@ -3755,7 +3743,6 @@ fn device_worker_launch_args(
                 socket_path: params.socket_path.to_string_lossy().into_owned(),
                 wayland_sock: params.wayland_sock.to_string_lossy().into_owned(),
                 params: gpu_params,
-                extra_args: Vec::new(),
             })
             .map_err(|_| "provider-ticket:device-worker-argv-invalid:gpu".to_owned())?
         }

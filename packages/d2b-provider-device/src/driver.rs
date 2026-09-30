@@ -18,6 +18,18 @@
 //! these components declare none and retire their whole owned subtree on
 //! teardown instead.
 //!
+//! # Capability and authority
+//!
+//! A device grant is not a template name. Each family declares the closed set
+//! of named capabilities it can deliver
+//! ([`declared_device_functions`]) and the effect operation classes it admits
+//! ([`device_effect_operations`]); the trusted inventory decides which of
+//! those functions the host backs right now, and [`crate::binding`] is the
+//! one source-side path that admits a consumer's `DeviceBindingRequest`
+//! against those exact facts. Physical authority comes from the inventory's
+//! opaque key, so a seccomp name, a launch role, or a device-node path can no
+//! longer decide a device grant.
+//!
 //! Conversion mapping (spec section 13):
 //! - `describe` -> the [`ProviderRow`] registrations under `Device`.
 //! - `validate_spec` -> [`ResourceDriver::validate`]: the spec decodes and
@@ -36,7 +48,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ResourceUid, ZoneId};
+use d2b_contracts_resource::v3::{
+    ControllerGeneration, DeviceEffectOperation, DeviceFunction, DeviceSpec, InventorySelector,
+    ResourceRef, ResourceUid, ZoneId,
+};
 use d2b_provider_toolkit::{
     ProviderRow, SharedProviderDeclarationError, SharedProviderDriverArgs,
     SharedProviderDriverFactory, SharedProviderEffectError, SharedProviderEffectOutcome,
@@ -297,17 +312,104 @@ pub fn declared_dependency_refs(
     }
 }
 
+/// Resolve the family one committed Device row names.
+///
+/// The `Device` type is served by four Providers and one driver keys them
+/// all, so a row's own `providerRef` is the only thing that selects the
+/// family. This is the one spelling of that selection: a Provider outside
+/// the four is `None`, and no other field of the row can move a capability or
+/// a storage grant between families.
+pub fn component_for_provider(provider_ref: &str) -> Option<DeviceComponent> {
+    match provider_ref {
+        d2b_provider_device_tpm::PROVIDER_REF => Some(DeviceComponent::Tpm),
+        d2b_provider_device_usbip::PROVIDER_REF => Some(DeviceComponent::Usbip),
+        d2b_provider_device_security_key::PROVIDER_REF => Some(DeviceComponent::SecurityKey),
+        d2b_provider_device_gpu::PROVIDER_REF => Some(DeviceComponent::Gpu),
+        _ => None,
+    }
+}
+
 /// The execution domains the Device type can be reconciled in.
 const DEVICE_EXECUTION_DOMAINS: &[&str] = &["host"];
 
+/// The named capabilities each Device family can ever admit, for the bus
+/// class its row declares.
+///
+/// This is the provider-owned replacement for a template table that named
+/// device nodes: a family declares the closed set of functions its
+/// realization knows how to deliver, and the trusted inventory decides which
+/// of them the host actually backs right now. A request may name one of
+/// these names and nothing else, so a device grant can no longer be reached
+/// by spelling a template.
+///
+/// The GPU vocabulary carries the NVIDIA nodes as ordinary named
+/// capabilities. They are not a wider default: a consumer that needs one
+/// must hold an admitted binding for it, so a decode mode selects which
+/// admitted capability the worker reaches rather than which node path the
+/// launch is handed.
+pub fn declared_device_functions(
+    component: DeviceComponent,
+    spec: &DeviceSpec,
+) -> Vec<DeviceFunction> {
+    let selector = spec.inventory().selector();
+    let functions: &[&str] = match (component, selector) {
+        (DeviceComponent::Tpm, Some(InventorySelector::Tpm { .. })) => &["tpm"],
+        (DeviceComponent::Gpu, Some(InventorySelector::Drm { .. })) | (
+            DeviceComponent::Gpu,
+            Some(InventorySelector::Pci { .. }),
+        ) => &[
+            "dri",
+            "render-node",
+            "udmabuf",
+            "nvidia-ctl",
+            "nvidia-uvm",
+            "nvidia-device",
+        ],
+        (DeviceComponent::Usbip, Some(InventorySelector::Usb { .. })) => &["usb"],
+        (
+            DeviceComponent::SecurityKey,
+            Some(InventorySelector::Hidraw { .. }),
+        ) => &["hidraw"],
+        _ => &[],
+    };
+    functions
+        .iter()
+        .filter_map(|name| DeviceFunction::parse(*name).ok())
+        .collect()
+}
+
+/// The effect operation classes each Device family admits.
+///
+/// A relationship's operations are the source's own declaration, and a
+/// helper leg may only drive a subset of them, so widening one family's
+/// reachable effects is a change to this table rather than to a launch
+/// argument.
+pub const fn device_effect_operations(component: DeviceComponent) -> &'static [DeviceEffectOperation] {
+    match component {
+        DeviceComponent::Tpm => &[DeviceEffectOperation::PrepareStateDir, DeviceEffectOperation::SpawnRunner],
+        DeviceComponent::Gpu => &[DeviceEffectOperation::OpenDevice, DeviceEffectOperation::SpawnRunner],
+        DeviceComponent::Usbip => &[
+            DeviceEffectOperation::SpawnRunner,
+            DeviceEffectOperation::ApplyNftablesProjection,
+        ],
+        DeviceComponent::SecurityKey => &[
+            DeviceEffectOperation::SecurityKeyOpenDevice,
+            DeviceEffectOperation::SecurityKeyApplyUdevRules,
+        ],
+    }
+}
+
 /// The resource types the Device realizations read while reconciling: the
 /// owning Guest, the Host execution target, the declared worker rows, the
-/// state Volume, the relay/worker Endpoints, and the Services the USBIP and
-/// security-key Device rows are admitted by.
+/// state Volume, the admitted device bindings the source arbitrates, the
+/// relay/worker Endpoints, and the Services the USBIP and security-key
+/// Device rows are admitted by.
 const DEVICE_READS: &[WellKnownType] = &[
+    WellKnownType::DEVICE_BINDING,
     WellKnownType::GUEST,
     WellKnownType::HOST,
     WellKnownType::VOLUME,
+    WellKnownType::VOLUME_BINDING,
     WellKnownType::PROCESS,
     WellKnownType::ENDPOINT,
     WellKnownType::USB_SERVICE,

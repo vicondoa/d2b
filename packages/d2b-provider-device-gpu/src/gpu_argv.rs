@@ -20,6 +20,16 @@
 //! Provider composes that private CH argument from the sealed launch ticket;
 //! the Guest controller does not receive or assemble it.
 //!
+//! # What the argv may not carry
+//!
+//! The GPU worker's device capability is delivered by its own admitted
+//! `DeviceBinding` as a verified descriptor, so no argument here may name a
+//! device node: an argv generator that accepted a render-node path would let
+//! the same caller redirect a worker at a card its binding never claimed. The
+//! generator therefore refuses any input that names a device node, and the
+//! free-form `extraArgs` tail is gone, so the flag set above is the whole of
+//! what a caller can influence.
+//!
 //! Crate invariant `#![forbid(unsafe_code)]` is honoured.
 
 use serde::{Deserialize, Serialize};
@@ -93,10 +103,6 @@ pub struct GpuArgvInput {
     pub wayland_sock: String,
     /// `--params` JSON payload.
     pub params: GpuParams,
-    /// Free-form additional crosvm args. Caller is responsible for
-    /// quoting; each entry is emitted as-is in order at the end.
-    #[serde(default)]
-    pub extra_args: Vec<String>,
 }
 
 /// Errors the GPU argv generator can return.
@@ -118,6 +124,29 @@ pub enum GpuArgvError {
     EmptyContextTypes,
     /// No display is declared.
     EmptyDisplays,
+    /// One input named a device node.
+    ///
+    /// A device capability is delivered by the worker's own admitted
+    /// `DeviceBinding`, never by a path in its command line, so a render node
+    /// or any other device is refused here rather than handed to a launch
+    /// whose binding does not carry it.
+    DeviceNodeArgumentRefused,
+}
+
+/// Fence one path-shaped input against a device node.
+///
+/// crosvm's GPU sidecar is handed sockets and a Wayland endpoint, never a
+/// device. A `/dev/...` component in any of those inputs would be a caller
+/// redirecting the worker at a node its admitted binding does not carry, so
+/// it is refused before the argv is rendered.
+fn reject_device_node(path: &str) -> Result<(), GpuArgvError> {
+    if path
+        .split('/')
+        .any(|component| component == "dev" || component == "proc" || component == "sys")
+    {
+        return Err(GpuArgvError::DeviceNodeArgumentRefused);
+    }
+    Ok(())
 }
 
 /// Render the params JSON payload. Compact (no spaces) so the
@@ -192,9 +221,11 @@ pub fn generate_gpu_argv(input: &GpuArgvInput) -> Result<Vec<String>, GpuArgvErr
     if input.wayland_sock.is_empty() {
         return Err(GpuArgvError::EmptyWaylandSock);
     }
+    reject_device_node(&input.socket_path)?;
+    reject_device_node(&input.wayland_sock)?;
     let params_json = render_params(&input.params)?;
 
-    let mut argv: Vec<String> = vec![
+    let argv: Vec<String> = vec![
         input.crosvm_binary_path.clone(),
         "device".to_owned(),
         "gpu".to_owned(),
@@ -205,9 +236,6 @@ pub fn generate_gpu_argv(input: &GpuArgvInput) -> Result<Vec<String>, GpuArgvErr
         "--params".to_owned(),
         params_json,
     ];
-    for extra in &input.extra_args {
-        argv.push(extra.clone());
-    }
     Ok(argv)
 }
 
@@ -232,7 +260,6 @@ mod tests {
                 egl: true,
                 vulkan: true,
             },
-            extra_args: Vec::new(),
         }
     }
 
@@ -261,7 +288,6 @@ mod tests {
                 egl: true,
                 vulkan: true,
             },
-            extra_args: Vec::new(),
         }
     }
 
@@ -374,14 +400,13 @@ mod tests {
                 "displays": [{"hidden": true}],
                 "egl": true,
                 "vulkan": true
-            },
-            "extraArgs": []
+            }
         }"#;
         let parsed = serde_json::from_str::<GpuArgvInput>(json);
         assert!(parsed.is_ok(), "baseline shape must still parse: {parsed:?}");
         let top_level = json.replace(
-            "\"extraArgs\": []",
-            "\"extraArgs\": [], \"unexpectedField\": 1",
+            "\"vmName\": \"corp-vm\"",
+            "\"vmName\": \"corp-vm\", \"unexpectedField\": 1",
         );
         assert!(
             serde_json::from_str::<GpuArgvInput>(&top_level).is_err(),
@@ -405,16 +430,68 @@ mod tests {
         );
     }
 
+    /// The GPU worker reaches no device through its command line.
+    ///
+    /// Its device capability is delivered by its own admitted
+    /// `DeviceBinding` as a verified descriptor, so a render-node path in an
+    /// argument would be a caller redirecting the worker at a card its
+    /// binding never claimed. Both path-shaped inputs are fenced, and the
+    /// rendered argv names no device at all.
     #[test]
-    fn extra_args_appended_in_order() {
-        let mut input = audit_input();
-        input.extra_args = vec![
-            "--seccomp-policy-dir".to_owned(),
-            "/etc/crosvm/seccomp".to_owned(),
-        ];
-        let argv = generate_gpu_argv(&input).unwrap();
-        let last_two = &argv[argv.len() - 2..];
-        assert_eq!(last_two, &["--seccomp-policy-dir", "/etc/crosvm/seccomp"]);
+    fn refuses_an_input_that_names_a_render_node() {
+        for (socket, wayland) in [
+            (
+                "/dev/dri/renderD128".to_owned(),
+                "/run/user/1000/wayland-0".to_owned(),
+            ),
+            (
+                "/run/d2b/vms/corp-vm/gpu.sock".to_owned(),
+                "/dev/dri/renderD129".to_owned(),
+            ),
+        ] {
+            let mut input = daemon_input();
+            input.socket_path = socket;
+            input.wayland_sock = wayland;
+            assert!(
+                matches!(
+                    generate_gpu_argv(&input),
+                    Err(GpuArgvError::DeviceNodeArgumentRefused)
+                ),
+                "a device node must not reach the GPU worker argv"
+            );
+        }
+
+        let argv = generate_gpu_argv(&daemon_input()).unwrap();
+        assert!(
+            !argv.iter().any(|argument| argument.contains("/dev/")),
+            "the rendered GPU argv names no device node: {:?}",
+            argv
+        );
+    }
+
+    /// A declared payload cannot smuggle a render node or a free-form
+    /// argument tail back in.
+    ///
+    /// `GpuArgvInput` denies unknown fields, so a launch ticket that still
+    /// carries an `extraArgs` tail or an explicit render-node field is
+    /// refused at the type boundary rather than launching a worker that was
+    /// pointed at another card.
+    #[test]
+    fn a_declared_payload_cannot_carry_a_render_node_or_an_argument_tail() {
+        let input = daemon_input();
+        let mut payload = serde_json::to_value(&input).expect("the declared input serializes");
+        payload["extraArgs"] = serde_json::json!(["--render-node", "/dev/dri/renderD129"]);
+        assert!(
+            serde_json::from_value::<GpuArgvInput>(payload).is_err(),
+            "a free-form argv tail must not decode"
+        );
+
+        let mut payload = serde_json::to_value(&input).expect("the declared input serializes");
+        payload["renderNode"] = serde_json::json!("/dev/dri/renderD129");
+        assert!(
+            serde_json::from_value::<GpuArgvInput>(payload).is_err(),
+            "an explicit render-node field must not decode"
+        );
     }
 
     #[test]

@@ -1,11 +1,30 @@
 //! Canonical child-resource builders for the TPM Provider.
+//!
+//! # State is an ordinary VolumeBinding
+//!
+//! The TPM state directory used to be reached through a provider/template
+//! table: a closed entry in shared code named which Volume class the
+//! `swtpm-socket` template could bind read-write, and the launch inherited
+//! whatever that row said. Storage authority is not a template property.
+//!
+//! Each consumer now states its own [`VolumeBindingRequest`] - the swtpm
+//! worker claims the `swtpm-process` view read-write at `/state`, the
+//! one-shot flush claims the `controller` view read-only - and the state
+//! Volume admits those requests through the ordinary volume binding path.
+//! [`TpmStateIdentity`] is the durable relationship set both consumers
+//! derive from the owning Device's identity, so a restarted controller
+//! re-admits the same NVRAM and the same tamper marker rather than minting a
+//! new state directory next to the old one.
 
+use d2b_contracts_resource::v3::binding::BindingSlot;
 use d2b_contracts_resource::v3::execution_policy::{BoundedToken, DurationMs, ExecutionDomain};
+use d2b_contracts_resource::v3::volume::AttachmentAccess;
 use d2b_contracts_resource::v3::{
-    AdoptionPolicy, DesiredLifecycle, EphemeralProcessSpec, ExecutionSpec, HealthCheckClass,
-    HealthCheckSpec, MappingClass, MountAccess, MountSpec, NamespaceClass, ProcessClass,
-    ProcessSpec, ReadinessClass, ReadinessSpec, ResourceRef, RestartClass,
-    RestartPolicySpec, SandboxSpec, TelemetrySpec, UserNamespaceSpec,
+    AdoptionPolicy, BindingSpecFingerprint, DesiredLifecycle, EphemeralProcessSpec, ExecutionSpec,
+    HealthCheckClass, HealthCheckSpec, MappingClass, MountAccess, MountSpec, NamespaceClass,
+    ProcessClass, ProcessSpec, ReadinessClass, ReadinessSpec, ResourceRef, RestartClass,
+    RestartPolicySpec, SandboxSpec, TelemetrySpec, UserNamespaceSpec, VolumeBindingRequest,
+    VolumePresentation,
 };
 use serde_json::{Value, json};
 
@@ -18,6 +37,17 @@ use crate::resource_effect::TpmResourceEffectError;
 /// resolve the same name from the same identity.
 const TPM_STATE_VOLUME_ROLE: &str = "tpm-state";
 
+/// The state view the long-lived swtpm worker claims.
+const TPM_WORKER_VIEW: &str = "swtpm-process";
+/// The state view the one-shot pre-start flush claims.
+const TPM_FLUSH_VIEW: &str = "controller";
+/// The consumer-side destination the state views are presented at.
+const TPM_STATE_DESTINATION: &str = "/state";
+/// The long-lived worker's stable consumer slot on the state Volume.
+const TPM_WORKER_SLOT: &str = "tpm-state-worker";
+/// The one-shot flush's stable consumer slot on the state Volume.
+const TPM_FLUSH_SLOT: &str = "tpm-state-flush";
+
 /// The controller-created state Volume's name for one Device, from the
 /// framework's one Device-scoped child naming rule.
 fn device_state_volume_name(
@@ -28,6 +58,161 @@ fn device_state_volume_name(
         .ok_or(TpmResourceEffectError::InvalidDevice)
 }
 
+/// The controller-created TPM state Volume as an exact typed reference.
+///
+/// The name embeds the owning Device's durable uid, which only the
+/// framework's Device-scoped child naming rule can evaluate, so this is
+/// the one place a state reference is built and both consumers read it.
+///
+/// # Errors
+///
+/// Returns [`TpmResourceEffectError::InvalidDevice`] when the reference does
+/// not name a Device or the Device name or Zone is empty.
+pub fn tpm_state_volume_ref(
+    zone: &str,
+    device_ref: &ResourceRef,
+) -> Result<ResourceRef, TpmResourceEffectError> {
+    let name = device_state_volume_name(zone, device_ref)?;
+    ResourceRef::parse(&format!("Volume/{name}"))
+        .map_err(|_| TpmResourceEffectError::InvalidDevice)
+}
+
+fn state_view(view: &str) -> Result<BoundedToken, TpmResourceEffectError> {
+    BoundedToken::parse(view).map_err(|_| TpmResourceEffectError::InvalidDevice)
+}
+
+fn state_slot(slot: &str) -> Result<BindingSlot, TpmResourceEffectError> {
+    BindingSlot::parse(slot).map_err(|_| TpmResourceEffectError::InvalidDevice)
+}
+
+/// The long-lived swtpm worker's own state relationship.
+///
+/// The worker writes NVRAM and binds the TPM and control sockets, so it
+/// claims the `swtpm-process` view read-write at `/state`. That view is not
+/// the Volume root: the `controller` view stays outside it, so the worker
+/// cannot reach state it did not claim.
+///
+/// # Errors
+///
+/// Returns [`TpmResourceEffectError::InvalidDevice`] when the state
+/// reference or one of the typed request fields cannot be constructed.
+pub fn build_tpm_worker_state_request(
+    zone: &str,
+    device_ref: &ResourceRef,
+    worker_ref: &ResourceRef,
+) -> Result<VolumeBindingRequest, TpmResourceEffectError> {
+    VolumeBindingRequest::new(
+        tpm_state_volume_ref(zone, device_ref)?,
+        worker_ref.clone(),
+        state_slot(TPM_WORKER_SLOT)?,
+        state_view(TPM_WORKER_VIEW)?,
+        AttachmentAccess::ReadWrite,
+        VolumePresentation::filesystem(TPM_STATE_DESTINATION)
+            .map_err(|_| TpmResourceEffectError::InvalidDevice)?,
+    )
+    .map_err(|_| TpmResourceEffectError::InvalidDevice)
+}
+
+/// The one-shot pre-start flush's own state relationship.
+///
+/// The flush runs `swtpm_ioctl -i --unix <state>/ctrl.sock` and changes no
+/// NVRAM, so it claims the `controller` view read-only. Read-only is the
+/// whole point: the flush reaches the control socket inside the state view
+/// and nothing the long-lived worker writes.
+///
+/// # Errors
+///
+/// Returns [`TpmResourceEffectError::InvalidDevice`] when the state
+/// reference or one of the typed request fields cannot be constructed.
+pub fn build_tpm_flush_state_request(
+    zone: &str,
+    device_ref: &ResourceRef,
+    flush_ref: &ResourceRef,
+) -> Result<VolumeBindingRequest, TpmResourceEffectError> {
+    VolumeBindingRequest::new(
+        tpm_state_volume_ref(zone, device_ref)?,
+        flush_ref.clone(),
+        state_slot(TPM_FLUSH_SLOT)?,
+        state_view(TPM_FLUSH_VIEW)?,
+        AttachmentAccess::ReadOnly,
+        VolumePresentation::filesystem(TPM_STATE_DESTINATION)
+            .map_err(|_| TpmResourceEffectError::InvalidDevice)?,
+    )
+    .map_err(|_| TpmResourceEffectError::InvalidDevice)
+}
+
+/// The durable state relationships one TPM Device declares.
+///
+/// Every field is derived from the owning Device's reference and the two
+/// consumer row names, so a controller that restarts and rebuilds this value
+/// from the same committed identities gets the same state Volume, the same
+/// two claims, and therefore the same NVRAM and tamper marker. Nothing here
+/// is a fresh uuid, a fresh directory, or a launch argument.
+#[derive(Clone, PartialEq, Eq)]
+pub struct TpmStateIdentity {
+    volume_ref: ResourceRef,
+    worker_request: VolumeBindingRequest,
+    flush_request: VolumeBindingRequest,
+}
+
+impl TpmStateIdentity {
+    /// Derive one Device's state relationships.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TpmResourceEffectError::InvalidDevice`] when the state
+    /// reference or one of the two typed requests cannot be constructed.
+    pub fn derive(
+        zone: &str,
+        device_ref: &ResourceRef,
+        worker_ref: &ResourceRef,
+        flush_ref: &ResourceRef,
+    ) -> Result<Self, TpmResourceEffectError> {
+        Ok(Self {
+            volume_ref: tpm_state_volume_ref(zone, device_ref)?,
+            worker_request: build_tpm_worker_state_request(zone, device_ref, worker_ref)?,
+            flush_request: build_tpm_flush_state_request(zone, device_ref, flush_ref)?,
+        })
+    }
+
+    /// Borrow the exact state Volume both consumers claim.
+    pub const fn volume_ref(&self) -> &ResourceRef {
+        &self.volume_ref
+    }
+
+    /// Borrow the long-lived worker's state relationship.
+    pub const fn worker_request(&self) -> &VolumeBindingRequest {
+        &self.worker_request
+    }
+
+    /// Borrow the one-shot flush's state relationship.
+    pub const fn flush_request(&self) -> &VolumeBindingRequest {
+        &self.flush_request
+    }
+
+    /// The durable digest of the two declared claims.
+    ///
+    /// Two controllers that derive the same identity produce the same value,
+    /// so a restart that re-admits a different pair shows up as a change of
+    /// state rather than silently reusing the old directory.
+    pub fn fingerprint(&self) -> BindingSpecFingerprint {
+        BindingSpecFingerprint::from_request(&(
+            self.worker_request.fingerprint(),
+            self.flush_request.fingerprint(),
+        ))
+    }
+}
+
+impl core::fmt::Debug for TpmStateIdentity {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("TpmStateIdentity")
+            .field("volume_ref", &self.volume_ref)
+            .field("worker_view", &self.worker_request.view())
+            .field("flush_view", &self.flush_request.view())
+            .finish_non_exhaustive()
+    }
+}
 
 /// Umask the declared swtpm rows carry: swtpm binds a shared Unix socket a
 /// peer connects to as a different uid, so the created socket must keep its
@@ -163,11 +348,11 @@ fn build_tpm_state_volume_spec_with_principals(
             "target": null
         }],
         "views": {
-            "swtpm-process": {
+            TPM_WORKER_VIEW: {
                 "path": "",
                 "rights": ["read", "write", "create", "traverse"]
             },
-            "controller": {
+            TPM_FLUSH_VIEW: {
                 "path": "",
                 "rights": ["read", "write", "create", "delete", "traverse"]
             }
@@ -315,8 +500,8 @@ fn swtpm_mount() -> Result<MountSpec, TpmResourceEffectError> {
     MountSpec::own_child_volume(
         BoundedToken::parse(TPM_STATE_VOLUME_ROLE)
             .map_err(|_| TpmResourceEffectError::InvalidDevice)?,
-        BoundedToken::parse("swtpm-process").map_err(|_| TpmResourceEffectError::InvalidDevice)?,
-        "/state",
+        state_view(TPM_WORKER_VIEW)?,
+        TPM_STATE_DESTINATION,
         MountAccess::ReadWrite,
         true,
     )

@@ -25,7 +25,9 @@ pub use authority::{
     GpuAuthorityAdmission, GpuAuthorityError, GpuAuthorityLease, GpuBackingToken, GpuClosureProof,
     GpuOwnerProof, GpuPlatformToken, GpuPrincipalToken, GpuProcessIdentity, GpuProcessObservation,
 };
-pub use controller::{GpuController, GpuControllerError, GpuPhase, GpuReconcileOutcome};
+pub use controller::{
+    GpuController, GpuControllerError, GpuDeviceGrants, GpuPhase, GpuReconcileOutcome,
+};
 pub use effects::{
     GpuEffectError, GpuEffectToken, GpuEffectTokenSet, GpuLaunchTicket, GpuLifecycleEffectPort,
 };

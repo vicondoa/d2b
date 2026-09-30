@@ -15,6 +15,7 @@
 
 #![deny(missing_docs)]
 
+pub mod binding;
 mod driver;
 pub mod effects_service;
 pub mod facets;
@@ -25,5 +26,6 @@ pub mod test_support;
 pub use driver::{
     DEVICE_REGISTRATIONS, DEVICE_RESYNC, DEVICE_TYPE_NAME, DeviceComponent, DeviceDriverArgs,
     DeviceDriverEffects, DeviceResourceState, GPU_CONTROLLER_REF, SECURITY_KEY_CONTROLLER_REF,
-    TPM_CONTROLLER_REF, USBIP_CONTROLLER_REF, declared_dependency_refs, device_descriptor,
+    TPM_CONTROLLER_REF, USBIP_CONTROLLER_REF, component_for_provider, declared_dependency_refs,
+    declared_device_functions, device_descriptor, device_effect_operations,
 };

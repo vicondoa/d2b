@@ -37,6 +37,10 @@ path = "tests/device_family.rs"
 required-features = ["test-support"]
 
 [[test]]
+name = "device_binding"
+path = "tests/device_binding.rs"
+
+[[test]]
 name = "device_family_integration"
 path = "integration/device_family.rs"
 

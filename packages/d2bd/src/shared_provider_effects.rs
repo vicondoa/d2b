@@ -54,7 +54,10 @@ use sha2::{Digest, Sha256};
 use crate::ServerState;
 use crate::resource_plane_v3::ResourcePlaneV3;
 use crate::resource_runtime::{ASSIGNMENT_EPOCH, ZoneResourceRuntime};
-use d2b_provider_device::{DeviceComponent, DeviceResourceState};
+use d2b_provider_device::binding::{DeviceInventory, DeviceInventoryEntry, DevicePresence};
+use d2b_provider_device::{
+    DeviceComponent, DeviceResourceState, component_for_provider, declared_device_functions,
+};
 use d2b_provider_device_gpu::facets::GpuRuntime;
 use d2b_provider_device_security_key::SecurityKeyComponent;
 use d2b_provider_device_tpm::facets::TpmRuntime;
@@ -1362,6 +1365,74 @@ impl ProductionSharedProviderEffects {
 impl ProductionSharedProviderEffects {
     /// One GPU authority digest (old `DaemonSharedProviderEffects::gpu_digest`
     /// with the driver's controller generation in place of the old context).
+    /// The named device capabilities this GPU Device has admitted bindings
+    /// for.
+    ///
+    /// A worker's device set used to be answered by the launch template: the
+    /// `videoNvidiaDecode` setting chose a template name and the closed
+    /// posture table for that name supplied the nodes. The admitted side of
+    /// that decision now comes from the Device source: every named
+    /// capability the trusted inventory resolved is a capability a worker
+    /// here may reach, and the controller refuses a shape that needs one the
+    /// inventory did not back.
+    async fn gpu_device_grants(
+        &self,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<d2b_provider_device_gpu::GpuDeviceGrants, SharedProviderEffectError> {
+        let inventory =
+            d2b_provider_device::facets::DeviceInventorySource::device_inventory(self, request)
+                .await?;
+        d2b_provider_device_gpu::GpuDeviceGrants::new(inventory.present_functions())
+            .map_err(|_| SharedProviderEffectError::InvalidResource)
+    }
+
+    /// The opaque physical authority one named Device capability resolves
+    /// to.
+    ///
+    /// The key frames the row's durable identity, its desired generation, and
+    /// the manager's controller generation around the function name, so it is
+    /// stable for one committed row and changes when that row's authority
+    /// evidence changes. It is deliberately not derived from a device-node
+    /// path, a serial, a PCI slot, or a template name: nothing a caller can
+    /// spell reaches the authority key.
+    fn device_authority_key(
+        &self,
+        request: &SharedProviderEffectRequest<'_>,
+        function: &str,
+    ) -> d2b_contracts_resource::v3::DeviceAuthorityKey {
+        let mut digest = Sha256::new();
+        digest.update(b"d2b:device-authority/v1");
+        digest.update([0]);
+        digest.update(request.uid.as_str().as_bytes());
+        digest.update([0]);
+        digest.update(request.generation.get().to_be_bytes());
+        digest.update(self.controller_generation.get().to_be_bytes());
+        digest.update(function.as_bytes());
+        let bytes: [u8; 32] = digest.finalize().into();
+        d2b_contracts_resource::v3::DeviceAuthorityKey::from_core(bytes)
+    }
+
+    /// Whether the verified host device-node matrix still backs one named
+    /// Device capability.
+    ///
+    /// Only a capability the matrix declares a class for can be observed at
+    /// all. A capability with no class is observed absent, which fails its
+    /// admission closed rather than guessing a node path the operator never
+    /// declared.
+    fn device_presence(&self, function: &str) -> DevicePresence {
+        let Some(class) = device_function_host_class(function) else {
+            return DevicePresence::Absent;
+        };
+        let readback = d2b_host::devices::read_device_metadata(
+            &std::path::PathBuf::from(class.default_path()),
+        );
+        if readback.exists {
+            DevicePresence::Present
+        } else {
+            DevicePresence::Absent
+        }
+    }
+
     fn gpu_digest(
         &self,
         domain: &str,
@@ -1645,6 +1716,7 @@ impl ProductionSharedProviderEffects {
             match controllers.remove(&request.uid) {
                 Some(controller) => controller,
                 None => d2b_provider_device_tpm::TpmResourceController::new(
+                    self.zone.clone(),
                     request.uid.clone(),
                     key_ref(&request.target)?,
                     execution_ref.clone(),
@@ -2143,6 +2215,10 @@ impl ProductionSharedProviderEffects {
             ));
         }
         let (_runtime, admission, tokens, settings, holder_ref) = self.gpu_admission(request).await?;
+        // The device capabilities are read from the trusted host inventory
+        // before the controller cache is locked: the read is asynchronous and
+        // no lock guard may be held across an await.
+        let grants = self.gpu_device_grants(request).await?;
         let mut controllers = state.gpu_controllers()
             .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
@@ -2151,6 +2227,7 @@ impl ProductionSharedProviderEffects {
             None => d2b_provider_device_gpu::GpuController::new_authorized(
                 admission.clone(),
                 settings.clone(),
+                grants,
                 tokens.clone(),
             )
             .map_err(|_| SharedProviderEffectError::InvalidResource)?,
@@ -2775,6 +2852,70 @@ impl d2b_provider_device_security_key::facets::SecurityKeyRuntime
             SecurityKeyComponent::Service => self.finalize_security_key_service(request).await,
             SecurityKeyComponent::Binding => self.finalize_security_key_binding(request).await,
         }
+    }
+}
+
+/// The verified host device-node class backing one named Device capability.
+///
+/// This is the adapter's private translation from the Device provider's
+/// declared capability names to the host matrix rows it can be read from. It
+/// carries no path of its own: the path is the matrix row's, and a name with
+/// no row is observed absent.
+fn device_function_host_class(function: &str) -> Option<d2b_host::devices::DeviceClass> {
+    use d2b_host::devices::DeviceClass;
+    Some(match function {
+        "tpm" => DeviceClass::Tpm,
+        "dri" | "render-node" | "nvidia-device" => DeviceClass::Dri,
+        "udmabuf" => DeviceClass::Udmabuf,
+        "nvidia-ctl" => DeviceClass::NvidiaCtl,
+        "nvidia-uvm" => DeviceClass::NvidiaUvm,
+        _ => return None,
+    })
+}
+
+// The Device source's trusted inventory facet (U16): a `Device` row's
+// declared selector is resolved against the verified host device-node matrix
+// into opaque physical authority keys, and the presence observed for each.
+// The keys are minted here, in the trusted adapter, from the row's own
+// durable identity, its generation, and the manager's controller
+// generation - never from a device-node path, a serial, or a template name.
+#[async_trait]
+impl d2b_provider_device::facets::DeviceInventorySource for ProductionSharedProviderEffects {
+    async fn device_inventory(
+        &self,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<DeviceInventory, SharedProviderEffectError> {
+        let spec: d2b_contracts_resource::v3::DeviceSpec =
+            serde_json::from_value(request.spec.clone())
+                .map_err(|_| SharedProviderEffectError::InvalidResource)?;
+        let provider_ref = request
+            .spec
+            .get("providerRef")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                request
+                    .metadata
+                    .get("providerRef")
+                    .and_then(Value::as_str)
+            })
+            .ok_or(SharedProviderEffectError::InvalidResource)?;
+        let component =
+            component_for_provider(provider_ref).ok_or(SharedProviderEffectError::InvalidResource)?;
+        let entries: Result<Vec<DeviceInventoryEntry>, SharedProviderEffectError> =
+            declared_device_functions(component, &spec)
+                .into_iter()
+                .map(|function| {
+                    let key = self.device_authority_key(request, function.as_str());
+                    let presence = self.device_presence(function.as_str());
+                    Ok(DeviceInventoryEntry::new(
+                        function,
+                        key,
+                        d2b_contracts_resource::v3::DeviceAuthorityArbitration::Exclusive,
+                        presence,
+                    ))
+                })
+                .collect();
+        DeviceInventory::new(entries?).map_err(|_| SharedProviderEffectError::InvalidResource)
     }
 }
 

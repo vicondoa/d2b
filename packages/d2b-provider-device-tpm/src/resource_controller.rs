@@ -1,9 +1,21 @@
 //! Device TPM child-resource lifecycle controller.
+//!
+//! The state a TPM Device keeps is an ordinary `VolumeBinding` relationship
+//! pair, not a template grant: the long-lived worker claims the
+//! `swtpm-process` view read-write and the one-shot flush claims the
+//! `controller` view read-only. The controller derives both from the
+//! owning Device's identity through [`TpmStateIdentity`], so a controller
+//! rebuilt after a restart re-admits the same state Volume and the same two
+//! claims - the NVRAM and the tamper marker survive instead of a fresh
+//! directory appearing beside them. A state reference the framework hands
+//! back that is not the one this Device derives is a state-integrity
+//! failure, not something to adopt.
 
-use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneId};
 use serde::Serialize;
 
 use crate::resource_effect::{TpmResourceEffectError, TpmResourceEffectPort};
+use crate::resources::TpmStateIdentity;
 
 /// Default descriptor repair interval.
 pub const TPM_REPAIR_INTERVAL_SECS: u64 = 30;
@@ -117,8 +129,10 @@ impl std::error::Error for TpmResourceControllerError {}
 pub struct TpmResourceController {
     device_uid: ResourceUid,
     device_ref: ResourceRef,
+    zone: ZoneId,
     execution_ref: ResourceRef,
     phase: TpmResourcePhase,
+    state: TpmStateIdentity,
     volume_ref: Option<ResourceRef>,
     process_ref: Option<ResourceRef>,
     flush_ref: Option<ResourceRef>,
@@ -138,6 +152,7 @@ impl TpmResourceController {
     /// [`TpmResourceEffectError::InvalidExecutionRef`] when the execution
     /// reference is not a Host.
     pub fn new(
+        zone: ZoneId,
         device_uid: ResourceUid,
         device_ref: ResourceRef,
         execution_ref: ResourceRef,
@@ -164,8 +179,21 @@ impl TpmResourceController {
             ));
         }
         Ok(Self {
+            state: TpmStateIdentity::derive(
+                zone.as_str(),
+                &device_ref,
+                &ResourceRef::parse(&format!("Process/swtpm-{}", device_ref.name().as_str()))
+                    .map_err(|_| TpmResourceControllerError::InvalidState)?,
+                &ResourceRef::parse(&format!(
+                    "EphemeralProcess/swtpm-flush-{}",
+                    device_ref.name().as_str()
+                ))
+                .map_err(|_| TpmResourceControllerError::InvalidState)?,
+            )
+            .map_err(TpmResourceControllerError::Effect)?,
             device_uid,
             device_ref,
+            zone,
             execution_ref,
             phase: TpmResourcePhase::Pending,
             volume_ref: None,
@@ -175,6 +203,32 @@ impl TpmResourceController {
             last_error: None,
             needs_state_verification: true,
         })
+    }
+
+    /// Borrow the durable state relationships this Device declares.
+    ///
+    /// The value is derived from the Device's own identity, so a controller
+    /// constructed again after a restart observes exactly the same state
+    /// Volume, the same two claims, and the same fingerprint.
+    pub const fn state_identity(&self) -> &TpmStateIdentity {
+        &self.state
+    }
+
+    /// Borrow the Zone this Device's state belongs to.
+    pub const fn zone(&self) -> &ZoneId {
+        &self.zone
+    }
+
+    /// Borrow the state Volume the framework resolved for this Device.
+    ///
+    /// Before the first reconcile this is the derived relationship; once the
+    /// framework has confirmed the row, it is the row itself. Either way it
+    /// is the same state Volume, because the reconcile refuses anything else.
+    pub fn volume_ref(&self) -> &ResourceRef {
+        match self.volume_ref.as_ref() {
+            Some(resolved) => resolved,
+            None => self.state.volume_ref(),
+        }
     }
 
     /// Return the current lifecycle phase.
@@ -234,6 +288,18 @@ impl TpmResourceController {
                 Ok(value) => value,
                 Err(error) => return self.effect_failed(error),
             };
+            // The state Volume this Device owns is derived, not discovered:
+            // a framework that resolves any other row is not describing this
+            // Device's NVRAM, and adopting it would silently move the
+            // persistent state.
+            if &volume != self.state.volume_ref() {
+                tracing::warn!(
+                    device = %self.device_ref.to_canonical_string(),
+                    expected = %self.state.volume_ref().to_canonical_string(),
+                    "tpm state volume is not this device's own state relationship;                      tpm state identity refused",
+                );
+                return self.effect_failed(TpmResourceEffectError::StateIntegrity);
+            }
             if self
                 .volume_ref
                 .as_ref()

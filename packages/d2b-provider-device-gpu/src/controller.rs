@@ -1,7 +1,21 @@
 //! Combined GPU/video Device reconcile state machine.
+//!
+//! # A device grant is a binding, not a template name
+//!
+//! The device nodes a worker reaches used to be a property of its template:
+//! the closed `device_worker_posture` table answered "which nodes does
+//! `video-worker-nvidia` get" and the launch inherited the answer, so a
+//! decode *setting* selected a device *grant*.
+//!
+//! [`GpuDeviceGrants`] is the admitted side of that decision. Each entry is
+//! one named capability the Device source admitted a `DeviceBinding` for, so
+//! a worker starts only when every capability its declared shape needs is
+//! present here, and a missing one is a refusal before any reservation, open,
+//! or spawn. The mode still chooses which capabilities the worker asks for;
+//! it no longer chooses which device it is handed.
 
 use core::fmt;
-use d2b_contracts_resource::v3::{ResourceUid, device::DeviceArbitration};
+use d2b_contracts_resource::v3::{DeviceFunction, ResourceUid, device::DeviceArbitration};
 
 use crate::{
     GpuAuthorityAdmission, GpuAuthorityError, GpuAuthorityLease, GpuClosureProof, GpuEffectError,
@@ -42,6 +56,16 @@ pub enum GpuControllerError {
     Authority(GpuAuthorityError),
     /// Restart observation was ambiguous.
     Quarantined,
+    /// A worker's declared shape needs a device capability this Device has
+    /// no admitted `DeviceBinding` for.
+    ///
+    /// The count is the number of missing capabilities; the names live in
+    /// the admission, not in a refusal.
+    DeviceCapabilityRefused {
+        /// How many named capabilities the configured shape needs and this
+        /// Device has no admitted binding for.
+        missing: usize,
+    },
 }
 
 impl fmt::Display for GpuControllerError {
@@ -52,6 +76,10 @@ impl fmt::Display for GpuControllerError {
             Self::InvalidState => "gpu-invalid-state",
             Self::Authority(error) => return error.fmt(formatter),
             Self::Quarantined => "gpu-authority-quarantined",
+            Self::DeviceCapabilityRefused { missing } => return write!(
+                formatter,
+                "gpu-device-capability-refused:{missing}"
+            ),
         })
     }
 }
@@ -67,11 +95,97 @@ pub enum GpuReconcileOutcome {
     Retry,
 }
 
+/// The named device capabilities this Device's workers may reach.
+///
+/// One entry per admitted `DeviceBinding` function. Nothing here is a node
+/// path, a template name, or a posture row: the Device source resolved the
+/// name to an opaque physical authority and admitted the claim, and the
+/// controller only checks that every capability a worker's declared shape
+/// needs is present. A capability that is absent refuses the worker before it
+/// takes a reservation, opens a device, or spawns.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct GpuDeviceGrants {
+    functions: Vec<DeviceFunction>,
+}
+
+impl GpuDeviceGrants {
+    /// Bind one Device's admitted capabilities.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GpuControllerError::DeviceCapabilityRefused`] when one
+    /// admitted name is bound twice, which would leave the set ambiguous
+    /// about what it carries.
+    pub fn new(functions: Vec<DeviceFunction>) -> Result<Self, GpuControllerError> {
+        let mut sorted = functions.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        if sorted.len() != functions.len() {
+            return Err(GpuControllerError::DeviceCapabilityRefused { missing: 1 });
+        }
+        Ok(Self { functions })
+    }
+
+    /// Whether one named capability is admitted.
+    pub fn covers(&self, function: &DeviceFunction) -> bool {
+        self.functions.contains(function)
+    }
+
+    /// Borrow the admitted capability names.
+    pub fn functions(&self) -> &[DeviceFunction] {
+        &self.functions
+    }
+
+    /// The capabilities the configured GPU worker shape needs.
+    ///
+    /// Both GPU shapes reach the DRM render node; the full shape adds the
+    /// DRM device and the cross-domain buffer node its context types need.
+    pub fn required_worker_functions(render_node_only: bool) -> Vec<DeviceFunction> {
+        let names: &[&str] = if render_node_only {
+            &["render-node"]
+        } else {
+            &["render-node", "dri", "udmabuf"]
+        };
+        names
+            .iter()
+            .filter_map(|name| DeviceFunction::parse(*name).ok())
+            .collect()
+    }
+
+    /// The capabilities the configured video decode shape needs.
+    ///
+    /// The NVIDIA arm needs the three NVIDIA nodes in addition to DRM. Which
+    /// arm runs is still a setting, but it now selects which *admitted*
+    /// capability the worker asks for: a Device without an admitted
+    /// `nvidia-uvm` claim cannot select the NVIDIA decode mode at all.
+    pub fn required_video_functions(nvidia_decode: bool) -> Vec<DeviceFunction> {
+        let names: &[&str] = if nvidia_decode {
+            &["render-node", "nvidia-ctl", "nvidia-uvm", "nvidia-device"]
+        } else {
+            &["render-node"]
+        };
+        names
+            .iter()
+            .filter_map(|name| DeviceFunction::parse(*name).ok())
+            .collect()
+    }
+}
+
+impl core::fmt::Debug for GpuDeviceGrants {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("GpuDeviceGrants")
+            .field("functions", &self.functions.len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Combined GPU/video controller.
 pub struct GpuController {
     device_uid: ResourceUid,
     arbitration: DeviceArbitration,
     settings: GpuSettings,
+    grants: GpuDeviceGrants,
     tokens: GpuEffectTokenSet,
     phase: GpuPhase,
     finalizer: bool,
@@ -95,6 +209,7 @@ impl GpuController {
     pub fn new_authorized(
         admission: GpuAuthorityAdmission,
         settings: GpuSettings,
+        grants: GpuDeviceGrants,
         tokens: GpuEffectTokenSet,
     ) -> Result<Self, GpuControllerError> {
         let device_uid = admission.owner().device_uid().clone();
@@ -110,6 +225,7 @@ impl GpuController {
             device_uid,
             arbitration: admission.arbitration(),
             settings,
+            grants,
             tokens,
             phase: GpuPhase::Pending,
             finalizer: true,
@@ -147,6 +263,31 @@ impl GpuController {
     /// Borrow the Core admission bound to this controller.
     pub const fn admission(&self) -> Option<&GpuAuthorityAdmission> {
         self.admission.as_ref()
+    }
+
+    /// Borrow the admitted device capabilities this Device's workers reach.
+    pub const fn grants(&self) -> &GpuDeviceGrants {
+        &self.grants
+    }
+
+    /// The capabilities a configured worker cannot reach yet.
+    ///
+    /// One Device declares a GPU worker shape and, when a sidecar is
+    /// configured, a video decode shape. Each needs its own admitted
+    /// capabilities; a name missing here is a refusal, not a node the launch
+    /// is quietly handed.
+    pub fn missing_capabilities(&self) -> Vec<DeviceFunction> {
+        let mut required =
+            GpuDeviceGrants::required_worker_functions(self.settings.render_node_only);
+        if self.settings.video_sidecar {
+            required.extend(GpuDeviceGrants::required_video_functions(
+                self.settings.video_nvidia_decode,
+            ));
+        }
+        required
+            .into_iter()
+            .filter(|function| !self.grants.covers(function))
+            .collect()
     }
 
     /// Borrow the opaque device grants bound to this controller.
@@ -219,6 +360,22 @@ impl GpuController {
             return Err(GpuControllerError::Authority(
                 GpuAuthorityError::PrincipalNotSeparated,
             ));
+        }
+        // A device grant comes from an admitted binding, not from the shape
+        // of the row. Refuse before the reservation, the open, and the spawn
+        // rather than starting a worker whose declared capabilities this
+        // Device never claimed.
+        let missing = self.missing_capabilities();
+        if !missing.is_empty() {
+            tracing::warn!(
+                device = %self.device_uid.to_canonical_string(),
+                missing = missing.len(),
+                reason = "worker shape needs capabilities this device has no admitted binding for",
+                "gpu device capability admission rejected during reconcile",
+            );
+            return Err(GpuControllerError::DeviceCapabilityRefused {
+                missing: missing.len(),
+            });
         }
         if self.authority_lease.is_none() {
             self.authority_lease = Some(
@@ -397,6 +554,12 @@ impl GpuController {
                 GpuAuthorityError::PrincipalNotSeparated,
             ));
         }
+        let missing = self.missing_capabilities();
+        if !missing.is_empty() {
+            return Err(GpuControllerError::DeviceCapabilityRefused {
+                missing: missing.len(),
+            });
+        }
         self.authority_lease = Some(lease);
         let mut matched = Vec::new();
         let mut missing = false;
@@ -574,6 +737,7 @@ impl fmt::Debug for GpuController {
             .debug_struct("GpuController")
             .field("device_uid", &"<redacted>")
             .field("arbitration", &self.arbitration)
+            .field("granted_capabilities", &self.grants.functions().len())
             .field("phase", &self.phase)
             .field("finalizer", &self.finalizer)
             .field("gpu_role", &self.gpu_role)

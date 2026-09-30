@@ -35,6 +35,21 @@
 //! …followed by a clean shutdown command (`-s`) before the supervisor
 //! starts the long-lived `swtpm socket` process.
 //!
+//! # What the argv may not carry
+//!
+//! swtpm used to accept a caller-supplied `uid=`/`gid=` socket owner and a
+//! free-form `extra_args` tail. Both are authority by another name: a
+//! numerical broker identity in a launch argument is identity a caller
+//! selects, and a free-form tail lets the same caller name a socket or a
+//! device node the admitted relationship does not carry. Neither exists any
+//! more. The socket is created owned by the uid swtpm already runs as, which
+//! is what the state directory's ACL and `mode=0660` are written against, and
+//! the admitted socket paths are the only filesystem inputs.
+//!
+//! An argument that names a device node is refused outright: a TPM worker's
+//! device capability is delivered by its own admitted `DeviceBinding`, never
+//! by a path in its command line.
+//!
 //! Crate invariant `#![forbid(unsafe_code)]` is honoured.
 
 use serde::{Deserialize, Serialize};
@@ -44,7 +59,7 @@ use crate::{MAX_SWTPM_LOG_LEVEL, MIN_SWTPM_LOG_LEVEL};
 /// All inputs required to render the long-lived `swtpm socket ...`
 /// argv.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SwtpmArgvInput {
     /// Absolute store path to the `swtpm` binary.
     pub swtpm_binary_path: String,
@@ -59,27 +74,6 @@ pub struct SwtpmArgvInput {
     /// Absolute path to the swtpm server socket (`--server`). CH
     /// connects to this one through `--tpm`.
     pub server_socket_path: String,
-    /// Optional socket owner rendered into the `--ctrl`/`--server`
-    /// entries as `uid=`/`gid=`. swtpm `chown()`s each socket to whatever
-    /// id it is given, so this is only safe when that id is one the launch
-    /// can actually chown to.
-    ///
-    /// `None` (the default for a namespaced launch) omits the entries
-    /// entirely and lets the socket be created owned by the uid swtpm
-    /// already runs as, which is correct under every namespace mapping. A
-    /// namespaced launch that names an owner gets
-    ///
-    /// ```text
-    /// Could not change ownership of UnixIO socket to 0:0
-    /// Operation not permitted
-    /// ```
-    ///
-    /// and exits 1 before it binds the data socket, leaving no log, no pid
-    /// file and no NVRAM. Set both or neither: swtpm takes them as one
-    /// ownership.
-    pub uid: Option<u32>,
-    /// Gid counterpart of [`Self::uid`].
-    pub gid: Option<u32>,
     /// `--log file=<path>` value; usually `<state_dir>/swtpm.log`.
     pub log_path: String,
     /// `--log level=<N>` value. swtpm accepts 1..20; d2b defaults
@@ -91,17 +85,13 @@ pub struct SwtpmArgvInput {
     /// startup the supervisor runs `swtpm_ioctl -i` first, so the
     /// long-lived process boots clean.
     pub startup_clear: bool,
-    /// Free-form additional swtpm args. Caller is responsible for
-    /// quoting; each entry is emitted as-is in order at the end.
-    #[serde(default)]
-    pub extra_args: Vec<String>,
 }
 
 /// All inputs required to render the pre-start
 /// `swtpm_ioctl -i --unix <ctrl-socket>` flush argv. Pairs with the
 /// `VmProcessInvariants::swtpm_pre_start_flush` invariant.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SwtpmIoctlFlushInput {
     /// Absolute store path to the `swtpm_ioctl` binary.
     pub swtpm_ioctl_binary_path: String,
@@ -123,10 +113,10 @@ pub enum SwtpmArgvError {
     },
     /// `vm_name` was empty.
     EmptyVmName,
-    /// Exactly one of `uid`/`gid` was supplied. swtpm takes the pair as a
-    /// single socket ownership, so a half-specified owner is a caller bug
-    /// rather than a default to guess.
-    IncompleteSocketOwner,
+    /// One path argument named a device node. A device capability is
+    /// delivered by the worker's own admitted `DeviceBinding`, so a
+    /// command line is never the way to reach one.
+    DeviceNodeArgumentRefused,
     /// `state_dir` was empty or non-absolute.
     InvalidStateDir {
         /// The offending path.
@@ -149,14 +139,26 @@ pub enum SwtpmArgvError {
     },
 }
 
+/// Fence one absolute path argument.
+///
+/// The path has to be absolute, and it must not name a device node: swtpm's
+/// inputs are directories and Unix sockets inside the admitted state view,
+/// never a character or block device. A `/dev/...` component is refused here
+/// rather than handed to a launch that would then hold a device the binding
+/// path never admitted.
 fn validate_absolute(path: &str, field: &str) -> Result<(), SwtpmArgvError> {
     if path.is_empty() || !path.starts_with('/') {
-        Err(SwtpmArgvError::InvalidStateDir {
+        return Err(SwtpmArgvError::InvalidStateDir {
             path: format!("{field}={path}"),
-        })
-    } else {
-        Ok(())
+        });
     }
+    if path
+        .split('/')
+        .any(|component| component == "dev" || component == "proc" || component == "sys")
+    {
+        return Err(SwtpmArgvError::DeviceNodeArgumentRefused);
+    }
+    Ok(())
 }
 
 /// Render the long-lived swtpm argv.
@@ -200,6 +202,10 @@ pub fn generate_swtpm_argv(input: &SwtpmArgvInput) -> Result<Vec<String>, SwtpmA
             which: "pid_path".to_owned(),
         });
     }
+    validate_absolute(&input.ctrl_socket_path, "ctrl_socket_path")?;
+    validate_absolute(&input.server_socket_path, "server_socket_path")?;
+    validate_absolute(&input.log_path, "log_path")?;
+    validate_absolute(&input.pid_path, "pid_path")?;
     if !(MIN_SWTPM_LOG_LEVEL..=MAX_SWTPM_LOG_LEVEL).contains(&input.log_level) {
         return Err(SwtpmArgvError::LogLevelOutOfRange {
             level: input.log_level,
@@ -214,34 +220,26 @@ pub fn generate_swtpm_argv(input: &SwtpmArgvInput) -> Result<Vec<String>, SwtpmA
     argv.push("--tpmstate".to_owned());
     argv.push(format!("dir={}", input.state_dir));
 
-    // The socket owner entries are opt-in. swtpm `chown()`s each socket to
+    // No socket owner entry is emitted. swtpm `chown()`s each socket to
     // whatever id it is handed, and inside the launch's user namespace that
-    // chown is refused ("Could not change ownership of UnixIO socket to
-    // 0:0 Operation not permitted"), so swtpm exits 1 before it binds the
-    // data socket and the state directory is left with no log, no pid file
-    // and no NVRAM. Reproduced with the exact device-worker artifact binary:
-    // this argv runs to a live swtpm, the same argv naming an owner aborts.
-    //
-    // A caller that genuinely needs the ownership still gets it; a launch
-    // that omits it gets a socket owned by the uid swtpm already runs as,
+    // chown is refused ("Could not change ownership of UnixIO socket to 0:0
+    // Operation not permitted"), so swtpm exits 1 before it binds the data
+    // socket and the state directory is left with no log, no pid file and no
+    // NVRAM. Reproduced with the exact device-worker artifact binary: this
+    // argv runs to a live swtpm, the same argv naming an owner aborts. The
+    // socket is therefore created owned by the uid swtpm already runs as,
     // which is what `mode=0660` and the state directory's ACL are written
-    // against.
-    let owner = match (input.uid, input.gid) {
-        (Some(uid), Some(gid)) => format!(",uid={uid},gid={gid}"),
-        (None, None) => String::new(),
-        _ => return Err(SwtpmArgvError::IncompleteSocketOwner),
-    };
-
+    // against - and no caller chooses a numerical identity any more.
     argv.push("--ctrl".to_owned());
     argv.push(format!(
-        "type=unixio,path={},mode=0660{}",
-        input.ctrl_socket_path, owner
+        "type=unixio,path={},mode=0660",
+        input.ctrl_socket_path
     ));
 
     argv.push("--server".to_owned());
     argv.push(format!(
-        "type=unixio,path={},mode=0660{}",
-        input.server_socket_path, owner
+        "type=unixio,path={},mode=0660",
+        input.server_socket_path
     ));
 
     if input.startup_clear {
@@ -261,10 +259,6 @@ pub fn generate_swtpm_argv(input: &SwtpmArgvInput) -> Result<Vec<String>, SwtpmA
     // pre-0.10 spelling `--daemon=false` is rejected by the installed
     // swtpm ("option '--daemon' doesn't allow an argument"), which
     // killed the worker before it bound a socket.
-
-    for extra in &input.extra_args {
-        argv.push(extra.clone());
-    }
 
     Ok(argv)
 }
@@ -293,6 +287,7 @@ pub fn generate_swtpm_ioctl_flush_argv(
             which: "ctrl_socket_path".to_owned(),
         });
     }
+    validate_absolute(&input.ctrl_socket_path, "ctrl_socket_path")?;
     Ok(vec![
         input.swtpm_ioctl_binary_path.clone(),
         "-i".to_owned(),
@@ -313,15 +308,10 @@ mod tests {
             state_dir: "/var/lib/d2b/vms/corp-vm/tpm".to_owned(),
             ctrl_socket_path: "/var/lib/d2b/vms/corp-vm/tpm/ctrl.sock".to_owned(),
             server_socket_path: "/run/d2b/vms/corp-vm/swtpm.sock".to_owned(),
-            // Exercises the opt-in owner so the golden keeps documenting it;
-            // the namespaced device-worker launch passes `None`.
-            uid: Some(1100),
-            gid: Some(1100),
             log_path: "/var/lib/d2b/vms/corp-vm/tpm/swtpm.log".to_owned(),
             log_level: 20,
             pid_path: "/var/lib/d2b/vms/corp-vm/tpm/swtpm.pid".to_owned(),
             startup_clear: true,
-            extra_args: Vec::new(),
         }
     }
 
@@ -384,13 +374,82 @@ mod tests {
         assert!(!argv.iter().any(|a| a == "startup-clear"));
     }
 
+    /// A swtpm worker reaches no device through its command line.
+    ///
+    /// The TPM worker's capability is delivered by its own admitted
+    /// `DeviceBinding`; a path argument that names a device node is refused
+    /// before the argv is rendered, so no caller can point the worker at a
+    /// node its binding never admitted.
     #[test]
-    fn extra_args_appended_at_end() {
-        let mut input = audit_swtpm_input();
-        input.extra_args = vec!["--migration-key".to_owned(), "file=/tmp/mig.key".to_owned()];
-        let argv = generate_swtpm_argv(&input).unwrap();
-        let last_two = &argv[argv.len() - 2..];
-        assert_eq!(last_two, &["--migration-key", "file=/tmp/mig.key"]);
+    fn refuses_a_path_argument_that_names_a_device_node() {
+        for (mutate, field) in [
+            (
+                Box::new(|input: &mut SwtpmArgvInput| {
+                    input.state_dir = "/dev/dri/renderD128".to_owned();
+                }) as Box<dyn Fn(&mut SwtpmArgvInput)>,
+                "state_dir",
+            ),
+            (
+                Box::new(|input: &mut SwtpmArgvInput| {
+                    input.ctrl_socket_path = "/dev/kvm".to_owned();
+                }),
+                "ctrl_socket_path",
+            ),
+            (
+                Box::new(|input: &mut SwtpmArgvInput| {
+                    input.server_socket_path = "/dev/dri/card0".to_owned();
+                }),
+                "server_socket_path",
+            ),
+            (
+                Box::new(|input: &mut SwtpmArgvInput| {
+                    input.log_path = "/dev/../var/lib/d2b/tpm/swtpm.log".to_owned();
+                }),
+                "log_path",
+            ),
+        ] {
+            let mut input = audit_swtpm_input();
+            mutate(&mut input);
+            assert!(
+                matches!(
+                    generate_swtpm_argv(&input),
+                    Err(SwtpmArgvError::DeviceNodeArgumentRefused)
+                ),
+                "{field} must not name a device node"
+            );
+        }
+
+        let mut flush = audit_flush_input();
+        flush.ctrl_socket_path = "/dev/dri/renderD128".to_owned();
+        assert!(matches!(
+            generate_swtpm_ioctl_flush_argv(&flush),
+            Err(SwtpmArgvError::DeviceNodeArgumentRefused)
+        ));
+    }
+
+    /// A declared payload cannot smuggle a socket owner or a free-form
+    /// argument tail back in.
+    ///
+    /// `SwtpmArgvInput` denies unknown fields, so a serialized launch ticket
+    /// that still carries the retired `uid`/`gid` owner or an `extraArgs`
+    /// tail is refused at the type boundary rather than silently launching
+    /// with a caller-chosen identity.
+    #[test]
+    fn a_declared_payload_cannot_carry_a_socket_owner_or_an_argument_tail() {
+        let input = audit_swtpm_input();
+        let mut payload = serde_json::to_value(&input).expect("the declared input serializes");
+        payload["extraArgs"] = serde_json::json!(["--tpm2", "--daemon"]);
+        assert!(
+            serde_json::from_value::<SwtpmArgvInput>(payload).is_err(),
+            "a free-form argv tail must not decode"
+        );
+
+        let mut payload = serde_json::to_value(&input).expect("the declared input serializes");
+        payload["uid"] = serde_json::json!(0);
+        assert!(
+            serde_json::from_value::<SwtpmArgvInput>(payload).is_err(),
+            "a caller-chosen socket owner must not decode"
+        );
     }
 
     #[test]
