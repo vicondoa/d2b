@@ -1,9 +1,17 @@
 //! Closed config-nixos service DTOs.
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
+use d2b_contracts_resource::v3::{
+    AdmissionStage, BindingAdmission, BindingAuthorization, BindingKey, BindingKind,
+    BindingRefusal, BindingRealizationFacet, BindingRealizationSupport, BindingSlot,
+    FreshnessTuple, RefusalReason, RequestedRights, ResourceRef, ResourceUid, SourceAdmission,
+    VolumeBindingRequest, ZoneId,
+    volume::AttachmentAccess,
+    volume_binding::VolumePresentation,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -378,6 +386,194 @@ pub(crate) fn validate_destination(value: &str) -> Result<(), ConfigError> {
     }
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// The canonical declaration configuration publishes
+// ---------------------------------------------------------------------------
+
+/// The realization facet a Guest's configuration working copy requires.
+///
+/// The document reaches the Guest as a private mount tree carrying the exact
+/// named view at the destination, so a backend that cannot enforce that facet
+/// is refused rather than handed a weaker presentation.
+pub const CONFIG_WORKING_COPY_FACETS: [BindingRealizationFacet; 1] =
+    [BindingRealizationFacet::FilesystemPresentation];
+
+/// The realization support this Provider's configuration delivery declares.
+///
+/// This is a fixed set derived from the one presentation configuration
+/// actually delivers. It is not a parameter a caller can widen, so a caller
+/// cannot declare support for a facet the configuration path never
+/// realizes.
+pub fn config_working_copy_support() -> &'static BindingRealizationSupport {
+    static SUPPORT: std::sync::OnceLock<BindingRealizationSupport> = std::sync::OnceLock::new();
+    SUPPORT.get_or_init(|| {
+        BindingRealizationSupport::new(CONFIG_WORKING_COPY_FACETS.to_vec())
+            .expect("the configuration facet set is fixed and duplicate-free")
+    })
+}
+
+/// One configuration attachment declared against the typed binding contract.
+///
+/// The declaration names the exact `Volume` source, the exact `Guest`
+/// consumer, the stable consumer slot, the named view, the access level, and
+/// the consumer-side presentation. It carries no host source path, no
+/// numerical principal, and no document bytes: the document is delivered
+/// through the admitted relationship, not through an authored path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigAttachment {
+    request: VolumeBindingRequest,
+}
+
+impl ConfigAttachment {
+    /// Construct one attachment declaration from typed references.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::InvalidRequest`] when the source is not a
+    /// `Volume`, when the consumer is not an admitted consumer kind, when the
+    /// slot or view is not a bounded token, or when the destination is not a
+    /// consumer-side mount path.
+    pub fn new(
+        source: ResourceRef,
+        consumer: ResourceRef,
+        slot: BindingSlot,
+        view: d2b_contracts_resource::v3::BoundedToken,
+        access: AttachmentAccess,
+        destination: &str,
+    ) -> Result<Self, ConfigError> {
+        let presentation = VolumePresentation::filesystem(destination)
+            .map_err(|_| ConfigError::InvalidDestination)?;
+        let request = VolumeBindingRequest::new(source, consumer, slot, view, access, presentation)
+            .map_err(|_| ConfigError::InvalidRequest)?;
+        Ok(Self { request })
+    }
+
+    /// Borrow the canonical desired request this declaration states.
+    pub const fn request(&self) -> &VolumeBindingRequest {
+        &self.request
+    }
+
+    /// The exact source the attachment reads from.
+    pub const fn source_ref(&self) -> &ResourceRef {
+        self.request.source_ref()
+    }
+
+    /// The exact consumer the attachment delivers to.
+    pub const fn consumer_ref(&self) -> &ResourceRef {
+        self.request.consumer_ref()
+    }
+
+    /// The realization facets this attachment depends on.
+    pub fn required_facets(&self) -> &'static [BindingRealizationFacet] {
+        self.request.required_facets()
+    }
+
+    /// The right this attachment asks the source to admit.
+    pub const fn requested_rights(&self) -> RequestedRights {
+        self.request.requested_rights()
+    }
+
+    /// Admit this attachment through the typed binding contract.
+    ///
+    /// Admission is the source Volume's decision, not configuration's: this
+    /// Provider supplies the declaration and the freshness evidence, and the
+    /// grant and the source admission arrive from the Role evaluation and the
+    /// Volume owner respectively. A configuration document therefore cannot
+    /// authorize its own delivery.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`BindingRefusal`] naming the enforcing stage. A
+    /// caller that presents no authorization evidence is refused at
+    /// `Authorize`, and a source that does not admit these rights is refused
+    /// at `Admit`.
+    pub fn admit(
+        &self,
+        zone: ZoneId,
+        source_uid: ResourceUid,
+        consumer_uid: ResourceUid,
+        authorization: &BindingAuthorization,
+        source: &SourceAdmission,
+        dependencies: &[FreshnessTuple],
+    ) -> Result<BindingAdmission, BindingRefusal> {
+        let key = BindingKey::new(
+            zone,
+            BindingKind::Volume,
+            self.request.source_ref().clone(),
+            source_uid,
+            self.request.consumer_ref().clone(),
+            consumer_uid,
+            self.request.slot().clone(),
+        )
+        .map_err(|_| {
+            BindingRefusal::new(AdmissionStage::Normalize, RefusalReason::ConflictingDeclaration)
+        })?;
+        d2b_contracts_resource::v3::admit_binding_request(
+            &key,
+            self.requested_rights(),
+            self.required_facets(),
+            authorization,
+            source,
+            config_working_copy_support(),
+            dependencies,
+        )
+    }
+}
+
+/// The diagnostic a refused configuration attachment renders.
+///
+/// It names the relationship and the enforcing stage and carries the typed
+/// reason. It never carries the document, the destination, a host path, or a
+/// session identity (R42).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigRefusal {
+    // The attachment is boxed so the refusal travels by reference: it names
+    // the relationship rather than carrying a second copy of it, and the
+    // refusal a caller propagates stays a small value.
+    attachment: Box<ConfigAttachment>,
+    refusal: BindingRefusal,
+}
+
+impl ConfigRefusal {
+    /// Construct a refusal for one attachment.
+    pub fn new(attachment: ConfigAttachment, refusal: BindingRefusal) -> Self {
+        Self {
+            attachment: Box::new(attachment),
+            refusal,
+        }
+    }
+
+    /// Borrow the exact relationship that was refused.
+    pub const fn attachment(&self) -> &ConfigAttachment {
+        &self.attachment
+    }
+
+    /// Return the enforcing stage.
+    pub const fn stage(&self) -> AdmissionStage {
+        self.refusal.stage()
+    }
+
+    /// Return the typed reason.
+    pub const fn reason(&self) -> RefusalReason {
+        self.refusal.reason()
+    }
+}
+
+impl fmt::Display for ConfigRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "config attachment {} -> {} refused at {:?} ({:?})",
+            self.attachment.source_ref().to_canonical_string(),
+            self.attachment.consumer_ref().to_canonical_string(),
+            self.stage(),
+            self.reason()
+        )
+    }
+}
+
+impl std::error::Error for ConfigRefusal {}
 
 /// In-memory host staging owner for one daemon authority.
 ///

@@ -12,14 +12,15 @@ mod service;
 mod ttrpc;
 
 pub use controller::{
-    ConfigCaller, ConfigError, ConfigOperation, ConfigService, GuestConfigDocument,
-    GuestSessionEvidence,
+    ConfigCaller, ConfigError, ConfigOperation, ConfigPublication, ConfigService,
+    GuestConfigDocument, GuestSessionEvidence,
 };
 pub use service::{
-    ConfigApproveRequest, ConfigApproveResponse, ConfigDiffRequest, ConfigDiffResponse,
-    ConfigRejectRequest, ConfigRejectResponse, ConfigStageRequest, ConfigStageResponse,
-    ConfigStagingStore, ConfigStatusRequest, ConfigStatusResponse, ConfigSyncRequest,
-    ConfigSyncResponse, GUEST_CONFIG_IDENTIFIER, MAX_CONFIG_BYTES,
+    CONFIG_WORKING_COPY_FACETS, ConfigApproveRequest, ConfigApproveResponse, ConfigAttachment,
+    ConfigDiffRequest, ConfigDiffResponse, ConfigRefusal, ConfigRejectRequest,
+    ConfigRejectResponse, ConfigStageRequest, ConfigStageResponse, ConfigStagingStore,
+    ConfigStatusRequest, ConfigStatusResponse, ConfigSyncRequest, ConfigSyncResponse,
+    GUEST_CONFIG_IDENTIFIER, MAX_CONFIG_BYTES, config_working_copy_support,
 };
 pub use ttrpc::{
     ConfigNixosClient, ConfigServiceBackend, GuestConfigReader, create_ttrpc_services,

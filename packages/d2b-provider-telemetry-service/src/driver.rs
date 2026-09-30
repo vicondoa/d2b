@@ -38,6 +38,7 @@ use std::error::Error;
 
 use d2b_resource_runtime::error::{DriverFailure, DriverOp, FailureDetail, ResourceError};
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
+use d2b_resource_runtime::resource::ResourceStatus;
 use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
 
 /// The qualified semantic telemetry Service type this factory serves.
@@ -57,13 +58,15 @@ pub const PHASE_PENDING: &str = "Pending";
 /// Provider phase spelling for an ambiguous, revoked, or unavailable route.
 pub const PHASE_DEGRADED: &str = "Degraded";
 
-/// The readiness term of the preserved phase predicate.
+/// The observed status an ingest route's own source row must publish before
+/// the Service claims a usable route.
 ///
-/// CONTRACT FLAG: the term reads a dependency's observed status (an ingest
-/// Endpoint's `status.phase`), which the KTD3 driver surface does not expose.
-/// It evaluates fail-closed until the surface carries observed state, so
-/// `Ready` is never claimed without evidence.
-pub const DEPENDENCY_READINESS_PROVEN: bool = false;
+/// `Ready` is a claim about use, not about a row's existence, so the term is
+/// the dependency's own observed classification read at the current row
+/// generation. `Pending`, `Recovering`, and `Failed` are not proof of a
+/// materialized route, so the readiness term stays fail-closed until the
+/// source publishes `Ready` for the exact generation being read.
+pub const INGEST_ROUTE_READY_STATUS: ResourceStatus = ResourceStatus::Ready;
 
 // ---------------------------------------------------------------------------
 // Driver error
@@ -340,22 +343,34 @@ impl TelemetryServiceDriver {
         let endpoint_refs = ingest_endpoint_refs(&spec).map_err(|kind| self.error(kind, op))?;
         let mut present_endpoints = Vec::with_capacity(endpoint_refs.len());
         let mut all_present = !endpoint_refs.is_empty();
+        let mut all_ready = !endpoint_refs.is_empty();
         for endpoint_ref in &endpoint_refs {
             let key = self.row_key(endpoint_ref);
-            match ctx.get(&key).await {
-                Ok(Some(row)) if !row.deleting => {
-                    present_endpoints.push(endpoint_ref.clone());
-                    self.watch_once(ctx, key).await;
+            let view = match ctx.get_view(&key).await {
+                Ok(Some(view)) if !view.deleting => view,
+                Ok(_) => {
+                    all_present = false;
+                    continue;
                 }
-                Ok(_) => all_present = false,
                 Err(error) => {
                     return Err(self
                         .error(TelemetryServiceDriverErrorKind::Reconcile, op)
                         .with_source(error));
                 }
+            };
+            present_endpoints.push(endpoint_ref.clone());
+            self.watch_once(ctx, key).await;
+            // A live row is not a usable route. The readiness term reads the
+            // endpoint owner's own observed classification for this exact
+            // generation, so a route whose delivery was revoked stops being
+            // reported as ready even while its row survives.
+            if view.observed_status() != Some(INGEST_ROUTE_READY_STATUS) {
+                all_ready = false;
             }
         }
-        let ready = all_present && DEPENDENCY_READINESS_PROVEN;
+        // Both terms are required: every declared route materialized, and
+        // every declared route observed ready at its current generation.
+        let ready = all_present && all_ready;
         let phase = if ready { TelemetryServicePhase::Ready } else { TelemetryServicePhase::Pending };
         ctx.set_status(TelemetryServiceStatus {
             phase,
@@ -679,30 +694,82 @@ mod tests {
             "the route is not materialized yet"
         );
 
-        fixture.manager.seed(endpoint_row());
+        // A live row alone is not a usable route: the readiness term reads
+        // the source's own observed classification.
+        fixture.manager.add(endpoint_row(), ResourceStatus::Pending);
         driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
         let Some(status) = fixture.ctx.status::<TelemetryServiceStatus>() else {
             panic!("service status");
         };
         assert_eq!(status.present_endpoints.len(), 1);
         assert_eq!(status.projection.as_ref().unwrap().service_role, "authority");
-        // CONTRACT FLAG: the old predicate also required the ingest
-        // Endpoint's own `status.phase == "Ready"`, which this surface cannot
-        // read; the phase stays fail-closed Pending while the row exists.
         assert_eq!(status.phase, TelemetryServicePhase::Pending);
         assert_eq!(
             status.projection.as_ref().unwrap().service_readiness,
             TelemetryServicePhase::Pending,
+            "a route whose source has not observed Ready is not usable"
         );
         assert_eq!(
             fixture.requeue.scheduled(),
             vec![TELEMETRY_SERVICE_RESYNC],
-            "a present endpoint stops rescheduling; readiness is watch-driven"
+            "a materialized route stops rescheduling; readiness is watch-driven"
+        );
+
+        // The same row, observed Ready at its own generation, is a usable
+        // route. Nothing else changed: the difference is the observed
+        // classification the readiness term requires.
+        let mut observed_ready = super::tests::fixture(service_row());
+        observed_ready.manager.add(endpoint_row(), ResourceStatus::Ready);
+        let mut observed_ready_driver = super::tests::driver(&observed_ready).await;
+        observed_ready_driver
+            .reconcile(&mut observed_ready.ctx)
+            .await
+            .expect("reconcile");
+        let ready_status = observed_ready
+            .ctx
+            .status::<TelemetryServiceStatus>()
+            .expect("service status");
+        assert_eq!(
+            ready_status.phase,
+            TelemetryServicePhase::Ready,
+            "an observed Ready route at its current generation is usable"
+        );
+        assert_eq!(
+            ready_status.projection.as_ref().unwrap().service_readiness,
+            TelemetryServicePhase::Ready,
+        );
+    }
+
+    /// A route whose source has left `Ready` stops being usable without the
+    /// row disappearing, so revocation is visible in the projection.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_route_that_stops_being_observed_ready_is_not_usable() {
+        let mut row = endpoint_row();
+        row.generation = 2;
+        let mut fixture = fixture(service_row());
+        fixture.manager.add(row, ResourceStatus::Failed(DriverFailure::retryable(DriverOp::Reconcile)));
+        let mut driver = driver(&fixture).await;
+
+        driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
+        let status = fixture
+            .ctx
+            .status::<TelemetryServiceStatus>()
+            .expect("service status");
+        assert_eq!(status.present_endpoints.len(), 1, "the row is still present");
+        assert_eq!(
+            status.phase,
+            TelemetryServicePhase::Pending,
+            "a route that stopped being observed ready is not a usable route"
+        );
+        assert_eq!(
+            fixture.requeue.scheduled(),
+            Vec::<Duration>::new(),
+            "a materialized route does not resync on a cadence"
         );
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-
     #[tokio::test]
     async fn service_projection_role_reports_ready_without_ingest_evidence() {
         let mut fixture = fixture(row(
@@ -764,7 +831,7 @@ mod tests {
         let mut fixture = fixture(service_row());
         let mut driver = driver(&fixture).await;
 
-        fixture.manager.seed(endpoint_row());
+        fixture.manager.add(endpoint_row(), ResourceStatus::Ready);
         driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
         driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
         let mut targets = fixture

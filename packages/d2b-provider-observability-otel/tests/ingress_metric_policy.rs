@@ -1,8 +1,12 @@
 use std::collections::BTreeMap;
 
+use d2b_contracts_resource::v3::{FreshnessTuple, ResourceRef};
 use d2b_provider_observability_otel::ingress_policy::QUARANTINE_VIOLATION_THRESHOLD;
+use d2b_provider_observability_otel::route_fixtures::{
+    admitted_endpoint_evidence, observed_for_all,
+};
 use d2b_provider_observability_otel::{
-    IdentityCanaries, Ingress, IngressErrorClass, IngressOutcome, IngressPolicyGate,
+    DeliveryRoute, IdentityCanaries, Ingress, IngressErrorClass, IngressOutcome, IngressPolicyGate,
     MetricDescriptor, MetricFrame, MetricPoint, canonical_descriptor, label,
 };
 
@@ -100,6 +104,24 @@ impl PolicyCase {
     }
 }
 
+/// The admitted route one ingress is served over.
+///
+/// The route is the endpoint owner's own scoped decision, so a caller cannot
+/// pick a transport: the route carries it.
+fn route(ingress: Ingress) -> DeliveryRoute {
+    DeliveryRoute::for_endpoint(
+        ResourceRef::parse("Endpoint/ingest").expect("canonical Endpoint"),
+        ingress,
+        admitted_endpoint_evidence(),
+    )
+    .expect("the admitted endpoint relationship is a route")
+}
+
+/// The freshness evidence the route is fenced against.
+fn observed() -> Vec<FreshnessTuple> {
+    observed_for_all(&[&admitted_endpoint_evidence()])
+}
+
 fn valid_resource_attributes() -> BTreeMap<String, String> {
     BTreeMap::from([(
         "d2b.zone".to_owned(),
@@ -184,7 +206,9 @@ fn every_ingress_covers_each_policy_failure_and_capacity_rejection() {
         for case in PolicyCase::ALL {
             let (frame, canaries, expected_error) = case.input();
             let mut gate = IngressPolicyGate::default();
-            let actual = gate.admit_for_connection(ingress, 7, &frame, &canaries, true);
+            let actual = gate
+                .admit_for_connection(&route(ingress), &observed(), 7, &frame, &canaries, true)
+                .expect("the live route admits");
 
             assert_eq!(
                 actual,
@@ -204,12 +228,14 @@ fn every_ingress_covers_each_policy_failure_and_capacity_rejection() {
         let mut gate = IngressPolicyGate::default();
         assert_eq!(
             gate.admit_for_connection(
-                ingress,
+                &route(ingress),
+                &observed(),
                 7,
                 &valid_frame(),
                 &IdentityCanaries::default(),
                 false
-            ),
+            )
+            .expect("the live route admits"),
             (IngressOutcome::Rejected, IngressErrorClass::None),
             "{} rejected a valid frame for an unexpected reason",
             ingress.as_str()
@@ -230,7 +256,9 @@ fn emitter_never_quarantines_and_streams_quarantine_at_the_threshold() {
             let mut gate = IngressPolicyGate::default();
 
             for attempt in 1..=QUARANTINE_VIOLATION_THRESHOLD {
-                let actual = gate.admit_for_connection(ingress, 7, &frame, &canaries, true);
+                let actual = gate
+                .admit_for_connection(&route(ingress), &observed(), 7, &frame, &canaries, true)
+                .expect("the live route admits");
                 assert_eq!(
                     actual,
                     (

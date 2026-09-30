@@ -7,10 +7,11 @@ use d2b_contracts_provider::v3::semantic_services::{
         explicit_binding_children,
     },
 };
-use d2b_contracts_resource::v3::{ExecutionDomain, ResourceRef};
+use d2b_contracts_resource::v3::{ExecutionDomain, FreshnessTuple, ResourceRef};
 
 use crate::{
-    IdentityCanaries, Ingress, IngressErrorClass, IngressOutcome, IngressPolicyGate, MetricFrame,
+    DeliveryRefusal, DeliveryRoute, IdentityCanaries, IngressErrorClass, IngressOutcome,
+    IngressPolicyGate, MetricFrame,
 };
 use tracing::{debug, warn};
 
@@ -316,7 +317,7 @@ pub struct TelemetryReconcileResult {
 }
 
 /// Closed telemetry controller failures.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TelemetryControllerError {
     /// Binding, Service, target, or Provider admission failed.
     Admission,
@@ -324,6 +325,11 @@ pub enum TelemetryControllerError {
     Finalized,
     /// A resource mutation was attempted through a stream-only session.
     StreamOnly,
+    /// The admitted relationship no longer admits new delivery.
+    ///
+    /// The payload names the resource and the enforcing stage; it carries no
+    /// frame content, socket path, or credential byte.
+    DeliveryRefused(DeliveryRefusal),
 }
 
 impl core::fmt::Display for TelemetryControllerError {
@@ -332,6 +338,7 @@ impl core::fmt::Display for TelemetryControllerError {
             Self::Admission => "telemetry-controller-admission-failed",
             Self::Finalized => "telemetry-controller-finalized",
             Self::StreamOnly => "telemetry-session-resource-mutation-forbidden",
+            Self::DeliveryRefused(refusal) => return write!(formatter, "{refusal}"),
         })
     }
 }
@@ -345,8 +352,14 @@ impl std::error::Error for TelemetryControllerError {}
 /// in the telemetry DriverEffects implementation.
 #[derive(Debug, Clone, Copy)]
 pub struct TelemetryBindingFrame<'a> {
-    /// Origin-asserted ingress transport.
-    pub ingress: Ingress,
+    /// The admitted relationships this frame's delivery rides on.
+    ///
+    /// The route carries the one transport its endpoint owner admitted, so a
+    /// frame cannot be presented on a transport the relationship was never
+    /// admitted for and a stopped relationship cannot be resumed elsewhere.
+    pub route: &'a DeliveryRoute,
+    /// The committed dependency evidence the route is fenced against.
+    pub observed: &'a [FreshnessTuple],
     /// Non-zero transport connection identifier.
     pub connection_id: u64,
     /// The bounded metric frame body.
@@ -461,13 +474,27 @@ impl TelemetryBindingController {
             return Err(TelemetryControllerError::Admission);
         }
         let children = Self::child_resources(binding_ref, service_ref, target_ref)?;
-        let (outcome, error_class) = self.gate.admit_for_connection(
-            frame_input.ingress,
-            frame_input.connection_id,
-            frame_input.frame,
-            frame_input.canaries,
-            frame_input.capacity_available,
-        );
+        let (outcome, error_class) = self
+            .gate
+            .admit_for_connection(
+                frame_input.route,
+                frame_input.observed,
+                frame_input.connection_id,
+                frame_input.frame,
+                frame_input.canaries,
+                frame_input.capacity_available,
+            )
+            .map_err(|refusal| {
+                warn!(
+                    provider = "observability-otel",
+                    binding = %binding_ref.to_canonical_string(),
+                    stage = ?refusal.stage(),
+                    reason = ?refusal.reason(),
+                    "telemetry delivery refused: the admitted relationship stopped admitting use"
+                );
+                self.phase = TelemetryBindingPhase::Degraded;
+                TelemetryControllerError::DeliveryRefused(refusal)
+            })?;
         self.phase = match outcome {
             IngressOutcome::Accepted => TelemetryBindingPhase::Ready,
             IngressOutcome::Rejected | IngressOutcome::Quarantined => {

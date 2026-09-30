@@ -51,6 +51,7 @@ use d2b_resource_runtime::driver::{
 };
 use d2b_resource_runtime::error::{DriverFailure, DriverOp};
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
+use d2b_resource_runtime::resource::ResourceStatus;
 use d2b_resource_runtime::spec_store::{EnsureOutcome, StoredDesiredResource};
 use d2b_resource_types::{
     AllowedSources, CONVERTED_TYPE_VERBS, ChildCreation, ChildCustody, DriverDescriptor,
@@ -365,10 +366,40 @@ impl TelemetryBindingDriver {
                 Err(_) => return Err(self.error(TelemetryBindingDriverErrorKind::Reconcile, op)),
             }
         }
+        // The Binding's collector delivers over the Service's declared ingest
+        // routes. A Service that publishes no admitted route has no delivery
+        // to realize, so the owner fences rather than materializing a
+        // collector whose endpoint relationship was never admitted.
+        if !self.service_admits_ingest(ctx, &service_ref, op).await? {
+            return Ok(None);
+        }
         let owner = self.row_ref(op)?;
         TelemetryBindingController::child_resources(&owner, &service_ref, &target_ref)
             .map(Some)
             .map_err(|_| self.error(TelemetryBindingDriverErrorKind::InvalidRelationship, op))
+    }
+
+    /// Whether the named Service currently admits an ingest route.
+    ///
+    /// The Service's own observed classification is the evidence: a Service
+    /// that is not `Ready` for its current row generation has no admitted
+    /// ingest route, and the Binding that consumes it has no delivery to
+    /// realize. This is a read of observed state, not a second policy
+    /// decision about the Service.
+    async fn service_admits_ingest(
+        &mut self,
+        ctx: &mut ResourceContext,
+        service_ref: &ResourceRef,
+        op: DriverOp,
+    ) -> Result<bool, TelemetryBindingDriverError> {
+        let key = self.row_key(service_ref);
+        let view = ctx
+            .get_view(&key)
+            .await
+            .map_err(|_| self.error(TelemetryBindingDriverErrorKind::Reconcile, op))?;
+        Ok(view.is_some_and(|view| {
+            !view.deleting && view.observed_status() == Some(ResourceStatus::Ready)
+        }))
     }
 
     /// One child ensure built from the provider-declared intent (old Core
@@ -626,6 +657,8 @@ const TELEMETRY_BINDING_READS: &[WellKnownType] = &[
     WellKnownType::GUEST,
     WellKnownType::PROCESS,
     WellKnownType::ENDPOINT,
+    WellKnownType::NETWORK,
+    WellKnownType::CREDENTIAL,
 ];
 
 /// The TelemetryBinding type's driver declaration.
@@ -686,15 +719,17 @@ mod tests {
         rows: Mutex<Vec<StoredDesiredResource>>,
         log: Mutex<Vec<String>>,
         watch_targets: Mutex<Vec<ResourceKey>>,
+        status: std::sync::Mutex<ResourceStatus>,
     }
 
     impl RecordingManager {
-        fn new(parent_uid: [u8; 16]) -> Arc<Self> {
+        fn new(parent_uid: [u8; 16], status: ResourceStatus) -> Arc<Self> {
             Arc::new(Self {
                 parent_uid,
                 rows: Mutex::new(Vec::new()),
                 log: Mutex::new(Vec::new()),
                 watch_targets: Mutex::new(Vec::new()),
+                status: std::sync::Mutex::new(status),
             })
         }
 
@@ -794,11 +829,26 @@ mod tests {
 
         async fn view(
             &self,
-            _key: &ResourceKey,
+            key: &ResourceKey,
         ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
-            // Desired rows only: this fixture publishes no runtime status, so
-            // it serves no observed state.
-            Ok(None)
+            // The ingest fence reads the named Service's own observed
+            // classification, so the double serves the status it was seeded
+            // with rather than no observed state at all.
+            let status = self.status.lock().expect("unpoisoned").clone();
+            let row = self.rows.lock().await.iter().find(|row| row.key == *key).cloned();
+            Ok(row.map(|row| d2b_resource_runtime::manager::ResourceView {
+                key: row.key.clone(),
+                uid: row.uid,
+                generation: row.generation,
+                deleting: row.deleting,
+                provenance: row.provenance,
+                spec: row.spec.clone(),
+                metadata: row.metadata.clone(),
+                owner_key: None,
+                status: Some(status),
+                status_generation: Some(row.generation),
+                status_projection: None,
+            }))
         }
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
@@ -851,7 +901,7 @@ mod tests {
     }
 
     fn fixture(row: StoredDesiredResource) -> Fixture {
-        let manager = RecordingManager::new(row.uid);
+        let manager = RecordingManager::new(row.uid, ResourceStatus::Ready);
         let requeue = Arc::new(RecordingRequeue::default());
         let (effects_tx, _effects_rx) = mpsc::unbounded_channel();
         let (watch_tx, _watch_rx) = mpsc::unbounded_channel();
@@ -1066,8 +1116,47 @@ mod tests {
         );
     }
 
+    /// A Binding whose Service admits no ingest route has no delivery to
+    /// realize, so the owner fences instead of materializing a collector.
+    ///
+    /// The seeded classification is the only difference from the converging
+    /// case: the Service row exists and is not deleting either way.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn binding_reconcile_fences_a_service_that_admits_no_ingest_route() {
+        let row = binding_row(binding_spec(TELEMETRY_PROVIDER_REF));
+        let manager = RecordingManager::new(row.uid, ResourceStatus::Pending);
+        let requeue = Arc::new(RecordingRequeue::default());
+        let (effects_tx, _effects_rx) = mpsc::unbounded_channel();
+        let (watch_tx, _watch_rx) = mpsc::unbounded_channel();
+        let mut ctx = ResourceContext::new(
+            row,
+            telemetry_binding_spec_decoder(),
+            Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+            Arc::clone(&requeue) as Arc<dyn RequeueScheduler>,
+            effects_tx,
+            watch_tx,
+        );
+        manager.seed(service_row()).await;
+        manager.seed(target_row()).await;
+        let mut driver: Box<dyn DynResourceDriver> =
+            TelemetryBindingDriverFactory::new().create(ctx.key()).await;
+        driver.reconcile(&mut ctx).await.expect("reconcile");
+        assert!(manager.log().await.is_empty(), "a fenced owner derives no children");
+        let status = ctx
+            .status::<TelemetryBindingStatus>()
+            .expect("binding status");
+        assert!(status.fenced);
+        assert!(!status.converged);
+        assert_eq!(status.phase, TelemetryBindingPhase::Degraded);
+        assert_eq!(
+            requeue.scheduled(),
+            vec![TELEMETRY_BINDING_RESYNC],
+            "the preserved resync re-evaluates the fence"
+        );
+    }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn binding_reconcile_fences_a_foreign_provider() {
         let mut fixture = fixture(binding_row(binding_spec("Provider/other")));
