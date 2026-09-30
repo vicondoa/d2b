@@ -164,8 +164,14 @@ pub struct QemuMediaDependencies {
 }
 
 impl QemuMediaDependencies {
-    /// Construct a fully-ready dependency snapshot from admitted evidence.
-    pub fn ready(device: DeviceObservation, bindings: GuestMediaBindings) -> Self {
+    /// Construct a fully-ready dependency snapshot.
+    ///
+    /// `Some` admits the new model: the private descriptor list is projected
+    /// from these relationships and nothing else. `None` selects the
+    /// pre-graph declared path the unchanged daemon composition still drives;
+    /// U34 deletes that arm and this becomes a plain `GuestMediaBindings`
+    /// parameter.
+    pub fn ready(device: DeviceObservation, bindings: Option<GuestMediaBindings>) -> Self {
         Self {
             device: Some(device),
             network_ready: true,
@@ -173,7 +179,7 @@ impl QemuMediaDependencies {
             display_ready: true,
             qmp_ready: true,
             qmp_status: Some(QmpVmStatus::Paused),
-            bindings: Some(bindings),
+            bindings,
             media_refs: Vec::new(),
             display_ref: None,
             runtime_volume_ready: true,

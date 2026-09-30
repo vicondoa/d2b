@@ -211,7 +211,7 @@ fn ready_requires_process_device_and_qmp_health() {
     assert_eq!(controller.phase(), QemuMediaPhase::Pending);
 
     let device = device();
-    let deps = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device, bindings());
+    let deps = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device, Some(bindings()));
     let ready = controller.reconcile(&deps, &mut effect).unwrap();
     assert_eq!(ready, QemuMediaReconcileOutcome::Ready);
     assert_eq!(controller.phase(), QemuMediaPhase::PausedAtBoot);
@@ -223,7 +223,7 @@ fn pause_at_boot_is_initial_proof_then_running_is_ready() {
     let mut controller = controller();
     let mut effect = FakeEffect::default();
     let device = device();
-    let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device, bindings());
+    let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device, Some(bindings()));
 
     assert_eq!(
         controller.reconcile(&dependencies, &mut effect).unwrap(),
@@ -254,7 +254,7 @@ fn pause_at_boot_rejects_running_before_pause_proof() {
     let mut controller = controller();
     let mut effect = FakeEffect::default();
     let device = device();
-    let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device, bindings());
+    let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device, Some(bindings()));
     dependencies.qmp_status = Some(d2b_provider_guest_qemu_media::QmpVmStatus::Running);
 
     assert_eq!(
@@ -286,7 +286,7 @@ fn matching_restart_process_is_adopted_without_launch() {
         ..FakeEffect::default()
     };
     let device = device();
-    let deps = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device, bindings());
+    let deps = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device, Some(bindings()));
     controller.set_expected_identity(identity);
     assert_eq!(
         controller.reconcile(&deps, &mut effect).unwrap(),
@@ -326,7 +326,7 @@ fn qmp_timeout_retains_authority_until_process_exit_is_proven() {
     let mut effect = FakeEffect::default();
     let mut device = device();
     device.authority_key = [9; 32];
-    let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device, bindings());
+    let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device, Some(bindings()));
     dependencies.qmp_ready = false;
     dependencies.qmp_status = None;
     dependencies.qmp_elapsed_seconds = 30;
@@ -375,7 +375,7 @@ fn failed_qmp_timeout_does_not_adopt_a_stopping_runner() {
     let mut effect = FakeEffect::default();
     let mut device = device();
     device.authority_key = [9; 32];
-    let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device, bindings());
+    let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device, Some(bindings()));
     dependencies.qmp_ready = false;
     dependencies.qmp_status = None;
     dependencies.qmp_elapsed_seconds = 30;
@@ -411,7 +411,7 @@ fn failed_qmp_timeout_with_exit_proven_does_not_rereserve_on_reconcile() {
     };
     let mut device = device();
     device.authority_key = [9; 32];
-    let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device, bindings());
+    let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device, Some(bindings()));
     dependencies.qmp_ready = false;
     dependencies.qmp_status = None;
     dependencies.qmp_elapsed_seconds = 30;
@@ -496,7 +496,7 @@ fn adopted_runner_qmp_timeout_uses_health_retry_not_launch_age() {
     controller.set_expected_identity(identity);
     let mut device = device();
     device.authority_key = [9; 32];
-    let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device, bindings());
+    let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device, Some(bindings()));
     dependencies.qmp_ready = false;
     dependencies.qmp_status = None;
     dependencies.qmp_elapsed_seconds = 30;
@@ -557,7 +557,11 @@ fn a_missing_admitted_binding_refuses_preparation_without_mutation() {
         let mut effect = FakeEffect::default();
         let dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(
             device(),
-            GuestMediaBindings::new(test_fixtures::zone(), consumer.clone(), relationships),
+            Some(GuestMediaBindings::new(
+                test_fixtures::zone(),
+                consumer.clone(),
+                relationships,
+            )),
         );
         let error = controller.reconcile(&dependencies, &mut effect).unwrap_err();
         assert!(
@@ -581,7 +585,7 @@ fn a_missing_admitted_binding_refuses_preparation_without_mutation() {
     let mut effect = FakeEffect::default();
     let dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(
         device(),
-        GuestMediaBindings::new(test_fixtures::zone(), consumer, []),
+        Some(GuestMediaBindings::new(test_fixtures::zone(), consumer, [])),
     );
     assert!(matches!(
         controller.reconcile(&dependencies, &mut effect),
@@ -601,7 +605,7 @@ fn a_stale_admitted_binding_refuses_preparation_without_mutation() {
     let mut effect = FakeEffect::default();
     let dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(
         device(),
-        GuestMediaBindings::new(
+        Some(GuestMediaBindings::new(
             test_fixtures::zone(),
             consumer.clone(),
             [
@@ -618,7 +622,7 @@ fn a_stale_admitted_binding_refuses_preparation_without_mutation() {
                     &consumer,
                 ),
             ],
-        ),
+        )),
     );
     assert!(matches!(
         controller.reconcile(&dependencies, &mut effect),
@@ -636,7 +640,7 @@ fn the_runner_holds_a_leg_on_the_guests_own_reservation() {
     let mut controller = controller();
     let mut effect = FakeEffect::default();
     let dependencies =
-        d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device(), bindings());
+        d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device(), Some(bindings()));
     assert_eq!(
         controller.reconcile(&dependencies, &mut effect).unwrap(),
         QemuMediaReconcileOutcome::Ready
@@ -682,7 +686,7 @@ fn shutdown_closes_consumer_descriptors_before_releasing_the_source() {
         ..FakeEffect::default()
     };
     let dependencies =
-        d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device(), bindings());
+        d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device(), Some(bindings()));
     assert_eq!(
         controller.reconcile(&dependencies, &mut effect).unwrap(),
         QemuMediaReconcileOutcome::Ready

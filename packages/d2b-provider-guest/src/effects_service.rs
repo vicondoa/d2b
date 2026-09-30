@@ -1780,6 +1780,10 @@ mod tests {
         )
         .unwrap();
         let mut effect = FrameworkQemuEffect::new(guest_ref.clone());
+        // This is the framework path, so it drives the same staging posture
+        // the daemon watch path uses: the pre-graph declared refs, not
+        // admitted evidence. Supplying an admitted relationship set here would
+        // make the test assert a path the daemon never takes.
         let dependencies = guest_media_runtime::QemuMediaDependencies::ready(
             guest_media_runtime::DeviceObservation {
                 device_ref: ResourceRef::parse("Device/host-kvm").unwrap(),
@@ -1790,6 +1794,7 @@ mod tests {
                 process_identity: Some(guest_media_runtime::PROCESS_TEMPLATE.to_owned()),
                 media_contract: guest_media_runtime::MEDIA_CONTRACT_ID.to_owned(),
             },
+            None,
         );
         assert_eq!(
             controller.reconcile(&dependencies, &mut effect).unwrap(),
