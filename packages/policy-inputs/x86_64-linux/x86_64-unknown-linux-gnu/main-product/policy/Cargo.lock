@@ -1480,6 +1480,17 @@ dependencies = [
 
 
 [[package]]
+name = "d2b-provider-execution-policy"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts-resource",
+ "d2b-resource-types",
+ "serde_json",
+ "tokio",
+]
+
+
+[[package]]
 name = "d2b-provider-guest"
 version = "0.0.0-bootstrap"
 dependencies = [

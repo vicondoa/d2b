@@ -373,7 +373,7 @@
       "x-d2b-reference-scope": "same-zone"
     },
     "SecretAccess": {
-      "description": "Secret exposure ceiling for one operation.\n\nThe closed seven-value class set the authorization rows already spell; an operation never widens it.",
+      "description": "Secret exposure ceiling for one operation.\n\nThe closed class set the authorization rows already spell; an operation never widens it.",
       "oneOf": [
         {
           "description": "No secret or key material is reachable.",
