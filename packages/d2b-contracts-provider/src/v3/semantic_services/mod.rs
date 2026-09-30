@@ -39,9 +39,13 @@ use schemars::{
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::provider::{BindingTargetType, Exportability, ProjectionFactory, ProviderContractError};
+use super::provider::{
+    BindingTargetType, Exportability, ProjectionFactory, ProviderContractError,
+    RESOURCE_IMPORT_OWNER_TYPE,
+};
 use d2b_contracts_resource::v3::{
     ResourceRef, ResourceSpec, ResourceTypeName, SchemaFingerprint,
+    execution_policy::BoundedToken,
     resource_schema::{
         ObjectFieldSchema, ProviderExtensionRegistration, ResourceSchemaContract,
         ResourceSchemaError, SCHEMA_DOMAIN_TAG, SchemaVersion, canonical_digest,
@@ -313,6 +317,34 @@ pub enum SemanticContractError {
     ProjectionFactoryInvalid,
 }
 
+/// Why one request is not an admitted use of an imported semantic projection.
+///
+/// The reasons are closed discriminants. None carries a reference, a path, a
+/// key, or any other caller-supplied material, and each names the stage that
+/// refused rather than the value it refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ImportUseRefusal {
+    /// The named Service is not this family's projection Service.
+    ProjectionTypeMismatch,
+    /// The projection's owner is not the `ResourceImport` the consumer
+    /// reached it through, so it is a locally owned Service rather than an
+    /// imported one.
+    NotAnImportedProjection,
+    /// The request named a backing-resource reference. An import holds no
+    /// backing authority in any Zone, in either direction.
+    BackingReferenceForbidden,
+    /// The request asked for a local physical effect. Backing use is realized
+    /// in the owner Zone, never in the importing one.
+    LocalPhysicalEffectForbidden,
+    /// The consuming target is outside this family's closed target set.
+    TargetNotAdmitted,
+    /// The request named no capability, or named one twice.
+    CapabilityRequestInvalid,
+    /// A frozen bound was exceeded.
+    BoundExceeded,
+}
+
 impl SemanticContractError {
     /// The closed diagnostic label.
     pub const fn as_str(self) -> &'static str {
@@ -328,6 +360,29 @@ impl SemanticContractError {
         }
     }
 }
+
+impl ImportUseRefusal {
+    /// The closed diagnostic label.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ProjectionTypeMismatch => "semantic-import-projection-type-mismatch",
+            Self::NotAnImportedProjection => "semantic-import-not-an-imported-projection",
+            Self::BackingReferenceForbidden => "semantic-import-backing-reference-forbidden",
+            Self::LocalPhysicalEffectForbidden => "semantic-import-local-physical-effect-forbidden",
+            Self::TargetNotAdmitted => "semantic-import-target-not-admitted",
+            Self::CapabilityRequestInvalid => "semantic-import-capability-request-invalid",
+            Self::BoundExceeded => "semantic-import-bound-exceeded",
+        }
+    }
+}
+
+impl core::fmt::Display for ImportUseRefusal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::error::Error for ImportUseRefusal {}
 
 impl core::fmt::Display for SemanticContractError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -846,6 +901,45 @@ impl SemanticProjectionBinding {
         &self.allowed_backing_ref_types
     }
 
+    /// The declared same-Zone backing-reference fields of this family.
+    ///
+    /// A projection never carries one of these. The list is empty for a family
+    /// that declares no backing, so it is a determinate deny-all rather than
+    /// an absent value.
+    pub fn backing_field_names(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.backing_declaration.field_names().into_iter()
+    }
+
+    /// The declared backing-reference field this family's projection schema
+    /// still permits, when there is one.
+    ///
+    /// A projection that names a backing field is stating that the projection
+    /// carries a reference the owner Zone resolves; the USB family forbids
+    /// this and returns `None`. It is reported rather than treated as a
+    /// capability: [`SemanticProjectionBinding::imported_backing_ref_types`]
+    /// stays empty whatever this returns, so no such field ever becomes an
+    /// importing Zone's authority (R7, R15-R16).
+    pub fn projection_backing_field(&self) -> Option<&'static str> {
+        let declared = self.backing_declaration.field_names();
+        self.projection_allowed
+            .iter()
+            .copied()
+            .find(|field| declared.contains(field))
+    }
+
+    /// The backing reference types an imported projection may name.
+    ///
+    /// Always empty, in every family. The owner Service's backing set is a
+    /// same-Zone fact: the owner Zone realizes it through its own bindings
+    /// under its own authority, and the importing Zone receives an admitted
+    /// semantic projection and a lease. There is therefore no backing
+    /// reference type for a projection to name here, which is what makes "an
+    /// import is a handle to the remote backing resource" unexpressible
+    /// rather than merely undocumented (KTD14, R7, AE11).
+    pub fn imported_backing_ref_types(&self) -> BTreeSet<ResourceTypeName> {
+        BTreeSet::new()
+    }
+
     /// The catalog declaration that grounds the resolved backing set.
     #[cfg(test)]
     pub(crate) const fn backing_declaration(&self) -> SemanticBackingDeclaration {
@@ -941,6 +1035,228 @@ impl core::fmt::Debug for SemanticProjectionBinding {
                 "binding_target_types",
                 &self.allowed_binding_target_ref_types.len(),
             )
+            .finish_non_exhaustive()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Imported projection use
+// ---------------------------------------------------------------------------
+
+/// Maximum capability tokens one imported-projection use may name.
+pub const MAX_IMPORT_USE_CAPABILITIES: usize = 64;
+
+/// One local physical effect an importing Zone's consumer asked to realize.
+///
+/// The vocabulary is closed and every variant is an effect an importing Zone
+/// could perform against its own host. KTD14 forbids all of them: an import
+/// materializes an admitted semantic Service projection and a lease, and the
+/// primitive resources the owner Service realizes stay in the owner Zone
+/// under that Zone's authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum LocalPhysicalEffect {
+    /// Attach a device to a consumer in the importing Zone.
+    DeviceAttachment,
+    /// Mount a storage source into a consumer in the importing Zone.
+    StorageMount,
+    /// Deliver a credential to a consumer in the importing Zone.
+    CredentialDelivery,
+    /// Join a network from a consumer in the importing Zone.
+    NetworkMembership,
+    /// Attach an endpoint to a consumer in the importing Zone.
+    EndpointAttachment,
+}
+
+impl LocalPhysicalEffect {
+    /// Every local physical effect, in contract order.
+    pub const ALL: [Self; 5] = [
+        Self::DeviceAttachment,
+        Self::StorageMount,
+        Self::CredentialDelivery,
+        Self::NetworkMembership,
+        Self::EndpointAttachment,
+    ];
+}
+
+/// One consumer's request to use an imported semantic projection.
+///
+/// The request is what the importing Zone's own admission reads. It carries
+/// the consumer's `*Binding` row, the projection Service it names, the
+/// consuming target, and the capabilities it wants - and, so that a refusal
+/// is observable rather than a silent narrowing, the backing-resource
+/// references and local physical effects the request also asked for. Both are
+/// refused outright: an import grants neither in either Zone.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ImportUseRequest {
+    consumer_binding: ResourceRef,
+    service_ref: ResourceRef,
+    target: BindingTargetType,
+    capabilities: BTreeSet<BoundedToken>,
+    requested_backing_refs: Vec<ResourceRef>,
+    requested_local_effects: Vec<LocalPhysicalEffect>,
+}
+
+impl ImportUseRequest {
+    /// Construct a bounded import-use request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ImportUseRefusal::BoundExceeded`] when more than
+    /// [`MAX_IMPORT_USE_CAPABILITIES`] capabilities are named, and
+    /// [`ImportUseRefusal::CapabilityRequestInvalid`] when one is named
+    /// twice. A duplicate fails here rather than being folded, so the request
+    /// and its admitted form always agree.
+    pub fn new(
+        consumer_binding: ResourceRef,
+        service_ref: ResourceRef,
+        target: BindingTargetType,
+        mut capabilities: Vec<BoundedToken>,
+        requested_backing_refs: Vec<ResourceRef>,
+        requested_local_effects: Vec<LocalPhysicalEffect>,
+    ) -> Result<Self, ImportUseRefusal> {
+        if capabilities.len() > MAX_IMPORT_USE_CAPABILITIES {
+            return Err(ImportUseRefusal::BoundExceeded);
+        }
+        capabilities.sort();
+        if capabilities.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(ImportUseRefusal::CapabilityRequestInvalid);
+        }
+        Ok(Self {
+            consumer_binding,
+            service_ref,
+            target,
+            capabilities: capabilities.into_iter().collect(),
+            requested_backing_refs,
+            requested_local_effects,
+        })
+    }
+
+    /// Borrow the importing Zone's consumer binding row.
+    pub const fn consumer_binding(&self) -> &ResourceRef {
+        &self.consumer_binding
+    }
+
+    /// Borrow the projection Service the consumer named.
+    pub const fn service_ref(&self) -> &ResourceRef {
+        &self.service_ref
+    }
+
+    /// Return the consuming target's closed kind.
+    pub const fn target(&self) -> BindingTargetType {
+        self.target
+    }
+
+    /// Borrow the sorted, duplicate-free capability set.
+    pub const fn capabilities(&self) -> &BTreeSet<BoundedToken> {
+        &self.capabilities
+    }
+
+    /// Borrow the backing-resource references the request also named.
+    ///
+    /// Empty for every admitted request. It is carried so a refusal names the
+    /// attempt instead of leaving the caller to infer it.
+    pub fn requested_backing_refs(&self) -> &[ResourceRef] {
+        &self.requested_backing_refs
+    }
+
+    /// Borrow the local physical effects the request also named.
+    ///
+    /// Empty for every admitted request.
+    pub fn requested_local_effects(&self) -> &[LocalPhysicalEffect] {
+        &self.requested_local_effects
+    }
+}
+
+impl core::fmt::Debug for ImportUseRequest {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ImportUseRequest")
+            .field("capability_count", &self.capabilities.len())
+            .field(
+                "requested_backing_ref_count",
+                &self.requested_backing_refs.len(),
+            )
+            .field(
+                "requested_local_effect_count",
+                &self.requested_local_effects.len(),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+/// The admitted use of an imported semantic projection.
+///
+/// The type is the restriction. There is no accessor that returns a `Volume`,
+/// `Device`, `Network`, `Endpoint`, or `Credential` reference, no way to build
+/// one, and no local physical effect: an admitted use is a bounded set of
+/// capabilities over one projection Service in one importing Zone. The
+/// primitive backing resources remain in the owner Zone, where ordinary
+/// bindings realize them under that Zone's authority (KTD14, R7, R15-R16).
+#[derive(Clone, PartialEq, Eq)]
+pub struct AdmittedImportUse {
+    family: SemanticFamily,
+    consumer_binding: ResourceRef,
+    service_ref: ResourceRef,
+    target: BindingTargetType,
+    capabilities: BTreeSet<BoundedToken>,
+}
+
+impl AdmittedImportUse {
+    /// The semantic family whose projection this use runs against.
+    pub const fn family(&self) -> SemanticFamily {
+        self.family
+    }
+
+    /// Narrow this admitted use to what an owner Zone's lease granted.
+    ///
+    /// This is how the exporting Zone's capability ceiling reaches the
+    /// importing consumer. The result is computed here as the intersection
+    /// rather than accepted from the caller, so a lease can remove authority
+    /// but can never add any: a caller that hands in a wider set still gets
+    /// only what the admitted use already carried.
+    pub fn narrowed(&self, granted: &BTreeSet<BoundedToken>) -> Self {
+        Self {
+            family: self.family,
+            consumer_binding: self.consumer_binding.clone(),
+            service_ref: self.service_ref.clone(),
+            target: self.target,
+            capabilities: self.capabilities.intersection(granted).cloned().collect(),
+        }
+    }
+
+    /// Borrow the importing Zone's consumer binding row.
+    pub const fn consumer_binding(&self) -> &ResourceRef {
+        &self.consumer_binding
+    }
+
+    /// Borrow the `ResourceImport`-owned projection Service.
+    pub const fn service_ref(&self) -> &ResourceRef {
+        &self.service_ref
+    }
+
+    /// Return the consuming target's closed kind.
+    pub const fn target(&self) -> BindingTargetType {
+        self.target
+    }
+
+    /// Borrow the admitted capability set.
+    ///
+    /// This is already bounded by the exporting Zone's capability ceiling and
+    /// by the lease; the owner Zone narrows it further for this consumer.
+    pub const fn capabilities(&self) -> &BTreeSet<BoundedToken> {
+        &self.capabilities
+    }
+
+    /// Whether this use covers one capability.
+    pub fn admits_capability(&self, capability: &BoundedToken) -> bool {
+        self.capabilities.contains(capability)
+    }
+}
+
+impl core::fmt::Debug for AdmittedImportUse {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AdmittedImportUse")
+            .field("family", &self.family)
+            .field("capability_count", &self.capabilities.len())
             .finish_non_exhaustive()
     }
 }
@@ -1138,6 +1454,72 @@ impl SemanticPairContract {
         } else {
             Err(SemanticContractError::WrongResourceType)
         }
+    }
+
+    /// Admit one importing-Zone consumer's use of a `ResourceImport` projection.
+    ///
+    /// `projection_owner` is the owner reference of the stored projection
+    /// envelope, read in the importing Zone. It must name the import the
+    /// consumer reached the projection through: a locally owned Service of the
+    /// same type is a different thing, and admitting it here would let a
+    /// consumer reach a local resource through the cross-Zone vocabulary.
+    ///
+    /// The family half of the decision is made here; the exporting Zone's
+    /// consumer policy, capability ceiling, quota, and lease bound it further.
+    /// A request that also names a backing-resource reference or a local
+    /// physical effect is refused outright rather than narrowed, so the
+    /// attempt is visible instead of silently ignored (AE11, AE30).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ImportUseRefusal::NotAnImportedProjection`] when the stored
+    /// projection is not owned by an import,
+    /// [`ImportUseRefusal::ProjectionTypeMismatch`] when it is not this
+    /// family's Service,
+    /// [`ImportUseRefusal::BackingReferenceForbidden`] when the request names
+    /// any backing-resource reference,
+    /// [`ImportUseRefusal::LocalPhysicalEffectForbidden`] when it asks for a
+    /// local physical effect,
+    /// [`ImportUseRefusal::TargetNotAdmitted`] when the consuming target is
+    /// outside this family's closed target set, and
+    /// [`ImportUseRefusal::CapabilityRequestInvalid`] when it names no
+    /// capability at all.
+    pub fn admit_import_use(
+        &self,
+        projection_owner: Option<&ResourceRef>,
+        request: &ImportUseRequest,
+    ) -> Result<AdmittedImportUse, ImportUseRefusal> {
+        if !projection_owner.is_some_and(|owner| {
+            owner.resource_type().as_str() == RESOURCE_IMPORT_OWNER_TYPE
+        }) {
+            return Err(ImportUseRefusal::NotAnImportedProjection);
+        }
+        if request.service_ref().resource_type() != &self.service.resource_type {
+            return Err(ImportUseRefusal::ProjectionTypeMismatch);
+        }
+        if !request.requested_backing_refs().is_empty() {
+            return Err(ImportUseRefusal::BackingReferenceForbidden);
+        }
+        if !request.requested_local_effects().is_empty() {
+            return Err(ImportUseRefusal::LocalPhysicalEffectForbidden);
+        }
+        if !self
+            .projection
+            .allowed_binding_target_ref_types
+            .contains(&request.target())
+        {
+            return Err(ImportUseRefusal::TargetNotAdmitted);
+        }
+        if request.capabilities().is_empty() {
+            return Err(ImportUseRefusal::CapabilityRequestInvalid);
+        }
+        Ok(AdmittedImportUse {
+            family: self.family,
+            consumer_binding: request.consumer_binding().clone(),
+            service_ref: request.service_ref().clone(),
+            target: request.target(),
+            capabilities: request.capabilities().clone(),
+        })
     }
 }
 

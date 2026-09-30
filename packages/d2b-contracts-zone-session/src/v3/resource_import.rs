@@ -4,17 +4,30 @@
 //! only the local ZoneLink and an opaque export key.  Core later materializes
 //! one same-qualified-type Service projection; this contract never carries a
 //! remote ResourceRef, a transport locator, a descriptor, or a grant.
+//!
+//! The projection is a lease over the owner Zone's admitted semantic service,
+//! never a local copy of what backs it.  [`ResourceImportSpec::admit_consumer_use`]
+//! is the single decision that keeps it that way: the family shape is checked
+//! by the signed catalog, then the exporting Zone's consumer policy,
+//! capability ceiling, quota, and lease bound the result.  Nothing in this
+//! module can name a `Volume`, `Device`, `Network`, `Endpoint`, `Credential`,
+//! or primitive binding, so none can be produced by importing.
+
+use std::collections::BTreeSet;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::resource_export::{ResourceExportSpec, ShareQuota, is_qualified_service_type};
+use super::resource_export::{ExportLeaseState, ResourceExportSpec, ShareQuota, is_qualified_service_type};
 use d2b_contracts::wire_deserialize;
 use d2b_contracts_provider::v3::provider::{
     Exportability, ProjectionFactory, ProviderContractError,
 };
+use d2b_contracts_provider::v3::semantic_services::{
+    AdmittedImportUse, ImportUseRefusal, ImportUseRequest, SemanticPairContract,
+};
 use d2b_contracts_resource::v3::{
-    ResourceName, ResourceRef, ResourceTypeName, SchemaFingerprint,
+    ResourceName, ResourceRef, ResourceTypeName, SchemaFingerprint, ZoneId,
     execution_policy::{BoundedText, BoundedToken, PrimitiveSpecError},
 };
 
@@ -50,6 +63,20 @@ pub enum ResourceImportContractError {
     QuotaInvalid,
     /// Expected Service or fingerprint metadata did not match.
     FingerprintMismatch,
+    /// The requesting Zone is not inside the export's consumer policy.
+    ConsumerZoneNotAdmitted,
+    /// The export's lease no longer admits new use, because it is draining or
+    /// has been revoked.
+    LeaseNotUsable,
+    /// A requested capability is outside the lease the owner Zone granted.
+    CapabilityNotLeased,
+    /// The request is not an admitted use of the projection's semantic
+    /// family, or it is outside what an import may consume at all.
+    ///
+    /// The family-level reasons are re-exported verbatim from the semantic
+    /// catalog, so a refusal names which boundary stopped the request rather
+    /// than reporting one opaque import error.
+    SemanticFamilyRefusal(ImportUseRefusal),
 }
 
 impl ResourceImportContractError {
@@ -65,6 +92,10 @@ impl ResourceImportContractError {
             Self::DuplicateEntry => "resource-import-duplicate-entry",
             Self::QuotaInvalid => "resource-import-quota-invalid",
             Self::FingerprintMismatch => "resource-import-fingerprint-mismatch",
+            Self::ConsumerZoneNotAdmitted => "resource-import-consumer-zone-not-admitted",
+            Self::LeaseNotUsable => "resource-import-lease-not-usable",
+            Self::CapabilityNotLeased => "resource-import-capability-not-leased",
+            Self::SemanticFamilyRefusal(refusal) => refusal.as_str(),
         }
     }
 }
@@ -338,6 +369,148 @@ impl ResourceImportSpec {
             });
         }
         Ok(())
+    }
+
+    /// Admit one importing-Zone consumer's use of this import's projection.
+    ///
+    /// `projection_owner` is the owner reference of the stored projection row
+    /// as resolved in the importing Zone, and `lease` is the export-side lease
+    /// the owner Zone granted this consumer. Both are observations, never
+    /// caller claims: the projection must be owned by an import, and the lease
+    /// must already name a consumer Zone the export's policy admits.
+    ///
+    /// The decision runs in the only order that cannot widen an import. The
+    /// family shape comes first, so a request that names a backing resource or
+    /// a local physical effect is refused by name; the export's consumer
+    /// policy, capability ceiling, quota, and lease then narrow what remains.
+    /// A capability the lease does not carry is refused rather than dropped,
+    /// because a silently narrowed capability set is how an over-ceiling
+    /// request would come to look admitted (AE11, R7, R16).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResourceImportContractError::ConsumerZoneNotAdmitted`] when
+    /// the lease's consumer Zone is outside the export's consumer policy,
+    /// [`ResourceImportContractError::LeaseNotUsable`] when the lease is
+    /// draining or revoked,
+    /// [`ResourceImportContractError::CapabilityNotLeased`] when a requested
+    /// capability is outside the lease, the export's operations, or the
+    /// import's own requested set, and
+    /// [`ResourceImportContractError::SemanticFamilyRefusal`] with the
+    /// catalog's own reason when the request is not an admitted use of the
+    /// projection.
+    pub fn admit_consumer_use(
+        &self,
+        pair: &SemanticPairContract,
+        export: &ResourceExportSpec,
+        lease: &ImportLeaseClaim,
+        projection_owner: Option<&ResourceRef>,
+        request: &ImportUseRequest,
+    ) -> Result<AdmittedImportUse, ResourceImportContractError> {
+        let family_use =
+            pair.admit_import_use(projection_owner, request)
+                .map_err(ResourceImportContractError::SemanticFamilyRefusal)?;
+        self.validate_against_export(export)?;
+        if !export.admits_consumer_zone(lease.consumer_zone()) {
+            return Err(ResourceImportContractError::ConsumerZoneNotAdmitted);
+        }
+        if !lease.admits_new_use() {
+            return Err(ResourceImportContractError::LeaseNotUsable);
+        }
+        let requested = family_use.capabilities();
+        if !requested
+            .iter()
+            .all(|capability| self.requests_capability(capability))
+        {
+            return Err(ResourceImportContractError::CapabilityNotLeased);
+        }
+        let narrowed = family_use.narrowed(lease.capabilities());
+        if narrowed.capabilities().len() != requested.len() {
+            return Err(ResourceImportContractError::CapabilityNotLeased);
+        }
+        Ok(narrowed)
+    }
+ }
+
+/// The export-side lease one importing consumer's use runs under.
+///
+/// This is an observation of what the owner Zone actually granted, not a
+/// request. Its capabilities are the grant: an importing consumer can use no
+/// more than the lease carries, however much the export's ceiling would allow.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ImportLeaseClaim {
+    consumer_zone: ZoneId,
+    capabilities: BTreeSet<BoundedToken>,
+    state: ExportLeaseState,
+}
+
+impl ImportLeaseClaim {
+    /// Construct a lease observation from the owner Zone's own admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResourceImportContractError::BoundExceeded`] when more than
+    /// [`MAX_RESOURCE_IMPORT_CAPABILITIES`] capabilities are carried and
+    /// [`ResourceImportContractError::DuplicateEntry`] when one is carried
+    /// twice. A duplicate fails here so the lease and its admitted use always
+    /// agree on the set.
+    pub fn new(
+        consumer_zone: ZoneId,
+        mut capabilities: Vec<BoundedToken>,
+        state: ExportLeaseState,
+    ) -> Result<Self, ResourceImportContractError> {
+        if capabilities.len() > MAX_RESOURCE_IMPORT_CAPABILITIES {
+            return Err(ResourceImportContractError::BoundExceeded);
+        }
+        capabilities.sort();
+        if capabilities.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(ResourceImportContractError::DuplicateEntry);
+        }
+        Ok(Self {
+            consumer_zone,
+            capabilities: capabilities.into_iter().collect(),
+            state,
+        })
+    }
+
+    /// Borrow the Zone the owner Zone admitted this lease for.
+    pub const fn consumer_zone(&self) -> &ZoneId {
+        &self.consumer_zone
+    }
+
+    /// Borrow the granted capability set.
+    pub const fn capabilities(&self) -> &BTreeSet<BoundedToken> {
+        &self.capabilities
+    }
+
+    /// Whether one capability is inside the grant.
+    pub fn admits_capability(&self, capability: &BoundedToken) -> bool {
+        self.capabilities.contains(capability)
+    }
+
+    /// Whether this lease still admits new use.
+    ///
+    /// A lease that is draining or revoked admits none. This is the fence the
+    /// owner's revocation raises first, so a consumer that reconnects after a
+    /// revocation cannot pick up where it left off.
+    pub const fn admits_new_use(&self) -> bool {
+        matches!(self.state, ExportLeaseState::Pending | ExportLeaseState::Active)
+    }
+
+    /// Return the observed lease state.
+    pub const fn state(&self) -> ExportLeaseState {
+        self.state
+    }
+}
+
+impl core::fmt::Debug for ImportLeaseClaim {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ImportLeaseClaim")
+            .field("consumer_zone", &self.consumer_zone)
+            .field("capability_count", &self.capabilities.len())
+            .field("state", &self.state)
+            .finish_non_exhaustive()
     }
 }
 

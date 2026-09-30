@@ -2280,11 +2280,18 @@ impl ProjectionFactory {
     }
 }
 
+/// The canonical ResourceType name of the import that owns a projection row.
+///
+/// An imported projection is a lease over a remote Service, not a local copy
+/// of it, so ownership by this type is what makes a row import-owned: it may
+/// not be re-exported, and it may not serve as another Service's backing.
+pub const RESOURCE_IMPORT_OWNER_TYPE: &str = "ResourceImport";
+
 fn is_import_owned(resource: &ResourceEnvelope) -> bool {
     resource
         .metadata()
         .owner_ref()
-        .is_some_and(|owner| owner.resource_type().as_str() == "ResourceImport")
+        .is_some_and(|owner| owner.resource_type().as_str() == RESOURCE_IMPORT_OWNER_TYPE)
 }
 
 impl core::fmt::Debug for ProjectionFactory {

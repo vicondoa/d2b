@@ -718,6 +718,25 @@ d2b_rust_test(
         "//packages/d2b-core:d2b_core",
         "@crates//:serde",
         "@crates//:serde_json",
+        "@crates//:tokio",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
+    name = "import_binding_authority",
+    srcs = ["tests/import_binding_authority.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2bd_lib",
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-provider-resource-export:d2b_provider_resource_export",
+        "//packages/d2b-provider-resource-import:d2b_provider_resource_import",
+        "//packages/d2b-provider-zone-link:d2b_provider_zone_link",
+        "//packages/d2b-resource-types:d2b_resource_types",
+        "@crates//:tokio",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

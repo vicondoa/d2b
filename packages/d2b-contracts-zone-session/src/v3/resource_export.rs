@@ -10,7 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use d2b_contracts_provider::v3::provider::{
-    Exportability, ProjectionFactory, ProviderContractError,
+    Exportability, ProjectionFactory, ProviderContractError, RESOURCE_IMPORT_OWNER_TYPE,
 };
 use d2b_contracts_resource::v3::identity::BindingDigest;
 use d2b_contracts_resource::v3::{
@@ -61,6 +61,10 @@ pub enum ResourceExportContractError {
     PolicyInvalid,
     /// A projection schema or factory fingerprint did not match.
     FingerprintMismatch,
+    /// The export subject is owned by a `ResourceImport`. A lease over a
+    /// remote Service is never re-exportable, so a consumer Zone cannot
+    /// launder the source Zone's authority by re-advertising what it imported.
+    ImportOwnedOriginRejected,
 }
 
 impl ResourceExportContractError {
@@ -76,6 +80,7 @@ impl ResourceExportContractError {
             Self::DuplicateEntry => "resource-export-duplicate-entry",
             Self::PolicyInvalid => "resource-export-policy-invalid",
             Self::FingerprintMismatch => "resource-export-fingerprint-mismatch",
+            Self::ImportOwnedOriginRejected => "resource-export-import-owned-origin-rejected",
         }
     }
 }
@@ -285,6 +290,15 @@ impl ConsumerZonePolicy {
     /// Whether a capability is inside the export ceiling.
     pub fn allows_capability(&self, capability: &BoundedToken) -> bool {
         self.capability_ceiling.binary_search(capability).is_ok()
+    }
+
+    /// Whether one Zone is explicitly named by this export's policy.
+    ///
+    /// This is the list half only. [`ResourceExportSpec::admits_consumer_zone`]
+    /// combines it with the export's visibility, because a child-Zone export
+    /// deliberately names no Zone and is bounded by the Zone tree instead.
+    pub fn names_zone(&self, zone: &ZoneId) -> bool {
+        self.zones.binary_search(zone).is_ok()
     }
 }
 
@@ -526,6 +540,47 @@ impl ResourceExportSpec {
         Ok(())
     }
 
+    /// Admit one consumer Zone against this export's consumer policy.
+    ///
+    /// A `NamedZones` export admits only the Zones it lists, which is how an
+    /// owner narrows a share below every child. A `ChildZones` export names no
+    /// Zone and is bounded instead by the Zone tree, which the caller's own
+    /// admission establishes; nothing here widens it past the named list when
+    /// one exists (R7).
+    pub fn admits_consumer_zone(&self, zone: &ZoneId) -> bool {
+        match self.visibility {
+            ExportVisibility::ChildZones => true,
+            ExportVisibility::NamedZones => self.consumer_zone_policy.names_zone(zone),
+        }
+    }
+
+    /// Admit the origin of one stored export subject.
+    ///
+    /// The subject is resolved in the owner Zone and handed over as its
+    /// stored envelope, because ownership is a property of the row rather
+    /// than of the reference the author typed. An import-owned projection is
+    /// refused: a consumer Zone holds a lease over the source Zone's Service,
+    /// not the authority to advertise it onward, so re-exporting an import is
+    /// how source authority would otherwise be laundered (AE11).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResourceExportContractError::ImportOwnedOriginRejected`] when
+    /// the stored subject's owner reference names a `ResourceImport`.
+    pub fn admits_export_subject_origin(
+        &self,
+        subject: &ResourceEnvelope,
+    ) -> Result<(), ResourceExportContractError> {
+        if subject
+            .metadata()
+            .owner_ref()
+            .is_some_and(|owner| owner.resource_type().as_str() == RESOURCE_IMPORT_OWNER_TYPE)
+        {
+            return Err(ResourceExportContractError::ImportOwnedOriginRejected);
+        }
+        Ok(())
+    }
+
     /// Validate this declaration against signed factory metadata.
     pub fn validate_factory(
         &self,
@@ -691,6 +746,117 @@ impl ExportLeaseSummary {
 }
 
 redacted_debug!(ExportLeaseSummary);
+
+/// One stage of a revoking export's drain.
+///
+/// The stages are separate rather than collapsed into "draining" because the
+/// ordering is the requirement: new use is blocked and outstanding lease use
+/// is driven to its declared safe state first, and only then is the
+/// advertisement withdrawn and the export row retired. The protected
+/// resources - the owner Service and the bindings that realize its backing -
+/// belong to the owner Zone and are never touched by the drain itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ExportRevocationStage {
+    /// New leases are refused and every outstanding lease is being released.
+    PreDrain,
+    /// No lease is outstanding, so the advertisement may be withdrawn.
+    AdvertisementWithdrawn,
+    /// Both stages are evidenced and the export row may retire.
+    Complete,
+}
+
+/// A revocation always begins fenced: constructing one is the act of
+/// refusing new leases, so no separate caller step can forget to do it.
+pub struct ExportRevocation {
+    policy: RevocationPolicy,
+    stage: ExportRevocationStage,
+    outstanding_leases: u32,
+}
+
+impl ExportRevocation {
+    /// Begin revoking one export.
+    ///
+    /// The returned value blocks new use from this point; the owner Zone
+    /// observes the leases it actually holds through
+    /// [`ExportRevocation::observe_leases`].
+    pub fn begin(spec: &ResourceExportSpec) -> Self {
+        Self {
+            policy: spec.revocation_policy(),
+            stage: ExportRevocationStage::PreDrain,
+            outstanding_leases: 0,
+        }
+    }
+
+    /// Whether new consumer use is blocked.
+    ///
+    /// Always true. It is stated rather than inferred so a caller cannot read
+    /// a draining export as still accepting leases.
+    pub const fn blocks_new_use(&self) -> bool {
+        true
+    }
+
+    /// The furthest stage this revocation has evidenced.
+    pub const fn stage(&self) -> ExportRevocationStage {
+        self.stage
+    }
+
+    /// The number of leases still holding the export.
+    pub const fn outstanding_leases(&self) -> u32 {
+        self.outstanding_leases
+    }
+
+    /// Whether the export row may retire.
+    pub const fn is_complete(&self) -> bool {
+        matches!(self.stage, ExportRevocationStage::Complete)
+    }
+
+    /// Whether the declared policy permits forcing the drain now.
+    ///
+    /// Forcing is a controller decision taken after the grace period, and it
+    /// is refused when the policy did not ask for it, so a slow lease can never
+    /// be cut off by a policy that promised it time.
+    pub const fn force_permitted(&self, elapsed_ms: u64) -> bool {
+        self.policy.force_revoke() && elapsed_ms >= self.policy.grace_period_ms()
+    }
+
+    /// Observe the export's leases and return the stage to perform next.
+    ///
+    /// A lease that is still `Active` or `Revoking` counts as outstanding, so
+    /// the advertisement cannot be withdrawn while a consumer is still using
+    /// the shared authority. A lease that never became active has nothing to
+    /// release and does not hold the export open.
+    pub fn observe_leases(&mut self, leases: &[ExportLeaseSummary]) -> ExportRevocationStage {
+        self.outstanding_leases = leases
+            .iter()
+            .filter(|lease| {
+                matches!(
+                    lease.lease_state(),
+                    ExportLeaseState::Active | ExportLeaseState::Revoking
+                )
+            })
+            .count()
+            .try_into()
+            .unwrap_or(u32::MAX);
+        self.stage = match self.stage {
+            ExportRevocationStage::PreDrain if self.outstanding_leases == 0 => {
+                ExportRevocationStage::AdvertisementWithdrawn
+            }
+            ExportRevocationStage::AdvertisementWithdrawn => ExportRevocationStage::Complete,
+            reached => reached,
+        };
+        self.stage
+    }
+}
+
+impl core::fmt::Debug for ExportRevocation {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ExportRevocation")
+            .field("stage", &self.stage)
+            .field("outstanding_leases", &self.outstanding_leases)
+            .finish_non_exhaustive()
+    }
+}
 
 /// Whether a ResourceType is a qualified semantic Service.
 pub(crate) fn is_qualified_service_type(resource_type: &ResourceTypeName) -> bool {
