@@ -28,14 +28,20 @@ mod workers;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
-pub use arbitration::{UsbipArbitrator, UsbipClaim, UsbipClaimError};
+pub use arbitration::{
+    AdmittedDeviceClaim, BoundDeviceLeg, USBIP_BACKING_FUNCTION, USBIP_SERVICE_DEVICE_SLOT,
+    UsbipArbitrator, UsbipClaim, UsbipClaimError, usbip_service_device_request,
+};
 pub use busid::{BusId, FirewallOwnershipMarker, MAX_BUS_ID_BYTES, PhysicalUsbBackingToken};
 pub use controller::{
     NetworkDependency, ScopedResourceUid, USBIP_BINDING_FINALIZER, USBIP_MAX_REPAIR_INTERVAL_SECS,
+    USBIP_RELAY_ENDPOINT_PURPOSE, USBIP_RELAY_NETWORK_SLOT, USBIP_RELAY_OPERATIONS,
     USBIP_REPAIR_INTERVAL_SECS, USBIP_SERVICE_FINALIZER, UsbipBindingAdmission,
     UsbipBindingController, UsbipBindingControllerError, UsbipBindingPhase,
     UsbipBindingReconcileResult, UsbipController, UsbipControllerError, UsbipMetricLabels,
-    UsbipOperation, UsbipOutcome, UsbipRunnerContract, UsbipServicePhase, usbip_runner_contract,
+    UsbipOperation, UsbipOutcome, UsbipRunnerContract, UsbipServiceClaim, UsbipServicePhase,
+    usbip_guest_endpoint_request, usbip_relay_endpoint_request, usbip_relay_network_request,
+    usbip_runner_contract,
 };
 pub use d2b_contracts::usbip::validate_bus_id;
 pub use driver::{
@@ -44,9 +50,9 @@ pub use driver::{
     usbip_descriptors,
 };
 pub use firewall::{
-    FirewallConfirmation, FirewallConfirmationKind, FirewallDigest, FirewallGenerationFence,
-    FirewallObservation, FirewallProjectionAction, FirewallProjectionIntent, FirewallToken,
-    RelayAuthorityLease, UsbipEffectError, UsbipEffectPort,
+    ClaimProjectionFence, FirewallConfirmation, FirewallConfirmationKind, FirewallDigest,
+    FirewallGenerationFence, FirewallObservation, FirewallProjectionAction, FirewallProjectionIntent,
+    FirewallToken, RelayAuthorityLease, UsbipClaimPort, UsbipEffectError, UsbipEffectPort,
 };
 pub use lifecycle::{
     AttachProcessIdentity, AttachmentObservation, BindingIdentity, BindingLifecycle,
@@ -55,6 +61,7 @@ pub use lifecycle::{
     ServicePort, ServiceRelayLease, SupervisorFinalizeError, UsbipSupervisor,
     binding_child_resources,
 };
+
 pub use process::{AttachSource, EphemeralProcessIntent, EphemeralProcessKind, UsbipDaemonProcess};
 pub use production::{ProductionPort, UsbipBrokerDispatcher};
 pub use state_machine::{

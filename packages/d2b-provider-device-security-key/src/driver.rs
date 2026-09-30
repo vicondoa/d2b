@@ -12,6 +12,17 @@
 //! crates' exported identities, and the driver derives the same two rows from
 //! the Service's own declared device reference on every pass.
 //!
+//! The Service and Binding compose primitive relationships instead of
+//! taking host access. The Service requests one `DeviceBinding` for its
+//! exclusive hidraw backing - built by [`security_key_device_request`] - and
+//! each Binding requests an `EndpointBinding` to the relay it is delivered
+//! through - built by [`security_key_guest_endpoint_request`]. The host relay
+//! and the in-guest frontend are provider-created helpers, so they realize the
+//! admitted relationships as bounded legs rather than claiming anything
+//! themselves. The pre-graph Core-admission path and its effects service stay
+//! for the not-yet-cutover production entry point and are queued for deletion
+//! in U34.
+//!
 //! Conversion mapping (spec section 13):
 //! - `describe` -> the [`ProviderRow`] registrations under the family's
 //!   ResourceTypes.
@@ -31,7 +42,10 @@ use async_trait::async_trait;
 use d2b_contracts_provider::v3::semantic_services::child_resources::{
     BindingChildIntent, BindingChildSet,
 };
-use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ResourceUid, ZoneId};
+use d2b_contracts_resource::v3::{
+    BindingContractError, BindingSlot, ControllerGeneration, EndpointAttachmentKind,
+    EndpointBindingRequest, ResourceRef, ResourceUid, ZoneId, execution_policy::BoundedToken,
+};
 use d2b_provider_toolkit::{
     HOST_REF, ProviderRow, SharedProviderDeclarationError, SharedProviderDriverArgs,
     SharedProviderDriverFactory, SharedProviderEffectError, SharedProviderEffectOutcome,
@@ -49,6 +63,42 @@ use crate::effects_service::SECURITY_KEY_EFFECTS_SERVICE;
 use serde_json::{Value, json};
 
 pub use crate::{PROVIDER_REF, SECURITY_KEY_BINDING_RESOURCE_TYPE, SECURITY_KEY_SERVICE_RESOURCE_TYPE};
+
+/// The stable consumer slot a Binding's relay Endpoint occupies.
+pub const SECURITY_KEY_RELAY_ENDPOINT_SLOT: &str = "relay-endpoint";
+
+/// The bounded purpose the relay Endpoint is admitted for.
+pub const SECURITY_KEY_RELAY_ENDPOINT_PURPOSE: &str = "security-key-relay";
+
+/// Build the canonical `EndpointBindingRequest` one Binding's relay Endpoint
+/// is.
+///
+/// `consumer` is the Binding's own declared in-guest frontend `Process`: the
+/// ceremony is delivered to the helper that realizes the Binding, never to the
+/// Guest as a whole and never to the host directory that happens to contain the
+/// socket (R23). The Guest's device access is not requested here at all - it
+/// rides the Service's admitted `DeviceBinding` as a bounded use of that
+/// claim.
+///
+/// # Errors
+///
+/// Returns [`BindingContractError`] when the source is not an `Endpoint`, the
+/// consumer is not one this binding kind admits, or the slot or purpose token
+/// is not bounded.
+pub fn security_key_guest_endpoint_request(
+    endpoint_ref: &ResourceRef,
+    consumer: &ResourceRef,
+) -> Result<EndpointBindingRequest, BindingContractError> {
+    EndpointBindingRequest::new(
+        endpoint_ref.clone(),
+        consumer.clone(),
+        BindingSlot::parse(SECURITY_KEY_RELAY_ENDPOINT_SLOT)
+            .map_err(|_| BindingContractError::InvalidField)?,
+        EndpointAttachmentKind::Connect,
+        BoundedToken::parse(SECURITY_KEY_RELAY_ENDPOINT_PURPOSE)
+            .map_err(|_| BindingContractError::InvalidField)?,
+    )
+}
 
 /// The controller reference the Service row's effects bind.
 pub const SECURITY_KEY_SERVICE_CONTROLLER_REF: &str =

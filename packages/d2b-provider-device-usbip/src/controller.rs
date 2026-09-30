@@ -1,14 +1,137 @@
 //! USB Service firewall and relay lifecycle controller.
+//!
+//! The semantic USB Service and Binding compose primitive relationships rather
+//! than reaching a host grant. Each of them *requests* a typed binding -
+//! [`usbip_relay_network_request`] for the relay's membership on its Network,
+//! [`usbip_relay_endpoint_request`] for the relay Endpoint, and
+//! [`usbip_guest_endpoint_request`] for the per-Guest Endpoint - and the
+//! Service's physical backing is requested as a `DeviceBindingRequest` (see
+//! [`crate::arbitration::usbip_service_device_request`]) and arbitrated by
+//! the `Device` source.
+//!
+//! [`UsbipController::reconcile_claim`] and
+//! [`UsbipController::finalize_claim`] are the converted path: every relay,
+//! projection, and teardown step carries the one admitted
+//! [`AdmittedDeviceClaim`] the source decided, a cross-Zone or stale claim is
+//! refused before any effect is attempted, and the source reservation is given
+//! up only after the projection is removed and the relay leg is stopped. The
+//! pre-graph methods below them stay for the not-yet-cutover production path
+//! and are queued for deletion in U34.
 
 use d2b_contracts_provider::v3::semantic_services::child_resources::BindingChildSet;
-use d2b_contracts_resource::v3::{ResourceGeneration, ResourceRef, ResourceUid};
+use d2b_contracts_resource::v3::{
+    AdmissionStage, BindingContractError, BindingRefusal, BindingSlot, DeviceEffectOperation,
+    EndpointAttachmentKind, EndpointBindingRequest, NetworkBindingRequest, NetworkMembership,
+    NetworkPresentation, RefusalReason, ResourceGeneration, ResourceRef, ResourceUid,
+    StoreIncarnation, ZoneId, execution_policy::BoundedToken,
+};
 
+use crate::arbitration::{AdmittedDeviceClaim, BoundDeviceLeg};
 use crate::binding_child_resources;
 use crate::firewall::{
-    FirewallConfirmationKind, FirewallDigest, FirewallGenerationFence, FirewallProjectionAction,
-    FirewallProjectionIntent, FirewallToken, RelayAuthorityLease, UsbipEffectError,
-    UsbipEffectPort,
+    ClaimProjectionFence, FirewallConfirmationKind, FirewallDigest, FirewallGenerationFence,
+    FirewallProjectionAction, FirewallProjectionIntent, FirewallToken, RelayAuthorityLease,
+    UsbipClaimPort, UsbipEffectError, UsbipEffectPort,
 };
+
+/// The stable consumer slot the relay's Network membership occupies.
+pub const USBIP_RELAY_NETWORK_SLOT: &str = "relay-network";
+
+/// The bounded purpose the relay Endpoint is admitted for.
+pub const USBIP_RELAY_ENDPOINT_PURPOSE: &str = "usb-relay";
+
+/// The effect operation classes a USBIP realization drives.
+///
+/// The relay is a helper of the Service's device claim, so it spawns the
+/// per-Network relay and applies its projection. The list is a subset the leg
+/// must cover; it never widens what the source admitted.
+pub const USBIP_RELAY_OPERATIONS: [DeviceEffectOperation; 2] = [
+    DeviceEffectOperation::SpawnRunner,
+    DeviceEffectOperation::ApplyNftablesProjection,
+];
+
+/// Build the canonical `NetworkBindingRequest` the per-Network relay is.
+///
+/// The relay consumes the Network, not the Service: a semantic USB Service
+/// does not hold a fabric, and this request is what the Network source admits
+/// before any listener exists.
+///
+/// # Errors
+///
+/// Returns [`BindingContractError`] when the source is not a `Network`.
+pub fn usbip_relay_network_request(
+    network_ref: &ResourceRef,
+) -> Result<NetworkBindingRequest, BindingContractError> {
+    NetworkBindingRequest::new(
+        network_ref.clone(),
+        service_controller_ref(),
+        BindingSlot::parse(USBIP_RELAY_NETWORK_SLOT).map_err(|_| BindingContractError::InvalidField)?,
+        NetworkMembership::new(Vec::new(), false)?,
+        NetworkPresentation::shared_fabric(),
+    )
+}
+
+/// Build the canonical `EndpointBindingRequest` the relay Endpoint is.
+///
+/// The relay accepts connections for the Service, so the relationship is a
+/// listen attachment delivered to the Service's own controller. A Guest
+/// cannot widen this by naming the endpoint: a different consumer, a
+/// different slot, or a different attachment kind is a different request.
+///
+/// # Errors
+///
+/// Returns [`BindingContractError`] when the source is not an `Endpoint`.
+pub fn usbip_relay_endpoint_request(
+    endpoint_ref: &ResourceRef,
+) -> Result<EndpointBindingRequest, BindingContractError> {
+    EndpointBindingRequest::new(
+        endpoint_ref.clone(),
+        service_controller_ref(),
+        BindingSlot::parse(USBIP_RELAY_NETWORK_SLOT).map_err(|_| BindingContractError::InvalidField)?,
+        EndpointAttachmentKind::Listen,
+        relay_purpose()?,
+    )
+}
+
+/// Build the canonical `EndpointBindingRequest` one Binding's Guest Endpoint
+/// is.
+///
+/// `consumer` is the Binding's own declared guest-proxy `Process`: the
+/// per-Guest attachment is delivered to the helper that realizes the Binding,
+/// never to the Guest as a whole and never to the host directory that happens
+/// to contain the socket (R23).
+///
+/// # Errors
+///
+/// Returns [`BindingContractError`] when the source is not an `Endpoint` or
+/// the consumer is not one this binding kind admits.
+pub fn usbip_guest_endpoint_request(
+    endpoint_ref: &ResourceRef,
+    consumer: &ResourceRef,
+) -> Result<EndpointBindingRequest, BindingContractError> {
+    EndpointBindingRequest::new(
+        endpoint_ref.clone(),
+        consumer.clone(),
+        BindingSlot::parse(USBIP_GUEST_ENDPOINT_SLOT).map_err(|_| BindingContractError::InvalidField)?,
+        EndpointAttachmentKind::Connect,
+        relay_purpose()?,
+    )
+}
+
+/// The stable consumer slot a Binding's Guest Endpoint occupies.
+const USBIP_GUEST_ENDPOINT_SLOT: &str = "guest-endpoint";
+
+/// The one `Process` that consumes a USB Service's Device, Network, and relay
+/// Endpoint relationships.
+fn service_controller_ref() -> ResourceRef {
+    ResourceRef::parse(crate::driver::USBIP_SERVICE_CONTROLLER_REF)
+        .expect("the USBIP Service controller reference is canonical")
+}
+
+/// The bounded purpose both USBIP Endpoint relationships are admitted for.
+fn relay_purpose() -> Result<BoundedToken, BindingContractError> {
+    BoundedToken::parse(USBIP_RELAY_ENDPOINT_PURPOSE).map_err(|_| BindingContractError::InvalidField)
+}
 
 /// Default descriptor repair interval.
 pub const USBIP_REPAIR_INTERVAL_SECS: u64 = 30;
@@ -284,6 +407,32 @@ impl UsbipBindingController {
         ) && self.children.resource_refs().any(|current| current == resource_ref)
     }
 
+    /// Build the canonical `EndpointBindingRequest` this Binding's declared
+    /// guest Endpoint is.
+    ///
+    /// The consumer is the Binding's own declared `guest-proxy` child, so the
+    /// per-Guest attachment is admitted for the helper that realizes the
+    /// Binding. Naming a different consumer - including the Guest itself or
+    /// the Service - is a different request and the Endpoint source has to
+    /// admit it on its own evidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BindingContractError`] when the declared guest-proxy child is
+    /// missing, the source is not an `Endpoint`, or the consumer kind is not
+    /// one this binding kind admits.
+    pub fn endpoint_request(
+        &self,
+        endpoint_ref: &ResourceRef,
+    ) -> Result<EndpointBindingRequest, BindingContractError> {
+        let proxy = self
+            .children
+            .child("guest-proxy")
+            .ok_or(BindingContractError::InvalidField)?
+            .resource_ref();
+        usbip_guest_endpoint_request(endpoint_ref, proxy)
+    }
+
     /// Observe Core-managed child readiness without spawning a feature
     /// process.
     pub fn observe_children(
@@ -541,6 +690,64 @@ impl UsbipOutcome {
     }
 }
 
+/// The admitted relationship one USB Service realizes, as its own row declares it.
+///
+/// The controller compares the claim against exactly these facts - the Zone the
+/// Service row lives in, the backing `Device` it names, the store incarnation
+/// it is fenced against, and the helper whose bounded leg may realize it - so
+/// the reconcile entry point takes one admission value rather than a list of
+/// independently supplied arguments.
+#[derive(Debug, Clone, Copy)]
+pub struct UsbipServiceClaim<'a> {
+    zone: &'a ZoneId,
+    store: &'a StoreIncarnation,
+    device_ref: &'a ResourceRef,
+    claim: &'a AdmittedDeviceClaim,
+    helper: &'a ResourceRef,
+    helper_uid: &'a ResourceUid,
+}
+
+impl<'a> UsbipServiceClaim<'a> {
+    /// Bind one admitted claim to the facts the Service row declares.
+    pub const fn new(
+        zone: &'a ZoneId,
+        store: &'a StoreIncarnation,
+        device_ref: &'a ResourceRef,
+        claim: &'a AdmittedDeviceClaim,
+        helper: &'a ResourceRef,
+        helper_uid: &'a ResourceUid,
+    ) -> Self {
+        Self {
+            zone,
+            store,
+            device_ref,
+            claim,
+            helper,
+            helper_uid,
+        }
+    }
+
+    /// The admitted `Device` claim.
+    pub const fn claim(&self) -> &'a AdmittedDeviceClaim {
+        self.claim
+    }
+
+    /// The helper whose bounded leg realizes the claim.
+    pub const fn helper(&self) -> &'a ResourceRef {
+        self.helper
+    }
+
+    /// The Zone the Service row lives in.
+    pub const fn zone(&self) -> &'a ZoneId {
+        self.zone
+    }
+
+    /// The store incarnation the admission is fenced against.
+    pub const fn store(&self) -> &'a StoreIncarnation {
+        self.store
+    }
+}
+
 /// Bounded metric labels whose keys and values come from closed sets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UsbipMetricLabels {
@@ -581,6 +788,17 @@ struct FirewallLease {
     token: FirewallToken,
     digest: FirewallDigest,
     fence: FirewallGenerationFence,
+    store: Option<StoreIncarnation>,
+}
+
+impl FirewallLease {
+    /// The store incarnation this retained projection was written under.
+    ///
+    /// `None` for the pre-graph projection path, which was fenced on resource
+    /// generations alone; the converted path always has one.
+    const fn claim_store(&self) -> Option<&StoreIncarnation> {
+        self.store.as_ref()
+    }
 }
 
 impl core::fmt::Debug for FirewallLease {
@@ -590,6 +808,12 @@ impl core::fmt::Debug for FirewallLease {
 }
 
 /// USB Service controller state for one physical backing and Network relay.
+///
+/// The converted path additionally retains the one admitted
+/// [`AdmittedDeviceClaim`] the `Device` source arbitrated, the helper its relay
+/// leg is bound to, and the store incarnation that admission was fenced
+/// against. None of them is an authority of this Provider's own: they are the
+/// evidence every effect below is measured against.
 pub struct UsbipController {
     service: ScopedResourceUid,
     service_generation: ResourceGeneration,
@@ -600,6 +824,10 @@ pub struct UsbipController {
     firewall: Option<FirewallLease>,
     last_error: Option<UsbipEffectError>,
     network_assignment_epoch: Option<u64>,
+    claim: Option<AdmittedDeviceClaim>,
+    relay_helper: Option<ResourceRef>,
+    store: Option<StoreIncarnation>,
+    source_released: bool,
 }
 
 impl UsbipController {
@@ -619,6 +847,10 @@ impl UsbipController {
             firewall: None,
             last_error: None,
             network_assignment_epoch: None,
+            claim: None,
+            relay_helper: None,
+            store: None,
+            source_released: false,
         }
     }
 
@@ -640,6 +872,20 @@ impl UsbipController {
     /// Whether firewall token/status is currently retained.
     pub const fn firewall_status_retained(&self) -> bool {
         self.firewall.is_some()
+    }
+
+    /// Borrow the admitted `Device` claim this Service realizes, once one has
+    /// been accepted.
+    pub const fn claim(&self) -> Option<&AdmittedDeviceClaim> {
+        self.claim.as_ref()
+    }
+
+    /// Whether the source reservation has been handed back.
+    ///
+    /// Release is the last step of teardown, so this only becomes true after
+    /// the projection is gone and the relay leg is stopped.
+    pub const fn source_released(&self) -> bool {
+        self.source_released
     }
 
     /// Reconcile the Ready Network dependency, relay authority, and exact
@@ -675,6 +921,7 @@ impl UsbipController {
                     token,
                     digest,
                     fence,
+                    store: None,
                 });
                 self.last_error = None;
                 self.phase = UsbipServicePhase::Ready;
@@ -782,6 +1029,256 @@ impl UsbipController {
         Ok(())
     }
 
+    /// Reconcile the relay and projection as bounded realizations of one
+    /// admitted `Device` claim.
+    ///
+    /// The order of checks is the point: `claim` has to be the relationship
+    /// this Service row declares, in the Zone the row lives in; `leg` has to be
+    /// an attenuated realization of that same relationship and reservation,
+    /// fenced against the same store incarnation, reaching the same capability
+    /// and physical authority; and the Network dependency has to be Ready at a
+    /// non-regressing assignment - all before the port is called even once. A
+    /// cross-Zone claim, a stale store, a revoking relationship, or a leg that
+    /// claims the device itself therefore leaves no relay, no listener, and no
+    /// firewall rule behind (R8, R35).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UsbipControllerError::Effect`] with
+    /// [`UsbipEffectError::ClaimRefused`] when the claim or the leg is refused,
+    /// the closed network refusals when the dependency is not usable, and the
+    /// port's own error when an effect fails after authority was admitted.
+    pub fn reconcile_claim<L, P>(
+        &mut self,
+        admitted: &UsbipServiceClaim<'_>,
+        leg: &L,
+        network: NetworkDependency,
+        port: &mut P,
+    ) -> Result<(), UsbipControllerError>
+    where
+        L: BoundDeviceLeg + ?Sized,
+        P: UsbipClaimPort,
+    {
+        let UsbipServiceClaim {
+            zone,
+            store,
+            device_ref,
+            claim,
+            helper,
+            helper_uid,
+        } = *admitted;
+        claim
+            .verify_service_claim(zone, device_ref)
+            .map_err(|refusal| self.claim_refusal_error(refusal))?;
+        claim
+            .verify_helper_leg(helper, helper_uid, &USBIP_RELAY_OPERATIONS, leg)
+            .map_err(|refusal| self.claim_refusal_error(refusal))?;
+        if self
+            .store
+            .as_ref()
+            .is_some_and(|current| current != store)
+        {
+            return Err(self.stale_store_error());
+        }
+        let fence = self.claim_fence(claim, &network, store)?;
+        self.validate_network(&network)?;
+        self.store = Some(store.clone());
+        // The claim is retained before the first effect so a failure part way
+        // through still has a relationship to drain.
+        self.claim = Some(claim.clone());
+        self.relay_helper = Some(helper.clone());
+        self.phase = UsbipServicePhase::Applying;
+        self.network = Some(network.clone());
+        self.network_assignment_epoch = network.assignment_epoch();
+        if self.relay.is_none() {
+            match port.start_relay_leg(
+                claim,
+                helper,
+                network.identity().resource_uid(),
+                &fence,
+            ) {
+                Ok(lease) => self.relay = Some(lease),
+                Err(error) => return self.effect_failed(error),
+            }
+        }
+        match port.mutate_claim_firewall(
+            claim,
+            network.identity().resource_uid(),
+            FirewallProjectionAction::Apply,
+            &fence,
+            None,
+        ) {
+            Ok(confirmation) => {
+                let Some((token, digest)) = confirmation.into_applied() else {
+                    return self.effect_failed(UsbipEffectError::EffectRejected);
+                };
+                self.firewall = Some(FirewallLease {
+                    token,
+                    digest,
+                    fence: self.generation_fence(&network),
+                    store: Some(store.clone()),
+                });
+                self.last_error = None;
+                self.phase = UsbipServicePhase::Ready;
+                Ok(())
+            }
+            Err(error) => self.effect_failed(error),
+        }
+    }
+
+    /// Observe only this claim's own projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UsbipControllerError::InvalidState`] when no admitted claim
+    /// has been reconciled, [`UsbipControllerError::FirewallDrift`] when the
+    /// observation differs from the desired projection, and the port's error
+    /// when the observation itself fails.
+    pub fn observe_claim<P: UsbipClaimPort>(
+        &mut self,
+        store: &StoreIncarnation,
+        port: &mut P,
+    ) -> Result<(), UsbipControllerError> {
+        let claim = self.claim.as_ref().ok_or(UsbipControllerError::InvalidState)?;
+        let network = self.network.as_ref().ok_or(UsbipControllerError::InvalidState)?;
+        let firewall = self.firewall.as_ref().ok_or(UsbipControllerError::InvalidState)?;
+        let fence = self.claim_fence(claim, network, store)?;
+        match port.observe_claim_firewall(
+            claim,
+            network.identity().resource_uid(),
+            &fence,
+            &firewall.token,
+        ) {
+            Ok(observation) if observation.matches_expected() => {
+                self.phase = UsbipServicePhase::Ready;
+                self.last_error = None;
+                Ok(())
+            }
+            Ok(_) => {
+                self.phase = UsbipServicePhase::Drifted;
+                tracing::warn!(
+                    device = %self.device_uid.to_canonical_string(),
+                    reason = "ownership-scoped firewall observation differs from desired state",
+                    "usbip service firewall drifted",
+                );
+                Err(UsbipControllerError::FirewallDrift)
+            }
+            Err(error) => self.effect_failed(error),
+        }
+    }
+
+    /// Remove the projection, stop the relay leg, then hand the relationship
+    /// back.
+    ///
+    /// The order is the contract: the projection is removed while the
+    /// reservation is still held, the relay that could still reach the backing
+    /// is stopped next, and only then is the source's claim released. A failure
+    /// at any step leaves the retained state intact for a retry, so a
+    /// partially torn-down Service never releases an authority its own effects
+    /// are still using.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UsbipControllerError::InvalidState`] when a claim is held
+    /// without a recorded network, and the port's error when a teardown step
+    /// does not confirm.
+    pub fn finalize_claim<P: UsbipClaimPort>(
+        &mut self,
+        port: &mut P,
+    ) -> Result<(), UsbipControllerError> {
+        let Some(claim) = self.claim.clone() else {
+            return Err(UsbipControllerError::InvalidState);
+        };
+        self.phase = UsbipServicePhase::Releasing;
+        if let Some(firewall) = self.firewall.as_ref() {
+            let network = self
+                .network
+                .as_ref()
+                .ok_or(UsbipControllerError::InvalidState)?;
+            let store = firewall
+                .claim_store()
+                .ok_or(UsbipControllerError::InvalidState)?;
+            let fence = self.claim_fence(&claim, network, store)?;
+            match port.mutate_claim_firewall(
+                &claim,
+                network.identity().resource_uid(),
+                FirewallProjectionAction::Remove,
+                &fence,
+                Some(&firewall.token),
+            ) {
+                Ok(confirmation)
+                    if matches!(
+                        confirmation.kind(),
+                        FirewallConfirmationKind::Removed
+                            | FirewallConfirmationKind::ValidatedAbsent
+                    ) =>
+                {
+                    self.firewall = None;
+                }
+                Ok(_) => return self.effect_failed(UsbipEffectError::EffectRejected),
+                Err(error) => return self.effect_failed(error),
+            }
+        }
+        if let Some(helper) = self.relay_helper.clone()
+            && let Err(error) = port.stop_relay_leg(&claim, &helper)
+        {
+            return self.effect_failed(error);
+        }
+        self.relay = None;
+        self.relay_helper = None;
+        if let Err(error) = port.release_claim(&claim) {
+            return self.effect_failed(error);
+        }
+        self.claim = None;
+        self.store = None;
+        self.network = None;
+        self.network_assignment_epoch = None;
+        self.source_released = true;
+        self.last_error = None;
+        self.phase = UsbipServicePhase::WaitingForNetwork;
+        Ok(())
+    }
+
+    /// Record one claim refusal and report it as this controller's failure.
+    ///
+    /// The refusal names the enforcing stage and the reason (R42); no resource
+    /// identity, path, or device detail is logged from it.
+    fn claim_refusal_error(&mut self, refusal: BindingRefusal) -> UsbipControllerError {
+        let error = UsbipEffectError::ClaimRefused(refusal.stage(), refusal.reason());
+        self.effect_failed::<()>(error)
+            .expect_err("a refusal always fails the controller it is recorded on")
+    }
+
+    /// The refusal this controller reports when the retained store moved.
+    fn stale_store_error(&mut self) -> UsbipControllerError {
+        self.claim_refusal_error(BindingRefusal::new(
+            AdmissionStage::Reserve,
+            RefusalReason::StaleAuthority,
+        ))
+    }
+
+    /// The generation fence the pre-graph projection path uses.
+    fn generation_fence(&self, network: &NetworkDependency) -> FirewallGenerationFence {
+        FirewallGenerationFence::new(network.generation(), self.service_generation)
+    }
+
+    /// The claim-scoped fence one projection mutation is measured against.
+    fn claim_fence(
+        &self,
+        claim: &AdmittedDeviceClaim,
+        network: &NetworkDependency,
+        store: &StoreIncarnation,
+    ) -> Result<ClaimProjectionFence, UsbipControllerError> {
+        ClaimProjectionFence::new(claim, network.generation(), self.service_generation, store)
+            .map_err(|refusal| {
+                UsbipControllerError::Effect(UsbipEffectError::ClaimRefused(
+                    refusal.stage(),
+                    refusal.reason(),
+                ))
+            })
+    }
+
+    /// The legacy per-Network/per-device projection path's own checks.
     fn validate_network(
         &mut self,
         network: &NetworkDependency,
@@ -826,6 +1323,7 @@ impl UsbipController {
             | UsbipEffectError::RelayAuthorityConflict
             | UsbipEffectError::FirewallForeignConflict
             | UsbipEffectError::EffectRejected
+            | UsbipEffectError::ClaimRefused(_, _)
             | UsbipEffectError::UnknownProjectionAction => UsbipServicePhase::Blocked,
             UsbipEffectError::NetworkNotReady => UsbipServicePhase::WaitingForNetwork,
         };

@@ -2,10 +2,29 @@
 //!
 //! Host file descriptors, socket binding, peer credentials, and relay task
 //! supervision remain in the daemon effect adapter.
+//!
+//! The ceremony lease is a graph decision now, not a membership check against
+//! a list this relay keeps. `SecurityKeyState::enabled_vms` and
+//! `SecurityKeyState::enable_vm` are the pre-graph access list: a VM id string
+//! that was inserted by configuration decided who could hold the key, and the
+//! accept loop's membership test was the whole of the admission. U34 deletes
+//! that list and its check. The converted path is [`AdmittedCeremony`]: a
+//! ceremony is admitted only while the Guest's `EndpointBinding` to the relay
+//! and the Service's exclusive `DeviceBinding` are both current and consistent,
+//! so a stale or foreign session cannot pick up a lease - including one a
+//! reappearing device's previous owner left behind.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+
+use d2b_contracts_resource::v3::{
+    AdmissionStage, BindingConsumerKind, BindingEvidence, BindingKey, BindingKind, BindingRefusal,
+    RefusalReason, ResourceRef, StoreIncarnation,
+};
+
+use crate::lease::AdmittedDeviceClaim;
 
 use tracing::{debug, info};
 
@@ -201,6 +220,175 @@ impl CidTranslator {
 }
 
 // ---------------------------------------------------------------------------
+// Admitted ceremony
+// ---------------------------------------------------------------------------
+
+/// The two admitted relationships one Guest ceremony rides.
+///
+/// A ceremony is bounded use of the Service's exclusive device claim, delivered
+/// to one Guest through that Guest's own Endpoint relationship. Both keys are
+/// the graph's identities and the holder is a `Guest` reference, so a ceremony
+/// cannot be built from a VM id, a session name, or anything else the relay or a
+/// caller chose. The helper the endpoint is delivered to is read off the
+/// relationship rather than supplied, so it is always the consumer the Endpoint
+/// source admitted.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AdmittedCeremony {
+    device: BindingKey,
+    endpoint: BindingKey,
+    guest: ResourceRef,
+    helper: ResourceRef,
+    epoch: StoreIncarnation,
+}
+
+impl AdmittedCeremony {
+    /// Bind one Guest's Endpoint relationship to the Service's device claim.
+    ///
+    /// `guest` is the Binding's own per-Guest identity; the delivery itself
+    /// belongs to the frontend helper the Endpoint source admitted, which this
+    /// constructor reads off the relationship.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdmissionStage::Admit`] with
+    /// [`RefusalReason::SourcePolicyRefused`] when either relationship is not
+    /// currently admitted for use, when the endpoint relationship is not an
+    /// `EndpointBinding`, or when `guest` is not a `Guest`, and
+    /// [`AdmissionStage::Reserve`] with [`RefusalReason::StaleAuthority`] when
+    /// the two relationships were admitted under different store incarnations.
+    pub fn new(
+        device: &AdmittedDeviceClaim,
+        endpoint: &BindingEvidence,
+        guest: &ResourceRef,
+    ) -> Result<Self, BindingRefusal> {
+        if !device.admits_new_use()
+            || !endpoint.state().admits_new_use()
+            || !endpoint.state().proves_effect()
+        {
+            return Err(BindingRefusal::new(
+                AdmissionStage::Admit,
+                RefusalReason::SourcePolicyRefused,
+            ));
+        }
+        if endpoint.key().kind() != BindingKind::Endpoint
+            || guest.resource_type().as_str()
+                != BindingConsumerKind::Guest.resource_type()
+        {
+            return Err(BindingRefusal::new(
+                AdmissionStage::Admit,
+                RefusalReason::SourcePolicyRefused,
+            ));
+        }
+        let Some(epoch) = device.epoch() else {
+            return Err(BindingRefusal::new(
+                AdmissionStage::Reserve,
+                RefusalReason::StaleAuthority,
+            ));
+        };
+        let endpoint_epoch = endpoint
+            .admission()
+            .dependencies()
+            .first()
+            .map(|dependency| dependency.store_incarnation());
+        if endpoint_epoch != Some(epoch) {
+            return Err(BindingRefusal::new(
+                AdmissionStage::Reserve,
+                RefusalReason::StaleAuthority,
+            ));
+        }
+        Ok(Self {
+            device: device.key().clone(),
+            endpoint: endpoint.key().clone(),
+            guest: guest.clone(),
+            helper: endpoint.key().consumer_ref().clone(),
+            epoch: epoch.clone(),
+        })
+    }
+
+    /// The admitted `Device` claim this ceremony rides.
+    pub const fn device_key(&self) -> &BindingKey {
+        &self.device
+    }
+
+    /// The admitted `EndpointBinding` this ceremony is delivered through.
+    pub const fn endpoint_key(&self) -> &BindingKey {
+        &self.endpoint
+    }
+
+    /// The Guest identity this ceremony is held for.
+    pub const fn guest(&self) -> &ResourceRef {
+        &self.guest
+    }
+
+    /// The helper the Endpoint relationship is delivered to.
+    pub const fn helper(&self) -> &ResourceRef {
+        &self.helper
+    }
+
+    /// The store incarnation both relationships were admitted under.
+    pub const fn epoch(&self) -> &StoreIncarnation {
+        &self.epoch
+    }
+
+    /// Whether both live relationships still are the ones this ceremony was
+    /// admitted against.
+    ///
+    /// A device that reappears under another authority, a replaced store, or a
+    /// revoked endpoint all make this false, which is what stops a ceremony from
+    /// being adopted across the change.
+    pub fn matches(&self, device: &AdmittedDeviceClaim, endpoint: &BindingEvidence) -> bool {
+        device.key() == &self.device
+            && device.epoch() == Some(&self.epoch)
+            && device.admits_new_use()
+            && endpoint.key() == &self.endpoint
+            && endpoint.state().admits_new_use()
+            && endpoint.state().proves_effect()
+    }
+}
+
+impl fmt::Debug for AdmittedCeremony {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AdmittedCeremony")
+            .field("device_slot", &self.device.slot())
+            .field("endpoint_slot", &self.endpoint.slot())
+            .field("guest", &self.guest.to_canonical_string())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Admit one ceremony against the live relationships and take the lease.
+///
+/// The lease is keyed on the admitted Guest identity rather than on a supplied
+/// name, so the only thing that can hold the key is a Guest the Endpoint source
+/// admitted and whose Service claim is still current. `None` means no ceremony
+/// was admitted: the caller does not get the key and the relay keeps its state.
+pub fn admit_ceremony(
+    state: &mut SecurityKeyState,
+    ceremony: &AdmittedCeremony,
+    device: &AdmittedDeviceClaim,
+    endpoint: &BindingEvidence,
+) -> Option<LeaseId> {
+    if !ceremony.matches(device, endpoint) {
+        debug!(
+            guest = ceremony.guest().to_canonical_string().as_str(),
+            reason = "device claim or endpoint relationship is not the admitted one",
+            "security-key: ceremony refused"
+        );
+        return None;
+    }
+    state.try_acquire_lease(&ceremony.guest().to_canonical_string())
+}
+
+/// Release a ceremony's lease, and only for the Guest it was admitted for.
+///
+/// A mismatched caller is a no-op, which is what keeps a straggling disconnect
+/// from releasing a fresh ceremony's lease.
+pub fn release_ceremony(state: &mut SecurityKeyState, ceremony: &AdmittedCeremony, lease: LeaseId) {
+    state.release_lease(&ceremony.guest().to_canonical_string(), lease);
+}
+
+// ---------------------------------------------------------------------------
 // Lease state machine
 // ---------------------------------------------------------------------------
 
@@ -272,6 +460,11 @@ impl LeaseState {
 #[derive(Debug)]
 pub struct SecurityKeyState {
     /// VMs that are configured to use the security-key proxy.
+    ///
+    /// This is the pre-graph access list and it is queued for deletion in U34.
+    /// [`admit_ceremony`] is the converted gate: the lease is keyed on the
+    /// admitted Guest identity and gated on the current `DeviceBinding` and
+    /// `EndpointBinding` rather than on a string this field happens to hold.
     pub enabled_vms: HashSet<String>,
     /// Current lease state for the physical key.
     pub lease: LeaseState,
@@ -292,6 +485,9 @@ impl SecurityKeyState {
     }
 
     /// Authorize a VM to use this relay's resolved physical key.
+    ///
+    /// Pre-graph path; U34 deletes it with `enabled_vms` and the accept loop's
+    /// membership test.
     pub fn enable_vm(&mut self, vm_id: impl Into<String>) {
         self.enabled_vms.insert(vm_id.into());
     }

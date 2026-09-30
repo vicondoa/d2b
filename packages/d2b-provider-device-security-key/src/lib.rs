@@ -32,21 +32,28 @@ pub use controller::{
 };
 pub use driver::{
     SECURITY_KEY_BINDING_CONTROLLER_REF, SECURITY_KEY_BINDING_CREATIONS,
-    SECURITY_KEY_REGISTRATIONS, SECURITY_KEY_RESYNC, SECURITY_KEY_SERVICE_CONTROLLER_REF,
+    SECURITY_KEY_REGISTRATIONS, SECURITY_KEY_RELAY_ENDPOINT_PURPOSE,
+    SECURITY_KEY_RELAY_ENDPOINT_SLOT, SECURITY_KEY_RESYNC, SECURITY_KEY_SERVICE_CONTROLLER_REF,
     SECURITY_KEY_SERVICE_CREATIONS, SecurityKeyComponent, SecurityKeyDriverArgs,
     SecurityKeyDriverEffects, declared_dependency_refs, security_key_descriptors,
+    security_key_guest_endpoint_request,
 };
-pub use lease::{LeaseState, SecurityKeyLease, SecurityKeyLeaseError, SecurityKeySessionId};
+pub use lease::{
+    AdmittedDeviceClaim, BoundDeviceLeg, LeaseState, SECURITY_KEY_DEVICE_SLOT,
+    SECURITY_KEY_HIDRAW_FUNCTION, SECURITY_KEY_RELAY_OPERATIONS, SecurityKeyClaimPort,
+    SecurityKeyClaimRequest, SecurityKeyLease, SecurityKeyLeaseError, SecurityKeySessionId,
+    security_key_device_request,
+};
 pub use process::{
     FrontendProcessDeclaration, ProcessDeclarationError, RelayProcessDeclaration,
     SecurityKeyProcessRole, security_key_process_name,
 };
 pub use relay::{
-    CEREMONY_TIMEOUT, CTAPHID_BROADCAST_CID, CTAPHID_CANCEL, CTAPHID_ERROR,
+    AdmittedCeremony, CEREMONY_TIMEOUT, CTAPHID_BROADCAST_CID, CTAPHID_CANCEL, CTAPHID_ERROR,
     CTAPHID_ERR_CHANNEL_BUSY, CTAPHID_ERR_INVALID_CMD, CTAPHID_INIT, CTAPHID_INIT_PKT_BIT,
     CTAPHID_REPORT_SIZE, CidTranslator, CtaphidContPacket, CtaphidInitPacket, CtaphidPacket,
-    CtaphidReport, LeaseId, QUEUE_WAIT_TIMEOUT, SecurityKeyState, build_cancel_packet,
-    build_error_report, build_init_packet, parse_ctaphid_report,
+    CtaphidReport, LeaseId, QUEUE_WAIT_TIMEOUT, SecurityKeyState, admit_ceremony, build_cancel_packet,
+    build_error_report, build_init_packet, parse_ctaphid_report, release_ceremony,
 };
 pub use relay_service::{
     AsyncHidrawDevice, HidrawDevice, PeerAuthError, SkAcceptAbort, SkAcceptHandle, SkSessionTable,
