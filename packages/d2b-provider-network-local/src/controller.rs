@@ -28,6 +28,7 @@ use d2b_provider_guest::GuestSpec;
 use crate::artifact::{
     ArtifactCatalogEntry, ArtifactResolutionError, resolve_net_vm_system_artifact,
 };
+use crate::binding::MembershipPolicy;
 use crate::ifname::{
     NetworkIfRole, derive_network_child_name, derive_network_ifname, derive_network_route_name_for,
 };
@@ -269,6 +270,21 @@ impl NetworkAdmissionKey {
     /// Borrow the installed bundle generation.
     pub const fn bundle_generation(&self) -> &ResourceBundleGenerationId {
         &self.bundle_generation
+    }
+
+    /// Rebuild the complete immutable Network effect provenance.
+    ///
+    /// Every host effect and every derived locator on this Network folds in
+    /// the same five-part identity, so a per-consumer membership is fenced
+    /// against exactly the tuple its fabric realization was admitted with.
+    pub fn provenance(&self) -> NetworkProvenance {
+        NetworkProvenance::new(
+            self.zone_uid.clone(),
+            self.network_uid.clone(),
+            self.network_generation,
+            self.attachment_generation,
+            self.bundle_generation.clone(),
+        )
     }
 }
 
@@ -1555,7 +1571,7 @@ pub fn guest_agent_process_spec(guest_name: &str) -> Result<ProcessSpec, Network
 
 /// Render per-Network data into the four config files only.
 pub fn render_config(spec: &NetworkSpec) -> Result<NetworkConfigContent, NetworkEffectError> {
-    render_config_inner(spec, None)
+    render_config_inner(spec, None, None)
 }
 
 /// Render per-Network data with the immutable identity that authorized it.
@@ -1563,14 +1579,39 @@ pub fn render_config_with_provenance(
     spec: &NetworkSpec,
     provenance: &NetworkProvenance,
 ) -> Result<NetworkConfigContent, NetworkEffectError> {
-    render_config_inner(spec, Some(provenance))
+    render_config_inner(spec, Some(provenance), None)
+}
+
+/// Render the four config files one admitted membership needs.
+///
+/// The shared fabric's own bytes are unchanged: a membership adds only its own
+/// consumer interface and reservation, so two consumers on one Network differ
+/// in the per-consumer traffic policy and in the config digest while the
+/// bridges, routes, and ownership markers they share are realized once.
+pub fn render_membership_config(
+    spec: &NetworkSpec,
+    provenance: &NetworkProvenance,
+    membership: &MembershipPolicy,
+) -> Result<NetworkConfigContent, NetworkEffectError> {
+    render_config_inner(spec, Some(provenance), Some(membership))
 }
 
 fn render_config_inner(
     spec: &NetworkSpec,
     provenance: Option<&NetworkProvenance>,
+    membership: Option<&MembershipPolicy>,
 ) -> Result<NetworkConfigContent, NetworkEffectError> {
-    let dnsmasq = format!("lan={}\n", spec.lan_cidr().as_str()).into_bytes();
+    let dnsmasq = match membership {
+        Some(membership) => format!(
+            "lan={}\nconsumer={}\ninterface={}\negress={}\n",
+            spec.lan_cidr().as_str(),
+            membership.consumer_ref().to_canonical_string(),
+            membership.presented_interface().as_str(),
+            if membership.allow_egress() { "allow" } else { "deny" },
+        )
+        .into_bytes(),
+        None => format!("lan={}\n", spec.lan_cidr().as_str()).into_bytes(),
+    };
     let nftables = format!(
         "lan={}\nuplink={}\nblocklist={}\n",
         spec.lan_cidr().as_str(),
@@ -1589,19 +1630,22 @@ fn render_config_inner(
         spec.uplink_cidr().as_str()
     )
     .into_bytes();
-    let attachments = format!(
-        "[{}]",
-        spec.attachments()
-            .iter()
-            .map(|attachment| attachment.index().to_string())
-            .collect::<Vec<_>>()
-            .join(",")
-    )
-    .into_bytes();
+    let mut attachment_rows: Vec<String> = spec
+        .attachments()
+        .iter()
+        .map(|attachment| attachment.index().to_string())
+        .collect();
+    if let Some(membership) = membership {
+        attachment_rows.push(format!("member={}", membership.fabric_interface().as_str()));
+    }
+    let attachments = format!("[{}]", attachment_rows.join(",")).into_bytes();
     let mut digest_input = Vec::new();
     for bytes in [&dnsmasq, &nftables, &routing, &attachments] {
         digest_input.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
         digest_input.extend_from_slice(bytes);
+    }
+    if let Some(membership) = membership {
+        digest_input.extend_from_slice(&membership.digest());
     }
     if let Some(provenance) = provenance {
         let marker = d2b_contracts_resource::v3::derive_network_ownership_marker(

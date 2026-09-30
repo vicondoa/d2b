@@ -103,6 +103,16 @@ d2b_rust_test(
 )
 
 d2b_rust_test(
+    name = "network_binding",
+    srcs = ["tests/network_binding.rs"],
+    compile_data = ["Cargo.toml"],
+    deps = [
+        ":d2b_provider_network_local",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
     name = "net_vm_artifact_is_generic",
     srcs = ["tests/net_vm_artifact_is_generic.rs"],
     compile_data = [

@@ -12,6 +12,7 @@
 #![deny(missing_docs)]
 
 pub mod artifact;
+pub mod binding;
 pub mod bridge_port;
 pub mod broker;
 pub mod controller;
@@ -35,6 +36,12 @@ pub mod routes;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
+pub use binding::{
+    AdmittedMembership, FabricRealization, FabricRelease, FabricView, HostStateObservation,
+    MembershipAdmission, MembershipPolicy, MembershipReadiness, NetworkBindingError,
+    NetworkBindingRegistry, NetworkFabricKey, NetworkFabricTarget, NetworkMembershipCeiling,
+    NmUnmanagedObservation, ParentInputOutcome, membership_interface, network_binding_support,
+};
 pub use driver::{
     NETWORK_CONTROLLER_REF, NETWORK_CREATIONS, NETWORK_FAMILY_NAME, NETWORK_PROVIDER_REF, NETWORK_REGISTRATIONS,
     NETWORK_RESYNC, NETWORK_TYPE_NAME, NetworkComponent, NetworkDriverArgs, NetworkDriverEffects,

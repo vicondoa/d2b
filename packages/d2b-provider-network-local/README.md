@@ -31,6 +31,22 @@ child projections, deterministic IfName admission, complete bridge-port
 readback, projection-scoped nftables policy, route readiness, and ordered IPv6
 suppression.
 
+### Network membership
+
+`binding` admits one consumer's membership on the shared fabric. The fabric -
+bridges, routes, ownership markers, NetworkManager policy, and the single
+ownership-scoped nftables projection - is realized once per
+`(Network, execution target)` and shared; what stays per consumer is the typed
+traffic policy (inbound ports and whether the consumer may originate outbound
+connections) plus one provider-derived interface on that fabric. A membership
+is admitted only with an authorization grant, this Provider's own source
+decision, a declared realization facet, and a dependency fence naming both the
+Network and the consumer row, and it is refused before any host mutation when a
+foreign nftables entry, host object, or NetworkManager configuration occupies a
+trusted slot. A Host or Guest child-support ceiling is recorded as an admission
+constraint and creates no membership; only a parent's own consumption does.
+Releasing one consumer retains the fabric while any other membership is live.
+
 ## Controllers / services / workers / binaries
 
 The `d2b-provider-network-local-ctrl` controller is Host-placed and uses the
