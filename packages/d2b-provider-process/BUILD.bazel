@@ -81,18 +81,22 @@ d2b_rust_test(
     crate = ":d2b_provider_process_test_support",
 )
 
+# This target runs the shared conformance suite, which is gated behind the
+# `test-support` feature. Every crate it names therefore has to be the
+# test-support variant: linking the plain one alongside produces a second copy
+# of each type, and the target's trait impls stop matching the library's.
 d2b_rust_test(
     name = "process_family",
     srcs = ["tests/process_family.rs"],
     compile_data = ["Cargo.toml"],
     deps = [
         "//packages/d2b-provider-guest-cloud-hypervisor:d2b_provider_guest_cloud_hypervisor",
-        ":d2b_provider_process",
+        ":d2b_provider_process_test_support",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-core:d2b_core",
-        "//packages/d2b-process-conformance:d2b_process_conformance",
+        "//packages/d2b-core:d2b_core_test_support",
+        "//packages/d2b-process-conformance:d2b_process_conformance_test_support",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
-        "//packages/d2b-resource-types:d2b_resource_types",
+        "//packages/d2b-resource-types:d2b_resource_types_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
