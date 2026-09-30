@@ -19,7 +19,15 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts_resource::v3::{ PayloadSchema, ResourceRef, canonical_json_bytes };
+use d2b_contracts_resource::v3::{
+    AdmissionStage, AuthoritySubject, AuthoritySubjectKind, PayloadSchema, RefusalReason,
+    ResourceRef, StoreIncarnation, ZoneId, canonical_json_bytes,
+};
+use d2b_contracts_resource::v3::AdmissionDecision as GraphAdmissionDecision;
+use d2b_core::resource_authority::{
+    AcceptedGraph, GraphAuthority, GraphMutation, MutationKind, MutationSubjectEvidence,
+    TransportIdentity,
+};
 use d2b_provider_command::command::{ CommandSpec };
 use d2b_provider_operation::operation::{ OperationSpec };
 use d2b_provider_seccomp_profile::{ SECCOMP_PROFILE_RESOURCE_TYPE, SeccompProfileSpec };
@@ -134,6 +142,7 @@ pub struct SeedProfile {
     /// The inline posture content.
     pub spec: SeccompProfileSpec,
 }
+
 
 /// One declared Command row.
 #[derive(Debug, Clone)]
@@ -343,6 +352,12 @@ impl FoundationSeed {
         // Declare-then-validate: every reference resolves over the committed
         // set as a whole, before the first write.
         self.validate(&committed, providers, &materialized_specs, &rows)?;
+        // Every seeded row is admitted through the one evaluator before the
+        // first write, against the verified deployment graph itself. There
+        // is no bootstrap-operation allowlist to extend: the seed's authority
+        // is the deployment root identity, and a row committed under any
+        // other subject is refused with its stage and reason.
+        self.admit_verified(&rows)?;
         let mut report = SeedReport {
             committed: Vec::with_capacity(rows.len()),
             materialized,
@@ -374,6 +389,50 @@ impl FoundationSeed {
             .ensure(stored)
             .await
             .map_err(|error| SeedError::Store(error.to_string()))
+    }
+
+    // -- Verified deployment graph ----------------------------------------
+
+    /// Admit every seeded row through the one evaluator, as the verified
+    /// deployment graph's own mutation.
+    ///
+    /// The seed is the initial desired graph, so it is admitted rather than
+    /// waved through: each row is presented as a `Create` mutation whose
+    /// initiating subject is the deployment root the verified graph
+    /// established. A row admitted by anything else - a bootstrap operation
+    /// list, a transport identity, a provider's self-binding - is refused
+    /// with the stage and reason the evaluator named, and nothing is written.
+    fn admit_verified(&self, rows: &[PendingRow]) -> Result<(), SeedError> {
+        let accepted = verified_deployment_graph()?;
+        let evidence = MutationSubjectEvidence::new(
+            AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap),
+            TransportIdentity::Daemon,
+        );
+        for row in rows {
+            let target = ResourceRef::parse(row.reference().as_str()).map_err(|_| {
+                SeedError::InvalidRow {
+                    row: static_type(row.key.type_name.as_str()),
+                    name: row.key.name.clone(),
+                    reason: "the row reference is not a resource reference",
+                }
+            })?;
+            let request = GraphMutation::new(
+                accepted.zone().clone(),
+                evidence.clone(),
+                MutationKind::Create,
+                target,
+            );
+            if let GraphAdmissionDecision::Refused { stage, reason } =
+                GraphAuthority::admit_mutation(&request, &accepted)
+            {
+                return Err(SeedError::GraphRefused {
+                    row: row.reference(),
+                    stage,
+                    reason,
+                });
+            }
+        }
+        Ok(())
     }
 
     // -- Materialization ---------------------------------------------------
@@ -741,6 +800,37 @@ impl MaterializedOperation {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// The store incarnation the bootstrap graph is seeded in.
+///
+/// The seed opens a store that has no authority journal yet, so its own
+/// generation is the one the deployment root is admitted in. The U34
+/// cutover reads the live journal incarnation instead.
+const FOUNDATION_STORE: &str = "foundation-1";
+
+/// The prior accepted graph the seed's rows are admitted against.
+///
+/// It carries the deployment root and nothing else: an empty authorization
+/// set, so no row can be admitted by a grant that is itself being seeded,
+/// and no binding source, so no row can create a relationship.
+fn verified_deployment_graph() -> Result<AcceptedGraph, SeedError> {
+    let zone = ZoneId::parse(SYSTEM_ZONE)
+        .map_err(|_| SeedError::GraphRefused {
+            row: SYSTEM_ZONE.to_owned(),
+            stage: AdmissionStage::Authorize,
+            reason: RefusalReason::StoreIncarnationMismatch,
+        })?;
+    let store = StoreIncarnation::parse(FOUNDATION_STORE).map_err(|_| SeedError::GraphRefused {
+        row: SYSTEM_ZONE.to_owned(),
+        stage: AdmissionStage::Authorize,
+        reason: RefusalReason::StoreIncarnationMismatch,
+    })?;
+    Ok(AcceptedGraph::new(
+        zone,
+        store,
+        AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap),
+    ))
+}
+
 fn encode<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, SeedError> {
     canonical_json_bytes(value).map_err(|_| SeedError::Encoding)
 }
@@ -1002,6 +1092,19 @@ pub enum SeedError {
         /// The materialized operation.
         row: String,
     },
+    /// One seeded row is refused by the verified deployment graph.
+    ///
+    /// The seed is admitted, not waved through: a row presented under any
+    /// subject other than the verified deployment root is refused here with
+    /// the enforcing stage and the reason the evaluator named.
+    GraphRefused {
+        /// The row reference that was refused.
+        row: String,
+        /// The stage the evaluator refused at.
+        stage: AdmissionStage,
+        /// Why it refused.
+        reason: RefusalReason,
+    },
     /// A contract value failed to encode canonically.
     Encoding,
 }
@@ -1072,6 +1175,11 @@ impl core::fmt::Display for SeedError {
                 formatter,
                 "foundation seed refused {row}: the materialized payload schema drifted from its \
                  command"
+            ),
+            Self::GraphRefused { row, stage, reason } => write!(
+                formatter,
+                "foundation seed refused {row}: the verified deployment graph refused it at \
+                 {stage:?} for {reason:?}"
             ),
             Self::Encoding => formatter.write_str("foundation seed refused an unencodable row"),
         }
@@ -1275,6 +1383,7 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
             .expect("profile spec"),
         }
     }
+
 
     fn provider() -> SeedProvider {
         SeedProvider {
