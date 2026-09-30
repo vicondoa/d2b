@@ -76,22 +76,31 @@ scan_dashes() {
     done < <(git -C "$root" ls-files -z --cached --others --exclude-standard \
       --exclude='local-spawn-runner.*')
   else
-    # `_tmp` is Bazel's TEST_TMPDIR root inside the execroot. A test that
-    # writes scratch data there leaves files the walk picks up and the grep
-    # cannot read while they are being written, which fails a correct tree
-    # for a reason that has nothing to do with the source. It is build
-    # scratch, not a source tree, so it is excluded alongside the others.
+    # `_tmp` is Bazel's TEST_TMPDIR root inside the execroot. It is not empty
+    # scratch: it holds a materialised Rust toolchain, including downloaded
+    # rustdoc HTML, crate registries, and `.partial` downloads that appear and
+    # vanish while the walk runs. Repository source never lives there, and the
+    # rustdoc HTML is full of non-ASCII dashes, so scanning it fails a correct
+    # tree for a reason that has nothing to do with the source.
+    #
+    # These directories must be PRUNED, not filtered per file. `-not -path`
+    # evaluates after find has already descended and printed the whole subtree,
+    # which cost minutes per run, and a file rewritten or deleted mid-walk can
+    # still reach grep and fail the gate. Prune so enumeration never pays for
+    # build scratch and never sees a transient file at all.
     while IFS= read -r -d '' file; do
       files+=("${file#"$root"/}")
-    done < <(find "$root" -type f -not -path '*/.git/*' -not -path '*/target/*' \
-      -not -path '*/_tmp/*' -not -path '_tmp/*' \
-      -not -path '*/local-spawn-runner.*' -print0)
+    done < <(find "$root" \
+      \( -type d \( -name .git -o -name target -o -name _tmp -o -name external \
+        -o -name .agent-tmp -o -name 'bazel-*' -o -name '*.runfiles' \
+        -o -name 'local-spawn-runner.*' \) -prune \) -o \
+      -type f -print0)
   fi
 
   [ "${#files[@]}" -gt 0 ] || fail "source-hygiene scan found no files"
   for file in "${files[@]}"; do
     case "$file" in
-      .agent-tmp/*|.git/*|bazel-bin/*|bazel-out/*|bazel-testlogs/*|\
+      .agent-tmp/*|.git/*|_tmp/*|bazel-bin/*|bazel-out/*|bazel-testlogs/*|\
       external/*|local-spawn-runner.*|target/*|*.runfiles/*)
         continue
         ;;
