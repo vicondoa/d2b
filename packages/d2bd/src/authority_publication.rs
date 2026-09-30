@@ -583,10 +583,10 @@ impl AuthorityPublicationCoordinator {
         &self,
         candidate: &PrepareCandidate,
     ) -> Result<PreparedPublication, PublicationError> {
-        if let Some(pending) = self.pending().await {
-            if pending != candidate.transaction {
-                return Err(PublicationError::AlreadyPending { pending });
-            }
+        if let Some(pending) = self.pending().await
+            && pending != candidate.transaction
+        {
+            return Err(PublicationError::AlreadyPending { pending });
         }
         let envelope = self
             .envelope(AuthorityPublicationRequest::PrepareChange(candidate.to_request()))
