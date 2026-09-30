@@ -313,6 +313,21 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
+(reset)
+_arguments "${_arguments_options[@]}" : \
+'--state-root=[The deployment root this reset is bounded to. It defaults to the broker'\''s own state directory]:PATH:_files' \
+'--cgroup-root=[The cgroup hierarchy root the live-drain probe walks. It defaults to the broker'\''s own managed slice]:PATH:_files' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
         esac
     ;;
 esac
@@ -4854,6 +4869,7 @@ _d2b__subcmd__host_commands() {
 'doctor:' \
 'reconcile:' \
 'validate:' \
+'reset:\`d2b host reset\`\: the offline, ownership-bounded clean break (U32, KTD15)' \
     )
     _describe -t commands 'd2b host commands' commands "$@"
 }
@@ -4886,6 +4902,11 @@ _d2b__subcmd__host__subcmd__prepare_commands() {
 _d2b__subcmd__host__subcmd__reconcile_commands() {
     local commands; commands=()
     _describe -t commands 'd2b host reconcile commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__host__subcmd__reset_commands] )) ||
+_d2b__subcmd__host__subcmd__reset_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b host reset commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__host__subcmd__status_commands] )) ||
 _d2b__subcmd__host__subcmd__status_commands() {
