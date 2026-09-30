@@ -42,6 +42,7 @@ pub const RESOURCE_TYPES: &[&str] = &[
     "Command",
     "Operation",
     "SeccompProfile",
+    "ExecutionPolicy",
     "vendor",
 ];
 /// The resource verbs that write an audit row, in contract order.

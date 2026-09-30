@@ -1484,6 +1484,7 @@ name = "d2b-provider-host"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
+ "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-provider-system-core",
  "d2b-provider-toolkit",
@@ -1749,6 +1750,7 @@ name = "d2b-provider-system-core"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
+ "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-provider-toolkit",
  "serde",
@@ -1883,6 +1885,7 @@ name = "d2b-provider-user"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
+ "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-core",
  "d2b-provider-system-core",
@@ -1999,8 +2002,10 @@ dependencies = [
 name = "d2b-provider-zone"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
+ "d2b-provider-toolkit",
  "d2b-resource-types",
  "tokio",
 ]
@@ -2242,6 +2247,7 @@ dependencies = [
  "d2b-provider-display-wayland",
  "d2b-provider-emergency-policy",
  "d2b-provider-endpoint",
+ "d2b-provider-execution-policy",
  "d2b-provider-guest",
  "d2b-provider-guest-azure-container-apps",
  "d2b-provider-guest-cloud-hypervisor",

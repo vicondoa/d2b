@@ -151,6 +151,7 @@ use d2b_provider_resource_export::resource_export_descriptor;
 use d2b_provider_resource_import::resource_import_descriptor;
 use d2b_provider_role::role_descriptor;
 use d2b_provider_role_binding::role_binding_descriptor;
+use d2b_provider_execution_policy::execution_policy_descriptor;
 use d2b_provider_seccomp_profile::seccomp_profile_descriptor;
 use d2b_provider_zone::zone_descriptor;
 use d2b_provider_zone_link::zone_link_descriptor;
@@ -3013,6 +3014,10 @@ impl ResourcePlaneV3 {
             family_declaration("seccomp-profile"),
             vec![seccomp_profile_descriptor()],
         );
+        set = set.with(
+            family_declaration("execution-policy"),
+            vec![execution_policy_descriptor()],
+        );
         // The six interaction types start through the generated registration
         // table (U12): each type's row names its provider identity, and the
         // drivers are wired in `registered_drivers` from the family's own
@@ -5446,6 +5451,7 @@ HOST_EFFECTS_SERVICE.id,
             "command",
             "operation",
             "seccomp-profile",
+            "execution-policy",
         ]);
         assert_eq!(runtime.startup_order(), expected);
         runtime.drain().await.expect("the providers drain");

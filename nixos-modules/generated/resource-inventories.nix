@@ -106,6 +106,7 @@
     "EmergencyPolicy" = "core.d2bus.org_EmergencyPolicy.schema.json";
     "Endpoint" = "core.d2bus.org_Endpoint.schema.json";
     "EphemeralProcess" = "core.d2bus.org_EphemeralProcess.schema.json";
+    "ExecutionPolicy" = "core.d2bus.org_ExecutionPolicy.schema.json";
     "Guest" = "core.d2bus.org_Guest.schema.json";
     "Host" = "core.d2bus.org_Host.schema.json";
     "Network" = "core.d2bus.org_Network.schema.json";

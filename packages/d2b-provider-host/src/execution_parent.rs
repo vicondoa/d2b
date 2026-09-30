@@ -457,8 +457,7 @@ mod tests {
             }),
             json!({ "volumeRef": "Volume/media-library" }),
         ]))
-            .err()
-            .expect("the nameless default is refused");
+            .expect_err("the nameless default is refused");
         assert_eq!(
             error,
             ExecutionParentRefusal::DefaultChild {

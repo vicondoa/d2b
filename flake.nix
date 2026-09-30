@@ -208,6 +208,7 @@
           cp -r ${./packages/d2b-provider-role} $out/packages/d2b-provider-role
           cp -r ${./packages/d2b-provider-role-binding} $out/packages/d2b-provider-role-binding
           cp -r ${./packages/d2b-provider-seccomp-profile} $out/packages/d2b-provider-seccomp-profile
+          cp -r ${./packages/d2b-provider-execution-policy} $out/packages/d2b-provider-execution-policy
           cp -r ${./packages/d2b-provider-shell-pool} $out/packages/d2b-provider-shell-pool
           cp -r ${./packages/d2b-provider-shell-session} $out/packages/d2b-provider-shell-session
           cp -r ${./packages/d2b-provider-toolkit} $out/packages/d2b-provider-toolkit

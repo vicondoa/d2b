@@ -39,7 +39,15 @@ fn the_registered_name_is_the_contract_canonical_resource_type() {
             .to_resource_type_name()
             .as_str()
     );
-    assert!(ResourceTypeName::parse(EXECUTION_POLICY_RESOURCE_TYPE).is_err());
+    // The type is registered in the generated authority, so the name resolves
+    // and a reference to a row is spellable. Before registration this parse
+    // failed, which is exactly why the type could not be referenced at all.
+    assert_eq!(
+        ResourceTypeName::parse(EXECUTION_POLICY_RESOURCE_TYPE)
+            .expect("the registered type name parses")
+            .as_str(),
+        EXECUTION_POLICY_RESOURCE_TYPE
+    );
 }
 
 /// The decode boundary reads the committed bytes as the canonical spec, and a

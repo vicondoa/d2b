@@ -76,10 +76,15 @@ scan_dashes() {
     done < <(git -C "$root" ls-files -z --cached --others --exclude-standard \
       --exclude='local-spawn-runner.*')
   else
+    # `_tmp` is Bazel's TEST_TMPDIR root inside the execroot. A test that
+    # writes scratch data there leaves files the walk picks up and the grep
+    # cannot read while they are being written, which fails a correct tree
+    # for a reason that has nothing to do with the source. It is build
+    # scratch, not a source tree, so it is excluded alongside the others.
     while IFS= read -r -d '' file; do
       files+=("${file#"$root"/}")
     done < <(find "$root" -type f -not -path '*/.git/*' -not -path '*/target/*' \
-      -not -path '*/local-spawn-runner.*' -print0)
+      -not -path '*/_tmp/*' -not -path '*/local-spawn-runner.*' -print0)
   fi
 
   [ "${#files[@]}" -gt 0 ] || fail "source-hygiene scan found no files"

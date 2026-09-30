@@ -1237,6 +1237,14 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
                 true,
             ),
         ),
+        (
+            "ExecutionPolicy",
+            dto_resource_schema::<d2b_contracts_resource::v3::ExecutionPolicySpec>(
+                "ExecutionPolicy",
+                "Confinement row: required isolation classes, the capability ceiling, mandatory restrictions, authorized identity, and the selected syscall filter. It grants no volume, device, network, endpoint, or credential access.",
+                true,
+            ),
+        ),
     ];
     schemas.extend(standard_core_schemas());
     schemas.sort_by(|left, right| left.0.cmp(right.0));

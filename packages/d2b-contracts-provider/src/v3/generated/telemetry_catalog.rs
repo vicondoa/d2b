@@ -30,6 +30,7 @@ pub const RESOURCE_TYPE_VALUES: &[&str] = &[
     "Command",
     "Operation",
     "SeccompProfile",
+    "ExecutionPolicy",
     "vendor",
 ];
 /// The API verb label domain, projected from the Role resource verbs.

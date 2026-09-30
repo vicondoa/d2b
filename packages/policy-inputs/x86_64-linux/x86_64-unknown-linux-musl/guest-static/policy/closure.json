@@ -11,7 +11,7 @@
   "features": [],
   "default_features": false,
   "source_authority": "packages/Cargo.guest.lock",
-  "lock_sha256": "bd64f756fecfc5343b919df20b04ad56dbce3af2df78eca24864a5aa2625d37d",
+  "lock_sha256": "02a0b7351e49648c9fae2436d768c75766f6755eaf8ac78fbf29d6e5f5726177",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -792,6 +792,14 @@
     {
       "id": "d2b-provider-endpoint@0.0.0-bootstrap#path",
       "name": "d2b-provider-endpoint",
+      "version": "0.0.0-bootstrap",
+      "source": null,
+      "checksum": null,
+      "target": "x86_64-unknown-linux-musl"
+    },
+    {
+      "id": "d2b-provider-execution-policy@0.0.0-bootstrap#path",
+      "name": "d2b-provider-execution-policy",
       "version": "0.0.0-bootstrap",
       "source": null,
       "checksum": null,
@@ -6656,6 +6664,30 @@
       "target": null
     },
     {
+      "from": "d2b-provider-execution-policy@0.0.0-bootstrap#path",
+      "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-execution-policy@0.0.0-bootstrap#path",
+      "to": "d2b-resource-types@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-execution-policy@0.0.0-bootstrap#path",
+      "to": "schemars@0.8.22#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-execution-policy@0.0.0-bootstrap#path",
+      "to": "serde@1.0.229#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
       "from": "d2b-provider-guest-azure-container-apps@0.0.0-bootstrap#path",
       "to": "async-trait@0.1.92#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
@@ -9538,6 +9570,12 @@
     {
       "from": "d2bd@0.0.0-bootstrap#path",
       "to": "d2b-provider-endpoint@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2bd@0.0.0-bootstrap#path",
+      "to": "d2b-provider-execution-policy@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },

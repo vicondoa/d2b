@@ -30,4 +30,5 @@
   "Command"
   "Operation"
   "SeccompProfile"
+  "ExecutionPolicy"
 ]

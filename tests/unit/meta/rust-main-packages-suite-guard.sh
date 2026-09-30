@@ -18,7 +18,16 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-ROOT=${ROOT:-$(cd "$HERE/../../.." && pwd)}
+# Under Bazel the tree under test is the runfiles tree, and the runfiles root -
+# not the execroot and not whatever the caller happens to have exported - is
+# the only place its contents are complete. Reading the execroot instead makes
+# the answer depend on which package directories a concurrent build happened to
+# materialise, so a correct tree fails with a different package name each run.
+if [ -n "${TEST_SRCDIR:-}" ] && [ -n "${TEST_WORKSPACE:-}" ]; then
+    ROOT=${TEST_SRCDIR}/${TEST_WORKSPACE}
+else
+    ROOT=${ROOT:-$(cd "$HERE/../../.." && pwd)}
+fi
 # Overridable so negative probes can point the guard at a scratch tree.
 CHECKS_FILE=${CHECKS_FILE:-"$ROOT/bazel/checks/BUILD.bazel"}
 PKGS_ROOT=${PKGS_ROOT:-"$ROOT/packages"}

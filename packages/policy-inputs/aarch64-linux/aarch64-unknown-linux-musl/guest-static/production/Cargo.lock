@@ -1335,6 +1335,17 @@ dependencies = [
 
 
 [[package]]
+name = "d2b-provider-execution-policy"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts-resource",
+ "d2b-resource-types",
+ "schemars",
+ "serde",
+]
+
+
+[[package]]
 name = "d2b-provider-guest-cloud-hypervisor"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -2059,6 +2070,7 @@ dependencies = [
  "d2b-provider-display-wayland",
  "d2b-provider-emergency-policy",
  "d2b-provider-endpoint",
+ "d2b-provider-execution-policy",
  "d2b-provider-guest",
  "d2b-provider-guest-azure-container-apps",
  "d2b-provider-guest-azure-virtual-machine",

@@ -43,6 +43,7 @@ pub const RESOURCE_TYPES: &[&str] = &[
     "Command",
     "Operation",
     "SeccompProfile",
+    "ExecutionPolicy",
 ];
 /// The typed nouns and the resource type each addresses.
 pub const TYPED_NOUNS: &[(&str, &str)] = &[

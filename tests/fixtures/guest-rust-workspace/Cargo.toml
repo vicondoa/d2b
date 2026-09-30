@@ -39,6 +39,7 @@ members = [
   "d2b-provider-display-wayland",
   "d2b-provider-emergency-policy",
   "d2b-provider-endpoint",
+  "d2b-provider-execution-policy",
   "d2b-provider-host",
   "d2b-provider-network-local",
   "d2b-provider-notification-desktop",

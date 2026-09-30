@@ -38,7 +38,9 @@ sh_test(
         "//:packages_workspace_sources",
         "//bazel/checks:BUILD.bazel",
     ],
-    env_inherit = ["PATH", "ROOT"],
+    # Deliberately no ROOT: the script derives the runfiles root itself under
+    # Bazel, and an ambient ROOT would point the guard at a different tree.
+    env_inherit = ["PATH"],
     tags = [
         "local",
         "no-sandbox",

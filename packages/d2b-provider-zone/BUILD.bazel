@@ -22,6 +22,8 @@ d2b_rust_library(
     compile_data = ["Cargo.toml"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
         "//packages/d2b-resource-types:d2b_resource_types",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
     ] + all_crate_deps(normal = True, cargo_only = True),
