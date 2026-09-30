@@ -692,16 +692,7 @@ fn stream_carriage_cannot_inject_a_control_operation() {
         .bindings()
         .admit(binding.clone())
         .expect("admitted relationship");
-    // A BLOCKING stream pair, so the round trip below observes real carriage
-    // rather than racing a non-blocking read. The portal sets close-on-exec
-    // on the descriptor it is given either way.
-    let (accepted, peer) = socketpair(
-        AddressFamily::UNIX,
-        SocketType::STREAM,
-        SocketFlags::CLOEXEC,
-        None,
-    )
-    .expect("socketpair");
+    let (accepted, peer) = pair(SocketType::STREAM);
     let opened = service
         .open_under_binding(&binding, &evidence(), stream_request(), accepted)
         .expect("graph-bound open");
@@ -725,9 +716,12 @@ fn stream_carriage_cannot_inject_a_control_operation() {
     let mut carried = Vec::new();
     let mut chunk = [0_u8; 64];
     while carried.len() < forged.len() {
+        // The pair is non-blocking, so the kernel may report EAGAIN before the
+        // write lands on the other end; that is the stream saying "not yet",
+        // not the frame being lost.
         let read = match rustix::io::read(opened.transport_fd(), &mut chunk) {
             Ok(read) => read,
-            Err(rustix::io::Errno::INTR) => continue,
+            Err(rustix::io::Errno::INTR | rustix::io::Errno::AGAIN) => continue,
             Err(error) => panic!("read the carried bytes back: {error}"),
         };
         assert!(read > 0, "the real stream must return what was written");
