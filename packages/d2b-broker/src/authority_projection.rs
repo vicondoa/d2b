@@ -163,11 +163,14 @@ impl SessionMaterial {
         hasher.update([0]);
         hasher.update(format!("{:?}", binding.initiating_subject.kind()).as_bytes());
         hasher.update([0]);
+        // `Display for ResourceRef` is the redacted diagnostic rendering, so
+        // two different initiating subjects would derive the same token from
+        // it. The canonical rendering is what this derivation needs.
         hasher.update(
             binding
                 .initiating_subject
                 .resource_ref()
-                .map(|reference| reference.to_string())
+                .map(|reference| reference.to_canonical_string())
                 .unwrap_or_default()
                 .as_bytes(),
         );
@@ -552,12 +555,17 @@ fn drop_transfer(state: &mut ProjectionWorkerState, zone: &str) {
 }
 
 /// The authority rows a published row set contributes to the projection.
+///
+/// The index is keyed by the reference's *canonical* rendering, never by its
+/// `Display`: `Display for ResourceRef` is the redacted diagnostic rendering,
+/// so every reference would collapse onto one key and the projection would
+/// keep only the last row of a published set.
 fn authority_rows(rows: &[AuthorityProjectionRow]) -> BTreeMap<String, AcceptedAuthorityRow> {
     rows.iter()
         .filter(|row| AuthorityRowKind::of_reference(&row.resource_ref).is_authority())
         .map(|row| {
             (
-                row.resource_ref.to_string(),
+                row.resource_ref.to_canonical_string(),
                 AcceptedAuthorityRow {
                     reference: row.resource_ref.clone(),
                     desired_revision: row.desired_revision,
@@ -588,13 +596,13 @@ fn candidate_is_reducing(
     }
     if removed
         .iter()
-        .any(|reference| current.contains_key(&reference.to_string()))
+        .any(|reference| current.contains_key(&reference.to_canonical_string()))
     {
         return true;
     }
     candidate.iter().any(|row| {
         AuthorityRowKind::of_reference(&row.resource_ref).is_authority()
-            && current.contains_key(&row.resource_ref.to_string())
+            && current.contains_key(&row.resource_ref.to_canonical_string())
     })
 }
 
@@ -1374,8 +1382,12 @@ fn end_snapshot_locked(
                 RefusalReason::StoreIncarnationMismatch,
             ));
         }
+        // The comparison is on the sequence first: a document that lands on the
+        // accepted sequence must carry the accepted digest there, so a
+        // different history at the same sequence is refused rather than read as
+        // a whole-value inequality.
         if snapshot.cursor.sequence < zone_state.accepted.sequence
-            || (snapshot.cursor == zone_state.accepted
+            || (snapshot.cursor.sequence == zone_state.accepted.sequence
                 && snapshot.cursor.digest != zone_state.accepted.digest)
         {
             return Err(fence(
@@ -1730,9 +1742,16 @@ fn commit_change_locked(
             }
         }
         zone_state.accepted = request.committed.clone();
-        zone_state.rows = authority_rows(&request.rows);
+        // A commit carries the exact rows this one change installs - the same
+        // candidate the fence was prepared for, which the digest above proved
+        // byte for byte - so they are merged over the accepted rows by
+        // reference. Replacing the set would silently drop every accepted Role
+        // and RoleBinding the change did not mention.
+        for (reference, row) in authority_rows(&request.rows) {
+            zone_state.rows.insert(reference, row);
+        }
         for reference in &request.removed {
-            zone_state.rows.remove(&reference.to_string());
+            zone_state.rows.remove(&reference.to_canonical_string());
         }
         for effect in zone_state.effects.values_mut() {
             effect.transaction = request.transaction.clone();
@@ -1828,8 +1847,10 @@ fn resynchronize_locked(
                 RefusalReason::UnprovenEffect,
             ));
         };
+        // As above: the floor is checked on its sequence, and a floor naming the
+        // accepted sequence must name the accepted digest there.
         if request.accepted_floor.sequence < zone_state.accepted.sequence
-            || (request.accepted_floor == zone_state.accepted
+            || (request.accepted_floor.sequence == zone_state.accepted.sequence
                 && request.accepted_floor.digest != zone_state.accepted.digest)
         {
             return Err(fence(
@@ -1962,7 +1983,7 @@ fn control_action_locked(
             };
             let reservations = zone_state
                 .reservations
-                .entry(request.target.to_string())
+                .entry(request.target.to_canonical_string())
                 .or_insert(ReservationRecord {
                     transaction: request.transaction.clone(),
                     target: request.target.clone(),
@@ -2058,7 +2079,7 @@ fn begin_effect_locked(
         ));
     };
     zone_state.reservations.insert(
-        request.target.to_string(),
+        request.target.to_canonical_string(),
         ReservationRecord {
             transaction: request.transaction.clone(),
             target: request.target.clone(),

@@ -694,6 +694,20 @@ d2b_rust_test(
 )
 
 d2b_rust_test(
+    name = "authority_publication",
+    srcs = ["tests/authority_publication.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2bd_lib",
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "@crates//:serde_json",
+        "@crates//:tokio",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
     name = "mode_separation",
     srcs = ["tests/mode_separation.rs"],
     compile_data = ["Cargo.toml"],

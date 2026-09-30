@@ -3597,8 +3597,8 @@ struct CandidateDigestBody {
     removed: Vec<String>,
 }
 
-/// The canonical bytes one publication candidate's digest is taken over.
-///
+/// The canonical bytes one publication candidate's digest is taken over, with
+/// each reference in its canonical rendering, never its redacted `Display`.
 /// A `DesiredDigest` frames canonical JSON text, so the candidate is rendered
 /// as one canonical JSON object rather than as a private binary framing: both
 /// legs derive the digest through this one function, a value that is not
@@ -3613,14 +3613,14 @@ fn publication_candidate_bytes(
         rows: rows
             .iter()
             .map(|row| CandidateRowDigest {
-                resource_ref: row.resource_ref.to_string(),
+                resource_ref: row.resource_ref.to_canonical_string(),
                 desired_revision: row.desired_revision.get().to_string(),
                 desired_digest: row.desired_digest.as_str().to_owned(),
                 admitted: String::from_utf8(row.admitted.to_canonical_bytes())
                     .expect("a canonical JSON object always renders as UTF-8"),
             })
             .collect(),
-        removed: removed.iter().map(ResourceRef::to_string).collect(),
+        removed: removed.iter().map(ResourceRef::to_canonical_string).collect(),
     };
     let rendered =
         serde_json::to_vec(&body).expect("a publication candidate always serializes");

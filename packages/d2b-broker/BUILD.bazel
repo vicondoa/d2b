@@ -1,5 +1,6 @@
 load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test", "rust_doc_test", "rust_clippy_test")
+load("//bazel/checks/rust:d2b_rust_rules.bzl", "d2b_rust_test")
 load("//bazel/checks/rust:defs.bzl", "broker_test_tags")
 
 
@@ -128,6 +129,21 @@ rust_library(
 # here moved there with it (names preserved, so the socket/service units and
 # the prebuilt host-tool selection stay untouched). The tests below reach
 # the binary through the composition package's targets.
+
+d2b_rust_test(
+    name = "authority_publication",
+    srcs = ["tests/authority_publication.rs"],
+    compile_data = ["Cargo.toml"],
+    tags = broker_test_tags(),
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_broker",
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
 
 rust_test(
     name = "bridge_lifecycle",
@@ -484,7 +500,8 @@ rust_doc_test(
 # the crate's own targets.
 rust_clippy_test(
     name = "clippy",
-    targets = [":d2b_broker",
+    targets = [":authority_publication",
+        ":d2b_broker",
         ":d2b_broker_test_support",
         ":d2b_broker_layer1_bootstrap",
         ":d2b_broker_layer1_bootstrap_test_support",

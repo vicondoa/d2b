@@ -591,12 +591,16 @@ impl AuthorityPublicationCoordinator {
         let envelope = self
             .envelope(AuthorityPublicationRequest::PrepareChange(candidate.to_request()))
             .await?;
-        let AuthorityPublicationResponse::Prepared(prepared) = self
+        let response = self
             .link
             .serve(envelope)
             .await
-            .map_err(PublicationError::transport)?
-        else {
+            .map_err(PublicationError::transport)?;
+        // A refusal is an answer, not a missing one: it carries the closed code
+        // and the Zone's state, and a manager that reported it as an unmatched
+        // completion would lose exactly the evidence it needs to reconcile.
+        PublicationError::from_response(&response)?;
+        let AuthorityPublicationResponse::Prepared(prepared) = response else {
             return Err(PublicationError::UnmatchedCompletion {
                 completion: candidate.transaction.clone(),
                 pending: self
@@ -909,7 +913,13 @@ impl AuthorityPublicationCoordinator {
         &self,
         request: AuthorityPublicationRequest,
     ) -> Result<AuthorityPublicationEnvelope, PublicationError> {
-        let session = match self.session.lock().await.clone() {
+        // The held session is read into a local before the match: a temporary
+        // in a `match` scrutinee lives until the end of the `match`, so the
+        // guard would still be held across the open below, and the open takes
+        // the same lock. Every message that had to open its own session
+        // deadlocked.
+        let held = self.session.lock().await.clone();
+        let session = match held {
             Some(session) => session,
             None => self.open_session().await?,
         };
