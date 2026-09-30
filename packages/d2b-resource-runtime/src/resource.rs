@@ -1504,6 +1504,10 @@ pub(crate) mod test_support {
             host_target: crate::target::TargetRef::host("test-host").expect("host target"),
             target_resolver,
             backoff,
+            // No per-type relation projection is registered in the actor test
+            // harness: the derived index carries ownership only there, which is
+            // all those fixtures declare.
+            relation_extractors: crate::relations::RelationExtractors::new(),
         };
         let (actor, _join) =
             ractor::Actor::spawn(None, crate::manager::ResourceManager::new(), args)

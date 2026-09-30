@@ -17,6 +17,8 @@ pub mod privileges;
 pub mod processes;
 pub mod provider_artifact;
 pub mod provider_capabilities;
+/// The one pure graph-admission evaluator (KTD4).
+pub mod resource_authority;
 pub mod runtime;
 pub mod site;
 pub mod static_invariants;

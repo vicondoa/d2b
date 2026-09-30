@@ -305,6 +305,9 @@ fn registration_reason(error: &ProviderDirectoryError) -> String {
         ProviderDirectoryError::RequiredBeforeOpen { type_name } => {
             format!("required-before-open:{}", type_name.as_str())
         }
+        ProviderDirectoryError::RelationProjection(error) => {
+            format!("relation-projection:{}", error)
+        }
     }
 }
 

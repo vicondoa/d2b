@@ -820,6 +820,12 @@ impl From<crate::provider::ProviderDirectoryError> for ResourceError {
                     message: "driver must be registered before the plane opens".to_string(),
                 }
             }
+            crate::provider::ProviderDirectoryError::RelationProjection(error) => {
+                Self::Provider {
+                    type_name: error.to_string(),
+                    message: "relation projection registration".to_string(),
+                }
+            }
         }
     }
 }

@@ -12,7 +12,7 @@ use d2b_contracts_resource::v3::execution_policy::{
 use d2b_contracts_resource::v3::identity::STANDARD_RESOURCE_TYPES;
 use d2b_contracts_resource::v3::identity::{AuthenticatedSubjectContext, EvidenceClass, Locality};
 use d2b_contracts_resource::v3::{
-    ControllerGeneration, MAX_ROLE_BINDING_SUBJECTS, MAX_ROLE_RULE_EXECUTION_REFS,
+    AuthoritySubject, ControllerGeneration, MAX_ROLE_BINDING_SUBJECTS, MAX_ROLE_RULE_EXECUTION_REFS,
     MAX_ROLE_RULE_RESOURCE_NAMES, MAX_ROLE_RULE_RESOURCE_TYPES, MAX_ROLE_RULE_VERBS,
     MAX_ROLE_RULES, ResourceErrorKind, ResourceGeneration, ResourceName, ResourceRef,
     ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
@@ -1480,6 +1480,24 @@ impl NativeAuthorizer {
             std::sync::Arc::new(context),
             state,
         ))
+    }
+
+    /// The typed authority subject one admitted authorization carries
+    /// (U6, KTD4).
+    ///
+    /// The session layer established the caller's exact reference and the
+    /// store identity committed rows carry for it, so the new-graph mutation
+    /// entry point can be given a typed subject instead of a rendered name.
+    /// Classification lives here because this is the surface that owns
+    /// authorization: a reference outside the six admitted authority classes
+    /// yields `None`, so the caller refuses rather than downgrading an
+    /// unevaluable subject to a string the evaluator cannot check.
+    pub fn authority_subject(
+        &self,
+        authorization: &AdmittedAuthorization,
+    ) -> Option<AuthoritySubject> {
+        let kind = d2b_resource_runtime::manager::authority_subject_kind(&authorization.subject_ref)?;
+        Some(AuthoritySubject::named(kind, authorization.subject_ref.clone()))
     }
 
     /// Authorize one request against the current policy and return the

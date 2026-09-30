@@ -250,6 +250,11 @@ async fn manager_fixture() -> ManagerFixture {
             .expect("host target"),
         target_resolver: Arc::new(HostOnlyResolver),
         backoff: std::time::Duration::from_millis(200),
+        // The manager-owned fixture registers no per-type relation projection,
+        // so the derived index carries ownership only. The typed relation
+        // construction is exercised over the converted declarations in U6's
+        // own integration test.
+        relation_extractors: d2b_resource_runtime::RelationExtractors::new(),
     };
     let (actor, _join) = ractor::Actor::spawn(None, d2b_resource_runtime::ResourceManager::new(), args)
         .await

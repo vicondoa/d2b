@@ -500,7 +500,9 @@ const fn default_max_stream_credits() -> u32 {
 /// use to introduce code: the provider is pinned to a trusted artifact at
 /// deployment, and the component and method are resolved from that
 /// provider's declared implementation set.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, tag = "kind")]
 pub enum OperationImplementation {
     /// A method of one declared provider component.

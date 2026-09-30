@@ -92,13 +92,15 @@ use d2b_resource_runtime::error::ResourceError;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::resource::ResourceStatus;
 use d2b_resource_runtime::manager::{
-    DesiredResource, ManagerActorEndpoint, ResourceManager, ResourceManagerArgs,
+    AdmissionDecision, AdmissionOp, DesiredResource, ManagerActorEndpoint, MutationAdmission,
+    MutationRequest, MutationSubject, ResourceManager, ResourceManagerArgs,
     ResourceManagerClient, ResourceManagerMsg, ResourceSelector, ResourceView,
 };
 use d2b_resource_runtime::revision::RuntimeRevision;
 use d2b_resource_runtime::spec_store::{SpecSelector, SpecStore, StoredDesiredResource};
 use d2b_resource_runtime::GuestTargetControl;
 use d2b_resource_runtime::target::{TargetDirectory, TargetRef, TargetResolver};
+use d2b_resource_runtime::relations::RelationExtractors;
 use d2b_resource_runtime::watch::{
     ChangeSource, DEFAULT_RING_CAPACITY, RevisionExpired, WatchDelivery, WatchHub, WatchRegistration,
     WatchSelector,
@@ -2650,8 +2652,122 @@ impl d2b_provider_guest::CloudHypervisorGuestRuntime for PlaneCloudHypervisorGue
 // path (U8) presents the api caller subject, owned cascades present the
 // resource-owner subject. U14 retired the Phase A type partition, so the
 // manager serves every type; the DriverFactory's registered directory is
-// the only gate on which types can spawn actors. The manager's default
-// [`AllowAll`] admission is therefore the whole policy.
+// the only gate on which types can spawn actors. The plane therefore still
+// installs [`SystemZoneWriteFence`], which is the whole policy on the
+// unchanged entry point (U34 replaces it with [`GraphMutationAdmission`] and
+// deletes the string-subject path atomically).
+
+// ---------------------------------------------------------------------------
+// New-graph mutation admission (U6, KTD4)
+// ---------------------------------------------------------------------------
+
+/// The manager-boundary admission of the new graph construction (U6, KTD4).
+///
+/// This is the composition's whole contribution to the decision: it names the
+/// Zone, the transport, and the subject the manager boundary already
+/// established, and defers every rule to the one pure evaluator in
+/// `d2b_core::resource_authority`. It holds no policy of its own, and it never
+/// reads a name out of the request to decide anything - `principal` is used
+/// only to recover the initiating subject's exact reference, and a request
+/// whose principal names no resolvable reference is refused rather than
+/// evaluated.
+///
+/// U34 installs this in place of [`crate::foundation_seed::SystemZoneWriteFence`]
+/// for the [`ResourceManagerMsg::AuthenticatedApply`] entry point, and deletes
+/// the unchanged string-subject entry points in the same step.
+pub struct GraphMutationAdmission {
+    accepted: std::sync::Arc<d2b_core::resource_authority::AcceptedGraph>,
+    zone: d2b_contracts_resource::v3::ZoneId,
+    transport: d2b_core::resource_authority::TransportIdentity,
+}
+
+impl GraphMutationAdmission {
+    /// Construct the plane's admission from the prior accepted graph.
+    pub fn new(
+        accepted: std::sync::Arc<d2b_core::resource_authority::AcceptedGraph>,
+        zone: d2b_contracts_resource::v3::ZoneId,
+        transport: d2b_core::resource_authority::TransportIdentity,
+    ) -> Self {
+        Self { accepted, zone, transport }
+    }
+
+    /// The prior accepted graph this admission evaluates against.
+    pub fn accepted(&self) -> &d2b_core::resource_authority::AcceptedGraph {
+        &self.accepted
+    }
+}
+
+impl MutationAdmission for GraphMutationAdmission {
+    fn admit(&self, subject: &MutationSubject, request: &MutationRequest) -> AdmissionDecision {
+        use d2b_contracts_resource::v3::{
+            AdmissionDecision as GraphDecision, AuthoritySubject, AuthoritySubjectKind,
+        };
+        use d2b_core::resource_authority::{
+            GraphAuthority, GraphMutation, MutationKind, MutationSubjectEvidence,
+        };
+
+        // The authenticated entry points render the subject either as an exact
+        // reference or as the one of the two bootstrap-class tokens the
+        // runtime renders for a subject that names no resource. Anything else
+        // is display text an in-process caller wrote, and display text decides
+        // nothing.
+        let initiating = match d2b_contracts_resource::v3::ResourceRef::parse(&subject.principal)
+        {
+            Ok(reference) => match
+                d2b_resource_runtime::manager::authority_subject_kind(&reference)
+            {
+                Some(kind) => AuthoritySubject::named(kind, reference.clone()),
+                None => {
+                    return AdmissionDecision::Deny(format!(
+                        "graph admission: {} has no admitted authority class",
+                        subject.principal
+                    ));
+                }
+            },
+            Err(_) => match subject.principal.as_str() {
+                "bootstrap" => AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap),
+                "operator" => AuthoritySubject::unresourced(AuthoritySubjectKind::Operator),
+                _ => {
+                    return AdmissionDecision::Deny(
+                        "graph admission: the caller principal is neither an exact resource \
+                         reference nor a bootstrap-class token"
+                            .to_owned(),
+                    );
+                }
+            },
+        };
+        let kind = match request.op {
+            AdmissionOp::Ensure => MutationKind::Create,
+            AdmissionOp::Remove => MutationKind::Delete,
+        };
+        // A key the typed reference cannot spell names no row the graph could
+        // authorize, so it is refused rather than approximated with a different
+        // target.
+        let Ok(target) = d2b_contracts_resource::v3::ResourceRef::parse(&format!(
+            "{}/{}",
+            request.key.type_name, request.key.name
+        )) else {
+            return AdmissionDecision::Deny(format!(
+                "graph admission: {}/{} is not an exact resource reference",
+                request.key.type_name, request.key.name
+            ));
+        };
+        let mutation = GraphMutation::new(
+            self.zone.clone(),
+            MutationSubjectEvidence::new(initiating, self.transport),
+            kind,
+            target,
+        );
+        match GraphAuthority::admit_mutation(&mutation, &self.accepted) {
+            GraphDecision::Admitted => AdmissionDecision::Allow,
+            GraphDecision::Refused { stage, reason } => AdmissionDecision::Deny(format!(
+                "graph admission refused at {}: {}",
+                serde_json::to_string(&stage).unwrap_or_else(|_| "authorize".to_owned()),
+                serde_json::to_string(&reason).unwrap_or_else(|_| "identity-not-authorized".to_owned()),
+            )),
+        }
+    }
+}
 
 /// Default spec decode hook for rows no per-type decoder covers (a row whose
 /// type has no driver never spawns an actor, so this only ever sees
@@ -3183,6 +3299,13 @@ impl ResourcePlaneV3 {
             host_target,
             target_resolver: Arc::new(DeclaredExecutionRef),
             backoff: PLANE_BACKOFF,
+            // Relation indexing (U6, R3/R4): the plane registers no per-type
+            // projection yet, so the manager's derived index carries ownership
+            // only - exactly the relationship class the unchanged entry point
+            // already relies on. The canonical projections arrive with each
+            // converted declaration family and the new admission construction
+            // is installed with them at the U34 cutover.
+            relation_extractors: RelationExtractors::new(),
         };
         let (actor, _join) = ractor::Actor::spawn(None, ResourceManager::new(), args).await?;
         readiness.set_manager_started(true);

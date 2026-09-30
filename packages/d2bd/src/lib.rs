@@ -24,4 +24,11 @@ pub mod principal_allocation;
 pub(crate) mod provider_lifecycle;
 pub(crate) mod resource_plane_v3;
 
+/// The plane's new-graph mutation admission construction (U6, KTD4).
+///
+/// Re-exported so this package's owning integration test drives the same
+/// construction production will install, rather than a test-local imitation of
+/// it. U34 removes this export together with the construction it names.
+pub use resource_plane_v3::GraphMutationAdmission;
+
 include!("composition.rs");

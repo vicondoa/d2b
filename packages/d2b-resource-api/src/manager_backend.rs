@@ -54,7 +54,8 @@ use d2b_contracts_resource::v3::{
     RESOURCE_ENVELOPE_DOMAIN_TAG,
 };
 use d2b_resource_runtime::manager::{
-    DesiredResource, MutationSubject, ResourceManagerClient, ResourceSelector, ResourceView,
+    AuthenticatedIdentity, AuthenticatedMutation, DesiredResource, MutationSubject,
+    ResourceManagerClient, ResourceSelector, ResourceView,
 };
 use d2b_resource_runtime::revision::RuntimeRevision;
 use d2b_resource_runtime::resource::ResourceStatus;
@@ -215,6 +216,38 @@ pub(crate) fn api_subject(authorization: &AdmittedAuthorization) -> MutationSubj
         principal: authorization.subject_ref.to_canonical_string(),
         origin: ResourceProvenance::Api,
     }
+}
+
+/// The authenticated form of the API caller subject (U6, KTD4).
+///
+/// The authorization evaluation captured the caller's exact reference and the
+/// store-assigned identity committed rows carry for it, so the new-graph entry
+/// point receives a typed subject instead of a rendered string. A reference
+/// with no admitted authority class has no subject the evaluator could
+/// evaluate, so it is refused here rather than downgraded to a name.
+///
+/// The unchanged [`api_subject`] string seam stays the production path until
+/// the new-graph construction is installed.
+pub fn authenticated_api_subject(
+    authorizer: &crate::authz::NativeAuthorizer,
+    authorization: &AdmittedAuthorization,
+) -> Result<AuthenticatedMutation, StoreError> {
+    let subject = authorizer.authority_subject(authorization).ok_or_else(|| {
+        tracing::warn!(
+            subject_type = %authorization.subject_ref.resource_type(),
+            "api subject has no admitted authority class"
+        );
+        error(
+            StoreErrorKind::Resource(ResourceErrorKind::AuthorizationDenied),
+            None,
+            RetryClass::Never,
+            "subject-not-admitted",
+        )
+    })?;
+    Ok(AuthenticatedMutation::new(AuthenticatedIdentity::new(
+        subject,
+        authorization.subject_uid.clone(),
+    )))
 }
 
 /// The Nix bundle materialization subject (U10 wires it): ingestion admits

@@ -154,6 +154,30 @@ pub trait ManagerEndpoint: Send + Sync + 'static {
         registration: WatchRegistration,
     ) -> Result<WatchId, ResourceError>;
     async fn cancel_watch(&self, watch: WatchId) -> Result<(), ResourceError>;
+
+    /// Create a source-owned binding under the source controller's
+    /// authenticated authority (U6, KTD2).
+    ///
+    /// KTD2 routes a typed consumer request through the source controller: the
+    /// controller admits the request and then asks the manager to create the
+    /// source-owned binding. That second step is this method, and it carries
+    /// the controller's authenticated evidence - not the owner's name - so a
+    /// driver cannot mint a relationship by holding a parent reference.
+    ///
+    /// The default refuses. An endpoint that cannot carry that evidence must
+    /// not quietly fall back to [`Self::ensure_child`], which is the
+    /// un-authenticated path KTD2 removes; refusing keeps the fallback
+    /// unreachable rather than merely unused.
+    async fn ensure_source_owned_binding(
+        &self,
+        _parent: &ResourceKey,
+        _evidence: crate::manager::AuthenticatedMutation,
+        _child: ChildEnsure,
+    ) -> Result<EnsureOutcome, ResourceError> {
+        Err(ResourceError::ManagerRejected {
+            reason: "endpoint carries no authenticated source-controller authority".to_owned(),
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------

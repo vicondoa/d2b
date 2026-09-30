@@ -146,6 +146,14 @@ impl DeviceBindingRequest {
         &self.slot
     }
 
+    /// Borrow the exact consumer.
+    ///
+    /// Present on every family request, so one relation index resolves a
+    /// declared consumer the same way for all five.
+    pub const fn consumer_ref(&self) -> &ResourceRef {
+        &self.consumer_ref
+    }
+
     /// Borrow the named device function.
     pub const fn function(&self) -> &DeviceFunction {
         &self.function

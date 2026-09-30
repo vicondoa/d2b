@@ -11,11 +11,12 @@ use d2b_contracts_resource::v3::{
     MAX_EXPEDITED_DEADLINE_MS, MAX_FILTER_VALUES, MAX_LIST_FILTERS, MAX_LIST_PAGE_SIZE,
     MAX_LIST_RESOURCE_TYPES, MAX_PAGE_CURSOR_BYTES, MAX_REQUEST_CANONICAL_BYTES,
     MAX_REQUEST_DEADLINE_MS, MAX_RESPONSE_CANONICAL_BYTES, MAX_WATCH_CREDITS, MAX_WATCH_FILTERS,
-    MAX_WATCH_RESOURCE_TYPES, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope, ResourceError,
-    ResourceErrorKind, ResourceGeneration, ResourceName, ResourceRef, ResourceTypeName,
-    ResourceUid, ZoneId, ZoneRevision, canonical_digest,
+    MAX_WATCH_RESOURCE_TYPES, RESOURCE_ENVELOPE_DOMAIN_TAG, AdmittedAuthorization,
+    ResourceEnvelope, ResourceError, ResourceErrorKind, ResourceGeneration, ResourceName,
+    ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision, canonical_digest,
 };
 use d2b_core_controller::controller_assignment::{AssignmentVerb, ScopedResourceMutation};
+use d2b_resource_runtime::manager::AuthenticatedMutation;
 use d2b_contracts_resource::v3::{
     ExpectedRevision, ResourceMutationKind, StoreCommitResult, StoreFilter, StoreGetRequest,
     StoreInspectSchemaRequest, StoreListRequest, StoreListResult,
@@ -1156,6 +1157,48 @@ where
             }
             Err(error) => error_response(error),
         }
+    }
+
+    /// The typed subject this service's own authorization established for a
+    /// mutation (U6, KTD4/AE15).
+    ///
+    /// The service authorizes every mutation from the session's own claims and
+    /// never reads a subject out of the payload, so a nested call or a
+    /// privileged transport cannot substitute an identity here. This surfaces
+    /// that same decision in the typed form the new-graph manager entry point
+    /// takes: the subject's exact reference and the store identity committed
+    /// rows carry for it.
+    ///
+    /// There is deliberately no transport parameter. A transport is provenance
+    /// for a diagnostic and never an input to the decision (AE15), so this
+    /// surface cannot be told to treat one as authoritative.
+    ///
+    /// # Errors
+    ///
+    /// Refuses when the authenticated subject has no admitted authority class,
+    /// because there is then nothing the graph evaluator could decide for. It
+    /// does not fall back to the rendered-name seam.
+    pub fn authenticated_mutation<T>(
+        &self,
+        trusted: &TrustedRequest<T>,
+    ) -> Result<AuthenticatedMutation, ResourceError> {
+        let admitted = AdmittedAuthorization {
+            zone: subject_zone(trusted),
+            subject_ref: trusted.subject.subject_ref().clone(),
+            subject_uid: trusted.subject.subject_uid().clone(),
+            targets: Vec::new(),
+        };
+        let subject = crate::manager_backend::authenticated_api_subject(
+            &self.authorizer,
+            &admitted,
+        )
+        .map_err(|_| {
+            ResourceError::terminal(
+                ResourceErrorKind::AuthorizationDenied,
+                "authenticated subject has no admitted authority class",
+            )
+        })?;
+        Ok(subject)
     }
 
     async fn commit_one<T>(

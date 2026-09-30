@@ -31,6 +31,8 @@ pub mod spec_store;
 /// for staged, prepared, and committed-but-unacknowledged transactions (U5,
 /// KTD5-KTD6).
 pub mod authority_journal;
+/// Typed relation indexes derived from accepted desired rows (U6; R2-R4).
+pub mod relations;
 /// Resource identity and ownership-edge types.
 pub mod identity;
 /// Runtime error taxonomy shared by actors, drivers, and the store.
@@ -41,9 +43,11 @@ pub mod revision;
 // Public runtime surface (U3): the manager is the per-Zone authority, the
 // resource actor is the per-resource authority.
 pub use crate::manager::{
-    AdmissionDecision, AdmissionOp, AllowAll, ChildrenDiff, DesiredResource, ManagerActorEndpoint,
-    MutationAdmission, MutationRequest, MutationSubject, ResourceHandle, ResourceSelector,
-    ResourceManager, ResourceManagerArgs, ResourceManagerClient, ResourceManagerMsg, ResourceView,
+    authority_subject_kind, resource_ref, source_controller_kind, AdmissionDecision, AdmissionOp, AllowAll,
+    AuthenticatedIdentity, AuthenticatedMutation, ChildrenDiff, DesiredResource,
+    ManagerActorEndpoint, MutationAdmission, MutationRequest, MutationSubject, ResourceHandle,
+    ResourceSelector, ResourceManager, ResourceManagerArgs, ResourceManagerClient,
+    ResourceManagerMsg, ResourceView,
 };
 pub use crate::resource::{
     DEFAULT_REQUEUE_BACKOFF, ResourceActor, ResourceActorArgs, ResourceMsg, ResourceStatus,
@@ -60,6 +64,16 @@ pub use crate::authority_journal::{
     AcceptedCursor, AcceptedPublication, CommitOutcome, CommittedPublication, DesiredMutation,
     DesiredRow, OutboxEntry, PublicationState, PublicationTransaction, StagedMutation,
     TransactionRecovery, ZoneRecovery,
+};
+// Relation index (U6, KTD2-KTD4): the six distinct graph relationship classes
+// derived from committed desired rows, and the per-type projections that read
+// them. Nothing here is separately authored: every edge comes from a row.
+pub use crate::relations::{
+    AuthorizationRelation, BindingRequestRelations, BindingSlotConflict, ConsumptionRelation,
+    DecodedBindingRequest, ImplementationRelation, ObservationRelation,
+    OperationImplementationRelations, OwnershipRelation, PlacementRelation, RelationClass,
+    RelationEdge, RelationError, RelationExtractors, RelationExtractor, RelationIndex,
+    RelationResolver, RelationRow, UnresolvedRelation, BINDING_RESOURCE_TYPES,
 };
 pub use crate::identity::TransactionId;
 pub use crate::schema::{AUTHORITY_JOURNAL_USER_VERSION, StoreFormat};

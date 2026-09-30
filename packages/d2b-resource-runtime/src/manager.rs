@@ -73,6 +73,164 @@ use crate::watch::{
     ChangeKind, ChangeNotice, ChangeSource, WatchHub, WatchRegistration as ExternalWatchRegistration,
     WatchSelector as ExternalWatchSelector,
 };
+use d2b_contracts_resource::v3::{
+    AuthoritySubject, AuthoritySubjectKind, BindingKind, ResourceRef, ResourceUid, ZoneId,
+};
+use crate::relations::{DecodedBindingRequest, RelationExtractors, RelationIndex, RelationRow};
+
+// ---------------------------------------------------------------------------
+// Authenticated mutation evidence (U6, KTD4)
+// ---------------------------------------------------------------------------
+
+/// One authenticated identity: its class, its exact reference, and the
+/// store-assigned identity the durable rows carry for it.
+///
+/// The pair is what makes the subject checkable. A principal string can be
+/// written by any in-process caller; a reference plus the store identity
+/// resolves against committed rows, so a name that no row backs grants
+/// nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthenticatedIdentity {
+    subject: AuthoritySubject,
+    uid: ResourceUid,
+}
+
+impl AuthenticatedIdentity {
+    /// Construct one identity from its class, exact reference, and uid.
+    pub const fn new(subject: AuthoritySubject, uid: ResourceUid) -> Self {
+        Self { subject, uid }
+    }
+
+    /// The subject class the authenticating layer classified.
+    pub const fn subject(&self) -> &AuthoritySubject {
+        &self.subject
+    }
+
+    /// The subject's exact reference, when it names one.
+    pub const fn reference(&self) -> Option<&ResourceRef> {
+        self.subject.resource_ref()
+    }
+
+    /// The store-assigned identity committed rows carry for it.
+    pub const fn uid(&self) -> &ResourceUid {
+        &self.uid
+    }
+
+    /// The provenance this identity's mutations are recorded under.
+    ///
+    /// Derived from the authenticated class rather than chosen by the caller:
+    /// an admitted workload identity writes as a component, a human identity
+    /// writes as the API, and the verified deployment graph writes as a
+    /// bundle.
+    pub const fn provenance(&self) -> ResourceProvenance {
+        match self.subject.kind() {
+            AuthoritySubjectKind::User | AuthoritySubjectKind::Operator => {
+                ResourceProvenance::Api
+            }
+            AuthoritySubjectKind::Bootstrap => ResourceProvenance::Nix,
+            AuthoritySubjectKind::Process
+            | AuthoritySubjectKind::EphemeralProcess
+            | AuthoritySubjectKind::Host
+            | AuthoritySubjectKind::Guest
+            | AuthoritySubjectKind::Provider => ResourceProvenance::Resource,
+        }
+    }
+}
+
+/// The authenticated evidence one durable graph mutation carries.
+///
+/// `initiating` is the subject the decision is made for: a nested call keeps
+/// the subject that started the work, so arriving through a privileged
+/// transport cannot substitute a more privileged identity (AE15). A
+/// source-owned binding creation additionally names the source controller
+/// whose authority admits it (KTD2) - an owner reference is not that
+/// authority, so the two travel separately and are checked separately.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthenticatedMutation {
+    initiating: AuthenticatedIdentity,
+    source_controller: Option<AuthenticatedIdentity>,
+}
+
+impl AuthenticatedMutation {
+    /// Construct ordinary authenticated evidence with no source controller.
+    pub const fn new(initiating: AuthenticatedIdentity) -> Self {
+        Self { initiating, source_controller: None }
+    }
+
+    /// Name the source controller admitting a source-owned relationship.
+    pub fn with_source_controller(mut self, controller: AuthenticatedIdentity) -> Self {
+        self.source_controller = Some(controller);
+        self
+    }
+
+    /// The subject the mutation is admitted for.
+    pub const fn initiating(&self) -> &AuthenticatedIdentity {
+        &self.initiating
+    }
+
+    /// The source controller admitting a source-owned relationship.
+    pub const fn source_controller(&self) -> Option<&AuthenticatedIdentity> {
+        self.source_controller.as_ref()
+    }
+
+    /// Render the display provenance the existing admission seam reads.
+    ///
+    /// The string is what the injected admission sees as the caller; it is
+    /// derived from the authenticated reference, never supplied as free text
+    /// by an in-process caller.
+    pub fn principal(&self) -> String {
+        match self.initiating.reference() {
+            Some(reference) => reference.to_canonical_string(),
+            None => match self.initiating.subject.kind() {
+                AuthoritySubjectKind::Bootstrap => "bootstrap".to_owned(),
+                AuthoritySubjectKind::Operator => "operator".to_owned(),
+                _ => "unresolved".to_owned(),
+            },
+        }
+    }
+
+    /// The existing seam's subject for this mutation.
+    pub fn mutation_subject(&self) -> MutationSubject {
+        MutationSubject {
+            principal: self.principal(),
+            origin: self.initiating.provenance(),
+        }
+    }
+}
+
+/// The authority subject class a primitive source controller acts under
+/// (U6, KTD2).
+///
+/// Every one of the five primitive source families is controlled by a provider
+/// component acting under its own admitted identity, so the class is
+/// [`AuthoritySubjectKind::Provider`] and the exact reference is what
+/// authorization matches on. A type that is not a primitive source has no
+/// source-controller authority and yields `None`, so the caller refuses
+/// rather than inventing one.
+pub fn source_controller_kind(source_type: &str) -> Option<AuthoritySubjectKind> {
+    BindingKind::ALL
+        .into_iter()
+        .any(|kind| kind.source_resource_type() == source_type)
+        .then_some(AuthoritySubjectKind::Provider)
+}
+
+/// The subject class one authenticated reference maps to.
+///
+/// Only the six workload and deployment classes carry an admitted authority
+/// subject. A reference outside them (a `Zone` self-resource, a `Group`, a
+/// `ZoneLink`) has no class in the authority contract, so the authenticated
+/// path refuses it rather than inventing a classification for it.
+pub fn authority_subject_kind(resource_ref: &ResourceRef) -> Option<AuthoritySubjectKind> {
+    match resource_ref.resource_type().as_str() {
+        "User" => Some(AuthoritySubjectKind::User),
+        "Process" => Some(AuthoritySubjectKind::Process),
+        "EphemeralProcess" => Some(AuthoritySubjectKind::EphemeralProcess),
+        "Host" => Some(AuthoritySubjectKind::Host),
+        "Guest" => Some(AuthoritySubjectKind::Guest),
+        "Provider" => Some(AuthoritySubjectKind::Provider),
+        _ => None,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Admission hook: the manager boundary replaces the cut redb seal (KTD2)
@@ -319,6 +477,35 @@ pub enum ResourceManagerMsg {
         desired: DesiredResource,
         reply: oneshot::Sender<Result<ResourceHandle, ResourceError>>,
     },
+    /// Authenticated graph mutation (U6, KTD4/R8): the new-graph entry point
+    /// that carries a typed subject instead of display text. `parent` marks a
+    /// source-owned child (KTD2): the source controller's authenticated
+    /// authority admits the relationship, and an owner reference alone does
+    /// not. The entry points above stay the production path until U34 installs
+    /// this one atomically.
+    AuthenticatedApply {
+        evidence: AuthenticatedMutation,
+        parent: Option<ResourceKey>,
+        desired: DesiredResource,
+        reply: oneshot::Sender<Result<ResourceHandle, ResourceError>>,
+    },
+    /// Source-owned child binding creation under authenticated
+    /// source-controller evidence (U6, KTD2): the endpoint a source
+    /// controller's driver uses, and the only owned-child path that admits a
+    /// binding relationship.
+    AuthenticatedChildEnsure {
+        evidence: AuthenticatedMutation,
+        parent: ResourceKey,
+        child: ChildEnsure,
+        reply: oneshot::Sender<Result<EnsureOutcome, ResourceError>>,
+    },
+    /// Authenticated durable deletion (U6, KTD4), the removal counterpart of
+    /// [`Self::AuthenticatedApply`].
+    AuthenticatedRemove {
+        evidence: AuthenticatedMutation,
+        key: ResourceKey,
+        reply: oneshot::Sender<Result<(), ResourceError>>,
+    },
     /// Durable deletion (R10, F3): mark deleting (commit), cascade to owned
     /// children, then run driver cleanup through the actor.
     Remove {
@@ -341,6 +528,12 @@ pub enum ResourceManagerMsg {
     KeyForUid {
         uid: [u8; 16],
         reply: oneshot::Sender<Result<Option<ResourceKey>, ResourceError>>,
+    },
+    /// The six derived relation indexes for this Zone (U6, R2/R3). Derived
+    /// wholly from committed desired rows, so the value a restart rebuilds is
+    /// comparable with the one the previous process held.
+    Relations {
+        reply: oneshot::Sender<Result<RelationIndex, ResourceError>>,
     },
     /// External API watch (R23): served from the in-memory hub; replay plus
     /// live delivery is gap-free within the daemon epoch.
@@ -476,6 +669,14 @@ pub struct ResourceManagerState {
     by_uid: HashMap<[u8; 16], ResourceKey>,
     by_owner: HashMap<ResourceKey, std::collections::HashSet<ResourceKey>>,
     by_type: HashMap<ResourceTypeName, std::collections::HashSet<ResourceKey>>,
+    /// The six derived relation indexes (U6, R2/R3). Derived wholly from
+    /// `rows`, so a rebuild after restart reproduces the same value and no
+    /// separately authored dependency list exists to drift from the rows.
+    relations: RelationIndex,
+    /// The registered per-type relation projections (U6, R3/R4). The manager
+    /// owns the derived index; the owning provider owns each projection, so
+    /// the manager never reads a resource type's declaration itself.
+    relation_extractors: RelationExtractors,
 
     /// Ephemeral dependency graph (spec section 16): who watches whom. Held
     /// across actor restarts so dependents can be notified and resubscribe.
@@ -492,6 +693,18 @@ pub struct ResourceManagerState {
 struct WatchEntry {
     subscriber: ResourceKey,
     target: ResourceKey,
+}
+
+/// The exact reference one manager key names (U6).
+///
+/// The relation index keys declared relationships by reference, and a row's
+/// durable identity is `(zone, type, name)`, so this is the one place that
+/// turns a stored key into the reference every projection and grant matches on.
+pub fn resource_ref(key: &ResourceKey) -> Option<ResourceRef> {
+    Some(ResourceRef::new(
+        d2b_contracts_resource::v3::ResourceTypeName::parse(key.type_name.clone()).ok()?,
+        d2b_contracts_resource::v3::ResourceName::parse(key.name.clone()).ok()?,
+    ))
 }
 
 /// Deterministic stable uid for a key (R8): owned-child graphs and adoption
@@ -547,6 +760,49 @@ impl ResourceManagerState {
             .insert(key.clone());
         self.rows.insert(key.clone(), row);
         self.link_row_owner(&key);
+    }
+
+    /// Re-derive the six relation indexes from the committed rows (U6, R3).
+    ///
+    /// The index has exactly one constructor, [`RelationIndex::rebuild`], and
+    /// its only input is the rows the store committed. That is what makes the
+    /// index canonical: the runtime cannot hold a relationship the rows do not
+    /// say, and a restart over the same rows reproduces the same value
+    /// (F7). Rebuilding per committed mutation is cheap next to the durable
+    /// write and the actor spawn the same mutation already performs.
+    fn rebuild_relations(&mut self) {
+        let zone = match ZoneId::parse(self.zone.clone()) {
+            Ok(zone) => zone,
+            Err(_) => return,
+        };
+        let mut rows: Vec<(ResourceRef, ResourceUid, Option<ResourceUid>, Vec<u8>)> = Vec::new();
+        for row in self.rows.values() {
+            // A row whose identity is not representable is skipped rather than
+            // approximated: the derived index is a view of committed rows, and
+            // a row it cannot name must not appear under a second spelling.
+            let Some(uid) = ResourceUid::from_bytes(&row.uid).ok() else {
+                continue;
+            };
+            let Some(reference) = resource_ref(&row.key) else {
+                continue;
+            };
+            rows.push((
+                reference,
+                uid,
+                row.owner_uid.and_then(|owner| ResourceUid::from_bytes(&owner).ok()),
+                row.spec.clone(),
+            ));
+        }
+        // A deterministic input order makes the rebuild reproducible even
+        // though the derived index sorts its own edges.
+        rows.sort_by(|left, right| left.0.cmp(&right.0));
+        let views: Vec<RelationRow<'_>> = rows
+            .iter()
+            .map(|(reference, uid, owner, spec)| {
+                RelationRow::new(zone.clone(), uid.clone(), reference.clone(), owner.clone(), spec)
+            })
+            .collect();
+        self.relations = RelationIndex::rebuild(&views, &self.relation_extractors);
     }
 
     /// Link a row into its owner's owned-child set. The link needs the
@@ -622,6 +878,7 @@ impl ResourceManagerState {
         // assignment, or another realization (R20).
         self.targets.release(key).await;
         self.unindex_row(key);
+        self.rebuild_relations();
         self.pending_retirement.remove(key);
         self.hub.publish(ChangeNotice {
             key: key.clone(),
@@ -741,6 +998,7 @@ impl ResourceManagerState {
         let committed = outcome.row().clone();
         let changed = matches!(outcome, EnsureOutcome::Created(_) | EnsureOutcome::Updated(_));
         self.index_row(committed.clone());
+        self.rebuild_relations();
         if matches!(outcome, EnsureOutcome::Updated(_)) {
             // The committed row moved past the row the published status was
             // projected from: either the generation advanced (the spec bytes
@@ -843,6 +1101,196 @@ impl ResourceManagerState {
         }
         Ok(())
     }
+
+    /// One authenticated graph mutation (U6, KTD2-KTD4).
+    ///
+    /// The manager performs only the parts that are index and shape: the
+    /// declaring parent exists, a source-owned binding row is created by its
+    /// own source controller rather than by anyone holding an owner reference,
+    /// an owned child keeps its owner, and the consumer slot is normalized
+    /// against the derived index. Whether this subject may make this change is
+    /// the injected [`MutationAdmission`]'s decision, not the manager's.
+    async fn authenticated_ensure(
+        &mut self,
+        manager: ActorRef<ResourceManagerMsg>,
+        evidence: &AuthenticatedMutation,
+        parent: Option<&ResourceKey>,
+        desired: DesiredResource,
+    ) -> Result<(EnsureOutcome, ActorRef<ResourceMsg>), ResourceError> {
+        if desired.key.zone != self.zone {
+            return Err(ResourceError::ManagerRejected { reason: format!(
+                "resource zone {} does not belong to manager zone {}",
+                desired.key.zone, self.zone
+            ) });
+        }
+        let parent_row = match parent {
+            None => None,
+            Some(parent) => Some(self.rows.get(parent).cloned().ok_or_else(|| {
+                ResourceError::ManagerRejected {
+                    reason: format!("source controller {parent} is not committed in this manager"),
+                }
+            })?),
+        };
+        admit_source_owned_binding_shape(evidence, parent, parent_row.as_ref(), &desired)?;
+        let key = ResourceKey::new(
+            desired.key.zone.clone(),
+            desired.key.type_name.clone(),
+            desired.key.name.clone(),
+        );
+        self.check_binding_slot(&key, &desired)?;
+        let row = match (parent, parent_row.as_ref()) {
+            (None, _) => top_level_row(&desired),
+            (Some(parent), Some(parent_row)) => {
+                // Ownership integrity (R8): the declarative owned-child
+                // refusal applies to the authenticated path exactly as it does
+                // to the unchanged one.
+                if let Some(error) = reparent_refusal(self, parent, parent_row.uid, &key) {
+                    return Err(error);
+                }
+                owned_row(&desired, Some(parent), Some(parent_row.uid))
+            }
+            // Unreachable: `parent_row` is resolved from `parent` above.
+            (Some(_), None) => unreachable!("a resolved parent has a committed row"),
+        };
+        self.ensure_internal(manager, &evidence.mutation_subject(), row).await
+    }
+
+    /// One authenticated durable deletion (U6, KTD4).
+    async fn authenticated_remove(
+        &mut self,
+        evidence: &AuthenticatedMutation,
+        key: &ResourceKey,
+    ) -> Result<(), ResourceError> {
+        if key.zone != self.zone {
+            return Err(ResourceError::ManagerRejected { reason: format!(
+                "resource zone {} does not belong to manager zone {}",
+                key.zone, self.zone
+            ) });
+        }
+        self.remove_internal(&evidence.mutation_subject(), key).await
+    }
+
+    /// KTD3 normalization for one candidate binding row, before any mutation.
+    ///
+    /// The consumer slot index is derived from committed rows, so a second,
+    /// differently-shaped declaration for one live slot is refused here rather
+    /// than being resolved by arrival order. A row that does not carry its
+    /// family's canonical request declares no slot, so it is not normalized
+    /// here.
+    fn check_binding_slot(
+        &self,
+        key: &ResourceKey,
+        desired: &DesiredResource,
+    ) -> Result<(), ResourceError> {
+        let Some(request) = DecodedBindingRequest::decode(&key.type_name, &desired.spec) else {
+            return Ok(());
+        };
+        let Some(source_uid) = self.relations.uid_of(request.source_ref()) else {
+            return Ok(());
+        };
+        let Some(consumer_uid) = self.relations.uid_of(request.consumer_ref()) else {
+            return Ok(());
+        };
+        let Ok(zone) = ZoneId::parse(&self.zone) else {
+            return Ok(());
+        };
+        let Ok(binding_key) = request.key(zone, source_uid.clone(), consumer_uid.clone()) else {
+            return Ok(());
+        };
+        let decision = self.relations.check_slot(&binding_key, request.fingerprint());
+        match decision {
+            Err(conflict) => Err(ResourceError::ManagerRejected {
+                reason: format!("consumer slot {}: {conflict}", binding_key.slot().as_str()),
+            }),
+            // A candidate whose slot already names this exact source is the
+            // relationship's own prior declaration, not a competing one.
+            Ok(_) => Ok(()),
+        }
+    }
+}
+
+/// The canonical [`ResourceUid`] one durable row uid spells.
+///
+/// A manager row's identity is a stable 16-byte digest; the authority
+/// vocabulary names it as a `ResourceUid`. This is the one conversion between
+/// the two, so a subject cannot be compared against one shape and committed
+/// under another.
+fn uid_of(uid: &[u8; 16]) -> ResourceUid {
+    ResourceUid::from_bytes(uid)
+        .unwrap_or_else(|_| {
+            ResourceUid::parse("00000000-0000-4000-8000-000000000000")
+                .expect("the nil fallback uid is canonical")
+        })
+}
+
+/// The binding family one row type materializes, when it is one.
+fn row_binding_kind(type_name: &str) -> Option<BindingKind> {
+    BindingKind::ALL.into_iter().find(|kind| kind.resource_type() == type_name)
+}
+
+/// KTD2 shape check for a source-owned binding creation.
+///
+/// A source-owned binding row is created by the source controller that admits
+/// the request, so the declaring parent must be that source and the evidence
+/// must name it as the controller. An owner reference alone proves nothing
+/// about who admitted the relationship, so a binding row without that
+/// authenticated controller - and any evidence naming a different controller
+/// than the row it would own - is refused before the mutation reaches the
+/// store.
+fn admit_source_owned_binding_shape(
+    evidence: &AuthenticatedMutation,
+    parent: Option<&ResourceKey>,
+    parent_row: Option<&StoredDesiredResource>,
+    desired: &DesiredResource,
+) -> Result<(), ResourceError> {
+    let binding_kind = row_binding_kind(&desired.key.type_name);
+    if let Some(parent) = parent {
+        let parent_row = parent_row.expect("a resolved parent has a committed row");
+        match binding_kind {
+            Some(kind) => {
+                if BindingKind::from_source_resource_type(&parent.type_name) != Some(kind) {
+                    return Err(ResourceError::ManagerRejected { reason: format!(
+                        "{} is a {} relationship, whose source is a {}; {parent} declares a {}",
+                        desired.key.name,
+                        kind.resource_type(),
+                        kind.source_resource_type(),
+                        parent.type_name,
+                    ) });
+                }
+                let controller = evidence.source_controller().ok_or_else(|| {
+                    ResourceError::ManagerRejected { reason: format!(
+                        "source-owned {} creation names no authenticated source controller",
+                        kind.resource_type()
+                    ) }
+                })?;
+                if controller.uid() != &uid_of(&parent_row.uid) {
+                    return Err(ResourceError::ManagerRejected { reason: format!(
+                        "source controller does not own {}; the declaring parent does",
+                        desired.key.name
+                    ) });
+                }
+            }
+            None => {
+                if let Some(controller) = evidence.source_controller()
+                    && controller.uid() != &uid_of(&parent_row.uid)
+                {
+                    return Err(ResourceError::ManagerRejected { reason: format!(
+                        "source controller does not own {}; the declaring parent does",
+                        desired.key.name
+                    ) });
+                }
+            }
+        }
+        return Ok(());
+    }
+    if let Some(kind) = binding_kind {
+        return Err(ResourceError::ManagerRejected { reason: format!(
+            "{} is a source-owned {} relationship and may only be created by its source controller",
+            desired.key.name,
+            kind.resource_type()
+        ) });
+    }
+    Ok(())
 }
 
 /// Construction arguments for the per-Zone manager (KTD5).
@@ -872,6 +1320,11 @@ pub struct ResourceManagerArgs {
     pub target_resolver: Arc<dyn TargetResolver>,
     /// Fixed reconcile backoff for retryable driver failures (R13).
     pub backoff: Duration,
+    /// Per-type relation projections (U6, R3/R4). Empty registers no
+    /// projection, so the derived index carries ownership only - which is
+    /// exactly what the unchanged production entry point needs until the
+    /// converted declarations land and U34 installs them.
+    pub relation_extractors: RelationExtractors,
 }
 
 /// The per-Zone manager actor (spec section 4).
@@ -909,6 +1362,8 @@ impl Actor for ResourceManager {
             backoff: args.backoff,
             my_cell: myself.get_cell(),
             rows: HashMap::new(),
+            relations: RelationIndex::new(),
+            relation_extractors: args.relation_extractors,
             statuses: HashMap::new(),
             status_generations: HashMap::new(),
             status_projections: HashMap::new(),
@@ -946,6 +1401,10 @@ impl Actor for ResourceManager {
         for row in &rows {
             state.link_row_owner(&row.key);
         }
+        // The relation index is derived from the rows that were just loaded
+        // (F7): a restart reconstructs it exactly as the pre-restart process
+        // held it, because committed rows are its only input.
+        state.rebuild_relations();
         for row in rows {
             let _ = state.spawn_resource_actor(myself.clone(), row).await;
         }
@@ -1003,8 +1462,39 @@ impl Actor for ResourceManager {
                     .collect();
                 reply.send(Ok(views)).ok();
             }
+            ResourceManagerMsg::AuthenticatedApply { evidence, parent, desired, reply } => {
+                let result = state
+                    .authenticated_ensure(myself.clone(), &evidence, parent.as_ref(), desired)
+                    .await
+                    .map(|(outcome, actor)| handle_from_outcome(&outcome, actor));
+                reply.send(result).ok();
+            }
+            ResourceManagerMsg::AuthenticatedChildEnsure { evidence, parent, child, reply } => {
+                let desired = DesiredResource {
+                    key: ResourceKey::new(
+                        parent.zone.clone(),
+                        child.type_name.as_str().to_owned(),
+                        child.name.clone(),
+                    ),
+                    spec: child.spec,
+                    metadata: child.metadata,
+                    provenance: ResourceProvenance::Resource,
+                };
+                let result = state
+                    .authenticated_ensure(myself.clone(), &evidence, Some(&parent), desired)
+                    .await
+                    .map(|(outcome, _actor)| outcome);
+                reply.send(result).ok();
+            }
+            ResourceManagerMsg::AuthenticatedRemove { evidence, key, reply } => {
+                let result = state.authenticated_remove(&evidence, &key).await;
+                reply.send(result).ok();
+            }
             ResourceManagerMsg::KeyForUid { uid, reply } => {
                 reply.send(Ok(state.by_uid.get(&uid).cloned())).ok();
+            }
+            ResourceManagerMsg::Relations { reply } => {
+                reply.send(Ok(state.relations.clone())).ok();
             }
             ResourceManagerMsg::Watch { selector, after, reply } => {
                 // One manager serializes list snapshots, revisions, and watch
@@ -1497,6 +1987,21 @@ impl ManagerEndpoint for ManagerActorEndpoint {
     async fn cancel_watch(&self, watch: WatchId) -> Result<(), ResourceError> {
         self.rpc(|reply| ResourceManagerMsg::CancelWatch { watch, reply }).await
     }
+
+    async fn ensure_source_owned_binding(
+        &self,
+        parent: &ResourceKey,
+        evidence: AuthenticatedMutation,
+        child: ChildEnsure,
+    ) -> Result<EnsureOutcome, ResourceError> {
+        self.rpc(|reply| ResourceManagerMsg::AuthenticatedChildEnsure {
+            evidence,
+            parent: parent.clone(),
+            child,
+            reply,
+        })
+        .await
+    }
 }
 
 /// Caller-side facade over the manager mailbox (U8 wires the Resource API
@@ -1610,6 +2115,53 @@ impl ResourceManagerClient {
         uid: [u8; 16],
     ) -> Result<Option<ResourceKey>, ResourceError> {
         self.rpc(|reply| ResourceManagerMsg::KeyForUid { uid, reply }).await
+    }
+
+    /// One authenticated graph mutation (U6, KTD2-KTD4).
+    ///
+    /// `parent` names the declaring owner for a source-owned child; a source
+    /// controller admitting a binding relationship passes its own key and the
+    /// matching [`AuthenticatedMutation::with_source_controller`] evidence.
+    ///
+    /// # Errors
+    ///
+    /// Every refusal the manager or the injected admission reaches, with
+    /// nothing committed.
+    pub async fn authenticated_apply(
+        &self,
+        evidence: AuthenticatedMutation,
+        parent: Option<ResourceKey>,
+        desired: DesiredResource,
+    ) -> Result<ResourceHandle, ResourceError> {
+        self.rpc(|reply| ResourceManagerMsg::AuthenticatedApply {
+            evidence,
+            parent,
+            desired,
+            reply,
+        })
+        .await
+    }
+
+    /// One authenticated durable deletion (U6, KTD4).
+    ///
+    /// # Errors
+    ///
+    /// Every refusal the manager or the injected admission reaches.
+    pub async fn authenticated_remove(
+        &self,
+        evidence: AuthenticatedMutation,
+        key: ResourceKey,
+    ) -> Result<(), ResourceError> {
+        self.rpc(|reply| ResourceManagerMsg::AuthenticatedRemove { evidence, key, reply }).await
+    }
+
+    /// The six derived relation indexes for this Zone (U6, R2/R3).
+    ///
+    /// # Errors
+    ///
+    /// [`ResourceError::ManagerUnavailable`] when the request cannot be routed.
+    pub async fn relations(&self) -> Result<RelationIndex, ResourceError> {
+        self.rpc(|reply| ResourceManagerMsg::Relations { reply }).await
     }
 
     /// Open a gap-free watch on matching changes: the registration atomically
