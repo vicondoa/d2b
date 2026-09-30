@@ -1205,6 +1205,7 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-resource",
  "d2b-provider-toolkit",
+ "d2b-resource-types",
  "env_logger",
  "html2text",
  "log",
@@ -1636,6 +1637,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts-resource",
  "d2b-provider-toolkit",
+ "d2b-resource-types",
  "getrandom 0.2.17",
  "serde",
  "serde_json",
