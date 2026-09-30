@@ -38,3 +38,7 @@ tokio = { workspace = true, features = ["test-util"] }
 name = "registration"
 path = "tests/registration.rs"
 required-features = ["test-support"]
+
+[[test]]
+name = "endpoint_binding"
+path = "tests/endpoint_binding.rs"

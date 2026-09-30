@@ -56,6 +56,7 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = d2b_broker_shared_deps + [
         "//packages/d2b-core:d2b_core",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-host:d2b_host",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
@@ -81,6 +82,7 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = d2b_broker_shared_deps + [
         "//packages/d2b-core:d2b_core",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-host:d2b_host",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
@@ -158,6 +160,21 @@ d2b_rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
+
+d2b_rust_test(
+    name = "endpoint_delivery",
+    srcs = ["tests/endpoint_delivery.rs"],
+    compile_data = ["Cargo.toml"],
+    tags = broker_test_tags(),
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_broker",
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
 d2b_rust_test(
     name = "volume_presentation",
     srcs = ["tests/volume_presentation.rs"],
@@ -167,6 +184,7 @@ d2b_rust_test(
     deps = [
         ":d2b_broker",
         "//packages/d2b-core:d2b_core",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -182,6 +200,7 @@ d2b_rust_test(
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-core:d2b_core",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

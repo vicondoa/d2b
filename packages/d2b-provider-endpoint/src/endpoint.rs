@@ -11,6 +11,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use d2b_contracts_resource::v3::{
     ResourceRef,
+    endpoint_binding::EndpointAttachmentKind,
     execution_policy::{BoundedText, BoundedToken, PrimitiveSpecError, redacted_debug},
 };
 
@@ -134,6 +135,16 @@ impl EndpointAttachmentPolicy {
             max_attachments,
         })
     }
+
+    /// Whether this endpoint admits one more `attach` relationship while
+    /// `live` attachments are outstanding.
+    ///
+    /// Capacity is counted on the endpoint the owner declared, so a second
+    /// consumer reaching for the same stream is refused by the endpoint's
+    /// own ceiling rather than by a directory it happens to share.
+    pub const fn admits_attachment(&self, live: u16) -> bool {
+        self.supported && live < self.max_attachments
+    }
 }
 
 impl<'de> Deserialize<'de> for EndpointAttachmentPolicy {
@@ -204,6 +215,56 @@ impl EndpointConsumerPolicy {
     /// Borrow the operation allowlist.
     pub fn allowed_operations(&self) -> &[EndpointOperation] {
         &self.allowed_operations
+    }
+
+    /// Borrow the consumer allowlist.
+    ///
+    /// This is the endpoint OWNER's own subject allowlist: the set of
+    /// consumers this endpoint admits, as opposed to the graph's
+    /// authorization evidence. An `EndpointBinding` is admitted against
+    /// both, and neither one is a directory the consumer may reach.
+    pub fn allowed_subjects(&self) -> &[ResourceRef] {
+        &self.allowed_subjects
+    }
+
+    /// Borrow the signed provider-component allowlist.
+    pub fn allowed_provider_components(&self) -> &[BoundedToken] {
+        &self.allowed_provider_components
+    }
+
+    /// Whether this policy admits `consumer` as a subject.
+    ///
+    /// An empty allowlist is the deliberately unconstrained policy
+    /// ([`EndpointConsumerPolicy::unrestricted`]), so an empty list admits
+    /// any subject rather than none - the same rule the other two
+    /// allowlists follow, and the opposite of a "deny by default" reading
+    /// that would make [`EndpointConsumerPolicy::default`] unusable.
+    pub fn admits_subject(&self, consumer: &ResourceRef) -> bool {
+        self.allowed_subjects.is_empty() || self.allowed_subjects.contains(consumer)
+    }
+
+    /// Whether this policy admits one signed provider component.
+    pub fn admits_provider_component(&self, component: &BoundedToken) -> bool {
+        self.allowed_provider_components.is_empty()
+            || self.allowed_provider_components.contains(component)
+    }
+
+    /// Whether this policy admits `operation` on the endpoint.
+    pub fn admits_operation(&self, operation: EndpointOperation) -> bool {
+        self.allowed_operations.is_empty() || self.allowed_operations.contains(&operation)
+    }
+
+    /// The endpoint operation one attachment kind performs on it.
+    ///
+    /// The mapping is the endpoint's own vocabulary, so a binding cannot
+    /// reach the endpoint through an operation the endpoint never declared
+    /// by spelling a different attachment kind.
+    pub const fn operation_for(attachment: EndpointAttachmentKind) -> EndpointOperation {
+        match attachment {
+            EndpointAttachmentKind::Connect => EndpointOperation::Resolve,
+            EndpointAttachmentKind::Listen => EndpointOperation::Observe,
+            EndpointAttachmentKind::Attach => EndpointOperation::Attach,
+        }
     }
 }
 
@@ -357,6 +418,16 @@ impl EndpointSpec {
     /// Borrow fine-grained consumer policy.
     pub const fn consumer_policy(&self) -> &EndpointConsumerPolicy {
         &self.consumer_policy
+    }
+
+    /// Borrow the endpoint's own attachment capacity.
+    ///
+    /// The capacity is a property of the endpoint the owner declared, not
+    /// of the consumer asking for it: an `EndpointBinding` that attaches is
+    /// refused unless this policy supports attachments and the endpoint's
+    /// simultaneous-attachment ceiling still has room.
+    pub const fn attachment_policy(&self) -> &EndpointAttachmentPolicy {
+        &self.attachment_policy
     }
 
     /// Return lifecycle behavior.

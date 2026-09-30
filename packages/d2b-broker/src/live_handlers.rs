@@ -23,7 +23,7 @@
 use std::collections::HashSet;
 use std::fs::File;
 use std::io;
-use std::os::fd::{AsFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -1475,6 +1475,503 @@ fn setfacl_fd_safe_op(
     kind: AclPathKind,
 ) -> Result<Option<(u64, u64)>, String> {
     setfacl_fd_safe_op_classed(path, op, acl_spec, kind).map_err(|failure| failure.legacy_detail)
+}
+
+// ---------------------------------------------------------------------------
+// Exact endpoint access (U18, R23, AE19)
+// ---------------------------------------------------------------------------
+
+/// The POSIX access-ACL xattr the kernel stores for an inode.
+const POSIX_ACL_ACCESS_XATTR: &str = "system.posix_acl_access";
+
+/// The `ACL_USER_OBJ` entry tag in `system.posix_acl_access`.
+const ACL_USER_OBJ_TAG: u16 = 0x01;
+/// The `ACL_USER` (named user) entry tag in `system.posix_acl_access`.
+const ACL_USER_TAG: u16 = 0x02;
+/// The `ACL_MASK` entry tag in `system.posix_acl_access`.
+const ACL_MASK_TAG: u16 = 0x10;
+/// The `ACL_OTHER` entry tag in `system.posix_acl_access`.
+const ACL_OTHER_TAG: u16 = 0x20;
+/// The `posix_acl_xattr_header` version every Linux `system.posix_acl_*`
+/// xattr carries.
+const POSIX_ACL_XATTR_VERSION: u32 = 2;
+/// The fixed size of one encoded ACL entry.
+const ACL_ENTRY_BYTES: usize = 8;
+/// How many times a grant is applied before it is reported not-effective.
+///
+/// One re-apply is the recorded solution: `setfacl` recomputes the mask from
+/// the union of the group-class entries and mirrors it into the file's group
+/// bits, which restores effectiveness. A second application that still does
+/// not cover the request is not a transient condition, so the grant reports
+/// not-effective instead of looping.
+const ACL_EFFECTIVE_ATTEMPTS: usize = 2;
+
+/// What the kernel actually applies to one principal on one inode.
+///
+/// This is the ACL the KERNEL stores and the access check USES: a named-user
+/// entry already ANDed with the ACL mask. An entry the mask has nullified
+/// survives in the xattr and contributes nothing, which is exactly the shape
+/// a later `chmod` leaves behind - see
+/// `docs/solutions/infrastructure/posix-acl-mask-nullified-by-chmod-on-mode-0700-directories.md`.
+/// Reading the mode the broker asked for, or grepping the entry for presence,
+/// passes every one of those cases; this does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EffectiveAcl {
+    extended: bool,
+    mask: u32,
+    named_user: Option<u32>,
+    effective: u32,
+}
+
+impl EffectiveAcl {
+    /// Whether the inode carries an extended POSIX ACL at all.
+    ///
+    /// A directory with only the base owner/group/other entries has no
+    /// xattr, so `false` means the mode's own class is the answer.
+    pub const fn is_extended(&self) -> bool {
+        self.extended
+    }
+
+    /// The ACL mask that caps every named entry.
+    pub const fn mask(&self) -> u32 {
+        self.mask
+    }
+
+    /// The permission bits an access check applies to this principal.
+    pub const fn bits(&self) -> u32 {
+        self.effective
+    }
+
+    /// The named-user entry's OWN bits, before the mask caps them.
+    ///
+    /// This is what the broker asked for, which is a different question from
+    /// what the kernel grants. ANDing it with [`EffectiveAcl::mask`] is the
+    /// permission an access check applies through that entry, so a `Some`
+    /// value whose bits differ from [`EffectiveAcl::bits`] is exactly the
+    /// AE19 shape: the entry survived a mode reconciliation and the mask took
+    /// everything away from it. `None` when the inode carries no named entry
+    /// for this principal, whatever class the access check then resolves
+    /// through.
+    pub const fn granted_bits(&self) -> Option<u32> {
+        self.named_user
+    }
+
+    /// Whether the effective bits cover `required`.
+    pub const fn covers(&self, required: u32) -> bool {
+        self.effective & required == required
+    }
+}
+
+/// Read the effective POSIX permission the kernel applies to `uid` on the
+/// inode behind `file`.
+///
+/// The xattr is read through `/proc/self/fd/<n>`, which is a magic link to the
+/// exact inode the verified `O_PATH|NOFOLLOW` descriptor holds open. That
+/// matters twice: the read cannot be redirected by a symlink or a rename
+/// planted at the path, and it does not need a second `openat2` on a socket
+/// inode, which Linux refuses outright.
+pub fn effective_acl(
+    file: &File,
+    metadata: &std::fs::Metadata,
+    uid: u32,
+) -> Result<EffectiveAcl, String> {
+    let Some(bytes) = read_posix_acl(file)? else {
+        // No extended ACL: the mode's own class is what the kernel applies.
+        let mode = metadata.mode();
+        return Ok(EffectiveAcl {
+            extended: false,
+            mask: (mode >> 3) & 0o7,
+            named_user: None,
+            effective: mode_class(mode, metadata.uid(), uid),
+        });
+    };
+    if bytes.len() < 4 || (bytes.len() - 4) % ACL_ENTRY_BYTES != 0 {
+        return Err(format!(
+            "{POSIX_ACL_ACCESS_XATTR} on the pinned inode is {} bytes, which is not an encoded ACL",
+            bytes.len()
+        ));
+    }
+    let version = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    if version != POSIX_ACL_XATTR_VERSION {
+        return Err(format!(
+            "{POSIX_ACL_ACCESS_XATTR} carries version {version}, which this host does not write"
+        ));
+    }
+    let mut owner = None;
+    let mut named_user = None;
+    let mut mask = None;
+    let mut other = None;
+    for entry in bytes[4..].chunks_exact(ACL_ENTRY_BYTES) {
+        let tag = u16::from_le_bytes([entry[0], entry[1]]);
+        let perm = u32::from(u16::from_le_bytes([entry[2], entry[3]])) & 0o7;
+        let id = u32::from_le_bytes([entry[4], entry[5], entry[6], entry[7]]);
+        match tag {
+            ACL_USER_OBJ_TAG => owner = Some(perm),
+            ACL_USER_TAG if id == uid => named_user = Some(perm),
+            ACL_MASK_TAG => mask = Some(perm),
+            ACL_OTHER_TAG => other = Some(perm),
+            _ => {}
+        }
+    }
+    let mask = mask.unwrap_or(0o7);
+    // POSIX.1e access resolution, for the principal classes this broker
+    // grants: the owner takes the owner entry, a named user takes its own
+    // entry capped by the mask, and anything else takes `other`. A named
+    // GROUP match is deliberately not resolved - the exact-endpoint path
+    // grants a named user, so a group match cannot arise here, and guessing
+    // one would report an access the kernel might not grant.
+    let effective = if metadata.uid() == uid {
+        owner.unwrap_or(0)
+    } else if let Some(entry) = named_user {
+        entry & mask
+    } else {
+        other.unwrap_or(0)
+    };
+    Ok(EffectiveAcl {
+        extended: true,
+        mask,
+        named_user,
+        effective,
+    })
+}
+
+/// The class the mode applies to `uid` when the inode carries no extended
+/// ACL.
+fn mode_class(mode: u32, owner_uid: u32, uid: u32) -> u32 {
+    if owner_uid == uid {
+        (mode >> 6) & 0o7
+    } else {
+        // Without an extended ACL the group bits are the group class, and a
+        // principal the broker never named resolves against `other`.
+        mode & 0o7
+    }
+}
+
+/// Read `system.posix_acl_access` through the pinned descriptor.
+///
+/// `Ok(None)` is "the inode carries no extended ACL", which is a real answer
+/// and not an error: a socket with only owner/group/other entries has no
+/// xattr, and a filesystem without ACL support reports `ENODATA` or
+/// `ENOTSUP` for the same read.
+fn read_posix_acl(file: &File) -> Result<Option<Vec<u8>>, String> {
+    let procfd = format!("/proc/self/fd/{}", file.as_fd().as_raw_fd());
+    // A POSIX access ACL is a 4-byte header plus 8-byte entries over a
+    // directory that declares at most a handful of them, so 256 bytes covers
+    // any real endpoint; the loop is here so a pathological entry set is a
+    // larger read rather than a truncated - and therefore mis-parsed - one.
+    let mut capacity = 256;
+    loop {
+        let mut buffer = vec![0_u8; capacity];
+        match rustix::fs::getxattr(procfd.as_str(), POSIX_ACL_ACCESS_XATTR, &mut buffer) {
+            Ok(len) => {
+                buffer.truncate(len);
+                return Ok(Some(buffer));
+            }
+            Err(err) if errno_is_acl_absent(&err) => return Ok(None),
+            Err(err) if err == rustix::io::Errno::RANGE && capacity < 1 << 16 => {
+                capacity *= 2;
+            }
+            Err(err) => {
+                return Err(format!(
+                    "reading {POSIX_ACL_ACCESS_XATTR} through the pinned descriptor failed: {err}"
+                ));
+            }
+        }
+    }
+}
+
+/// Whether one xattr error means "this inode carries no ACL" rather than
+/// "the read failed".
+///
+/// A socket with only owner/group/other entries has no xattr at all, and a
+/// filesystem without ACL support reports the same absence; both are real
+/// answers, not errors.
+fn errno_is_acl_absent(err: &rustix::io::Errno) -> bool {
+    matches!(
+        *err,
+        rustix::io::Errno::NODATA
+            | rustix::io::Errno::OPNOTSUPP
+            | rustix::io::Errno::NOSYS
+    )
+}
+
+/// The exact endpoint access one consumer principal actually has.
+///
+/// `socket` is the pinned `(dev, ino)` the broker resolved, so a consumer
+/// admitted against one inode can tell that the producer has since replaced
+/// it. The permission fields are the KERNEL's effective values, not the mode
+/// the broker asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EndpointAccess {
+    socket: (u64, u64),
+    socket_effective: u32,
+    ancestor_effective: u32,
+    parent_listable: bool,
+}
+
+impl EndpointAccess {
+    /// The `(dev, ino)` of the exact endpoint socket this observation pinned.
+    pub const fn socket(&self) -> (u64, u64) {
+        self.socket
+    }
+
+    /// The effective permission the consumer principal has on the socket.
+    pub const fn socket_effective(&self) -> u32 {
+        self.socket_effective
+    }
+
+    /// The effective traverse bit every ancestor directory applies.
+    pub const fn ancestor_effective(&self) -> u32 {
+        self.ancestor_effective
+    }
+
+    /// Whether the consumer principal may enumerate the socket's parent.
+    ///
+    /// This is the directory authority R23 removed: traverse is what a
+    /// consumer needs to reach the exact endpoint, and listing is what would
+    /// hand it the whole directory.
+    pub const fn parent_listable(&self) -> bool {
+        self.parent_listable
+    }
+
+    /// Whether the effective access covers `required` on the socket, with a
+    /// traverse bit on every ancestor and no listing on the container.
+    pub const fn grants(&self, required: u32) -> bool {
+        self.socket_effective & required == required
+            && self.ancestor_effective & 0o1 == 0o1
+            && !self.parent_listable
+    }
+}
+
+/// Grant `uid` exactly one endpoint socket, plus traverse on every ancestor
+/// directory between the filesystem root and that socket's parent, and prove
+/// each grant is EFFECTIVE.
+///
+/// The socket is opened `O_PATH|NOFOLLOW|RESOLVE_NO_SYMLINKS` and held open
+/// for the whole grant, so the ACL lands on the inode that was verified and a
+/// symlink or rename planted at the path cannot redirect it. The path is then
+/// re-resolved and must still be the same `(dev, ino)`; a producer that
+/// replaced its socket mid-grant makes the grant not-ready rather than
+/// leaving an entry on a now-stale inode.
+///
+/// A POSIX ACL mask is recomputed from a file's group bits by any later
+/// `chmod`, which silently caps a named entry that is still listed. Each
+/// grant is therefore applied and then CHECKED, and re-applied once when the
+/// check finds the entry capped; a grant that is still short is reported
+/// not-effective rather than treated as applied. This is the recorded
+/// solution in
+/// `docs/solutions/infrastructure/posix-acl-mask-nullified-by-chmod-on-mode-0700-directories.md`,
+/// and the ancestor traverse bit is what it protects: a correct grant one
+/// level below a root with none is no grant at all.
+///
+/// The containing directory is granted `--x` and never `r`, so a consumer
+/// holding this grant can reach the exact socket and cannot enumerate the
+/// directory around it.
+pub fn grant_exact_endpoint_access(
+    socket: &Path,
+    ancestors: &[PathBuf],
+    uid: u32,
+    socket_rights: u32,
+) -> Result<EndpointAccess, String> {
+    if socket_rights == 0 || socket_rights > 0o7 {
+        return Err("an exact endpoint grant must request between one and three POSIX bits".to_owned());
+    }
+    let (socket_file, socket_meta) = open_o_path_metadata(socket)
+        .map_err(|failure| failure.legacy_detail)?
+        .ok_or_else(|| {
+            "the exact endpoint socket is absent: the grant could not be applied".to_owned()
+        })?;
+    if !socket_meta.file_type().is_socket() {
+        return Err(format!(
+            "refusing an exact endpoint grant on {}: it is not a socket",
+            socket.display()
+        ));
+    }
+    let socket_effective = grant_effective_on_fd(
+        &socket_file,
+        &socket_meta,
+        &format!("u:{uid}:{}", render_acl_permissions(socket_rights)),
+        uid,
+        socket_rights,
+        "exact-endpoint-socket",
+    )?;
+
+    let mut ancestor_effective = 0o7;
+    for ancestor in ancestors {
+        // A directory that is already world-traversable needs no grant, and
+        // must not be granted one: it is not this broker's to mutate.
+        let needs = dir_needs_traverse_grant(ancestor)
+            .map_err(|failure| failure.legacy_detail)?
+            .ok_or_else(|| {
+                format!(
+                    "refusing absent ancestor {}: the traversal grant could not be applied",
+                    ancestor.display()
+                )
+            })?;
+        if !needs {
+            continue;
+        }
+        let (file, metadata) = open_o_path_metadata(ancestor)
+            .map_err(|failure| failure.legacy_detail)?
+            .ok_or_else(|| {
+                format!(
+                    "refusing absent ancestor {}: the traversal grant could not be applied",
+                    ancestor.display()
+                )
+            })?;
+        if !metadata.file_type().is_dir() {
+            return Err(format!(
+                "refusing an exact endpoint traversal grant on {}: it is not a directory",
+                ancestor.display()
+            ));
+        }
+        // Traverse only. An `r` here would hand the consumer the whole
+        // directory, which is the authority this grant exists to withhold.
+        if grant_effective_on_fd(
+            &file,
+            &metadata,
+            &format!("u:{uid}:--x"),
+            uid,
+            0o1,
+            "exact-endpoint-ancestor",
+        )? & 0o1
+            != 0o1
+        {
+            ancestor_effective = 0;
+        }
+    }
+
+    // Re-resolve the socket: the grant landed on the inode the held
+    // descriptor refers to, and this proves the path still names it.
+    match current_path_dev_ino(socket).map_err(|failure| failure.legacy_detail)? {
+        Some(current) if current == (socket_meta.dev(), socket_meta.ino()) => {}
+        _ => {
+            return Err(
+                "the exact endpoint socket was replaced while its grant was applied: not ready"
+                    .to_owned(),
+            )
+        }
+    }
+
+    let parent_listable = socket
+        .parent()
+        .and_then(|parent| open_o_path_metadata(parent).ok().flatten())
+        .and_then(|(file, metadata)| effective_acl(&file, &metadata, uid).ok())
+        .is_some_and(|acl| acl.bits() & 0o4 == 0o4);
+    Ok(EndpointAccess {
+        socket: (socket_meta.dev(), socket_meta.ino()),
+        socket_effective,
+        ancestor_effective,
+        parent_listable,
+    })
+}
+
+/// Apply one grant through a pinned descriptor and prove the kernel applies
+/// it, re-applying once when a mode reconciliation nullified the mask.
+fn grant_effective_on_fd(
+    file: &File,
+    metadata: &std::fs::Metadata,
+    acl_spec: &str,
+    uid: u32,
+    required: u32,
+    target_class: &str,
+) -> Result<u32, String> {
+    let mut applied = None;
+    for attempt in 1..=ACL_EFFECTIVE_ATTEMPTS {
+        crate::sys::pidfd_sys::run_setfacl_op_on_fd(file.as_fd(), "-m", acl_spec).map_err(|err| {
+            format!(
+                "setfacl -m {acl_spec} on a {target_class} inode failed on attempt {attempt}: {err}"
+            )
+        })?;
+        let acl = effective_acl(file, metadata, uid)?;
+        if acl.covers(required) {
+            return Ok(acl.bits());
+        }
+        applied = Some(acl);
+    }
+    let acl = applied.unwrap_or_else(|| {
+        effective_acl(file, metadata, uid).unwrap_or(EffectiveAcl {
+            extended: false,
+            mask: 0,
+            named_user: None,
+            effective: 0,
+        })
+    });
+    Err(format!(
+        "the {target_class} grant for uid {uid} is present but NOT effective: applied effective \
+         bits are {:#o}, {required:#o} required, mask {:#o}. Reporting not-ready rather than \
+         treating ACL presence as access",
+        acl.bits(),
+        acl.mask()
+    ))
+}
+
+/// Render POSIX permission bits as the `rwx` spelling `setfacl` expects.
+fn render_acl_permissions(bits: u32) -> String {
+    let mut rendered = String::with_capacity(3);
+    rendered.push(if bits & 0o4 == 0o4 { 'r' } else { '-' });
+    rendered.push(if bits & 0o2 == 0o2 { 'w' } else { '-' });
+    rendered.push(if bits & 0o1 == 0o1 { 'x' } else { '-' });
+    rendered
+}
+
+/// Re-read what one consumer principal actually has on one exact endpoint.
+///
+/// `Ok(None)` means the path no longer resolves to a socket at all, so the
+/// caller must prepare the new exact endpoint rather than reuse this one.
+/// The returned [`EndpointAccess::socket`] is the CURRENT `(dev, ino)`, which
+/// is how a caller detects that a producer replaced the socket under a
+/// relationship prepared against the old one.
+pub fn exact_endpoint_access(socket: &Path, uid: u32) -> Result<Option<EndpointAccess>, String> {
+    let Some((file, metadata)) = open_o_path_metadata(socket).map_err(|failure| failure.legacy_detail)?
+    else {
+        return Ok(None);
+    };
+    if !metadata.file_type().is_socket() {
+        return Ok(None);
+    }
+    let acl = effective_acl(&file, &metadata, uid)?;
+    // A world-traversable ancestor already applies a traverse bit to every
+    // principal, so it is folded in as effective rather than skipped: the
+    // answer is whether the CONSUMER can walk to the socket, not whether this
+    // broker had to grant anything.
+    let mut ancestor_effective = 0o7;
+    for ancestor in socket
+        .ancestors()
+        .skip(1)
+        .filter(|component| !component.as_os_str().is_empty())
+ {
+        let Some((ancestor_file, ancestor_meta)) =
+            open_o_path_metadata(ancestor).map_err(|failure| failure.legacy_detail)?
+        else {
+            ancestor_effective = 0;
+            break;
+        };
+        if effective_acl(&ancestor_file, &ancestor_meta, uid)?.bits() & 0o1 != 0o1 {
+            ancestor_effective = 0;
+        }
+    }
+    let parent_listable = socket
+        .parent()
+        .and_then(|parent| open_o_path_metadata(parent).ok().flatten())
+        .and_then(|(file, metadata)| effective_acl(&file, &metadata, uid).ok())
+        .is_some_and(|acl| acl.bits() & 0o4 == 0o4);
+    Ok(Some(EndpointAccess {
+        socket: (metadata.dev(), metadata.ino()),
+        socket_effective: acl.bits(),
+        ancestor_effective,
+        parent_listable,
+    }))
+}
+
+/// Revoke one consumer principal's grant on one exact endpoint socket.
+///
+/// Idempotent and path-safe: a missing socket is a no-op and the removal lands
+/// on the pinned inode. Revoking the socket's entry does NOT touch the
+/// ancestor traversal grants, which sibling endpoints and the producer's own
+/// helpers also depend on.
+pub fn revoke_exact_endpoint_access(socket: &Path, uid: u32) -> Result<Option<(u64, u64)>, String> {
+    setfacl_fd_safe_op(socket, "-x", &format!("u:{uid}"), AclPathKind::Socket)
 }
 
 async fn setfacl_verified_device(

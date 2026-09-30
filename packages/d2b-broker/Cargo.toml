@@ -96,3 +96,7 @@ sha2 = { workspace = true }
 disallowed_methods = "deny"
 await_holding_lock = "deny"
 await_holding_refcell_ref = "deny"
+
+[[test]]
+name = "endpoint_delivery"
+path = "tests/endpoint_delivery.rs"

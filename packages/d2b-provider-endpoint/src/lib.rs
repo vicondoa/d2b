@@ -23,8 +23,8 @@
 
 #![deny(missing_docs)]
 
+mod binding;
 mod driver;
-
 mod effects_service;
 mod facets;
 
@@ -34,8 +34,8 @@ pub mod test_support;
 pub use driver::{
     EndpointDriver, EndpointDriverArgs, EndpointDriverEffects, EndpointDriverError,
     EndpointDriverFactory, EndpointDriverStatus, EndpointPurposeVocabulary, EndpointRealization,
-    GuestControlProducer, VIRTIOFSD_PURPOSE, endpoint_descriptor, endpoint_realization,
-    endpoint_spec_decoder,
+    GuestControlProducer, VIRTIOFSD_PURPOSE, endpoint_child_support_ceiling,
+    endpoint_descriptor, endpoint_realization, endpoint_spec_decoder,
 };
 pub use effects_service::{
     ENDPOINT_EFFECTS_SERVICE, EndpointEffectsService, EndpointEffectsServiceFactory,
@@ -43,6 +43,17 @@ pub use effects_service::{
     guest_control_purpose,
 };
 pub use facets::{DeviceWorkerEvidenceSource, EndpointEffectFacets, EndpointSocketSource, GuestVmmEvidenceSource};
+
+pub use binding::{
+    AdmittedEndpointBinding, BindingReadiness, DeliveryFenceViolation, DeliveryForm,
+    EndpointAccessObservation, EndpointBindingAdmission, EndpointBindingError,
+    EndpointBindingRegistry, EndpointConsumerTarget, EndpointDelivery, EndpointProvenance,
+    EndpointSocketIdentity, EndpointSourceKey, EndpointTeardown, ParentInputOutcome,
+    declared_delivery_form, endpoint_binding_support, endpoint_binding_support_ceiling,
+    endpoint_grants_observe, fence_delivery_environment, fence_delivery_environment_all,
+    fence_delivery_payload, fence_delivery_payload_all,
+    required_right_bits,
+};
 
 /// The Endpoint ResourceType spec and status shapes owned by this crate.
 pub mod endpoint;

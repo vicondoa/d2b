@@ -40,7 +40,8 @@
 
 use std::sync::Arc;
 
-use d2b_contracts_resource::v3::{ CanonicalJsonObject, ResourceRef, ResourceSpec };
+use d2b_contracts_resource::v3::{ CanonicalJsonObject, ChildSupportCeiling, ResourceRef, ResourceSpec };
+use crate::binding::EndpointBindingError;
 use crate::endpoint::{ EndpointClass, EndpointLifecyclePolicy, EndpointLocality, EndpointSpec, EndpointTransport,
         EndpointVisibility, };
 use d2b_resource_runtime::context::{ResourceContext, SpecDecoder, typed_spec_decoder};
@@ -185,6 +186,30 @@ pub fn endpoint_realization(
         return Some(EndpointRealization::DeviceWorkerSocket);
     }
     None
+}
+
+// ---------------------------------------------------------------------------
+// Child target-support ceiling
+// ---------------------------------------------------------------------------
+
+/// The child target-support ceiling one admitted Endpoint spec offers.
+///
+/// An `EndpointBinding` is admitted against the endpoint's OWN declaration,
+/// so the driver owns the conversion from a committed `Endpoint` row to the
+/// ceiling its children may request against it (R16, U18). A ceiling bounds
+/// admission and creates no binding, no reservation, and no access: the
+/// realization behind the endpoint is the binding's, and the locator stays
+/// with the owner. A shape this driver does not realize offers no ceiling at
+/// all, so a child target cannot bound children against an endpoint nothing
+/// realizes.
+pub fn endpoint_child_support_ceiling(
+    spec: &EndpointSpec,
+    vocabulary: &dyn EndpointPurposeVocabulary,
+) -> Result<ChildSupportCeiling, EndpointBindingError> {
+    if endpoint_realization(spec, vocabulary).is_none() {
+        return Err(EndpointBindingError::InvalidRequest);
+    }
+    crate::binding::endpoint_binding_support_ceiling(spec)
 }
 
 // ---------------------------------------------------------------------------

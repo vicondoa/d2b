@@ -63,6 +63,16 @@ d2b_rust_test(
 )
 
 d2b_rust_test(
+    name = "endpoint_binding",
+    srcs = ["tests/endpoint_binding.rs"],
+    compile_data = ["Cargo.toml"],
+    deps = [
+        ":d2b_provider_endpoint",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
     name = "d2b_provider_endpoint_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_endpoint",
