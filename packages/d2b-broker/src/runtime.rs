@@ -1275,8 +1275,12 @@ pub(crate) fn load_kernel_resolver(bundle_path: &Path) -> BundleSlot {
         // Unit tests inject the prebuilt in-memory resolver of their
         // per-test bundle (identical to what the daemon side passes the
         // arm); the on-disk reload stays the fallback.
-        if let Some(resolver) = TEST_KERNEL_BUNDLE_RESOLVER.get() {
-            return BundleSlot::Loaded(resolver.clone());
+        if let Some(resolver) = TEST_KERNEL_BUNDLE_RESOLVER
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+        {
+            return BundleSlot::Loaded(resolver);
         }
         try_load_resolver_with_policy(
             bundle_path,
@@ -3071,7 +3075,20 @@ fn prepare_runner_launch_identity(
         .parent()
         .unwrap_or_else(|| Path::new(DEFAULT_BROKER_RUNTIME_DIR));
     if posture.is_serving_worker() {
-        crate::live_handlers::grant_serving_worker_launch_acls(argv, uid, runtime_root)
+        // The served view root is named by the launch argv, so it is bounded
+        // by the same trusted declaration the live spawn kernel resolves:
+        // the shared-storage roots the broker's own verified bundle carries.
+        let roots = match crate::runtime::load_kernel_resolver(&config.bundle_path) {
+            crate::runtime::BundleSlot::Loaded(resolver) => {
+                crate::ops::launch_acl_bounds::served_view_root_roots(&resolver)
+            }
+            // No verified bundle means no trusted root: the grant below
+            // refuses every served view root by name rather than opening
+            // the one the argv named.
+            crate::runtime::BundleSlot::Unavailable
+            | crate::runtime::BundleSlot::Tampered { .. } => Vec::new(),
+        };
+        crate::live_handlers::grant_serving_worker_launch_acls(argv, uid, runtime_root, &roots)
             .map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
     }
     // Device-owned worker launches (the declared swtpm/GPU rows) also bind
@@ -7341,10 +7358,57 @@ fn usbip_lock_path_for_intent(
 #[cfg(test)]
 static TEST_USBIP_LOCK_ROOT: OnceLock<PathBuf> = OnceLock::new();
 
-/// Unit-test injection for the kernel's USBIP bundle resolver (see
+/// Unit-test injection for the kernel's bundle resolver (see
 /// [`load_kernel_resolver`]).
+///
+/// Per test rather than per process: the spawn kernel resolves this for
+/// every launch that needs a trusted path bound, and each such test brings
+/// its own bundle with its own declared storage roots, so a process-wide
+/// "first writer wins" slot would hand one test another's declarations.
+/// Because the slot is process-wide, the installing guard holds a lock for
+/// the whole test: without it, a second test running concurrently would
+/// replace the bundle mid-test. It restores the previous value on drop, so
+/// a bundle never leaks into the test that runs next.
 #[cfg(test)]
-static TEST_KERNEL_BUNDLE_RESOLVER: OnceLock<std::sync::Arc<BundleResolver>> = OnceLock::new();
+static TEST_KERNEL_BUNDLE_RESOLVER: std::sync::RwLock<Option<std::sync::Arc<BundleResolver>>> =
+    std::sync::RwLock::new(None);
+
+#[cfg(test)]
+static TEST_KERNEL_BUNDLE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Installs `resolver` as the kernel's bundle for the current test, holding
+/// the process-wide slot until the returned guard is dropped.
+#[cfg(test)]
+pub(crate) struct TestKernelBundleResolver {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    previous: Option<std::sync::Arc<BundleResolver>>,
+}
+
+#[cfg(test)]
+impl TestKernelBundleResolver {
+    pub(crate) fn install(resolver: std::sync::Arc<BundleResolver>) -> Self {
+        let lock = TEST_KERNEL_BUNDLE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = (*TEST_KERNEL_BUNDLE_RESOLVER
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()))
+        .replace(resolver);
+        Self {
+            _lock: lock,
+            previous,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestKernelBundleResolver {
+    fn drop(&mut self) {
+        *TEST_KERNEL_BUNDLE_RESOLVER
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = self.previous.take();
+    }
+}
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 async fn read_usb_device_identity(sysfs_root: &Path, bus_id: &str) -> Result<(u16, u16), BrokerError> {
@@ -12582,6 +12646,11 @@ mod tests {
         manifest_path: PathBuf,
         host_path: PathBuf,
         processes_path: PathBuf,
+        /// The shared-storage root this bundle's storage contract
+        /// declares: `<root>/store`. The serving-worker ACL grant proves
+        /// the launch argv's `--shared-dir=` against exactly this set, so a
+        /// kernel test that exercises the grant serves its view out of here.
+        store_root: PathBuf,
         resolver: Arc<BundleResolver>,
     }
 
@@ -12611,6 +12680,8 @@ mod tests {
         let manifest_path = bundle_dir.join("vms.json");
         let host_path = bundle_dir.join("host.json");
         let processes_path = bundle_dir.join("processes.json");
+        let storage_path = bundle_dir.join("storage.json");
+        let store_root = root.join("store");
 
         let host = HostJson {
             schema_version: "v2".to_owned(),
@@ -12855,7 +12926,7 @@ mod tests {
             bundle_version: 1,
             schema_version: "v3".to_owned(),
             privileges_path: "privileges.json".to_owned(),
-            storage_path: None,
+            storage_path: Some("storage.json".to_owned()),
             realm_workloads_launcher_v2_path: None,
             generation: BundleGeneration {
                 generator: "unit-test".to_owned(),
@@ -12869,20 +12940,83 @@ mod tests {
         write_json_file(&manifest_path, &manifest);
         write_json_file(&host_path, &host);
         write_json_file(&processes_path, &processes);
+        write_json_file(&storage_path, &test_storage_contract(&store_root));
 
-        let resolver = Arc::new(BundleResolver::from_artifacts_with_zone_resource_bundles(
+        let mut resolver = BundleResolver::from_artifacts_with_zone_resource_bundles(
             bundle,
             host,
             processes,
             manifest,
             BTreeMap::new(),
-        ));
+        );
+        // The in-memory constructor does not read the storage artifact off
+        // disk; attach the same contract the bundle index names so the
+        // trusted path bounds a kernel arm resolves see it.
+        resolver.set_storage(test_storage_contract(&store_root));
+        let resolver = Arc::new(resolver);
         TestBundle {
             bundle_path,
             manifest_path,
             host_path,
             processes_path,
+            store_root,
             resolver,
+        }
+    }
+
+    /// The test bundle's storage contract: one declared directory row whose
+    /// `path_template` is `store_root`, which is the shared-storage root
+    /// the serving-worker ACL grant proves `--shared-dir=` against.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn test_storage_contract(store_root: &Path) -> d2b_core::storage::StorageJson {
+        use d2b_contracts::contract_id::{ContractId, PathTemplate};
+        use d2b_core::storage::{
+            ActorKind, ActorRef, CleanupPolicy, LeaseClass, PrincipalKind, PrincipalRef,
+            RepairPolicy, SensitivityClass, StorageAdoptionPolicy, StorageInvariant, StorageJson,
+            StorageLifecycle, StoragePathKind, StoragePathSpec, StoragePersistence,
+            StorageRestartPolicy,
+        };
+
+        let principal = |kind: PrincipalKind, value: &str| PrincipalRef {
+            kind,
+            value: ContractId::parse(value).expect("test principal id"),
+        };
+        let actor = |kind: ActorKind, value: &str| ActorRef {
+            kind,
+            value: ContractId::parse(value).expect("test actor id"),
+        };
+        StorageJson {
+            schema_version: "v2".to_owned(),
+            roots: Vec::new(),
+            paths: vec![StoragePathSpec {
+                id: ContractId::parse("path:test-store:vm-a").expect("test storage id"),
+                scope: ContractId::parse("vm:vm-a").expect("test scope id"),
+                path_template: PathTemplate::parse(&store_root.display().to_string())
+                    .expect("test path template"),
+                kind: StoragePathKind::Directory,
+                lifecycle: StorageLifecycle::BootScopedReadoptable,
+                persistence: StoragePersistence::BootScoped,
+                owner: principal(PrincipalKind::User, "d2bd"),
+                group: principal(PrincipalKind::Group, "d2b"),
+                mode: "0770".to_owned(),
+                access_acl: Vec::new(),
+                default_acl: Vec::new(),
+                creator: actor(ActorKind::NixModule, "tmpfiles"),
+                writers: vec![actor(ActorKind::Broker, "d2b-broker")],
+                readers: vec![actor(ActorKind::Daemon, "d2bd")],
+                cleanup_policy: CleanupPolicy::Boot,
+                repair_policy: RepairPolicy::NixActivation,
+                restart_policy: StorageRestartPolicy::PreserveAcrossDaemonRestart,
+                adoption_policy: StorageAdoptionPolicy::AdoptWithLiveOwnerProof,
+                lease_class: LeaseClass::None,
+                sensitivity: SensitivityClass::Private,
+                no_follow: true,
+                recursive: false,
+                invariants: vec![StorageInvariant::NoSymlink],
+            }],
+            restart_policies: Vec::new(),
+            degraded_states: Vec::new(),
+            remediations: Vec::new(),
         }
     }
 
@@ -13699,7 +13833,12 @@ mod tests {
         std::fs::create_dir_all(&socket_dir).expect("create socket dir");
         std::fs::set_permissions(&socket_dir, std::fs::Permissions::from_mode(0o700))
             .expect("chmod socket dir");
-        let served = root.join("store-view").join("live");
+        // The served view root is bundle-declared storage, so it must live
+        // under a storage root this broker's own verified bundle declares -
+        // the same trusted declaration the launch's argv is proved against.
+        let bundle = build_test_bundle(&root);
+        let _bundle_guard = TestKernelBundleResolver::install(bundle.resolver.clone());
+        let served = bundle.store_root.join("live");
         std::fs::create_dir_all(&served).expect("create served root");
         std::fs::set_permissions(&served, std::fs::Permissions::from_mode(0o750))
             .expect("chmod served root");
@@ -15710,14 +15849,7 @@ mod tests {
         let root = test_audit_dir("spawn-kernel-usbip-binds");
         fs::create_dir_all(&root).expect("create test root");
         let bundle = build_test_bundle(&root);
-        TEST_KERNEL_BUNDLE_RESOLVER
-            .set(bundle.resolver.clone())
-            .unwrap_or_else(|_| {
-                assert!(Arc::ptr_eq(
-                    TEST_KERNEL_BUNDLE_RESOLVER.get().expect("set once"),
-                    &bundle.resolver
-                ))
-            });
+        let _bundle_guard = TestKernelBundleResolver::install(bundle.resolver.clone());
         // The fake USB sysfs device the bundle's locked busid names
         // (vendor 1050, product 0407, bus 1, dev 7): the derived device
         // node is /dev/bus/usb/001/007.
@@ -15822,12 +15954,15 @@ mod tests {
             .expect("chmod runtime root");
         fs::set_permissions(&socket_dir, fs::Permissions::from_mode(0o700))
             .expect("chmod socket dir");
-        let shared = root.join("view");
+        let bundle = build_test_bundle(&root);
+        let _bundle_guard = TestKernelBundleResolver::install(bundle.resolver.clone());
+        // The served view lives under the storage root the bundle declares,
+        // which is what the ACL grant proves the launch argv against.
+        let shared = bundle.store_root.join("view");
         fs::create_dir_all(&shared).expect("create view root");
         fs::set_permissions(&shared, fs::Permissions::from_mode(0o750)).expect("chmod view root");
 
-        let harness =
-            SpawnKernelHarness::new(&root, &root.join("unused-bundle.json"), &runtime_root);
+        let harness = SpawnKernelHarness::new(&root, &bundle.bundle_path, &runtime_root);
         let response = envelope_response(
             harness
                 .invoke(

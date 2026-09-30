@@ -59,6 +59,9 @@ pub(crate) mod device;
 // Trusted scope of one Device-owned worker launch (row -> Device -> Guest
 // pin, per-Guest socket directory, Device row uid derivation).
 pub(crate) mod device_worker;
+// Broker-owned host-path bounds for the ACL grants that reach outside the
+// broker runtime tree (served view roots, host session runtime directory).
+pub(crate) mod launch_acl_bounds;
 // GPU-specific role, allowlist, and restart identity preflight.
 pub(crate) mod gpu;
 pub(crate) mod modprobe;

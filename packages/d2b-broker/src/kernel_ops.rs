@@ -980,6 +980,29 @@ async fn spawn_process(
                 crate::runtime::broker_error_kernel_detail(error)
             ))
         })?;
+    // The two ACL grants that reach outside the broker's own runtime tree -
+    // a serving worker's served view root and a runner's host session
+    // runtime directory - are selected by strings in the launch payload
+    // (`--shared-dir=`, `XDG_RUNTIME_DIR`), so each is bounded by a
+    // TRUSTED DECLARATION read out of the broker's verified bundle here,
+    // the same per-request reload authority the USBIP and Device-worker
+    // arms above use. One reload feeds both, and only for a launch that
+    // actually asks for one of the two grants, so every other spawn stays
+    // bundle-free. An unbound declaration (a bundle or site that declares
+    // none) refuses the launch in the handler; it is never a default.
+    use crate::ops::launch_acl_bounds as bounds;
+    let acl_bounds = if serving_worker
+        || crate::live_handlers::plan_reads_host_session_runtime_dir(&plan_input)
+    {
+        Some(kernel_resolver(config, "spawn-process")?)
+    } else {
+        None
+    };
+    let served_view_roots = acl_bounds
+        .as_deref()
+        .map(bounds::served_view_root_roots)
+        .unwrap_or_default();
+    let session_runtime_dir = acl_bounds.as_deref().and_then(bounds::session_runtime_dir);
     // The serving-worker ACL grant (the retired arm's
     // `prepare_runner_launch_identity` serving posture): before the
     // spawn and before any descriptor is passed to the child, open the
@@ -990,6 +1013,7 @@ async fn spawn_process(
             &plan_input.argv,
             plan_input.uid,
             &config.runtime_root,
+            &served_view_roots,
         )
         .map_err(|error| errored(format!("spawn-process: {error}")))?;
     }
@@ -1022,6 +1046,7 @@ async fn spawn_process(
         &device_worker,
         guest_runtime_posture,
         &config.runtime_root,
+        session_runtime_dir.as_ref(),
     )
     .await
     .map_err(|error| errored(format!("spawn-process: {error}")))?;
