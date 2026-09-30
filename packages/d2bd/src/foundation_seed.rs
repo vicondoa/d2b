@@ -67,14 +67,14 @@ pub const SYSTEM_HOMED_TYPES: &[&str] = &["Command", "Operation", "SeccompProfil
 pub const MAX_SEED_NAME_BYTES: usize = 63;
 /// The subject types a RoleBinding may grant, resolved by the session layer.
 ///
-/// This mirrors the closed vocabulary declared by the contract, which is the
-/// one declaration of the set. `Group` is the single entry this list carries
-/// beyond it: the volume principal projection accepts a `Group` subject, so
-/// the seed must accept what that projection can write. Reconciling that one
-/// entry against the contract is outstanding cutover work.
-pub const BINDABLE_SUBJECT_TYPES: &[&str] = &[
-    "Zone", "User", "Provider", "Host", "Guest", "Process", "EphemeralProcess", "Group",
-];
+/// Read from the contract rather than restated. This module used to keep its
+/// own copy of the closed list, which drifted from the contract's: it carried
+/// a `Group` entry the contract did not, so the seed could commit a
+/// RoleBinding row that the contract decoder would then refuse. Deriving the
+/// slice makes that class of divergence impossible rather than merely fixed
+/// once.
+pub const BINDABLE_SUBJECT_TYPES: &[&str] =
+    d2b_contracts_zone_session::v3::BINDABLE_SUBJECT_TYPES[..];
 /// The resource types an execution selector may name.
 pub const EXECUTION_SUBJECT_TYPES: &[&str] = &["Host", "Guest", "EphemeralProcess"];
 /// The default metadata envelope every seeded row carries.

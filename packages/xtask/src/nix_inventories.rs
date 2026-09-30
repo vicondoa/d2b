@@ -951,6 +951,7 @@ mod tests {
                 "Guest",
                 "Process",
                 "EphemeralProcess",
+                "Group",
             ]
         );
         assert_eq!(

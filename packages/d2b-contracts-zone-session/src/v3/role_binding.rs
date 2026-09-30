@@ -34,8 +34,22 @@ pub const MAX_ROLE_BINDING_EXECUTION_REFS: usize = 32;
 /// one policy path. Naming only the long-running one would leave the binding
 /// vocabulary as a second authority that distinguishes them, which is the
 /// differential authority route this model forbids.
-pub const BINDABLE_SUBJECT_TYPES: [&str; 7] =
-    ["Zone", "User", "Provider", "Host", "Guest", "Process", "EphemeralProcess"];
+///
+/// `Group` is admitted because a Group is a real principal the volume
+/// principal projection resolves. The foundation seed previously carried this
+/// entry on its own copy of the list while this contract omitted it, so the
+/// seed could commit a row this contract would then refuse; declaring it here
+/// removes that divergence instead of leaving two vocabularies.
+pub const BINDABLE_SUBJECT_TYPES: [&str; 8] = [
+    "Zone",
+    "User",
+    "Provider",
+    "Host",
+    "Guest",
+    "Process",
+    "EphemeralProcess",
+    "Group",
+];
 
 /// RoleBinding schema failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
