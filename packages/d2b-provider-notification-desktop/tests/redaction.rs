@@ -50,3 +50,63 @@ fn notification_canary_stays_out_of_debug_errors_and_telemetry() {
         Err(ProviderError::TelemetryFieldRejected)
     );
 }
+
+// --- U28: content never becomes authority-bearing invocation metadata ---
+
+use d2b_contracts_resource::v3::ResourceRef;
+use d2b_provider_notification_desktop::{
+    NOTIFICATION_SERVICE, NotificationEndpointRole, NotificationHostEndpoints,
+    notification_endpoint_bindings,
+};
+
+#[test]
+fn notification_content_cannot_become_an_endpoint_or_service_authority() {
+    const CANARY: &str = "notif-authority-canary-9be2";
+    let endpoints = NotificationHostEndpoints::new(
+        ResourceRef::parse("Endpoint/notification-guest-source").expect("endpoint"),
+        ResourceRef::parse("Endpoint/notification-desktop-sink").expect("endpoint"),
+    )
+    .expect("declared endpoints");
+    let consumer = ResourceRef::parse("Process/notification-sink").expect("consumer");
+
+    // A request whose every content field spells out an authority token the
+    // Provider owns.
+    let request = NotificationRequest::new(
+        NotificationEndpointRole::DesktopSink.purpose(),
+        NotificationEndpointRole::GuestSource.slot(),
+        Category::SystemInfo,
+    )
+    .unwrap()
+    .with_actions(vec![
+        ActionSpec::new("open", NotificationEndpointRole::GuestSource.purpose()).unwrap(),
+    ])
+    .unwrap()
+    .with_idempotency_key(NotificationEndpointRole::DesktopSink.slot())
+    .unwrap();
+    let sanitized = request.sanitize().unwrap();
+    assert!(sanitized.summary().contains(NotificationEndpointRole::DesktopSink.purpose()));
+
+    for declared in notification_endpoint_bindings(&endpoints, &consumer).expect("bindings") {
+        let rendered = format!("{:?}", declared.request());
+        assert!(!rendered.contains(CANARY), "payload leaked into {rendered}");
+        assert_eq!(declared.request().slot().as_str(), declared.role().slot());
+        assert_eq!(
+            declared.request().purpose().as_str(),
+            declared.role().purpose()
+        );
+        assert!(NOTIFICATION_SERVICE.streams.contains(&declared.role().stream()));
+    }
+    for role in NotificationEndpointRole::ALL {
+        assert!(!role.slot().contains(CANARY));
+        assert!(!role.purpose().contains(CANARY));
+    }
+    // A source that is not an `Endpoint` row is refused rather than admitted
+    // as a presentation channel.
+    assert!(
+        NotificationHostEndpoints::new(
+            ResourceRef::parse("Process/notification-sink").expect("consumer"),
+            ResourceRef::parse("Endpoint/notification-desktop-sink").expect("endpoint"),
+        )
+        .is_err()
+    );
+}

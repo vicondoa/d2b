@@ -7,6 +7,11 @@ use std::{
 use tracing::{error, warn};
 
 use crate::ProviderError;
+use crate::admission::{
+    AdmittedNotificationEndpoint, NotificationEndpointBinding, NotificationEndpointGate,
+    NotificationEndpointRole, NotificationHostEndpoints, admit_notification_endpoint,
+    notification_endpoint_bindings,
+};
 use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use sha2::{Digest, Sha256};
 
@@ -64,6 +69,30 @@ impl NotificationSourceIdentity {
     /// Borrow the exact Guest source reference.
     pub const fn source_ref(&self) -> &ResourceRef {
         &self.source_ref
+    }
+
+    /// The exact endpoint relationship this Guest source is admitted over.
+    ///
+    /// The relationship is derived from this identity's committed rows
+    /// through the Provider's declared stream vocabulary
+    /// ([`NotificationEndpointRole::GuestSource`]). The caller's endpoint
+    /// label is deliberately not an input: a label can neither redirect the
+    /// relationship onto another endpoint nor become its slot or purpose.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderError::LifecycleSourceInvalid`] when the declared
+    /// relationship cannot be expressed for these rows.
+    pub fn source_binding(
+        &self,
+        endpoints: &NotificationHostEndpoints,
+        consumer: &ResourceRef,
+    ) -> Result<NotificationEndpointBinding, ProviderError> {
+        notification_endpoint_bindings(endpoints, consumer)
+            .map_err(|_error| ProviderError::LifecycleSourceInvalid)?
+            .into_iter()
+            .find(|binding| binding.role() == NotificationEndpointRole::GuestSource)
+            .ok_or(ProviderError::LifecycleSourceInvalid)
     }
 }
 
@@ -125,6 +154,66 @@ impl NotificationHostSinkIdentity {
     /// Borrow the owning Provider.
     pub const fn provider_ref(&self) -> &ResourceRef {
         &self.provider_ref
+    }
+
+    /// Borrow the Host row the sink runs on.
+    pub const fn host_execution_ref(&self) -> &ResourceRef {
+        &self.host_execution_ref
+    }
+
+    /// Borrow the admitted `User` the sink presents as.
+    pub const fn host_user_ref(&self) -> &ResourceRef {
+        &self.host_user_ref
+    }
+
+    /// The exact endpoint relationship this host sink presents over.
+    ///
+    /// The relationship is derived from the Provider's declared stream
+    /// vocabulary ([`NotificationEndpointRole::DesktopSink`]) and the
+    /// consumer row the composing host committed for the sink's own worker.
+    /// It is never derived from the display Provider reference, the host user,
+    /// or any caller-supplied text: those identify who presents, not what the
+    /// presentation is admitted over.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderError::LifecycleHostSinkInvalid`] when the declared
+    /// relationship cannot be expressed for these rows.
+    pub fn desktop_sink_binding(
+        &self,
+        endpoints: &NotificationHostEndpoints,
+        consumer: &ResourceRef,
+    ) -> Result<NotificationEndpointBinding, ProviderError> {
+        notification_endpoint_bindings(endpoints, consumer)
+            .map_err(|_error| ProviderError::LifecycleHostSinkInvalid)?
+            .into_iter()
+            .find(|binding| binding.role() == NotificationEndpointRole::DesktopSink)
+            .ok_or(ProviderError::LifecycleHostSinkInvalid)
+    }
+
+    /// Admit this identity's host-sink transition over a declared endpoint
+    /// relationship.
+    ///
+    /// The gate is the same one a delivery runs, so the lifecycle's host
+    /// effect and the delivery it serves cannot disagree about whether the
+    /// presentation endpoint is admitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderError::HostSinkEndpointUnauthenticated`] when the
+    /// presented relationship is refused, when it is not the desktop
+    /// presentation channel, or when its consumer is not this sink's committed
+    /// host row.
+    pub fn admit_host_sink_transition(
+        &self,
+        gate: &NotificationEndpointGate<'_>,
+    ) -> Result<AdmittedNotificationEndpoint, ProviderError> {
+        let admitted = admit_notification_endpoint(gate)
+            .map_err(|_refusal| ProviderError::HostSinkEndpointUnauthenticated)?;
+        if admitted.role() != NotificationEndpointRole::DesktopSink {
+            return Err(ProviderError::HostSinkEndpointUnauthenticated);
+        }
+        Ok(admitted)
     }
 }
 
@@ -386,6 +475,39 @@ impl<B: NotificationLifecycleBackend> NotificationLifecycleSupervisor<B> {
         state.sources = sources;
         state.host_sink = observation.host_sink;
         Ok(count)
+    }
+
+    /// Apply one plan whose host-sink transition runs over an admitted
+    /// desktop-presentation endpoint relationship.
+    ///
+    /// This is the lifecycle's endpoint-authority entry point (U28): the
+    /// declared relationship is admitted before any host effect runs, so a
+    /// plan that starts or stops a host sink cannot be applied without one.
+    /// The transition itself is then the unchanged one - the same
+    /// stop-before-start ordering, the same compensation, the same receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderError::HostSinkEndpointUnauthenticated`] when the
+    /// plan touches the host sink and the presented relationship is refused or
+    /// is not the desktop presentation channel, and otherwise returns whatever
+    /// [`Self::apply`] returns.
+    // The supervisor is sync public surface: d2bd's sync effect-port trait
+    // impls call it off any executor; it has no async form.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    pub fn apply_over_endpoint(
+        &self,
+        plan: &NotificationLifecyclePlan,
+        gate: &NotificationEndpointGate<'_>,
+    ) -> Result<NotificationLifecycleReceipt, ProviderError> {
+        if plan.start_host_sink().is_some() || plan.stop_host_sink().is_some() {
+            let identity = plan
+                .stop_host_sink()
+                .or_else(|| plan.start_host_sink())
+                .ok_or(ProviderError::HostSinkEndpointUnauthenticated)?;
+            identity.admit_host_sink_transition(gate)?;
+        }
+        self.apply(plan)
     }
 
     /// Apply one plan and issue a receipt only after every host effect succeeds.

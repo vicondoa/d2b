@@ -65,6 +65,11 @@ pub enum ProviderError {
     ProcessEffectProofMismatch,
     /// A lifecycle source identity is invalid.
     LifecycleSourceInvalid,
+    /// The host-sink transition's declared endpoint relationship was refused.
+    ///
+    /// The refusal carries the graph's own stage and reason at the call site;
+    /// this variant is the closed, field-free label a caller sees.
+    HostSinkEndpointUnauthenticated,
     /// A lifecycle host-sink identity is invalid.
     LifecycleHostSinkInvalid,
     /// The lifecycle Provider reference is invalid.
@@ -155,6 +160,9 @@ impl ProviderError {
             Self::LifecycleSourceAlreadyActive => "notification-lifecycle-source-already-active",
             Self::LifecycleHostSinkAlreadyActive => "notification-lifecycle-host-sink-already-active",
             Self::LifecycleStateUnavailable => "notification-lifecycle-state-unavailable",
+            Self::HostSinkEndpointUnauthenticated => {
+                "notification-host-sink-endpoint-unauthenticated"
+            }
             Self::LifecycleHostSinkMissing => "notification-lifecycle-host-sink-missing",
             Self::LifecycleZoneUnavailable => "notification-lifecycle-zone-unavailable",
             Self::LifecycleRecoveryRequired => "notification-lifecycle-recovery-required",
