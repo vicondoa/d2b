@@ -225,6 +225,9 @@ test_suite(
         ":test-flake-aarch64",
         ":test-nix-unit",
         ":test-performance-budgets",
+        "//packages/d2b-test-vm-harness:d2b-test-vm-harness_clippy",
+        "//packages/d2b-test-vm-harness:d2b_test_vm_harness_clippy",
+        "//packages/d2b-test-vm-harness:d2b_test_vm_harness_test",
     ],
 )
 

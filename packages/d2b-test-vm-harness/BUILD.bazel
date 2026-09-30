@@ -9,8 +9,9 @@ load(
 # The lane's guest launcher is not a main-package crate: the repository's
 # test census force-registers any crate that carries a test aggregate into the
 # main package suite, and this crate's tests run as part of the lane, not as
-# part of `make check`. The lane's own suite in `bazel/checks/vm` names the
-# targets below directly, so they are still built, linted, and run.
+# part of that suite. The hermetic targets below are named directly instead -
+# by the `layer1` suite in `//bazel/checks` and by the lane's own suite in
+# `bazel/checks/vm` - so they are still built, linted, and run by `make check`.
 package(default_visibility = ["//bazel/checks:__pkg__", "//bazel/checks/vm:__pkg__"])
 
 exports_files(
