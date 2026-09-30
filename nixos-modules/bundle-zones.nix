@@ -80,6 +80,23 @@ let
     then byZone.${zoneName}
     else { };
 
+  # KTD2: the canonical consumer requests the configuration's binding
+  # shorthand compiled into. They travel with the bundle as a derived view,
+  # so the bundle consumer reads the compiled request rather than re-deriving
+  # the relationship from the authored mounts, and the authoring shorthand
+  # itself never reaches the bundle.
+  consumerRequests =
+    ((cfg._resourceCompiler or { }).processes or { }).consumerRequests
+    or [ ];
+  consumerRequestDocument = {
+    schemaVersion = 1;
+    requests = consumerRequests;
+  };
+  consumerRequestJson =
+    builtins.toJSON (resourcesBundle.canonical consumerRequestDocument);
+  consumerRequestDigest = "sha256:${resourcesBundle.framedDigest
+    "d2b:v3:consumer-requests" consumerRequestJson}";
+
   # Keep this list explicit so every Provider projection has a visible bundle
   # owner and no consumer can register an implicit fallback.
   # The Provider projections this consumer folds, and the compiler option key
@@ -440,12 +457,24 @@ in
       internal = true;
       visible = false;
     };
+    consumerRequests = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+      internal = true;
+      visible = false;
+      description = "Internal canonical consumer-request projection.";
+    };
   };
 
   config = {
     assertions = helperAssertions ++ providerProjectionCollisions;
     d2b._bundle.extraArtifacts = providerProjectionArtifacts;
     d2b._bundle.zoneResourceBundlesV3 = bundles;
+    d2b._bundle.consumerRequests = {
+      requests = consumerRequests;
+      json = consumerRequestJson;
+      digest = consumerRequestDigest;
+    };
     # The v3 emitter owns every installed path. Only the eval-visible data
     # field retains the compatibility projection used by older consumers.
     d2b._bundle.zoneResourceBundles = lib.mkForce activeBundles;

@@ -368,6 +368,62 @@ let
       }
     ];
 
+  # KTD1: the declaration projection a Provider package publishes in its own
+  # passthru. It exists only for an artifact whose packaging supplied one, so
+  # the pre-declaration catalog shape, and every configuration that declares no
+  # projection, are unchanged.
+  declarationFor = id:
+    let
+      artifact = artifacts.${id} or null;
+      package = attrOr artifact "package" null;
+      metadata =
+        if builtins.isAttrs package
+        && builtins.hasAttr "passthru" package
+        && builtins.isAttrs package.passthru
+        && builtins.hasAttr "providerArtifact" package.passthru
+        && builtins.isAttrs package.passthru.providerArtifact
+        && builtins.hasAttr "declaration" package.passthru.providerArtifact
+        then package.passthru.providerArtifact.declaration
+        else null;
+    in
+    if builtins.isAttrs metadata then metadata else null;
+
+  projectedArtifactIds =
+    lib.filter (id: declarationFor id != null) artifactIds;
+
+  # Catalog agreement, in both directions and on exact identity: every
+  # Provider the catalog selects is one a declaration produces, and every
+  # Provider a declaration produces is one the catalog selects. A row the
+  # declaration does not produce - or a declaration no catalog row selects -
+  # is refused rather than silently accepted.
+  projectionAgreement = lib.optionals (projectedArtifactIds != [ ]) [
+    {
+      assertion =
+        lib.sort lib.lessThan (map
+          (entry: entry.artifactId)
+          (lib.attrValues (cfg.providerCatalog or { })))
+        == projectedArtifactIds;
+      message = ''
+        d2b.providerCatalog and the declaration projection disagree. The
+        catalog selects [ ${lib.concatStringsSep ", " (map
+          (entry: entry.artifactId)
+          (lib.attrValues (cfg.providerCatalog or { })))} ]; the declarations
+        produce [ ${lib.concatStringsSep ", " projectedArtifactIds} ].
+      '';
+    }
+  ]
+  ++ (map
+    (id: {
+      assertion = (declarationFor id).artifactId == id
+        && (declarationFor id).providerRef == "Provider/${id}";
+      message = ''
+        d2b.artifacts."${id}" publishes a declaration projection filed under a
+        different Provider identity; a declaration is published as its own
+        artifact id and names no other Provider.
+      '';
+    })
+    projectedArtifactIds);
+
   signedContractAssertions = id:
     let
       catalog =
@@ -673,5 +729,6 @@ in
     # complete closed contract is validated.
     ++ (lib.concatMap signedContractAssertions artifactIds)
     ++ (lib.concatMap trustAssertions artifactIds)
-    ++ providerMatrixAssertions;
+    ++ providerMatrixAssertions
+    ++ projectionAgreement;
 }

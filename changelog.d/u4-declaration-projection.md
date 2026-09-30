@@ -13,6 +13,13 @@
 - A configuration shorthand compiles into canonical consumer requests rather
   than persisting a second relationship list, and the compiler refuses a slot
   two different declarations claim.
+- The Nix packaging, catalog, and Zone-bundle surfaces read that projection
+  instead of restating it. A Provider package publishes the projection its
+  declaration produced, the offline catalog asserts it selects exactly the
+  Providers those projections produce, and a Process or EphemeralProcess
+  binding request compiles into the canonical consumer request the projection
+  consumes. The authoring shorthand is dropped before the row is projected, so
+  no second relationship list reaches the bundle.
 
 ### Changed
 
@@ -20,6 +27,13 @@
   not hash to the digest the signed manifest pins, a configuration schema that
   is not the canonical schema its digest names, a duplicate consumer slot, and
   a retired contract version.
+- Refused at eval time: a build whose executable set or configuration schema
+  is not the digest its declaration pins, a projection row carrying a field
+  the closed row does not have (so a signing key, a seccomp label, or a
+  serving-worker role cannot ride on it), a consumer slot two different
+  requests claim, a request whose source the source policy does not admit, and
+  an offline catalog that disagrees with the declarations about which Providers
+  exist.
 
 ### Removed
 

@@ -708,6 +708,15 @@ fn host_users_module(
 /// declaration produce the same bytes and no consumer can hand-order a
 /// projection to make a diff.
 ///
+/// The Nix surfaces read this rendering and nothing else:
+/// `nix/provider-artifact.nix` accepts a `providers` row as the declaration a
+/// package was published from and refuses a digest or identity that disagrees
+/// with the bytes it built, `nixos-modules/provider-catalog.nix` asserts the
+/// catalog selects exactly the `providers` this rendering produces, and
+/// `nixos-modules/resources-zones-processes.nix` emits `consumerRequests` rows
+/// in this spelling. Renaming a field here breaks that boundary, so the
+/// rendered field set is asserted rather than documented.
+///
 /// The renderer is staged: the production entry point keeps the
 /// pre-declaration inventory until the cutover, so this is exercised by its
 /// owner-local tests rather than by a second generation command.
@@ -847,6 +856,41 @@ mod tests {
             &crate::resource_type_authority::declaration_fixture::plan(&["export", "close", "reopen"]),
         );
         assert_ne!(rendered, extended, "one changed method moves the Nix projection");
+    }
+
+    /// The rendered field set is the contract the Nix surfaces read, so a
+    /// rename here would break `nix/provider-artifact.nix`,
+    /// `nixos-modules/provider-catalog.nix`, and
+    /// `nixos-modules/resources-zones-processes.nix` silently. Each row is
+    /// pinned to the exact keys it renders, in the exact spelling.
+    #[test]
+    fn the_rendered_projection_is_the_shape_the_nix_surfaces_read() {
+        use crate::resource_type_authority::declaration_fixture;
+
+        let rendered =
+            render_declaration_nix_projection(&declaration_fixture::plan(&["export", "close"]));
+        assert!(
+            rendered.contains(
+                "\"provider-volume-virtiofs\" = {\n      providerRef = \"Provider/provider-volume-virtiofs\";\n      declarationDigest = \""
+            ),
+            "nix/provider-artifact.nix reads exactly these provider fields: {rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "{ componentId = \"volume-virtiofs\"; presentation = \"namespace-first-service-source\"; setupRestrictions = [\n  \"steady-state-mount-namespace\"\n  \"zero-host-capability\"\n]; }"
+            ),
+            "the capability reaches Nix on a component row with no inference field: {rendered}"
+        );
+
+        let requested = render_declaration_nix_projection(
+            &declaration_fixture::plan_with_request(&["export", "close"]),
+        );
+        assert!(
+            requested.contains(
+                "{ zone = \"alpha\"; consumerRef = \"Process/worker\"; slot = \"root\"; kind = \"volume\"; fingerprint = \"sha256:"
+            ),
+            "the compiled request is the projection's own Nix view: {requested}"
+        );
     }
 
     #[test]

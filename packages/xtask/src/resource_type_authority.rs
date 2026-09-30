@@ -1032,6 +1032,12 @@ pub(crate) mod declaration_fixture {
         project_provider_graph,
     };
     use d2b_contracts_resource::v3::{canonical_digest, canonical_json_bytes};
+    use d2b_contracts_resource::v3::{
+        BindingSlot, ResourceRef, VolumeBindingRequest, VolumePresentation, ZoneId,
+        volume::AttachmentAccess,
+    };
+    use d2b_contracts::identity::deterministic_resource_uid;
+    use d2b_contracts_provider::v3::projection::ConsumerRequestInput;
 
     /// The canonical root configuration schema the fixture components digest.
     const CONFIG_SCHEMA: &[u8] = br#"{"type":"object"}"#;
@@ -1203,6 +1209,36 @@ pub(crate) mod declaration_fixture {
     pub(crate) fn plan(methods: &[&str]) -> PrivatePlanProjection {
         project_provider_graph(&[&declaration(methods)], &[built_artifact()], &[])
             .expect("the fixture declaration projects")
+    }
+
+    /// The fixture's canonical consumer request: the configuration
+    /// shorthand's compiled form, keyed by the committed identities it is
+    /// admitted under.
+    pub(crate) fn consumer_request() -> ConsumerRequestInput {
+        let zone = ZoneId::parse("alpha").expect("zone identifier");
+        let request = VolumeBindingRequest::new(
+            ResourceRef::parse("Volume/data").expect("source reference"),
+            ResourceRef::parse("Process/worker").expect("consumer reference"),
+            BindingSlot::parse("root").expect("bounded slot"),
+            BoundedToken::parse("root").expect("bounded view"),
+            AttachmentAccess::ReadWrite,
+            VolumePresentation::filesystem("/data").expect("filesystem presentation"),
+        )
+        .expect("canonical volume binding request");
+        ConsumerRequestInput::new(
+            zone,
+            deterministic_resource_uid("alpha", "Volume", "data"),
+            deterministic_resource_uid("alpha", "Process", "worker"),
+            request,
+        )
+    }
+
+    /// The private plan the fixture declaration projects with one canonical
+    /// consumer request.
+    pub(crate) fn plan_with_request(methods: &[&str]) -> PrivatePlanProjection {
+        let request = consumer_request();
+        project_provider_graph(&[&declaration(methods)], &[built_artifact()], &[request])
+            .expect("the fixture declaration projects with a consumer request")
     }
 }
 
