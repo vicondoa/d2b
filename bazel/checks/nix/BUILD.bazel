@@ -200,6 +200,7 @@ _SURFACES = {
             "tests/unit/nix/graph-policy.nix",
         ],
         "modules": [],
+        "package": "tests/unit/nix",
         "raw_cases": True,
     },
 }

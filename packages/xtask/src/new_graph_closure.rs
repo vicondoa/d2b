@@ -223,6 +223,10 @@ const CONTRACT_CRATES: &[&str] = &[
     "d2b-resource-types",
 ];
 
+/// The workspace version every in-tree contract crate publishes, which is
+/// what the copied Guest workspace has to resolve the same identity to.
+const CONTRACT_CRATE_VERSION: &str = "0.0.0-bootstrap";
+
 /// Render the complete new-graph build composition from the declarations.
 ///
 /// Returns the artifacts in a fixed order, each paired with its path
@@ -322,7 +326,7 @@ fn render_manifest(artifacts: &[(String, String)]) -> Result<String, String> {
     for name in CONTRACT_CRATES {
         contract_crates.push(ContractCrate {
             name,
-            version: format!("0.0.0-bootstrap"),
+            version: CONTRACT_CRATE_VERSION.to_owned(),
         });
     }
     render_json(&ClosureManifest {
@@ -999,11 +1003,14 @@ mod tests {
     use super::*;
 
     /// The repository root the composition renders over.
+    ///
+    /// This is the shared `D2B_REPO_ROOT` resolution every xtask test uses,
+    /// not a compile-time path: `rules_rs` refuses a binary that embeds its
+    /// own working directory, so `env!("CARGO_MANIFEST_DIR")` would make the
+    /// target unbuildable under Bazel while cargo ran it fine.
     fn repo_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("the xtask manifest sits under packages/")
+        crate::repo_root()
+            .expect("the aggregate passes D2B_REPO_ROOT")
             .to_path_buf()
     }
 
