@@ -8159,7 +8159,7 @@ fn dispatch_unsafe_local_launcher(
     resolved: &workload_dispatch::ResolvedExec,
 ) -> Result<public_wire::LauncherExecDisposition, TypedError> {
     use d2b_contracts_control::unsafe_local_wire::{
-        HelperLaunchRequest, HelperOperationDisposition,
+        HelperGraphAdmission, HelperLaunchRequest, HelperOperationDisposition, UnsafeLocalPosture,
     };
     let target = resolved.identity.canonical_target.clone();
     let workload = authoritative_unsafe_local_resource_identity(state).map_err(|_| {
@@ -8170,10 +8170,28 @@ fn dispatch_unsafe_local_launcher(
             verb: "launch".to_owned(),
         }
     })?;
+    // The launch runs under the admission the graph issued for this
+    // committed row and this authenticated caller, under the family's one
+    // declared posture. The helper realizes no destination and no named
+    // view, so the launch depends on no presentation facet; the registry and
+    // the helper each refuse a launch whose admission says otherwise.
+    let admission = HelperGraphAdmission::new(
+        workload.clone(),
+        requester_uid,
+        UnsafeLocalPosture::ExplicitNoIsolation,
+        Vec::new(),
+    )
+    .map_err(|_| TypedError::RuntimeCapabilityUnsupported {
+        vm: target.to_canonical(),
+        runtime_kind: "unsafe-local".to_owned(),
+        capability: "admitted-requester-identity".to_owned(),
+        verb: "launch".to_owned(),
+    })?;
     let request = HelperLaunchRequest {
         request_id: next_internal_helper_request_id(),
         operation_id: operation_id.clone(),
         workload,
+        admission,
         target,
         item_id: resolved.item_id.clone(),
         argv: resolved.argv.clone(),

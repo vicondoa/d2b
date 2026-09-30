@@ -1,8 +1,10 @@
 //! The shared Process conformance suite run against `system-systemd`,
 //! plus the systemd-specific identity and adoption obligations.
 
+use d2b_contracts_resource::v3::ConfinementFacet;
 use d2b_contracts_resource::v3::ResourceGeneration;
 use d2b_contracts_resource::v3::identity::ReconnectGeneration;
+
 use d2b_process_conformance::suite;
 use d2b_process_conformance::testing::{PortCall, ScriptedEffectPort, block_on, fixtures};
 use d2b_process_conformance::{
@@ -289,3 +291,35 @@ fn a_user_domain_process_is_placed_in_a_verified_user_scope() {
     let report = block_on(provider.launch(&ticket)).expect("user-domain launch");
     assert_eq!(report.user_ref.as_ref(), Some(&user_ref));
 }
+
+/// The family's declared support is the whole truth about what a transient
+/// unit applies: privilege escalation disabled and a read-only unit
+/// filesystem, and nothing else (R27). A backend that claimed a namespace
+/// or a filter it cannot set would let a required restriction be dropped.
+#[test]
+fn the_family_declares_exactly_the_confinement_it_enforces() {
+    let support = d2b_provider_process_systemd::enforced_confinement_facets();
+    assert!(support.enforces(ConfinementFacet::NoNewPrivileges));
+    assert!(support.enforces(ConfinementFacet::ReadOnlyRoot));
+    for unenforceable in [
+        ConfinementFacet::UserNamespace,
+        ConfinementFacet::MountNamespace,
+        ConfinementFacet::NetworkNamespace,
+        ConfinementFacet::PidNamespace,
+        ConfinementFacet::IpcNamespace,
+        ConfinementFacet::UtsNamespace,
+        ConfinementFacet::CapabilityCeiling,
+        ConfinementFacet::SyscallFilter,
+        ConfinementFacet::PrivateRoot,
+    ] {
+        assert!(
+            !support.enforces(unenforceable),
+            "{unenforceable:?} is not something a transient unit this family starts applies"
+        );
+    }
+    assert!(
+        d2b_provider_process_systemd::realized_presentation_facets().is_empty(),
+        "this family sets no mount properties, so it realizes no presentation"
+    );
+}
+

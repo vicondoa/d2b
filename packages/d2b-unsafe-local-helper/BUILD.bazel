@@ -47,6 +47,18 @@ d2b_rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
+d2b_rust_test(
+    name = "graph_authority",
+    srcs = ["tests/graph_authority.rs"],
+    compile_data = ["Cargo.toml"],
+    deps = [
+        ":d2b_unsafe_local_helper",
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-control:d2b_contracts_control",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
 # keep
 filegroup(
     name = "cargo_workspace_sources",

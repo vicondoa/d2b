@@ -60,6 +60,16 @@ pub enum HelperRegistryError {
     SocketBufferTooSmall,
     InvalidFrame,
     InvalidRequest,
+    /// The requester is outside the set of identities this deployment admits
+    /// an unsafe-local launch for. The registry is default-denied: a subject
+    /// with no admitted unsafe-local posture never reaches a helper.
+    RequesterNotAdmitted,
+    /// The launch's admission was made for a different subject than the
+    /// authenticated caller presenting it.
+    RequesterMismatch,
+    /// The launch's admission does not verify, or does not name the launch's
+    /// own committed row.
+    InvalidAdmission,
     FrameTooLarge,
     ProtocolMismatch,
     SnapshotTooLarge,
@@ -366,6 +376,28 @@ impl HelperRegistry {
         requester_uid: u32,
         request: HelperLaunchRequest,
     ) -> Result<HelperOperationResult, HelperRegistryError> {
+        // The requester is the authenticated caller, and a helper connection
+        // is only ever a transport for it. Three refusals run before the
+        // ledger is touched and before any frame is queued:
+        //
+        // * a requester outside this deployment's admitted set never
+        //   reaches a helper at all;
+        // * an admission that names a different subject is refused, so a
+        //   frame cannot ask another subject's helper to run it;
+        // * an admission that does not verify, or that does not name the
+        //   launch's own committed row, is refused here rather than being
+        //   carried to a helper that would have to refuse it again.
+        if !self.allowed_uids.contains(&requester_uid) {
+            return Err(HelperRegistryError::RequesterNotAdmitted);
+        }
+        if !request.admission.is_intact()
+            || !request.admission.admits(&request.workload)
+        {
+            return Err(HelperRegistryError::InvalidAdmission);
+        }
+        if request.admission.requester_uid() != requester_uid {
+            return Err(HelperRegistryError::RequesterMismatch);
+        }
         let fingerprint = launch_fingerprint(&request)?;
         let operation_key = request.operation_id.to_string();
         let workload_target = request.target.to_canonical();
@@ -1168,9 +1200,14 @@ impl OperationLedger {
     }
 }
 
+/// The identity one operation id is deduplicated under.
+///
+/// The admission digest belongs to it, so a replay of the same operation id
+/// under a different admission is a conflict rather than a second launch.
 fn launch_fingerprint(request: &HelperLaunchRequest) -> Result<[u8; 32], HelperRegistryError> {
     let encoded = serde_json::to_vec(&(
         &request.workload,
+        request.admission.admission_digest(),
         &request.target,
         &request.item_id,
         &request.argv,
@@ -1198,22 +1235,39 @@ mod tests {
     use d2b_contracts_resource::v3::{
         ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneResourceIdentity, ZoneRevision,
     };
+    use d2b_contracts_control::unsafe_local_wire::{HelperGraphAdmission, UnsafeLocalPosture};
     use nix::fcntl::{FcntlArg, FdFlag, fcntl};
     use nix::sys::socket::{AddressFamily, SockFlag, socketpair};
     use std::os::fd::OwnedFd;
+
+    /// The committed row every fixture launch is admitted against.
+    fn committed_row() -> ZoneResourceIdentity {
+        ZoneResourceIdentity::new(
+            ZoneId::parse("host").unwrap(),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            ResourceRef::parse("Process/tools").unwrap(),
+            ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap(),
+            ResourceGeneration::new(1).unwrap(),
+            ZoneRevision::new(1),
+        )
+    }
+
+    fn admitted_for(requester_uid: u32) -> HelperGraphAdmission {
+        HelperGraphAdmission::new(
+            committed_row(),
+            requester_uid,
+            UnsafeLocalPosture::ExplicitNoIsolation,
+            Vec::new(),
+        )
+        .expect("the fixture admission is constructible")
+    }
 
     fn launch(request_id: u64, operation_id: &str, arg: &str) -> HelperLaunchRequest {
         HelperLaunchRequest {
             request_id,
             operation_id: OperationId::parse(operation_id).unwrap(),
-            workload: ZoneResourceIdentity::new(
-                ZoneId::parse("host").unwrap(),
-                ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
-                ResourceRef::parse("Process/tools").unwrap(),
-                ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap(),
-                ResourceGeneration::new(1).unwrap(),
-                ZoneRevision::new(1),
-            ),
+            workload: committed_row(),
+            admission: admitted_for(1000),
             target: WorkloadTarget::parse("tools.host.d2b").unwrap(),
             item_id: ProtocolToken::parse("browser").unwrap(),
             argv: ConfiguredArgv::new(vec![arg.to_owned()]).unwrap(),

@@ -163,6 +163,24 @@ impl<M: UserScopeManager> HelperClient<M> {
                         send_frame(&socket, &rejected)?;
                         continue;
                     }
+                    // The graph admission is checked here, on the service
+                    // loop, against the identity this process proved for
+                    // itself: a frame the graph never admitted, one admitted
+                    // for another subject, and one that depends on a
+                    // presentation this family cannot realize are all refused
+                    // without occupying a bounded operation worker. The
+                    // runtime re-checks the same admission before it spawns
+                    // anything, so the decision does not depend on where it
+                    // was taken.
+                    if let Err(code) = request
+                        .admission
+                        .admit_launch(&request.workload, self.runtime.uid)
+                    {
+                        let rejected =
+                            rejection(request.request_id, request.operation_id, code);
+                        send_frame(&socket, &rejected)?;
+                        continue;
+                    }
                     if active.fetch_add(1, Ordering::Relaxed) >= MAX_HELPER_QUEUE_DEPTH {
                         active.fetch_sub(1, Ordering::Relaxed);
                         let rejected = rejection(
@@ -436,6 +454,12 @@ fn failure_code(error: RuntimeError) -> HelperFailureCode {
         RuntimeError::InvalidRequest | RuntimeError::InvalidIdentity => {
             HelperFailureCode::InvalidRequest
         }
+        // The two admission refusals keep their own closed codes: a caller
+        // learns whether the graph never admitted the launch or whether a
+        // different subject presented it, and neither is flattened into a
+        // generic invalid request.
+        RuntimeError::GraphAdmissionRequired => HelperFailureCode::GraphAdmissionRequired,
+        RuntimeError::RequesterMismatch => HelperFailureCode::RequesterMismatch,
         RuntimeError::UserManagerUnavailable => HelperFailureCode::UserManagerUnavailable,
         RuntimeError::EnvironmentInvalid | RuntimeError::LedgerInvalid => {
             HelperFailureCode::EnvironmentInvalid

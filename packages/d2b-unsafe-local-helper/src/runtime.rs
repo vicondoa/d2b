@@ -7,9 +7,10 @@ use d2b_contracts_control::proxy_readiness::{
     ProxyReadinessEvent, ProxyReadinessStage, ProxyReadinessState, READINESS_PROTOCOL_VERSION,
 };
 use d2b_contracts_control::unsafe_local_wire::{
-    HelperLaunchRequest, HelperOperationDisposition, HelperOperationResult, HelperScopeKind,
-    HelperScopeSnapshot, HelperScopeState, HelperSnapshot, MAX_HELPER_SNAPSHOT_SCOPES,
-    RealmAccentColor, ZoneResourceIdentity, validate_unsafe_local_resource_identity,
+    HelperFailureCode, HelperLaunchRequest, HelperOperationDisposition, HelperOperationResult,
+    HelperScopeKind, HelperScopeSnapshot, HelperScopeState, HelperSnapshot,
+    MAX_HELPER_SNAPSHOT_SCOPES, RealmAccentColor, ZoneResourceIdentity,
+    validate_unsafe_local_resource_identity,
 };
 use nix::libc;
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
@@ -44,6 +45,12 @@ const MAX_READINESS_EVENT_BYTES: usize = 4096;
 pub enum RuntimeError {
     InvalidRequest,
     InvalidIdentity,
+    /// The launch carried no graph admission, the admission did not verify,
+    /// or it depends on a presentation this helper cannot enforce.
+    GraphAdmissionRequired,
+    /// The admission was made for a subject other than the one whose
+    /// authenticated identity this helper proved for itself.
+    RequesterMismatch,
     UserManagerUnavailable,
     EnvironmentInvalid,
     ExecutableUnavailable,
@@ -58,6 +65,16 @@ pub enum RuntimeError {
     Timeout,
     LedgerInvalid,
     Internal,
+}
+
+impl From<HelperFailureCode> for RuntimeError {
+    fn from(code: HelperFailureCode) -> Self {
+        match code {
+            HelperFailureCode::GraphAdmissionRequired => Self::GraphAdmissionRequired,
+            HelperFailureCode::RequesterMismatch => Self::RequesterMismatch,
+            _ => Self::InvalidRequest,
+        }
+    }
 }
 
 impl From<EnvironmentError> for RuntimeError {
@@ -321,16 +338,30 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
         })
     }
 
-    // Runs entirely on a dedicated operation worker thread (bounded
-    // admission via MAX_HELPER_QUEUE_DEPTH in the helper's client loop) -
-    // the sanctioned plan-R4 dedicated-worker boundary, never an executor.
+    /// Launch one workload under the graph admission the frame carries.
+    ///
+    /// The helper is default-denied. A launch frame is a request, and this
+    /// helper runs a workload only because an admission says the graph
+    /// admitted it for this committed row, under the explicit no-isolation
+    /// posture, for the authenticated subject whose identity this process
+    /// proved for itself. The proof is one-directional: the helper's own uid
+    /// may only *check* the admission's requester, never supply one, so a
+    /// launch admitted for another subject is refused here rather than
+    /// running because a privileged transport asked (R37, AE29).
+    ///
+    /// This family realizes no destination and no named view, so an admission
+    /// that depends on any presentation facet is refused before a supervisor
+    /// is spawned rather than launched with the property dropped (R20, R27).
+    ///
+    /// Runs entirely on a dedicated operation worker thread (bounded
+    /// admission via MAX_HELPER_QUEUE_DEPTH in the helper's client loop) -
+    /// the sanctioned plan-R4 dedicated-worker boundary, never an executor.
     #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
     pub fn launch(
         &self,
         request: HelperLaunchRequest,
     ) -> Result<HelperOperationResult, RuntimeError> {
-        validate_unsafe_local_resource_identity(&request.workload)
-            .map_err(|_| RuntimeError::InvalidRequest)?;
+        admit_helper_launch(&request, self.uid)?;
         let fingerprint = launch_fingerprint(&request)?;
         let reservation = match self
             .ledger
@@ -529,9 +560,43 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
     }
 }
 
+/// The identity one operation id is committed under.
+///
+/// The admission digest is part of it, so replaying an operation id under a
+/// different admission - a different requester, row generation, or posture -
+/// is a conflict rather than a second chance to run something else.
+/// The launch admission this helper enforces, as a seam of its own.
+///
+/// It is the one decision that stands between a launch frame and a spawned
+/// supervisor, so it is callable without a runtime: the service loop and
+/// [`ScopeRuntime::launch`] both go through it, and it decides nothing else.
+/// `transport_uid` is the identity the receiving process proved for itself -
+/// it may only *check* the admission's requester, never supply one.
+///
+/// # Errors
+///
+/// Returns [`RuntimeError::InvalidRequest`] for a row this family does not
+/// own, [`RuntimeError::GraphAdmissionRequired`] when the graph made no
+/// admission, when the admission does not name this launch's row, or when it
+/// depends on a presentation this family cannot realize, and
+/// [`RuntimeError::RequesterMismatch`] when the admission was made for a
+/// different subject than the one presenting it.
+pub fn admit_helper_launch(
+    request: &HelperLaunchRequest,
+    transport_uid: u32,
+) -> Result<(), RuntimeError> {
+    validate_unsafe_local_resource_identity(&request.workload)
+        .map_err(|_| RuntimeError::InvalidRequest)?;
+    request
+        .admission
+        .admit_launch(&request.workload, transport_uid)
+        .map_err(RuntimeError::from)
+}
+
 fn launch_fingerprint(request: &HelperLaunchRequest) -> Result<[u8; 32], RuntimeError> {
     let encoded = serde_json::to_vec(&(
         &request.workload,
+        request.admission.admission_digest(),
         &request.target,
         &request.item_id,
         &request.argv,
@@ -1342,7 +1407,9 @@ pub(crate) fn persist_ledger(
 mod tests {
     use super::*;
     use d2b_contracts::{configured_argv::ConfiguredArgv, token::ProtocolToken};
-    use d2b_contracts_control::unsafe_local_wire::{HelperLaunchRequest, ScopeIdentity};
+    use d2b_contracts_control::unsafe_local_wire::{
+        HelperGraphAdmission, HelperLaunchRequest, ScopeIdentity, UnsafeLocalPosture,
+    };
     use nix::unistd::Uid;
     use std::sync::{Arc, Barrier};
 
@@ -1409,10 +1476,12 @@ mod tests {
     }
 
     fn launch(operation_id: &str, arg: &str) -> HelperLaunchRequest {
+        let workload = workload();
         HelperLaunchRequest {
             request_id: 1,
             operation_id: OperationId::parse(operation_id).unwrap(),
-            workload: workload(),
+            admission: admitted(&workload),
+            workload,
             target: WorkloadTarget::parse("tools.host.d2b").unwrap(),
             item_id: ProtocolToken::parse("browser").unwrap(),
             argv: ConfiguredArgv::new(vec![arg.to_owned()]).unwrap(),
@@ -1422,6 +1491,18 @@ mod tests {
             )
             .unwrap(),
         }
+    }
+
+    /// The admission every fixture launch carries, issued for the identity
+    /// this test process can prove for itself.
+    fn admitted(workload: &ZoneResourceIdentity) -> HelperGraphAdmission {
+        HelperGraphAdmission::new(
+            workload.clone(),
+            Uid::current().as_raw(),
+            UnsafeLocalPosture::ExplicitNoIsolation,
+            Vec::new(),
+        )
+        .expect("the fixture admission is constructible")
     }
 
     fn workload() -> ZoneResourceIdentity {
