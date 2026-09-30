@@ -22,8 +22,8 @@ pub use d2b_contracts::audio::{
     parse_audio_state,
 };
 pub use authority::{
-    AudioAuthorityError, AudioLeaseId, MicDecision, MicrophoneArbiter, SharedMicrophoneArbiter,
-    SpeakerMixer, shared_microphone_arbiter,
+    AudioAuthorityError, AudioLeaseId, ChannelSession, MicDecision, MicrophoneArbiter,
+    SharedMicrophoneArbiter, SpeakerMixer, shared_microphone_arbiter,
 };
 pub use controller::{
     AudioArbitrationState, AudioBindingChannels, AudioBindingController, AudioBindingPhase,
@@ -32,8 +32,12 @@ pub use controller::{
     AudioSpeakerStatus, AUDIO_QUEUE_BOUND, AUDIO_REPAIR_INTERVAL_SECS,
 };
 pub use mediator::{
-    AudioChannel, AudioMediator, AudioMediatorError, AudioReadiness, FakeAudioMediator,
-    GuestAudioReadiness, HostAudioReadiness,
+    AUDIO_CAPTURE_OPERATION, AUDIO_CHANNELS, AUDIO_DECLARED_METHODS, AUDIO_MICROPHONE_PURPOSE,
+    AUDIO_PLAYBACK_OPERATION, AUDIO_SPEAKER_PURPOSE, AdmittedAudioMediator, AdmittedAudioSession,
+    AudioBindingFence, AudioChannel, AudioDeclaredMethod, AudioEffectKind, AudioMediator,
+    AudioMediatorError, AudioReadiness, AudioSessionOrigin, AudioSessionPlan, FakeAudioMediator,
+    GuestAudioReadiness, HostAudioReadiness, audio_declared_method, service_backing_endpoint,
+    service_declares_channel, service_declares_operation,
 };
 pub use resource_type::{
     AudioAdmissionError, AudioBindingSpec, AudioGrants, AudioServiceRole, AudioServiceSpec,

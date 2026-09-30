@@ -2496,13 +2496,16 @@ impl AudioMediatorSource for DaemonAudioMediatorSource {
             capability.host_enforcement =
                 d2b_core::provider_capabilities::AudioHostEnforcementKind::None;
         }
+        // U25: the v3 composition reaches the host audio session only
+        // through the endpoint relationships the Zone graph admitted. This
+        // surface has no admitted audio relationship to hand the mediator
+        // yet, so it passes none and the host side reports unavailable
+        // rather than reaching for an ambient PipeWire environment.
+        let _ = &self.state;
         Some(Box::new(crate::audio_dispatch::DaemonAudioMediator::new(
-            &self.state,
             vm_name,
             capability,
-            d2b_contracts_broker::broker_wire::BrokerCallerRole::AdminUid {
-                uid: self.state.daemon_uid,
-            },
+            None,
         )))
     }
 }
