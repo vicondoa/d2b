@@ -608,12 +608,12 @@ fn missing_execution_parent_support_refuses_a_child_request() {
     );
     assert_eq!(
         supported.admits_child_request(BindingKind::Device, RequestedRights::Observe),
-        Err(missing.clone()),
+        Err(missing),
         "a kind the ceiling does not cover is refused, never silently admitted"
     );
     assert_eq!(
         supported.admits_child_request(BindingKind::Volume, RequestedRights::Exclusive),
-        Err(missing.clone()),
+        Err(missing),
         "a right the ceiling does not cover is refused"
     );
 
@@ -622,7 +622,7 @@ fn missing_execution_parent_support_refuses_a_child_request() {
     let parent_use = ExecutionParentInput::<ChildBindingRequest>::ParentUse(child_request());
     assert_eq!(
         parent_use.admits_child_request(BindingKind::Volume, RequestedRights::Observe),
-        Err(missing.clone()),
+        Err(missing),
         "a parent's own consumption grants a child nothing"
     );
 
