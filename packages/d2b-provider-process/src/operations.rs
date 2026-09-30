@@ -36,8 +36,11 @@ use d2b_contracts_broker::kernel_client::{
     KernelInvocation, KernelInvokeError, KernelReply, envelope_invoke_kernel,
 };
 use d2b_contracts_resource::v3::{
-    CanonicalJsonObject, CanonicalJsonValue, ResourceRef, ResourceUid, canonical_json_bytes,
-    execution_policy::ExecutionDomain,
+    AuditMode, BrokerRequirement, CallableOperation, CanonicalJsonObject, CanonicalJsonValue,
+    FdContract, FdKind, OperationAudit, OperationAuthority, OperationBounds, OperationContractError,
+    OperationDomain, OperationFds, OperationImplementation, OperationSurface, PayloadProvenance,
+    PayloadSchema, ResourceRef, ResourceUid, SecretAccess, canonical_json_bytes,
+    execution_policy::{BoundedText, BoundedToken, ExecutionDomain},
 };
 use d2b_core::bundle_resolver::{BundleResolver, ResolvedRunnerIntent, is_device_worker_role};
 use d2b_core::sandbox_profile::CgroupPlacement;
@@ -3229,5 +3232,265 @@ mod tests {
             .await
             .expect_err("request mismatches the trusted intent");
         assert_eq!(refusal.code(), INTENT_MISMATCH);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The declared admitted effect (U10, KTD8)
+// ---------------------------------------------------------------------------
+
+/// The committed `Operation` the family's admitted launch effect is published
+/// as.
+///
+/// The name is the broker-generic kernel row the family already invokes, so
+/// the admitted-effect path and the legacy kernel row name one effect rather
+/// than introducing a second namespace. The production entry point still
+/// routes the legacy row; the atomic cutover installs the admitted carrier
+/// for this name.
+pub const PROCESS_EFFECT_LAUNCH: &str = "spawn-process";
+
+/// The trusted executable template the family's launch resolves through.
+///
+/// A launch runs a provider-owned template, not a `Command` row and not
+/// anything a mutable provider row could introduce: the template identity is
+/// part of the declared implementation, so a caller chooses neither the
+/// program nor its arguments (KTD13, R31).
+pub const PROCESS_LAUNCH_TEMPLATE: &str = "process-launch";
+
+/// The payload property that tells the broker the launched child binds a
+/// Device-owned socket in its private runtime tree.
+///
+/// It is a typed non-authority parameter: it selects which Device-owned
+/// derivation the broker resolves, and the broker re-pins the scope from the
+/// launched row's own metadata rather than from this value.
+pub const PROCESS_LAUNCH_SERVING_WORKER: &str = "servingWorker";
+
+/// The family's declared admitted-launch contract.
+///
+/// This is the whole of what a launch invocation may say. The program, the
+/// arguments, the environment, the uid, the gid, the supplementary groups,
+/// the user namespace, the confinement, and every private mount point are
+/// resolved by the broker from the accepted graph and the verified
+/// implementation contract; none of them is a declared parameter here, and
+/// the authority screen refuses the whole family again at admission if a
+/// future schema revision tries to add one (KTD8, R50, AE7).
+///
+/// The one descriptor the effect returns is declared: a pidfd for the
+/// launched child, which the caller uses to observe and signal that exact
+/// invocation. A returned set that does not match this contract is refused
+/// (R30, R38).
+///
+/// # Errors
+///
+/// Returns [`OperationContractError`] when the payload schema is rejected or
+/// when the family's own contract is inconsistent.
+pub fn launch_effect_operation(provider: ResourceRef) -> Result<CallableOperation, OperationContractError> {
+    let payload = PayloadSchema::parse(serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            PROCESS_LAUNCH_SERVING_WORKER: { "type": "boolean" },
+        },
+    }))
+    .map_err(|_| OperationContractError::UntrustedImplementation)?;
+    let result = PayloadSchema::parse(serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "runnerId": { "type": "string" },
+        },
+    }))
+    .map_err(|_| OperationContractError::UntrustedImplementation)?;
+    let audit = OperationAudit::new(
+        true,
+        AuditMode::Yes,
+        Vec::new(),
+        Vec::new(),
+        BoundedToken::parse("process-launch").expect("a bounded token is a canonical token"),
+    )?;
+    let authority = OperationAuthority::new(
+        OperationSurface::Broker,
+        OperationDomain::Host,
+        BoundedText::parse("d2b-launcher").expect("bounded text without control characters"),
+        BrokerRequirement::Yes,
+    );
+    let fds = OperationFds::new(
+        Vec::new(),
+        vec![FdContract::new(
+            BoundedToken::parse("pidfd").expect("a bounded token is a canonical token"),
+            FdKind::Pidfd,
+            true,
+        )],
+        Vec::new(),
+    )?;
+    CallableOperation::new(
+        OperationImplementation::trusted_executable_template(
+            provider,
+            BoundedToken::parse(PROCESS_LAUNCH_TEMPLATE)
+                .expect("a bounded token is a canonical token"),
+        )?,
+        payload,
+        Some(result),
+        true,
+        SecretAccess::None,
+        audit,
+        None,
+        authority,
+        fds,
+        OperationBounds::default(),
+        PayloadProvenance::Request,
+    )
+}
+
+#[cfg(test)]
+mod admitted_effect_tests {
+    use super::*;
+    use d2b_core::execution_plan::{ParameterRefusal, admit_parameters};
+    use d2b_contracts_resource::v3::CanonicalJsonObject;
+    use d2b_contracts_resource::v3::PrimitiveSpecError;
+
+    fn provider() -> ResourceRef {
+        ResourceRef::parse("Provider/process").expect("a canonical provider reference")
+    }
+
+    fn operation() -> CallableOperation {
+        launch_effect_operation(provider()).expect("the launch contract is well formed")
+    }
+
+    fn supplied(value: serde_json::Value) -> CanonicalJsonObject {
+        CanonicalJsonObject::parse(&serde_json::to_vec(&value).expect("canonical bytes"))
+            .expect("a canonical object")
+    }
+
+    #[test]
+    fn declared_launch_payload_carries_no_authority_bearing_field() {
+        let operation = operation();
+        for name in operation.payload_schema().property_names() {
+            assert!(
+                !d2b_core::execution_plan::is_authority_parameter(name),
+                "the launch payload declares `{name}`, which no invocation may carry"
+            );
+        }
+    }
+
+    #[test]
+    fn a_launch_payload_naming_a_host_path_is_refused_by_name() {
+        let error = admit_parameters(
+            &operation(),
+            &supplied(serde_json::json!({ "hostPath": "/etc/shadow" })),
+        )
+        .expect_err("a host path is refused");
+        assert_eq!(
+            error,
+            ParameterRefusal::AuthorityBearingField {
+                name: "hostPath".to_owned()
+            }
+        );
+        assert_eq!(error.code(), "effect-parameters-authority-bearing");
+    }
+
+    #[test]
+    fn a_launch_payload_naming_argv_or_env_is_refused_by_name() {
+        for field in ["argv", "env", "uid", "mountPolicy", "seccompPolicy"] {
+            let error = admit_parameters(
+                &operation(),
+                &supplied(serde_json::json!({ field: "value" })),
+            )
+            .expect_err("an authority-bearing field is refused");
+            assert_eq!(
+                error,
+                ParameterRefusal::AuthorityBearingField {
+                    name: field.to_owned()
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn a_launch_payload_field_the_contract_does_not_declare_is_refused() {
+        let error = admit_parameters(
+            &operation(),
+            &supplied(serde_json::json!({ "roleId": "virtiofsd" })),
+        )
+        .expect_err("an undeclared field is refused rather than ignored");
+        assert_eq!(
+            error,
+            ParameterRefusal::UndeclaredField {
+                name: "roleId".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn the_declared_typed_parameter_is_admitted() {
+        let admitted = admit_parameters(
+            &operation(),
+            &supplied(serde_json::json!({ PROCESS_LAUNCH_SERVING_WORKER: true })),
+        )
+        .expect("the one declared parameter is admitted");
+        assert_eq!(admitted.values().len(), 1);
+    }
+
+    #[test]
+    fn a_launch_effect_declares_its_returned_pidfd() {
+        let operation = operation();
+        let declared = operation.fds().response();
+        assert_eq!(declared.len(), 1);
+        assert_eq!(declared[0].name().as_str(), "pidfd");
+        assert!(declared[0].required());
+        assert!(operation.fds().request().is_empty());
+    }
+
+    #[test]
+    fn a_launch_effect_names_a_provider_owned_template() {
+        let operation = operation();
+        let implementation = operation.implementation();
+        assert_eq!(implementation.provider().to_canonical_string(), "Provider/process");
+        assert!(!implementation.is_provider_method());
+    }
+
+    /// A non-`Provider` reference cannot become a launch implementation, so
+    /// a mutable row that names something else is refused rather than loaded.
+    #[test]
+    fn a_non_provider_reference_cannot_declare_the_launch_implementation() {
+        let error = launch_effect_operation(
+            ResourceRef::parse("Process/launch").expect("a canonical process reference"),
+        )
+        .expect_err("a Process reference is not a declared provider");
+        assert_eq!(error, OperationContractError::UntrustedImplementation);
+    }
+
+    /// The contract's own bounds are enforced, not decorative.
+    #[test]
+    fn the_launch_contract_is_closed() {
+        let operation = operation();
+        assert!(operation.destructive());
+        assert_eq!(operation.secret_access(), SecretAccess::None);
+        assert!(operation.audit().required());
+        assert!(operation.result_schema().is_some());
+        assert!(operation.audit_join().is_none());
+    }
+
+    /// The declared caller authority is the launcher class, never the
+    /// privileged transport an invocation happens to arrive on.
+    #[test]
+    fn the_launch_contract_names_its_caller_authority_class() {
+        let operation = operation();
+        assert_eq!(operation.authority().caller_authority().as_str(), "d2b-launcher");
+        assert_eq!(
+            operation.authority().broker_requirement(),
+            BrokerRequirement::Yes
+        );
+        assert_eq!(operation.authority().surface(), OperationSurface::Broker);
+        assert_eq!(operation.authority().domain(), OperationDomain::Host);
+    }
+
+    /// A primitive-spec error is a construction failure of the family's own
+    /// contract, so it is reported rather than swallowed: the launch contract
+    /// is data, and a typo in it must fail the build's tests.
+    #[test]
+    fn a_bounded_token_rejects_a_misspelled_template_identity() {
+        let error = BoundedToken::parse("Process_Launch").expect_err("an uppercase token is refused");
+        assert!(matches!(error, PrimitiveSpecError::InvalidToken));
     }
 }

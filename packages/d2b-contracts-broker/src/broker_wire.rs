@@ -10,6 +10,7 @@
 //! copy. See `d2b_contracts::types` for the newtype set.
 
 use d2b_contracts::audit_wire::{validate_audit_page, AuditExportCursor, AuditExportEntry};
+use d2b_contracts::wire_deserialize;
 use d2b_contracts::types::{
     BundleClosureRef, BundleOpId, MediaRef, PathClass, RoleId, ScopeId, SubjectId, TracingSpanId,
     VmId,
@@ -18,11 +19,15 @@ use d2b_contracts::workload_identity::WorkloadIdentity;
 use d2b_contracts_resource::v3::process::{
     CapabilityClass, EnvironmentClass, NamespaceClass, UserNamespaceSpec,
 };
+use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 use d2b_contracts_resource::v3::{
-    ActivationRunnerInput, AdmissionStage, AuthoritySubject, CanonicalJsonObject, DesiredDigest,
-    DesiredRevision, IfName, RefusalReason, ResourceBundleGenerationId, ResourceGeneration,
-    ResourceRef, ResourceUid, StoreIncarnation, ZoneDesiredSequence, execution_policy::ExecutionDomain,
+    ActivationRunnerInput, AdmissionStage, AuthoritySubject, BindingKey, BindingRealizationFacet,
+    CanonicalJsonObject, DesiredDigest, DesiredRevision, FreshnessTuple, IfName,
+    MAX_BINDING_DEPENDENCIES, OPERATION_RESOURCE_TYPE, RefusalReason, RequestedRights,
+    ResourceBundleGenerationId, ResourceGeneration, ResourceRef, ResourceUid, StoreIncarnation,
+    ZoneDesiredSequence, execution_policy::ExecutionDomain,
 };
+use d2b_contracts_resource::{parsed_deserialize, redacted_debug, string_schema};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -557,6 +562,443 @@ pub struct EnvelopeInvokeResponse {
     /// The kernel kinds of the returned descriptors, in frame order.
     pub fd_kinds: Vec<FdKind>,
 }
+
+// ---------------------------------------------------------------------------
+// The admitted effect carrier (U10, KTD8)
+// ---------------------------------------------------------------------------
+
+/// Maximum relationship legs one admitted effect invocation may name.
+///
+/// The carrier's own shape bound. The admission applies a second, tighter
+/// ceiling over the legs it can resolve, so the two cannot drift into a
+/// frame that decodes and then has nowhere to go.
+pub const MAX_EFFECT_LEGS: usize = 8;
+
+/// Maximum bytes in one admitted effect's idempotency key.
+pub const MAX_IDEMPOTENCY_KEY_BYTES: usize = 128;
+
+/// Maximum hops one admitted effect's audit chain may carry.
+pub const MAX_CORRELATION_IDENTITIES: usize = 9;
+
+/// The one idempotency key an admitted effect carries.
+///
+/// The key names the logical effect, so a retry of one invocation is
+/// recognized as the same effect rather than run twice. It is a
+/// non-authority identity: it carries no grant, and presenting one a second
+/// time neither widens nor refreshes anything - the broker's ledger answers a
+/// repeat with the recorded outcome and refuses a reuse that carries a
+/// different payload.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(transparent)]
+pub struct IdempotencyKey(String);
+
+impl IdempotencyKey {
+    /// Parse one bounded, control-character-free key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EffectCarrierError::EmptyIdempotencyKey`] for an empty
+    /// value, [`EffectCarrierError::IdempotencyKeyTooLong`] past
+    /// [`MAX_IDEMPOTENCY_KEY_BYTES`], and
+    /// [`EffectCarrierError::IdempotencyKeyNotCanonical`] for a value
+    /// carrying a control character.
+    pub fn parse(value: impl Into<String>) -> Result<Self, EffectCarrierError> {
+        let value = value.into();
+        if value.is_empty() {
+            return Err(EffectCarrierError::EmptyIdempotencyKey);
+        }
+        if value.len() > MAX_IDEMPOTENCY_KEY_BYTES {
+            return Err(EffectCarrierError::IdempotencyKeyTooLong);
+        }
+        if value.chars().any(char::is_control) {
+            return Err(EffectCarrierError::IdempotencyKeyNotCanonical);
+        }
+        Ok(Self(value))
+    }
+
+    /// Borrow the canonical key.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+redacted_debug!(IdempotencyKey);
+parsed_deserialize!(IdempotencyKey);
+string_schema!(IdempotencyKey, 1, MAX_IDEMPOTENCY_KEY_BYTES);
+
+/// One relationship leg an admitted effect invocation names.
+///
+/// The leg is a *claim*, not an authorization: it names the exact KTD3
+/// relationship, the right the effect claims, the presentation facets it
+/// depends on, and - for an attenuated realization leg - the helper the
+/// effect is realized for. It carries no host path, no numerical credential,
+/// no mount policy, and no command line, and there is no field here that
+/// could: the source's own decision, the realization's declared support, and
+/// the destination the broker resolves are all decided at admission
+/// (KTD8, R34, AE27).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EffectLegSelection {
+    /// The exact relationship this leg runs on.
+    pub binding: BindingKey,
+    /// The right the effect claims. The source's own accepted decision is
+    /// what admits it; spelling a right here cannot widen it.
+    pub rights: RequestedRights,
+    /// The presentation facets the effect depends on. A facet the selected
+    /// realization does not declare is refused, never skipped.
+    #[serde(default)]
+    pub presentation: Vec<BindingRealizationFacet>,
+    /// The helper this leg is realized for, when it is an attenuated
+    /// realization leg rather than the consumer's own use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub helper: Option<ResourceRef>,
+}
+
+/// One nested leg's correlation identity.
+///
+/// A root invocation presents no correlation: it *is* the root. A nested leg
+/// presents the root invocation identifier plus the ordered subjects of the
+/// chain, the first of which is the subject the whole chain was initiated
+/// under. The chain's first subject must be the invocation's own subject, so
+/// a nested leg cannot arrive presenting a more privileged subject than the
+/// one that started the work (AE15, R8).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EffectCorrelation {
+    /// The invocation identifier every leg of the chain shares.
+    pub root_invocation_id: String,
+    /// The ordered subjects, root first. Never empty: the first entry is the
+    /// initiating subject.
+    pub identities: Vec<AuthoritySubject>,
+}
+
+/// One admitted privileged effect, as it crosses the origination leg.
+///
+/// This is the whole of what a caller may say. It names the `Operation`, the
+/// subject the decision is made for, the relationship legs the effect runs
+/// on, typed non-authority parameters, the dependency versions the caller
+/// expects, and the idempotency key of the logical effect. Every other value
+/// the effect needs - the source, the destination, the view, the identity, the
+/// program, the arguments, the environment - is resolved by the broker from
+/// its accepted graph and its trusted implementation contract, because there
+/// is no field here that could carry one (KTD8, R34, R50, AE7, AE22).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdmittedEffectInvocation {
+    /// The exact `Operation` row this invocation names.
+    pub operation: ResourceRef,
+    /// The subject the decision is made for: the resource that initiated the
+    /// work, not the transport the call arrived on.
+    pub subject: AuthoritySubject,
+    /// The relationship legs this effect runs on.
+    pub legs: Vec<EffectLegSelection>,
+    /// The typed non-authority parameters the operation's declared payload
+    /// schema admits.
+    pub parameters: CanonicalJsonObject,
+    /// The dependency versions the caller expects to be current.
+    #[serde(default)]
+    pub expected_dependencies: Vec<FreshnessTuple>,
+    /// The key of the logical effect, so a retry is the same effect.
+    pub idempotency_key: IdempotencyKey,
+    /// The correlation of a nested leg; absent for a root invocation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation: Option<EffectCorrelation>,
+}
+
+impl AdmittedEffectInvocation {
+    /// Assemble one invocation after checking its own shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EffectCarrierError`] when the reference does not name an
+    /// `Operation`, when no leg is named, when more than
+    /// [`MAX_EFFECT_LEGS`] legs are named, when no dependency version is
+    /// expected, when more than the binding contract's dependency bound are
+    /// expected, when the expected versions span two store generations or two
+    /// Zones, or when a nested leg's chain does not start with this
+    /// invocation's own subject.
+    pub fn new(
+        operation: ResourceRef,
+        subject: AuthoritySubject,
+        legs: Vec<EffectLegSelection>,
+        parameters: CanonicalJsonObject,
+        expected_dependencies: Vec<FreshnessTuple>,
+        idempotency_key: IdempotencyKey,
+        correlation: Option<EffectCorrelation>,
+    ) -> Result<Self, EffectCarrierError> {
+        if operation.resource_type().as_str() != OPERATION_RESOURCE_TYPE {
+            return Err(EffectCarrierError::NotAnOperation);
+        }
+        if legs.is_empty() {
+            return Err(EffectCarrierError::NoLeg);
+        }
+        if legs.len() > MAX_EFFECT_LEGS {
+            return Err(EffectCarrierError::TooManyLegs);
+        }
+        if expected_dependencies.is_empty() {
+            return Err(EffectCarrierError::NoExpectedDependency);
+        }
+        if expected_dependencies.len() > MAX_BINDING_DEPENDENCIES {
+            return Err(EffectCarrierError::TooManyExpectedDependencies);
+        }
+        let anchor = &expected_dependencies[0];
+        if expected_dependencies
+            .iter()
+            .any(|tuple| !tuple.same_store(anchor) || tuple.zone() != anchor.zone())
+        {
+            return Err(EffectCarrierError::MixedStoreGeneration);
+        }
+        if let Some(correlation) = &correlation
+            && (correlation.identities.is_empty()
+                || correlation.identities.len() > MAX_CORRELATION_IDENTITIES
+                || correlation.root_invocation_id.is_empty()
+                || correlation.identities[0] != subject)
+        {
+            // A nested leg that does not begin with this invocation's own
+            // subject is a substituted principal, not a correlated leg.
+            return Err(EffectCarrierError::CorrelationSubjectMismatch);
+        }
+        Ok(Self {
+            operation,
+            subject,
+            legs,
+            parameters,
+            expected_dependencies,
+            idempotency_key,
+            correlation,
+        })
+    }
+
+    /// The exact `Operation` this invocation names.
+    pub const fn operation(&self) -> &ResourceRef {
+        &self.operation
+    }
+
+    /// The subject the decision is made for.
+    pub const fn subject(&self) -> &AuthoritySubject {
+        &self.subject
+    }
+
+    /// The relationship legs this invocation names.
+    pub fn legs(&self) -> &[EffectLegSelection] {
+        &self.legs
+    }
+
+    /// The typed non-authority parameters.
+    pub const fn parameters(&self) -> &CanonicalJsonObject {
+        &self.parameters
+    }
+
+    /// The dependency versions the caller expects to be current.
+    pub fn expected_dependencies(&self) -> &[FreshnessTuple] {
+        &self.expected_dependencies
+    }
+
+    /// The key of the logical effect.
+    pub const fn idempotency_key(&self) -> &IdempotencyKey {
+        &self.idempotency_key
+    }
+
+    /// The correlation of a nested leg, when this invocation is one.
+    pub const fn correlation(&self) -> Option<&EffectCorrelation> {
+        self.correlation.as_ref()
+    }
+
+    /// The chain a nested leg presents, root first; empty for a root
+    /// invocation.
+    ///
+    /// The chain is the *root's*, so its length is not this leg's depth: a
+    /// leg admitted as the third hop of one invocation presents the same
+    /// two-identity root chain the first nested leg presented. The leg's own
+    /// depth is the recorded root's depth plus one, which only the broker
+    /// that admitted the root can say.
+    pub fn chain_identities(&self) -> &[AuthoritySubject] {
+        self.correlation
+            .as_ref()
+            .map_or(&[], |correlation| correlation.identities.as_slice())
+    }
+
+    /// Whether this invocation is a nested leg of an existing invocation.
+    pub fn is_nested(&self) -> bool {
+        self.correlation.is_some()
+    }
+}
+
+wire_deserialize!(
+    AdmittedEffectInvocation,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        operation: ResourceRef,
+        subject: AuthoritySubject,
+        legs: Vec<EffectLegSelection>,
+        parameters: CanonicalJsonObject,
+        #[serde(default)]
+        expected_dependencies: Vec<FreshnessTuple>,
+        idempotency_key: IdempotencyKey,
+        #[serde(default)]
+        correlation: Option<EffectCorrelation>,
+    },
+    wire,
+    AdmittedEffectInvocation::new(
+        wire.operation,
+        wire.subject,
+        wire.legs,
+        wire.parameters,
+        wire.expected_dependencies,
+        wire.idempotency_key,
+        wire.correlation,
+    )
+    .map_err(serde::de::Error::custom)
+);
+
+/// The closed carrier an admitted privileged effect crosses on.
+///
+/// It has exactly one member. That is the point: the frame kind an admitted
+/// effect arrives as is `admittedEffect`, and a legacy wire variant's name is
+/// not a member, so a straggler submitting one is refused by the decode rather
+/// than routed to a legacy handler. The carrier provides no translation and no
+/// compatibility arm - there is nothing to translate into (AE22, R49, R50).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", content = "invocation", rename_all = "camelCase")]
+pub enum AdmittedEffectCarrier {
+    /// The one admitted effect invocation.
+    AdmittedEffect(AdmittedEffectInvocation),
+}
+
+/// One descriptor an admitted effect returned.
+///
+/// The name is the `Operation`'s own fd-contract entry the descriptor answers,
+/// and the kind is the kernel kind the broker verified before answering. A
+/// caller can therefore join every returned descriptor to the declaration that
+/// promised it, and a descriptor no entry promised never crosses (R30, R38).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdmittedDescriptor {
+    /// The declared fd-contract entry this descriptor answers.
+    pub name: BoundedToken,
+    /// The kernel kind the broker verified.
+    pub kind: FdKind,
+}
+
+/// One refused admitted effect.
+///
+/// The code is the broker's closed refusal code, and the stage and reason are
+/// U1's: an operator reads which stage refused and why, and neither can echo a
+/// path, a numeric credential, or caller-supplied text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdmittedEffectRefusal {
+    /// The closed refusal code.
+    pub code: String,
+    /// The stage that refused.
+    pub stage: AdmissionStage,
+    /// The typed reason it refused.
+    pub reason: RefusalReason,
+}
+
+/// The broker's answer to one [`AdmittedEffectInvocation`].
+///
+/// A success carries the result object plus the descriptors the implementation
+/// minted, each already checked against the `Operation`'s declared response
+/// contract. A refusal carries the closed code with its enforcing stage and
+/// typed reason. Both carry the invocation identifier and the idempotency key,
+/// so a caller joins the reply to the audit record and a retry to the recorded
+/// outcome either way.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdmittedEffectResponse {
+    /// The invocation identifier the audit records key on.
+    pub invocation_id: String,
+    /// The exact `Operation` that ran.
+    pub operation: ResourceRef,
+    /// The key of the logical effect.
+    pub idempotency_key: IdempotencyKey,
+    /// The result object, present exactly when `refusal` is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<CanonicalJsonObject>,
+    /// The descriptors the implementation returned, checked against the
+    /// declared response contract.
+    #[serde(default)]
+    pub descriptors: Vec<AdmittedDescriptor>,
+    /// The refusal, present exactly when the invocation was refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<AdmittedEffectRefusal>,
+    /// The correlation of the leg, echoed so the caller can join a nested
+    /// reply to its root invocation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation: Option<EffectCorrelation>,
+}
+
+/// Why one admitted effect carrier was refused before it crossed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectCarrierError {
+    /// The named reference did not name an `Operation` row.
+    NotAnOperation,
+    /// No relationship leg was named.
+    NoLeg,
+    /// More legs than the carrier admits.
+    TooManyLegs,
+    /// No expected dependency version was named.
+    NoExpectedDependency,
+    /// More expected dependency versions than the binding contract admits.
+    TooManyExpectedDependencies,
+    /// The expected versions span two store generations or two Zones.
+    MixedStoreGeneration,
+    /// The idempotency key was empty.
+    EmptyIdempotencyKey,
+    /// The idempotency key exceeded its bound.
+    IdempotencyKeyTooLong,
+    /// The idempotency key carried a control character.
+    IdempotencyKeyNotCanonical,
+    /// A nested leg's chain did not start with this invocation's own subject.
+    CorrelationSubjectMismatch,
+}
+
+impl EffectCarrierError {
+    /// The closed code one carrier refusal is reported under.
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::NotAnOperation => "effect-invocation-not-an-operation",
+            Self::NoLeg => "effect-invocation-no-leg",
+            Self::TooManyLegs => "effect-invocation-too-many-legs",
+            Self::NoExpectedDependency => "effect-invocation-no-expected-dependency",
+            Self::TooManyExpectedDependencies => "effect-invocation-too-many-dependencies",
+            Self::MixedStoreGeneration => "effect-invocation-mixed-store-generation",
+            Self::EmptyIdempotencyKey => "effect-invocation-empty-idempotency-key",
+            Self::IdempotencyKeyTooLong => "effect-invocation-idempotency-key-too-long",
+            Self::IdempotencyKeyNotCanonical => "effect-invocation-idempotency-key-not-canonical",
+            Self::CorrelationSubjectMismatch => "effect-invocation-correlation-subject",
+        }
+    }
+}
+
+impl core::fmt::Display for EffectCarrierError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let text = match self {
+            Self::NotAnOperation => "an admitted effect must name an Operation row",
+            Self::NoLeg => "an admitted effect must name the relationship leg it runs on",
+            Self::TooManyLegs => "the invocation names more legs than the carrier admits",
+            Self::NoExpectedDependency => "an admitted effect must name its expected dependencies",
+            Self::TooManyExpectedDependencies => {
+                "the invocation names more dependencies than the binding contract admits"
+            }
+            Self::MixedStoreGeneration => {
+                "the expected dependencies span more than one store generation or Zone"
+            }
+            Self::EmptyIdempotencyKey => "the idempotency key is empty",
+            Self::IdempotencyKeyTooLong => "the idempotency key is over its bound",
+            Self::IdempotencyKeyNotCanonical => {
+                "the idempotency key carries a control character"
+            }
+            Self::CorrelationSubjectMismatch => {
+                "a nested leg's chain must start with the invocation's own subject"
+            }
+        };
+        formatter.write_str(text)
+    }
+}
+
+impl std::error::Error for EffectCarrierError {}
 
 impl BrokerRequest {
     /// Stable operation name for audit records.

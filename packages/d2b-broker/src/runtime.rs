@@ -327,6 +327,136 @@ fn stale_wire_refusal(retired: &RetiredWireVariant) -> BrokerResponse {
     })
 }
 
+
+// ---------------------------------------------------------------------------
+// The admitted effect frame gate (U10, KTD8)
+// ---------------------------------------------------------------------------
+
+/// The frame kind an admitted privileged effect arrives as.
+///
+/// The gate is the pre-dispatch half of KTD8: a frame that is not this kind
+/// never reaches an admitted-effect handler, so the legacy typed arms the
+/// production entry point still serves cannot be reached by presenting a
+/// privileged effect. The production cutover installs this gate in the accept
+/// loop; until then it is reachable from the boundary's own tests and from
+/// the composition that wires it.
+pub const ADMITTED_EFFECT_FRAME_KIND: &str = "admittedEffect";
+
+/// One frame the admitted-effect gate refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectFrameRefusal {
+    /// The closed refusal code: one of the admitted-effect boundary's codes.
+    pub code: &'static str,
+    /// The frame's `request.kind`, when the frame named one.
+    pub variant: Option<String>,
+}
+
+impl EffectFrameRefusal {
+    fn new(code: &'static str, variant: Option<&str>) -> Self {
+        Self {
+            code,
+            variant: variant.map(str::to_owned),
+        }
+    }
+}
+
+impl core::fmt::Display for EffectFrameRefusal {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match &self.variant {
+            Some(variant) => write!(formatter, "{}: {variant}", self.code),
+            None => write!(formatter, "{}", self.code),
+        }
+    }
+}
+
+impl std::error::Error for EffectFrameRefusal {}
+
+/// The broker process's admitted-effect ledger.
+///
+/// Process-lifetime state, exactly like the trusted-context store and the
+/// authority projection: the accepted invocation ids, the recorded initiating
+/// subjects of root invocations, and one terminal outcome per idempotency key
+/// are broker-owned, not per-connection.
+#[cfg(not(feature = "layer1-bootstrap"))]
+static ADMITTED_EFFECT_LEDGER: OnceLock<crate::envelope::EffectLedger> = OnceLock::new();
+
+/// The broker process's admitted-effect ledger, created on first use.
+#[cfg(not(feature = "layer1-bootstrap"))]
+pub fn admitted_effect_ledger() -> &'static crate::envelope::EffectLedger {
+    ADMITTED_EFFECT_LEDGER.get_or_init(crate::envelope::EffectLedger::new)
+}
+
+/// Screen one decoded origination frame at the admitted-effect boundary.
+///
+/// The screen is closed and it runs in one order, so a straggler learns why it
+/// was refused and never reaches a handler:
+///
+/// 1. A frame naming a retired wire variant is [`STALE_WIRE_VERSION`]: the
+///    retired name is recognized before the typed decode, exactly as the
+///    legacy gate does, and the caller is told which version boundary it has
+///    not moved past (AE22).
+/// 2. A frame that is not the admitted-effect carrier is
+///    [`LEGACY_EFFECT_REQUEST`]. There is no translation, no compatibility
+///    arm, and no route into a legacy handler.
+/// 3. A frame carrying an authority-bearing field name anywhere in its
+///    invocation object is [`AUTHORITY_PARAMETER`]: a host path, a command
+///    line, an environment map, a numerical credential, or a mount policy is
+///    refused by name, whatever the operation's schema declares (AE7, R50).
+/// 4. The invocation is then decoded, so the carrier's own invariants - the
+///    `Operation`, the legs, the single store generation, and the nested
+///    leg's own subject - are enforced at the frame.
+///
+/// # Errors
+///
+/// Returns the [`EffectFrameRefusal`] naming the closed code the frame was
+/// refused under. No return value carries a caller-supplied string, so a
+/// refusal cannot echo a payload back.
+#[cfg(not(feature = "layer1-bootstrap"))]
+pub fn admit_effect_frame(
+    envelope: &Value,
+) -> Result<d2b_contracts_broker::broker_wire::AdmittedEffectInvocation, EffectFrameRefusal> {
+    use d2b_contracts_broker::broker_wire::AdmittedEffectCarrier;
+    use d2b_core::execution_plan::is_authority_parameter;
+
+    if let Some(name) = request_kind(envelope)
+        && retired_wire_variant(name, RETIRED_WIRE_VARIANTS).is_some()
+    {
+        return Err(EffectFrameRefusal::new(
+            crate::envelope::STALE_WIRE_VERSION,
+            request_kind(envelope),
+        ));
+    }
+    if request_kind(envelope) != Some(ADMITTED_EFFECT_FRAME_KIND) {
+        return Err(EffectFrameRefusal::new(
+            crate::envelope::LEGACY_EFFECT_REQUEST,
+            request_kind(envelope),
+        ));
+    }
+    // The carrier is the frame's `request` object, which is where the closed
+    // wire spells the admitted effect; the envelope around it carries no
+    // admitted effect of its own.
+    let request = envelope
+        .get("request")
+        .cloned()
+        .ok_or_else(|| {
+            EffectFrameRefusal::new(crate::envelope::LEGACY_EFFECT_REQUEST, request_kind(envelope))
+        })?;
+    let carrier: AdmittedEffectCarrier = serde_json::from_value(request).map_err(|_| {
+        EffectFrameRefusal::new(crate::envelope::LEGACY_EFFECT_REQUEST, request_kind(envelope))
+    })?;
+    let AdmittedEffectCarrier::AdmittedEffect(invocation) = carrier;
+    let parameters = invocation.parameters();
+    if parameters
+        .keys()
+        .any(is_authority_parameter)
+    {
+        return Err(EffectFrameRefusal::new(
+            crate::envelope::AUTHORITY_PARAMETER,
+            request_kind(envelope),
+        ));
+    }
+    Ok(invocation)
+}
 /// Process-start configuration for one broker run, resolved from CLI
 /// flags and environment defaults by [`parse_command`].
 #[derive(Debug, Clone)]

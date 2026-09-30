@@ -19,6 +19,9 @@ pub mod provider_artifact;
 pub mod provider_capabilities;
 /// The one pure graph-admission evaluator (KTD4).
 pub mod resource_authority;
+/// The resolved private execution plan an admitted effect runs against
+/// (U10, KTD8).
+pub mod execution_plan;
 pub mod runtime;
 pub mod site;
 pub mod static_invariants;
