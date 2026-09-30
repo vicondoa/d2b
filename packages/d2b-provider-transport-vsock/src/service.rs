@@ -9,16 +9,21 @@
 //! outside this crate (INV-VSOCK-004).
 
 use crate::{
-    ReadySession,
+    GraphBoundSession, ReadySession,
     bridge::{
         BridgeControl, BridgeExit, BridgeStats, NamedStreamError, NamedStreamId, NamedStreamPort,
         TransportHandle, run_bridge,
     },
     errors::{ServiceError, VsockEffectError},
     framing::VsockTransportDescriptor,
+    graph_binding::{
+        AdmittedTransportRoute, TransportAttachEvidence, TransportAttachRefusal,
+        TransportBindingRegistry, admit_attach,
+    },
     limits::{CLOSE_GRACE_MS, MAX_ACTIVE_TRANSPORTS, MAX_OPEN_DEADLINE_MS, MIN_OPEN_DEADLINE_MS},
 };
 use async_trait::async_trait;
+use d2b_contracts_resource::v3::{AdmissionStage, RefusalReason};
 use std::{
     collections::HashMap,
     fmt,
@@ -337,6 +342,7 @@ where
     effect: Arc<P>,
     streams: Arc<N>,
     expected_identity: crate::GuestIdentity,
+    bindings: TransportBindingRegistry,
     active: Arc<Mutex<HashMap<TransportHandle, TransportEntry>>>,
     completed: Arc<Mutex<HashMap<TransportHandle, TransportObservation>>>,
     slots: Arc<Semaphore>,
@@ -367,11 +373,21 @@ where
             effect: Arc::new(effect),
             streams: Arc::new(streams),
             expected_identity,
+            bindings: TransportBindingRegistry::new(),
             active: Arc::new(Mutex::new(HashMap::new())),
             completed: Arc::new(Mutex::new(HashMap::new())),
             slots: Arc::new(Semaphore::new(MAX_ACTIVE_TRANSPORTS)),
             next_handle: AtomicU64::new(1),
         }
+    }
+
+    /// Return the bounded set of admitted transport relationships.
+    ///
+    /// This is the only list that can say a peer may attach: it holds graph
+    /// relationships keyed by their committed identity, never a peer address,
+    /// CID, or socket the transport decided on itself.
+    pub const fn bindings(&self) -> &TransportBindingRegistry {
+        &self.bindings
     }
 
     /// Return the stable Provider reference.
@@ -675,6 +691,64 @@ where
         })
     }
 
+    /// Open one transport on a relationship this service still admits.
+    ///
+    /// The gate runs again at realization time, against the relationship the
+    /// service's own registry currently holds rather than against the
+    /// snapshot the session was minted with. A relationship revoked, drained,
+    /// or re-fenced between authentication and this call therefore admits
+    /// nothing, which is what stops a reconnect from reviving authority the
+    /// graph has already taken back. The realization itself is the existing
+    /// [`Self::open_transport`], so there is exactly one open path.
+    ///
+    /// # Errors
+    ///
+    /// Returns the ordered [`TransportAttachRefusal`] when this service holds
+    /// no admitted relationship for the session's route or the presented
+    /// evidence is not the admitted relationship, and the realization
+    /// failure's own stable code when the open itself is refused.
+    pub async fn open_transport_under_binding(
+        &mut self,
+        session: &GraphBoundSession,
+        evidence: &TransportAttachEvidence,
+        request: OpenTransportRequest,
+    ) -> Result<OpenTransportResponse, TransportAttachRefusal> {
+        self.live_route(session.route(), evidence)
+            .inspect_err(|refusal| {
+                tracing::warn!(
+                    provider = "transport-vsock",
+                    endpoint = %request.endpoint_id,
+                    binding = %request.binding_id,
+                    reason = %refusal,
+                    "graph-bound transport open refused: evidence is not the admitted relationship"
+                );
+            })?;
+        self.open_transport(session.ready(), request)
+            .await
+            .map_err(|error| {
+                tracing::warn!(
+                    provider = "transport-vsock",
+                    reason = %error,
+                    "graph-bound transport realization refused after the relationship was admitted"
+                );
+                TransportAttachRefusal::from(error)
+            })
+    }
+
+    /// Measure presented evidence against the relationship this service holds
+    /// for one route, so a stale session cannot open on a revoked graph.
+    fn live_route(
+        &self,
+        route: &AdmittedTransportRoute,
+        evidence: &TransportAttachEvidence,
+    ) -> Result<(), TransportAttachRefusal> {
+        let live = self
+            .bindings
+            .binding(route.key())
+            .ok_or_else(TransportAttachRefusal::relationship_not_admitted)?;
+        admit_attach(&live, evidence).map(drop)
+    }
+
     /// Close one transport. The bridge closes before the effect is released.
     ///
     /// # Errors
@@ -966,6 +1040,44 @@ fn futures_phase_is_degraded(entry: &TransportEntry) -> bool {
 impl From<NamedStreamError> for ServiceError {
     fn from(_: NamedStreamError) -> Self {
         ServiceError::StreamUnavailable
+    }
+}
+
+impl From<ServiceError> for TransportAttachRefusal {
+    fn from(value: ServiceError) -> Self {
+        let (stage, reason) = match value {
+            ServiceError::SessionNotReady | ServiceError::SessionIdentityMismatch => (
+                AdmissionStage::Authorize,
+                RefusalReason::IdentityNotAuthorized,
+            ),
+            ServiceError::InvalidEndpointId
+            | ServiceError::InvalidBindingId
+            | ServiceError::InvalidDeadline
+            | ServiceError::InvalidSessionGeneration => (
+                AdmissionStage::Normalize,
+                RefusalReason::UntrustedImplementation,
+            ),
+            ServiceError::SessionGenerationMismatch => {
+                (AdmissionStage::Activate, RefusalReason::StaleAuthority)
+            }
+            ServiceError::ProviderOverloaded => {
+                (AdmissionStage::Reserve, RefusalReason::LimitExceedsCeiling)
+            }
+            ServiceError::Effect(_) => {
+                (AdmissionStage::Prepare, RefusalReason::UnprovenEffect)
+            }
+            ServiceError::StreamUnavailable => {
+                (AdmissionStage::Prepare, RefusalReason::TargetSupportMissing)
+            }
+            ServiceError::UnknownTransportHandle => (
+                AdmissionStage::Release,
+                RefusalReason::IdentityNotAuthorized,
+            ),
+            ServiceError::CloseUnconfirmed => {
+                (AdmissionStage::Drain, RefusalReason::UnprovenEffect)
+            }
+        };
+        TransportAttachRefusal::at(stage, reason, value.code())
     }
 }
 

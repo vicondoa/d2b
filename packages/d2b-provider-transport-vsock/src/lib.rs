@@ -7,6 +7,7 @@ mod auth;
 mod bridge;
 mod errors;
 mod framing;
+mod graph_binding;
 mod limits;
 mod relay;
 mod service;
@@ -15,15 +16,21 @@ mod state_volume;
 mod topology;
 
 pub use auth::{
-    GuestIdentity, PeerCid, ReadySession, SessionAuthority, SessionKey, SessionProof,
-    SessionRejectReason, SessionState,
+    GraphBoundSession, GuestIdentity, PeerCid, ReadySession, SessionAuthority, SessionKey,
+    SessionProof, SessionRejectReason, SessionState,
 };
 pub use bridge::{
-    BridgeControl, BridgeExit, BridgeStats, NamedStreamError, NamedStreamId, NamedStreamPort,
-    TransportHandle,
+    BridgeControl, BridgeExit, BridgeStats, CarriageClass, ControlPlaneInjectionRefusal,
+    ControlPlaneRequest, ControlRouteToken, NamedStreamError, NamedStreamId, NamedStreamPort,
+    TransportControlOperation, TransportHandle, classify_carriage,
 };
 pub use errors::{ServiceError, TransportError, VsockEffectError};
 pub use framing::{FramedVsockTransport, VsockTransportDescriptor};
+pub use graph_binding::{
+    AdmittedTransportBinding, AdmittedTransportRoute, RelationshipFence, RelationshipPhase,
+    TransportAttachEvidence, TransportAttachRefusal, TransportBindingRefusal,
+    TransportBindingRegistry, admit_attach, admit_route, MAX_ADMITTED_TRANSPORT_BINDINGS,
+};
 pub use limits::{
     CLOSE_GRACE_MS, MAX_ACTIVE_TRANSPORTS, MAX_FRAME_BYTES, MAX_OPEN_DEADLINE_MS,
     MAX_REPLAY_ENTRIES, MIN_OPEN_DEADLINE_MS,

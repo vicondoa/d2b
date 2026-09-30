@@ -1,7 +1,12 @@
 //! Guest-bound proof-of-possession and replay-safe ComponentSession admission.
 
-use crate::limits::MAX_REPLAY_ENTRIES;
-use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
+use crate::{
+    graph_binding::{
+        AdmittedTransportRoute, TransportAttachEvidence, TransportAttachRefusal, admit_route,
+    },
+    limits::MAX_REPLAY_ENTRIES,
+};
+use d2b_contracts_resource::v3::{AdmissionStage, RefusalReason, ResourceRef, ZoneId};
 use ring::hmac;
 use std::{collections::HashSet, fmt};
 
@@ -182,6 +187,32 @@ impl fmt::Display for SessionRejectReason {
 
 impl std::error::Error for SessionRejectReason {}
 
+impl From<SessionRejectReason> for TransportAttachRefusal {
+    fn from(value: SessionRejectReason) -> Self {
+        let (stage, reason) = match value {
+            SessionRejectReason::CidMismatch
+            | SessionRejectReason::GuestMismatch
+            | SessionRejectReason::ZoneMismatch => {
+                (AdmissionStage::Authorize, RefusalReason::IdentityNotAuthorized)
+            }
+            SessionRejectReason::StaleSignature => {
+                (AdmissionStage::Authorize, RefusalReason::StaleAuthority)
+            }
+            SessionRejectReason::Replay => (AdmissionStage::Admit, RefusalReason::StaleAuthority),
+            SessionRejectReason::MalformedProof => {
+                (AdmissionStage::Authorize, RefusalReason::UntrustedImplementation)
+            }
+            SessionRejectReason::SignatureInvalid => {
+                (AdmissionStage::Authorize, RefusalReason::IdentityNotAuthorized)
+            }
+            SessionRejectReason::AuthorityUnavailable => {
+                (AdmissionStage::Admit, RefusalReason::LimitExceedsCeiling)
+            }
+        };
+        TransportAttachRefusal::at(stage, reason, value.code())
+    }
+}
+
 /// State of one admitted transport session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionState {
@@ -238,6 +269,45 @@ impl fmt::Debug for ReadySession {
     }
 }
 
+/// One authenticated session bound to an admitted transport relationship.
+///
+/// The session authority and the relationship it was admitted against travel
+/// together, so no realization path can be handed a session without also
+/// naming the relationship whose fence governs it.
+#[derive(Debug)]
+pub struct GraphBoundSession {
+    ready: ReadySession,
+    route: AdmittedTransportRoute,
+}
+
+impl GraphBoundSession {
+    /// Borrow the authenticated session authority.
+    pub const fn ready(&self) -> &ReadySession {
+        &self.ready
+    }
+
+    /// Borrow the admitted relationship this session realizes.
+    pub const fn route(&self) -> &AdmittedTransportRoute {
+        &self.route
+    }
+
+    /// Return the current session state.
+    pub const fn state(&self) -> SessionState {
+        self.ready.state()
+    }
+
+    /// Return the Core-owned reconnect generation for this session.
+    pub const fn generation(&self) -> u64 {
+        self.ready.generation()
+    }
+
+    /// Check that a route is the relationship this session was admitted
+    /// against, while the session is still Ready.
+    pub fn matches_route(&self, route: &AdmittedTransportRoute) -> bool {
+        self.ready.state() == SessionState::Ready && self.route.key() == route.key()
+    }
+}
+
 /// Replay-safe authority for one exact Guest and Zone.
 pub struct SessionAuthority {
     expected: GuestIdentity,
@@ -271,6 +341,46 @@ impl SessionAuthority {
     /// [`SessionRejectReason::SignatureInvalid`] when the tag does not
     /// verify.
     pub fn authenticate(
+        &mut self,
+        observed_cid: PeerCid,
+        proof: SessionProof,
+    ) -> Result<ReadySession, SessionRejectReason> {
+        self.verify(observed_cid, proof)
+    }
+
+    /// Authenticate one proof against a live admitted transport relationship.
+    ///
+    /// The attach gate runs first and reads only: a foreign Zone, a stale
+    /// store, boot, desired revision, sequence, or reconnect generation, a
+    /// draining or revoked relationship refuses before the replay ledger or
+    /// the HMAC comparison is touched, so a refused relationship never
+    /// consumes a nonce and never spends the peer's next valid proof.
+    ///
+    /// # Errors
+    ///
+    /// Returns the ordered [`TransportAttachRefusal`] of [`admit_route`] when
+    /// the presented evidence is not the admitted relationship, and otherwise
+    /// the existing proof refusal carried as a refusal whose stable code is
+    /// that [`SessionRejectReason`]'s own code.
+    pub fn authenticate_under_binding(
+        &mut self,
+        route: &AdmittedTransportRoute,
+        evidence: &TransportAttachEvidence,
+        observed_cid: PeerCid,
+        proof: SessionProof,
+    ) -> Result<GraphBoundSession, TransportAttachRefusal> {
+        let admitted = admit_route(route, evidence)?;
+        let ready = self
+            .verify(observed_cid, proof)
+            .map_err(TransportAttachRefusal::from)?;
+        Ok(GraphBoundSession {
+            ready,
+            route: admitted,
+        })
+    }
+
+    /// The one proof comparison both admission paths run, in one order.
+    fn verify(
         &mut self,
         observed_cid: PeerCid,
         proof: SessionProof,
