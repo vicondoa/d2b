@@ -822,3 +822,16 @@ test_suite(
     name = "all-tests",
     tags = ["-local", "-no-remote-exec"],
 )
+
+d2b_rust_test(
+    name = "cloud_hypervisor_graph_inputs",
+    srcs = ["tests/cloud_hypervisor_graph_inputs.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2bd_lib",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-provider-guest:d2b_provider_guest",
+        "//packages/d2b-provider-guest-cloud-hypervisor:d2b_provider_guest_cloud_hypervisor",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)

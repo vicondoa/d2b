@@ -893,12 +893,12 @@
     },
     {
       "file": "packages/d2bd/src/resource_runtime.rs",
-      "line": 7524,
+      "line": 7582,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/resource_runtime.rs",
-      "line": 8700,
+      "line": 8758,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {

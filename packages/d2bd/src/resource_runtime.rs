@@ -89,13 +89,13 @@ use d2b_provider_toolkit::{
 };
 use d2b_provider_guest::GuestSpec;
 use d2b_provider_guest_cloud_hypervisor::{
-    AuthenticatedResourceApiAdapter, AuthenticatedResourceSession, BootstrapGraph, ChildRole,
-    CloudHypervisorConfig, CloudHypervisorController, CloudHypervisorResourceApiError,
-    CloudHypervisorResourceRequest, CloudHypervisorResourceResponse, FencedChild,
-    GuestChildCommitResponse, GuestDependencySnapshot, GuestFinalizationInput, GuestGenerationSet,
-    GuestSessionEvidence, GuestSessionEvidenceBinding, GuestSetupDescriptor,
+    AdmittedGuestGraph, AuthenticatedResourceApiAdapter, AuthenticatedResourceSession,
+    BootstrapGraph, ChildRole, CloudHypervisorConfig, CloudHypervisorController,
+    CloudHypervisorResourceApiError, CloudHypervisorResourceRequest, CloudHypervisorResourceResponse,
+    FencedChild, GuestChildCommitResponse, GuestDependencySnapshot, GuestFinalizationInput,
+    GuestGenerationSet, GuestSessionEvidence, GuestSessionEvidenceBinding, GuestSetupDescriptor,
     GuestSetupDescriptorVerifier, GuestSnapshot, OwnedChildSnapshot, ProcessState, SessionState,
-    VerifiedGuestSetupDescriptor, deterministic_child_ref,
+    VerifiedGuestSetupDescriptor, classify_guest_execution_parent, deterministic_child_ref,
 };
 use d2b_resource_api::{
     ResourceApiClient, ResourceBusAdapter, ResourceService,
@@ -3079,6 +3079,64 @@ impl core::fmt::Debug for ZoneResourceRuntime {
             .field("readiness", &self.readiness)
             .finish()
     }
+}
+
+/// Why one Cloud Hypervisor Guest's graph inputs were refused.
+///
+/// Every variant is field-free: a refusal names the stage, never a resource
+/// identity or caller text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloudHypervisorGraphInputError {
+    /// The Guest's flattened fragment is not expressible in the typed
+    /// execution-parent vocabulary.
+    ExecutionParentUnclassified,
+    /// The committed rows carry no classified input at all.
+    GraphUnclassified,
+}
+
+impl core::fmt::Display for CloudHypervisorGraphInputError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::ExecutionParentUnclassified => "cloud-hypervisor-execution-parent-unclassified",
+            Self::GraphUnclassified => "cloud-hypervisor-graph-unclassified",
+        })
+    }
+}
+
+impl std::error::Error for CloudHypervisorGraphInputError {}
+
+/// Classify one Cloud Hypervisor Guest's committed inputs into its admitted
+/// graph (U21; AE31-AE33).
+///
+/// The Guest's own `VolumeBinding` rows are the only thing that becomes a
+/// relationship whose consumer is the Guest. A row in the retired
+/// attachment shape is not a request this projection will translate, and a
+/// row whose consumer is another Guest is not this one's use: guessing either
+/// would be the flattening this conversion removes.
+///
+/// Re-exported so this package's owning integration test drives the same
+/// projection production will install, rather than a test-local imitation
+/// of it.
+pub fn cloud_hypervisor_guest_graph(
+    guest_ref: &ResourceRef,
+    guest_spec: &GuestSpec,
+    binding_rows: &[StoredResource],
+) -> Result<AdmittedGuestGraph, CloudHypervisorGraphInputError> {
+    let mut parent = classify_guest_execution_parent(guest_spec.policy())
+        .map_err(|_| CloudHypervisorGraphInputError::ExecutionParentUnclassified)?;
+    for row in binding_rows {
+        let Some(request) = d2b_provider_volume_binding::parsed_consumer_request(row) else {
+            continue;
+        };
+        if request.consumer_ref() != guest_ref {
+            continue;
+        }
+        parent = parent
+            .with_parent_use(guest_ref, request)
+            .map_err(|_| CloudHypervisorGraphInputError::ExecutionParentUnclassified)?;
+    }
+    AdmittedGuestGraph::from_execution_parent(guest_ref.clone(), &parent)
+        .map_err(|_| CloudHypervisorGraphInputError::GraphUnclassified)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

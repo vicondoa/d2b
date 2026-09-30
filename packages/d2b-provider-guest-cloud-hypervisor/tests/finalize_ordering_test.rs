@@ -1,8 +1,12 @@
-use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneRevision};
+use d2b_contracts_resource::v3::{
+    BindingLifecycleState, BindingObservation, BindingSlot, BoundedToken, CompletionCondition,
+    ExecutionPolicy, ReleaseOutcome, ResourceRef, ResourceUid, VolumeBindingRequest,
+    VolumePresentation, ZoneRevision, volume::AttachmentAccess,
+};
 use d2b_provider_guest_cloud_hypervisor::{
-    ChildRole, FencedChild, FinalizationBlockReason, FinalizationDisposition, FinalizationStep,
-    GuestFinalizationInput, ProcessState, SessionState, UpgradeReason, plan_finalization,
-    plan_upgrade,
+    AdmittedGuestGraph, ChildRole, FencedChild, FinalizationBlockReason, FinalizationDisposition,
+    FinalizationStep, GuestFinalizationInput, ProcessState, SessionState, UpgradeReason,
+    classify_guest_execution_parent, plan_finalization, plan_upgrade,
 };
 
 const GUEST_UID: &str = "123e4567-e89b-42d3-a456-426614174000";
@@ -293,5 +297,82 @@ fn disruptive_upgrade_preserves_durable_volume_and_advances_session_generation()
     assert!(matches!(
         plan.steps().get(2),
         Some(FinalizationStep::InvalidateSession { .. })
+    ));
+}
+
+/// The drain order the planner produces is the descendant order; the Guest's
+/// own admitted use settles after it and before the finalizer. The planner
+/// plans the descendants, and the controller's finalizer gate reads this
+/// fact, so the two halves are asserted here against the same graph the gate
+/// reads rather than a second imitation of it.
+#[test]
+fn guest_use_is_released_after_descendants_and_before_the_finalizer() {
+    let guest_ref = ResourceRef::parse("Guest/gateway").unwrap();
+    let request = VolumeBindingRequest::new(
+        ResourceRef::parse("Volume/gateway-system").unwrap(),
+        guest_ref.clone(),
+        BindingSlot::parse("system").unwrap(),
+        BoundedToken::parse("system").unwrap(),
+        AttachmentAccess::ReadWrite,
+        VolumePresentation::block_device(0).unwrap(),
+    )
+    .unwrap();
+    let parent = classify_guest_execution_parent(&ExecutionPolicy::system_default())
+        .unwrap()
+        .with_parent_use(&guest_ref, request)
+        .unwrap();
+    let mut graph = AdmittedGuestGraph::from_execution_parent(guest_ref, &parent).unwrap();
+    let request = parent.parent_use().next().unwrap().clone();
+    let source_uid = ResourceUid::parse(GUEST_UID).unwrap();
+    let observe = |release: ReleaseOutcome| {
+        BindingObservation::new(
+            BindingLifecycleState::Active,
+            CompletionCondition::Complete,
+            CompletionCondition::Complete,
+            release,
+        )
+    };
+
+    // An unobserved relationship holds use, so nothing may retire the Guest
+    // even once every descendant is gone.
+    assert!(graph.use_outstanding());
+    graph
+        .observe_binding(&request, &source_uid, observe(ReleaseOutcome::Outstanding))
+        .unwrap();
+    assert!(graph.use_outstanding());
+
+    graph
+        .observe_binding(&request, &source_uid, observe(ReleaseOutcome::Draining))
+        .unwrap();
+    assert!(
+        graph.use_outstanding(),
+        "draining use is still outstanding use"
+    );
+
+    graph
+        .observe_binding(&request, &source_uid, observe(ReleaseOutcome::Released))
+        .unwrap();
+    assert!(!graph.use_outstanding());
+
+    // With use settled, the planner's last step is the finalizer clear, after
+    // every descendant delete.
+    let plan = plan_finalization(
+        GuestFinalizationInput::new(
+            ResourceUid::parse(GUEST_UID).unwrap(),
+            SessionState::Closed,
+            true,
+            ProcessState::Absent,
+            Vec::new(),
+            false,
+            false,
+            false,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(plan.disposition(), FinalizationDisposition::Complete);
+    assert!(matches!(
+        plan.steps(),
+        [FinalizationStep::ClearGuestFinalizer]
     ));
 }

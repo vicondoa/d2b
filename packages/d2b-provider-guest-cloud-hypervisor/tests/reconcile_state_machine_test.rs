@@ -7,15 +7,21 @@ use tokio::sync::Mutex;
 
 use async_trait::async_trait;
 use d2b_contracts_resource::v3::{
-    DesiredLifecycle, ResourceGeneration, ResourcePhase, ResourceRef, ResourceUid, ZoneId,
-    ZoneRevision,
+    BindingKind, BindingLifecycleState, BindingObservation, BindingSlot, BoundedToken, BudgetSpec,
+    CanonicalJsonObject, ChildBindingRequest, CompletionCondition, DesiredLifecycle,
+    DeviceAttachment, ExecutionDomain, ExecutionPolicy, NetworkAttachment, ReleaseOutcome,
+    RequestedRights, ResourceGeneration, ResourcePhase, ResourceRef, ResourceUid,
+    VolumeBindingRequest, VolumePresentation, ZoneId, ZoneRevision, volume::AttachmentAccess,
 };
 use d2b_provider_guest_cloud_hypervisor::{
-    BootstrapGraph, ChildRole, ChildSpecUpdate, CloudHypervisorController, CloudHypervisorError,
-    CloudHypervisorResourceApi, CloudHypervisorResourceApiError, CommittedChild,
-    GuestChildCommitResponse, GuestChildCreateBatch, GuestDependencySnapshot,
-    GuestFinalizationInput, GuestGenerationSet, GuestSnapshot, GuestStatusProjection,
-    OwnedChildSnapshot, ProcessAdoptionStatus, ProcessState, SessionState, UpgradeReason,
+    AdmittedGuestGraph, BindingAdoptionFence, BindingAdoptionStatus, BootstrapGraph, ChildRole,
+    ChildSpecUpdate, CloudHypervisorController, CloudHypervisorError, CloudHypervisorResourceApi,
+    CloudHypervisorResourceApiError, CommittedChild, GuestChildCommitResponse,
+    GuestChildCreateBatch, GuestCondition, GuestConsumerCompletion, GuestDependencySnapshot,
+    GuestFinalizationInput, GuestGenerationSet, GuestSnapshot, GuestStartGate,
+    GuestStatusProjection, ObservedBindingRow, OwnedChildSnapshot, ProcessAdoptionStatus,
+    ProcessState, SessionState, UpgradeReason, classify_binding_adoption,
+    classify_guest_execution_parent,
 };
 
 mod common;
@@ -31,6 +37,81 @@ fn graph() -> BootstrapGraph {
         vec![],
     )
     .unwrap()
+}
+
+/// The one `VolumeBinding` request this Guest consumes as itself (AE32).
+fn guest_storage_request(name: &str, view: &str) -> VolumeBindingRequest {
+    VolumeBindingRequest::new(
+        ResourceRef::parse("Volume/store").unwrap(),
+        ResourceRef::parse(&format!("Guest/{name}")).unwrap(),
+        BindingSlot::parse("root").unwrap(),
+        BoundedToken::parse(view).unwrap(),
+        AttachmentAccess::ReadOnly,
+        VolumePresentation::filesystem("/var/lib/d2b/store").unwrap(),
+    )
+    .unwrap()
+}
+
+fn observed(
+    state: BindingLifecycleState,
+    prepare: CompletionCondition,
+    consumer: CompletionCondition,
+    release: ReleaseOutcome,
+) -> BindingObservation {
+    BindingObservation::new(state, prepare, consumer, release)
+}
+
+/// The admitted graph for one Guest, with every relationship reported
+/// `Pending` until an observation is supplied.
+fn admitted_graph(name: &str, observations: &[BindingObservation]) -> AdmittedGuestGraph {
+    let guest_ref = ResourceRef::parse(&format!("Guest/{name}")).unwrap();
+    let parent = classify_guest_execution_parent(&ExecutionPolicy::system_default())
+        .unwrap()
+        .with_parent_use(&guest_ref, guest_storage_request(name, "store"))
+        .unwrap();
+    let mut graph = AdmittedGuestGraph::from_execution_parent(guest_ref, &parent).unwrap();
+    let request = guest_storage_request(name, "store");
+    let source_uid = ResourceUid::parse(GUEST_UID).unwrap();
+    for observation in observations {
+        graph
+            .observe_binding(&request, &source_uid, *observation)
+            .expect("the Guest consumes this relationship");
+    }
+    graph
+}
+
+/// A fragment whose only attachment inputs are a Device and a Network a
+/// Guest declares for the workloads it runs (AE31).
+fn ceiling_policy() -> ExecutionPolicy {
+    ExecutionPolicy::new(
+        ExecutionDomain::System,
+        vec![ExecutionDomain::System],
+        None,
+        BudgetSpec::default(),
+        vec![NetworkAttachment::new(ResourceRef::parse("Network/work").unwrap(), false).unwrap()],
+        vec![DeviceAttachment::new(ResourceRef::parse("Device/kvm").unwrap(), true).unwrap()],
+        Vec::new(),
+    )
+    .unwrap()
+}
+
+/// An admitted graph whose only classified input is the child's support
+/// ceiling: a Guest that declares a Device and a Network for the workloads
+/// it runs and consumes nothing of its own (AE31).
+fn ceiling_only_graph(name: &str) -> AdmittedGuestGraph {
+    let guest_ref = ResourceRef::parse(&format!("Guest/{name}")).unwrap();
+    AdmittedGuestGraph::from_execution_parent(
+        guest_ref,
+        &classify_guest_execution_parent(&ceiling_policy()).unwrap(),
+    )
+    .unwrap()
+}
+
+fn make_admitted_controller(
+    api: FakeApi,
+    admitted: AdmittedGuestGraph,
+) -> CloudHypervisorController<FakeApi> {
+    make_controller(api).with_admitted_graph(admitted)
 }
 
 fn guest(name: &str, zone: &str, uid: &str, zone_uid: &str) -> GuestSnapshot {
@@ -510,6 +591,267 @@ async fn current_binding_readiness_leaves_the_vmm_running() {
         .status()
         .has_condition(d2b_provider_guest_cloud_hypervisor::GuestCondition::ProcessStopped));
     assert!(state.lock().await.updates.is_empty());
+}
+
+/// AE6 and AE21: a Guest whose storage export is prepared but not yet
+/// mounted starts, and the outstanding mount is reported afterwards. Waiting
+/// for the consumer's own completion before permitting the start would make
+/// the start depend on the thing the start enables.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn prepared_storage_permits_boot_and_mount_completion_follows() {
+    let guest = guest("gateway", "work", GUEST_UID, ZONE_UID);
+    let api = FakeApi::new(guest.clone(), dependencies(true, true, true, false, true));
+    let state = Arc::clone(&api.state);
+    let admitted = admitted_graph(
+        "gateway",
+        &[observed(
+            BindingLifecycleState::Active,
+            CompletionCondition::Complete,
+            CompletionCondition::Pending,
+            ReleaseOutcome::Outstanding,
+        )],
+    );
+    assert_eq!(admitted.start_gate(), GuestStartGate::Permitted);
+    assert_eq!(
+        admitted.consumer_completion(),
+        GuestConsumerCompletion::Incomplete
+    );
+    let mut controller = make_admitted_controller(api.clone(), admitted);
+    controller.register().await.unwrap();
+
+    controller.reconcile(guest.resource_ref()).await.unwrap();
+    let batch = state.lock().await.commits[0].clone();
+    state.lock().await.children = matching_children(&guest, &batch);
+
+    let outcome = controller.reconcile(guest.resource_ref()).await.unwrap();
+    assert!(
+        !outcome
+            .status()
+            .has_condition(GuestCondition::AdmittedBindingSourceNotPrepared),
+        "a prepared source clears the pre-start condition"
+    );
+    assert!(
+        outcome
+            .status()
+            .has_condition(GuestCondition::AdmittedBindingConsumerIncomplete),
+        "the outstanding mount is reported rather than waited on"
+    );
+    assert!(
+        !outcome.status().has_condition(GuestCondition::ProcessStopped),
+        "the VMM runs on prepared storage"
+    );
+    assert!(state.lock().await.updates.is_empty());
+}
+
+/// The other half of AE21: an unprepared source still holds the VMM stopped,
+/// and the consumer side is reported as not yet observable rather than as a
+/// failed mount. The two conditions stay apart instead of folding into one
+/// readiness both sides wait on.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn an_unprepared_source_keeps_the_vmm_stopped() {
+    let guest = guest("gateway", "work", GUEST_UID, ZONE_UID);
+    let api = FakeApi::new(guest.clone(), dependencies(true, true, true, true, true));
+    let state = Arc::clone(&api.state);
+    let admitted = admitted_graph(
+        "gateway",
+        &[observed(
+            BindingLifecycleState::Admitted,
+            CompletionCondition::Pending,
+            CompletionCondition::Pending,
+            ReleaseOutcome::Outstanding,
+        )],
+    );
+    assert_eq!(admitted.start_gate(), GuestStartGate::SourcePending);
+    assert_eq!(
+        admitted.consumer_completion(),
+        GuestConsumerCompletion::NotYetRunning
+    );
+    let mut controller = make_admitted_controller(api.clone(), admitted);
+    controller.register().await.unwrap();
+
+    controller.reconcile(guest.resource_ref()).await.unwrap();
+    let batch = state.lock().await.commits[0].clone();
+    state.lock().await.children = matching_children(&guest, &batch);
+
+    let outcome = controller.reconcile(guest.resource_ref()).await.unwrap();
+    assert!(
+        outcome
+            .status()
+            .has_condition(GuestCondition::AdmittedBindingSourceNotPrepared)
+    );
+    let process_target = batch
+        .mutations()
+        .iter()
+        .map(|mutation| mutation.target().clone())
+        .find(|target| target.resource_type().as_str() == "Process")
+        .unwrap();
+    let state = state.lock().await;
+    let stop = state
+        .updates
+        .iter()
+        .find(|update| *update.target() == process_target)
+        .expect("VMM stop update");
+    assert_eq!(stop.desired_lifecycle(), Some(DesiredLifecycle::Stopped));
+}
+
+/// Scenario 2: a Device and a Network a Guest declared for the workloads it
+/// runs are a child support ceiling. They allocate the Guest no access, so
+/// the flattened families reporting them not Ready no longer hold its boot,
+/// even though they keep reporting their own condition.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn a_support_ceiling_creates_no_binding_and_holds_no_boot() {
+    let guest = guest("gateway", "work", GUEST_UID, ZONE_UID);
+    let api = FakeApi::new(guest.clone(), dependencies(false, false, true, true, true));
+    let state = Arc::clone(&api.state);
+    let admitted = ceiling_only_graph("gateway");
+    assert!(
+        admitted.guest_bindings().is_empty(),
+        "a support ceiling creates no Guest relationship"
+    );
+    assert!(
+        admitted
+            .support_ceiling()
+            .admits(BindingKind::Device, RequestedRights::Exclusive)
+    );
+    let mut controller = make_admitted_controller(api.clone(), admitted);
+    controller.register().await.unwrap();
+
+    controller.reconcile(guest.resource_ref()).await.unwrap();
+    let batch = state.lock().await.commits[0].clone();
+    state.lock().await.children = matching_children(&guest, &batch);
+
+    let outcome = controller.reconcile(guest.resource_ref()).await.unwrap();
+    assert!(
+        !outcome.status().has_condition(GuestCondition::ProcessStopped),
+        "a ceiling is an admission constraint, not a boot dependency"
+    );
+    assert!(
+        outcome
+            .status()
+            .has_condition(GuestCondition::DeviceDependencyNotReady)
+            && outcome
+                .status()
+                .has_condition(GuestCondition::NetworkDependencyNotReady),
+        "the cutover keeps the old families' own verdicts observable"
+    );
+    assert!(state.lock().await.updates.is_empty());
+}
+
+/// AE32 and AE33: the Guest's own consumption is one relationship whose
+/// consumer is the Guest, while a child's request default shapes that
+/// child's draft and never becomes one.
+#[test]
+fn guest_consumption_is_a_guest_binding_and_child_defaults_are_not() {
+    let default_entry = CanonicalJsonObject::parse(
+        &serde_json::to_vec(&serde_json::json!({
+            "consumerRef": "Process/gateway-vmm",
+            "volumeRef": "Volume/store",
+            "view": "store",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let policy = ExecutionPolicy::new(
+        ExecutionDomain::System,
+        vec![ExecutionDomain::System],
+        None,
+        BudgetSpec::default(),
+        Vec::new(),
+        Vec::new(),
+        vec![default_entry],
+    )
+    .unwrap();
+    let guest_ref = ResourceRef::parse("Guest/gateway").unwrap();
+    let parent = classify_guest_execution_parent(&policy)
+        .unwrap()
+        .with_parent_use(&guest_ref, guest_storage_request("gateway", "store"))
+        .unwrap();
+    let graph = AdmittedGuestGraph::from_execution_parent(guest_ref.clone(), &parent).unwrap();
+
+    assert_eq!(graph.guest_bindings().len(), 1);
+    assert_eq!(
+        graph.guest_bindings()[0].request().consumer_ref(),
+        &guest_ref,
+        "the only Guest relationship is the one whose consumer is the Guest"
+    );
+    assert_eq!(graph.child_defaults().len(), 1);
+
+    let draft = ChildBindingRequest::new(
+        ResourceRef::parse("Process/gateway-vmm").unwrap(),
+        BindingKind::Volume,
+    )
+    .unwrap();
+    assert!(
+        graph.shape_child_request(&draft).is_err(),
+        "a Volume default is outside a ceiling that declares only Device and Network"
+    );
+    assert_eq!(
+        graph.guest_bindings().len(),
+        1,
+        "shaping a child's request adds no Guest relationship"
+    );
+}
+
+/// Scenario 3: a restart adopts binding evidence only when the row still
+/// names the same source and the same consumer under their store-assigned
+/// identities. A cached readiness under any other fence is refused.
+#[test]
+fn restart_adopts_binding_evidence_only_under_its_own_fence() {
+    let guest_ref = ResourceRef::parse("Guest/gateway").unwrap();
+    let source_ref = ResourceRef::parse("Volume/store").unwrap();
+    let source_uid = ResourceUid::parse(ZONE_UID).unwrap();
+    let view = BoundedToken::parse("store").unwrap();
+    let consumer_uid = ResourceUid::parse(GUEST_UID).unwrap();
+    let fence = BindingAdoptionFence::new(
+        source_ref.clone(),
+        source_uid.clone(),
+        view.clone(),
+        guest_ref.clone(),
+        consumer_uid.clone(),
+    );
+    let row = ObservedBindingRow {
+        source_ref: &source_ref,
+        source_uid: &source_uid,
+        view: &view,
+        consumer_ref: &guest_ref,
+        consumer_uid: &consumer_uid,
+    };
+    assert_eq!(
+        classify_binding_adoption(&fence, Some(row)),
+        BindingAdoptionStatus::Adopted
+    );
+    assert_eq!(
+        classify_binding_adoption(&fence, None),
+        BindingAdoptionStatus::Absent
+    );
+
+    let reassigned_uid = ResourceUid::parse("523e4567-e89b-42d3-a456-426614174000").unwrap();
+    assert_eq!(
+        classify_binding_adoption(
+            &fence,
+            Some(ObservedBindingRow {
+                consumer_uid: &reassigned_uid,
+                ..row
+            }),
+        ),
+        BindingAdoptionStatus::Refused,
+        "a reassigned Guest makes the row another relationship's evidence"
+    );
+    let replaced_source_uid = ResourceUid::parse("623e4567-e89b-42d3-a456-426614174000").unwrap();
+    assert_eq!(
+        classify_binding_adoption(
+            &fence,
+            Some(ObservedBindingRow {
+                source_uid: &replaced_source_uid,
+                ..row
+            }),
+        ),
+        BindingAdoptionStatus::Refused,
+        "a replaced source makes the row another relationship's evidence"
+    );
 }
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -1041,6 +1383,85 @@ async fn deletion_executes_reverse_order_and_clears_finalizer_only_after_absence
         ProcessState::Absent,
     ));
     controller.reconcile(guest.resource_ref()).await.unwrap();
+    assert_eq!(
+        state
+            .lock()
+            .await
+            .lifecycle_events
+            .last()
+            .map(String::as_str),
+        Some("clear-finalizer")
+    );
+}
+
+/// Scenario 4: every descendant is drained first, and the Guest's own
+/// admitted use is released before its finalizer clears. Retiring the Guest
+/// with use outstanding would leave a relationship whose consumer no longer
+/// exists.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn stop_drains_descendants_and_use_before_clearing_the_guest_finalizer() {
+    let guest = deleting_guest("gateway", "work", GUEST_UID, ZONE_UID);
+    let api = FakeApi::new(guest.clone(), dependencies(true, true, true, true, true));
+    let state = Arc::clone(&api.state);
+    {
+        let mut api_state = api.state.lock().await;
+        api_state.children = Vec::new();
+        api_state.finalization = Some(finalization_input(
+            &guest,
+            &[],
+            SessionState::Closed,
+            true,
+            ProcessState::Absent,
+        ));
+    }
+    let outstanding = admitted_graph(
+        "gateway",
+        &[observed(
+            BindingLifecycleState::Active,
+            CompletionCondition::Complete,
+            CompletionCondition::Complete,
+            ReleaseOutcome::Outstanding,
+        )],
+    );
+    assert!(outstanding.use_outstanding());
+    let mut controller = make_admitted_controller(api.clone(), outstanding);
+    controller.register().await.unwrap();
+
+    let outcome = controller.reconcile(guest.resource_ref()).await.unwrap();
+    assert!(
+        outcome
+            .status()
+            .has_condition(GuestCondition::AdmittedBindingUseOutstanding)
+    );
+    assert!(
+        !state
+            .lock()
+            .await
+            .lifecycle_events
+            .iter()
+            .any(|event| event == "clear-finalizer"),
+        "the finalizer is retained while the Guest still holds admitted use"
+    );
+
+    // The same Guest with its use released clears the finalizer, so the gate
+    // is the relationship's state and not a blanket refusal.
+    let released = admitted_graph(
+        "gateway",
+        &[observed(
+            BindingLifecycleState::Released,
+            CompletionCondition::Complete,
+            CompletionCondition::Complete,
+            ReleaseOutcome::Released,
+        )],
+    );
+    assert!(!released.use_outstanding());
+    let mut released_controller = make_admitted_controller(api.clone(), released);
+    released_controller.register().await.unwrap();
+    released_controller
+        .reconcile(guest.resource_ref())
+        .await
+        .unwrap();
     assert_eq!(
         state
             .lock()
