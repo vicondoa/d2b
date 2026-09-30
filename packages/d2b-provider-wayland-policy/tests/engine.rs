@@ -554,8 +554,11 @@ async fn finalize_finalizes_owned_children_before_the_provider_stage() {
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
-async fn delete_runs_the_provider_stage_then_retires_every_owned_child() {
+async fn delete_revokes_endpoint_access_before_a_helper_retires() {
     let (mut fixture, mut driver) = build_fixture(row(), true);
+    fixture
+        .manager
+        .seed_owned(ResourceKey::new("work", "EndpointBinding", "compositor"), false);
     fixture
         .manager
         .seed_owned(ResourceKey::new("work", "Endpoint", "endpoint"), false);
@@ -563,10 +566,15 @@ async fn delete_runs_the_provider_stage_then_retires_every_owned_child() {
         .manager
         .seed_owned(ResourceKey::new("work", "Process", "worker"), false);
 
-    ResourceDriver::delete(&mut driver, &mut fixture.ctx)
+    // The first pass revokes endpoint access and stops there: the worker row
+    // that could still use that access is not retired in the same pass.
+    let failure = ResourceDriver::delete(&mut driver, &mut fixture.ctx)
         .await
-        .expect("delete");
-
+        .expect_err("endpoint access is revoked before the helper retires");
+    assert_eq!(
+        driver.classify_error(&failure).class(),
+        FailureClass::Retryable
+    );
     let log = fixture.log.lock().await.clone();
     assert_eq!(log[0], "finalize:display-wayland-policy");
     assert_eq!(
@@ -575,8 +583,30 @@ async fn delete_runs_the_provider_stage_then_retires_every_owned_child() {
             .cloned()
             .collect::<Vec<_>>(),
         vec![
+            "delete:EndpointBinding/compositor".to_owned(),
             "delete:Endpoint/endpoint".to_owned(),
-            "delete:Process/worker".to_owned()
+        ],
+        "endpoint relationships revoke first, in binding-before-endpoint order: {log:?}"
+    );
+    assert!(
+        !log.iter().any(|entry| entry == "delete:Process/worker"),
+        "the helper waits for the revocation: {log:?}"
+    );
+
+    // The next pass retires the helper row behind the observed revocation.
+    ResourceDriver::delete(&mut driver, &mut fixture.ctx)
+        .await
+        .expect("the helper retires once endpoint access is revoked");
+    let log = fixture.log.lock().await.clone();
+    assert_eq!(
+        log.iter()
+            .filter(|entry| entry.starts_with("delete:"))
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![
+            "delete:EndpointBinding/compositor".to_owned(),
+            "delete:Endpoint/endpoint".to_owned(),
+            "delete:Process/worker".to_owned(),
         ]
     );
 }

@@ -109,6 +109,9 @@ pub enum SessionCondition {
     VirglVideoUnsupported,
     /// All pre-provisioned dynamic principals are occupied.
     NoPrincipalAvailable,
+    /// The session's endpoint access has not been revoked yet, so a helper is
+    /// still running against an admitted compositor or proxy socket.
+    EndpointAccessOutstanding,
 }
 
 /// Typed readiness evidence supplied by Core.
@@ -451,7 +454,7 @@ pub struct FinalizationInput {
     volume: VolumeState,
     authority: CleanupState,
     principal: CleanupState,
-    portal: CleanupState,
+    endpoint: CleanupState,
     grace: GraceState,
 }
 
@@ -468,7 +471,7 @@ impl FinalizationInput {
         volume: VolumeState,
         authority: CleanupState,
         principal: CleanupState,
-        portal: CleanupState,
+        endpoint: CleanupState,
         grace: GraceState,
     ) -> Self {
         Self {
@@ -478,7 +481,7 @@ impl FinalizationInput {
             volume,
             authority,
             principal,
-            portal,
+            endpoint,
             grace,
         }
     }
@@ -495,7 +498,7 @@ impl FinalizationInput {
         volume: VolumeState,
         authority: CleanupState,
         principal: CleanupState,
-        portal: CleanupState,
+        endpoint: CleanupState,
         grace: GraceState,
     ) -> Self {
         Self::from_supervisor(
@@ -505,7 +508,7 @@ impl FinalizationInput {
             volume,
             authority,
             principal,
-            portal,
+            endpoint,
             grace,
         )
     }
@@ -541,6 +544,9 @@ pub enum GraceState {
 /// Finalizer action decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FinalizationDecision {
+    /// Whether endpoint access still has to be revoked before a helper may be
+    /// retired.
+    pub revoke_endpoint: bool,
     /// Whether to issue a graceful Process stop.
     pub stop_proxy: bool,
     /// Whether to issue a graceful Process stop for the Guest frontend.
@@ -1294,6 +1300,13 @@ impl DisplayController {
     }
 
     /// Decide the safe finalizer action for one session.
+    ///
+    /// Endpoint access is revoked first: while this session still holds an
+    /// admitted compositor or proxy relationship, no helper is stopped and no
+    /// child may retire, because a worker retired first would leave an
+    /// admitted socket with no owner to revoke it. Only after that revocation
+    /// is observed do the workers stop, the transient volume go, and the
+    /// remaining authority and principal release.
     pub const fn finalize(input: FinalizationInput) -> FinalizationDecision {
         if matches!(input.grace, GraceState::Expired)
             && !(input.proxy.is_terminal()
@@ -1302,6 +1315,7 @@ impl DisplayController {
                 && input.frontend.is_deleted())
         {
             return FinalizationDecision {
+                revoke_endpoint: !matches!(input.endpoint, CleanupState::Complete),
                 stop_proxy: false,
                 stop_frontend: false,
                 delete_runtime_volume: false,
@@ -1310,8 +1324,20 @@ impl DisplayController {
                 ambiguous: true,
             };
         }
+        if !matches!(input.endpoint, CleanupState::Complete) {
+            return FinalizationDecision {
+                revoke_endpoint: true,
+                stop_proxy: false,
+                stop_frontend: false,
+                delete_runtime_volume: false,
+                remove_finalizer: false,
+                phase: Phase::Terminating,
+                ambiguous: false,
+            };
+        }
         if matches!(input.stop_requested, StopRequest::Active) {
             return FinalizationDecision {
+                revoke_endpoint: false,
                 stop_proxy: true,
                 stop_frontend: true,
                 delete_runtime_volume: false,
@@ -1326,6 +1352,7 @@ impl DisplayController {
             || !input.frontend.is_deleted()
         {
             return FinalizationDecision {
+                revoke_endpoint: false,
                 stop_proxy: !(input.proxy.is_terminal() && input.proxy.is_deleted()),
                 stop_frontend: !(input.frontend.is_terminal() && input.frontend.is_deleted()),
                 delete_runtime_volume: false,
@@ -1336,6 +1363,7 @@ impl DisplayController {
         }
         if !input.volume.is_deleted() {
             return FinalizationDecision {
+                revoke_endpoint: false,
                 stop_proxy: false,
                 stop_frontend: false,
                 delete_runtime_volume: true,
@@ -1346,9 +1374,9 @@ impl DisplayController {
         }
         if !matches!(input.authority, CleanupState::Complete)
             || !matches!(input.principal, CleanupState::Complete)
-            || !matches!(input.portal, CleanupState::Complete)
         {
             return FinalizationDecision {
+                revoke_endpoint: false,
                 stop_proxy: false,
                 stop_frontend: false,
                 delete_runtime_volume: false,
@@ -1358,6 +1386,7 @@ impl DisplayController {
             };
         }
         FinalizationDecision {
+            revoke_endpoint: false,
             stop_proxy: false,
             stop_frontend: false,
             delete_runtime_volume: false,

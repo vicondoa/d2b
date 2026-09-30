@@ -794,18 +794,43 @@ where
         Ok(())
     }
 
-    /// Finalize in the required order: stop workers, delete the transient
-    /// volume, revoke portal authority, release the principal, then release
-    /// the authenticated session authority.
+    /// Finalize in the required order: revoke endpoint access, stop workers,
+    /// delete the transient volume, release the principal, then release the
+    /// authenticated session authority.
+    ///
+    /// Revocation comes first on purpose. The helpers hold the session's
+    /// admitted compositor and proxy relationships, so no worker is stopped -
+    /// and no child may retire - while that access is still standing.
     pub fn finalize(
         &mut self,
         grace: GraceState,
     ) -> Result<FinalizationReport, DisplayRuntimeError> {
         self.stop_requested = true;
-        let stop_proxy =
-            !(self.observation.proxy.is_terminal() && self.observation.proxy.is_deleted());
-        let stop_frontend =
-            !(self.observation.frontend.is_terminal() && self.observation.frontend.is_deleted());
+        let revoking = DisplayController::finalize(FinalizationInput::from_supervisor(
+            StopRequest::Requested,
+            self.observation.proxy,
+            self.observation.frontend,
+            self.volume,
+            self.authority,
+            self.principal,
+            CleanupState::Complete,
+            grace,
+        ))
+        .revoke_endpoint;
+        if revoking {
+            self.portal = self
+                .effects
+                .revoke_portal()
+                .map_err(|e| {
+                    tracing::warn!(error = %e, "endpoint access revocation effect failed during finalization");
+                    DisplayRuntimeError::Effect(e)
+                })?;
+        }
+        let endpoint = self.portal;
+        let stop_proxy = endpoint == CleanupState::Complete
+            && !(self.observation.proxy.is_terminal() && self.observation.proxy.is_deleted());
+        let stop_frontend = endpoint == CleanupState::Complete
+            && !(self.observation.frontend.is_terminal() && self.observation.frontend.is_deleted());
         if stop_proxy {
             let receipt = self
                 .effects
@@ -833,7 +858,7 @@ where
             self.volume,
             self.authority,
             self.principal,
-            self.portal,
+            endpoint,
             grace,
         ));
         if decision.delete_runtime_volume {
@@ -851,13 +876,6 @@ where
             && self.observation.frontend.is_terminal()
             && self.observation.frontend.is_deleted()
         {
-            self.portal = self
-                .effects
-                .revoke_portal()
-                .map_err(|e| {
-                    tracing::warn!(error = %e, "portal authority revocation effect failed during finalization");
-                    DisplayRuntimeError::Effect(e)
-                })?;
             self.principal = self
                 .effects
                 .release_principal()
@@ -893,7 +911,7 @@ where
             self.volume,
             self.authority,
             self.principal,
-            self.portal,
+            endpoint,
             grace,
         ));
         if final_decision.ambiguous && matches!(grace, GraceState::Expired) {
@@ -909,7 +927,7 @@ where
             volume: self.volume,
             authority: self.authority,
             principal: self.principal,
-            portal: self.portal,
+            portal: endpoint,
         })
     }
 }
@@ -957,7 +975,7 @@ pub struct FinalizationReport {
     pub authority: CleanupState,
     /// Principal state.
     pub principal: CleanupState,
-    /// Portal state.
+    /// Endpoint access revocation state.
     pub portal: CleanupState,
 }
 
@@ -967,6 +985,7 @@ impl FinalizationReport {
     pub const fn empty() -> Self {
         Self {
             decision: FinalizationDecision {
+                revoke_endpoint: false,
                 stop_proxy: false,
                 stop_frontend: false,
                 delete_runtime_volume: true,
@@ -1090,6 +1109,119 @@ mod tests {
         )
         .unwrap();
         (spec, policy)
+    }
+
+    /// The recorded order of every finalization effect call.
+    struct OrderedEffects {
+        calls: Vec<&'static str>,
+        revoke_state: CleanupState,
+    }
+
+    impl DisplayProcessEffectPort for OrderedEffects {
+        fn issue_launch_grants(
+            &mut self,
+            _session: &AuthenticatedDisplaySession,
+            _spec: &WaylandSessionSpec,
+            _policy: &WaylandPolicySnapshot,
+            _proof: Option<&DisplayDependencyProof>,
+            _teardown_generation: u64,
+        ) -> Result<LaunchGrants, WorkerEffectError> {
+            unreachable!("this fixture finalizes a session it never launched")
+        }
+
+        fn launch(
+            &mut self,
+            _ticket: crate::LaunchTicket,
+        ) -> Result<WorkerLaunchReceipt, WorkerEffectError> {
+            unreachable!("this fixture finalizes a session it never launched")
+        }
+
+        fn stop(
+            &mut self,
+            role: DisplayProcessRole,
+        ) -> Result<WorkerLaunchReceipt, WorkerEffectError> {
+            self.calls.push(match role {
+                DisplayProcessRole::HostProxy => "stop-proxy",
+                DisplayProcessRole::GuestFrontend => "stop-frontend",
+            });
+            Ok(WorkerLaunchReceipt::from_supervisor(
+                role,
+                WorkerState::Terminal { deleted: true },
+                1,
+                1,
+                [7; 32],
+            ))
+        }
+
+        fn delete_runtime_volume(&mut self) -> Result<VolumeState, WorkerEffectError> {
+            self.calls.push("volume");
+            Ok(VolumeState::Deleted)
+        }
+
+        fn revoke_portal(&mut self) -> Result<CleanupState, WorkerEffectError> {
+            self.calls.push("revoke-endpoint");
+            Ok(self.revoke_state)
+        }
+
+        fn release_principal(&mut self) -> Result<CleanupState, WorkerEffectError> {
+            self.calls.push("principal");
+            Ok(CleanupState::Complete)
+        }
+
+        fn release_authority(&mut self) -> Result<CleanupState, WorkerEffectError> {
+            self.calls.push("authority");
+            Ok(CleanupState::Complete)
+        }
+    }
+
+    #[test]
+    fn endpoint_access_is_revoked_before_a_helper_retires() {
+        let mut runtime = DisplayRuntime::new(
+            DisplayController::new(2).unwrap(),
+            OrderedEffects {
+                calls: Vec::new(),
+                // A revocation that has not completed yet: no helper may stop.
+                revoke_state: CleanupState::Pending,
+            },
+        );
+        runtime.observation = ProcessObservation::from_supervisor(
+            WorkerState::Ready { generation: 1 },
+            WorkerState::Ready { generation: 1 },
+            VolumeState::Present,
+            1,
+            1,
+            [7; 32],
+        );
+
+        let pending = runtime.finalize(GraceState::Active).unwrap();
+        assert_eq!(pending.decision.revoke_endpoint, true);
+        assert!(!pending.stop_proxy);
+        assert!(!pending.stop_frontend);
+        assert!(!pending.decision.remove_finalizer);
+        assert_eq!(
+            runtime.effects_mut().calls,
+            vec!["revoke-endpoint"],
+            "no helper is stopped while endpoint access is still admitted"
+        );
+
+        // Once the revocation is observed, the helpers retire in the same
+        // order the session always used, behind the revocation.
+        runtime.effects_mut().revoke_state = CleanupState::Complete;
+        runtime.volume = VolumeState::Deleted;
+        let drained = runtime.finalize(GraceState::Active).unwrap();
+        assert!(!drained.decision.revoke_endpoint);
+        assert!(drained.decision.remove_finalizer);
+        assert_eq!(
+            runtime.effects_mut().calls,
+            vec![
+                "revoke-endpoint",
+                "revoke-endpoint",
+                "stop-proxy",
+                "stop-frontend",
+                "principal",
+                "authority",
+            ]
+        );
     }
 
     #[test]

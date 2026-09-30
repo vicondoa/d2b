@@ -311,6 +311,9 @@ pub fn spec_decoder() -> Arc<dyn SpecDecoder> {
 pub struct InteractionChild {
     /// The child row's resource reference.
     pub resource_ref: ResourceRef,
+    /// The child row's durable uid: the exact consumer identity an admitted
+    /// relationship is evaluated against.
+    pub uid: ResourceUid,
     /// The child row's generation.
     pub generation: u64,
 }
@@ -613,6 +616,48 @@ impl<T: InteractionType> InteractionDriver<T> {
         Ok(mutated)
     }
 
+    /// Revoke every obsolete endpoint relationship this pass owns.
+    ///
+    /// Endpoint access closes before any helper row retires: a session's
+    /// endpoint relationships are asked to revoke first, and the pass reports
+    /// that it did, so the delete verb returns pending and the helper rows
+    /// retire only once the revocation has been observed.
+    async fn revoke_endpoint_relationships(
+        &self,
+        ctx: &mut ResourceContext,
+        desired: &[ChildEnsure],
+        op: DriverOp,
+    ) -> Result<bool, InteractionDriverError> {
+        let owned = ctx
+            .children()
+            .await
+            .map_err(|_| self.error(InteractionDriverErrorKind::ChildMutation, op))?;
+        let mut revoking = owned
+            .iter()
+            .filter(|row| {
+                !row.deleting
+                    && is_endpoint_relationship(row.key.type_name.as_str())
+                    && !desired.iter().any(|child| {
+                        child.type_name.as_str() == row.key.type_name && child.name == row.key.name
+                    })
+            })
+            .map(|row| row.key.clone())
+            .collect::<Vec<_>>();
+        revoking.sort_by_key(|key| {
+            (
+                teardown_rank(key.type_name.as_str()),
+                key.name.clone(),
+            )
+        });
+        let revoked = !revoking.is_empty();
+        for key in revoking {
+            ctx.delete(&key)
+                .await
+                .map_err(|_| self.error(InteractionDriverErrorKind::ChildMutation, op))?;
+        }
+        Ok(revoked)
+    }
+
     /// The owned child rows realizing the desired child set, as the typed
     /// effect request sees them.
     async fn realized_children(
@@ -637,6 +682,8 @@ impl<T: InteractionType> InteractionDriver<T> {
                 Ok(InteractionChild {
                     resource_ref: key_ref(&row.key)
                         .map_err(|_| self.error(InteractionDriverErrorKind::SpecInvalid, op))?,
+                    uid: resource_uid(&row.uid)
+                        .ok_or_else(|| self.error(InteractionDriverErrorKind::SpecInvalid, op))?,
                     generation: row.generation,
                 })
             })
@@ -822,8 +869,9 @@ impl<T: InteractionType> ResourceDriver for InteractionDriver<T> {
 
     /// Teardown: the Provider's teardown stage runs first - the audio lease
     /// finalization, and the AudioService/ShellPool refusals that keep an
-    /// owner alive while a dependent Binding/Session remains - then the owned
-    /// children retire in the family's preserved order. Idempotent under
+    /// owner alive while a dependent Binding/Session remains - then every owned
+    /// endpoint relationship is revoked, and only the next pass retires the
+    /// helper rows once that revocation has been requested. Idempotent under
     /// retry; a malformed spec skips the Provider stage and still drains the
     /// owned children.
     async fn delete(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
@@ -839,6 +887,12 @@ impl<T: InteractionType> ResourceDriver for InteractionDriver<T> {
                 }
                 Err(error) => return Err(self.effect_error(error, op)),
             }
+        }
+        // Endpoint access is revoked before any helper retires: a pass that
+        // asked for a revocation returns pending, so the worker rows that
+        // could still use that access are not deleted in the same pass.
+        if self.revoke_endpoint_relationships(ctx, &[], op).await? {
+            return Err(self.error(InteractionDriverErrorKind::DeletePending, op));
         }
         self.retire_obsolete_children(ctx, &[], op).await?;
         Ok(())
@@ -864,14 +918,22 @@ pub fn resource_uid(bytes: &[u8; 16]) -> Option<ResourceUid> {
     ResourceUid::from_bytes(bytes).ok()
 }
 
-/// Teardown ranks: endpoints retire before their producing processes.
+/// Teardown ranks: endpoint relationships revoke before their producing
+/// processes.
 fn teardown_rank(resource_type: &str) -> u8 {
     match resource_type {
-        "Endpoint" => 0,
-        "EphemeralProcess" => 1,
-        "Process" => 2,
-        _ => 3,
+        "EndpointBinding" => 0,
+        "Endpoint" => 1,
+        "EphemeralProcess" => 2,
+        "Process" => 3,
+        _ => 4,
     }
+}
+
+/// Whether one row is an endpoint relationship, whose revocation must be
+/// requested before any helper row retires.
+fn is_endpoint_relationship(resource_type: &str) -> bool {
+    matches!(resource_type, "EndpointBinding" | "Endpoint")
 }
 
 /// One display-owned child intent as a manager child row.

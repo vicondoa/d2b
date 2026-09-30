@@ -27,7 +27,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use d2b_contracts_resource::v3::{ResourceEnvelope, ResourceRef, StoredResource, ZoneId};
+use d2b_contracts_resource::v3::{ResourceEnvelope, ResourceRef, ResourceUid, StoredResource, ZoneId};
 use d2b_provider_audio_pipewire::{AudioBindingController, AudioBindingPhase, AudioBindingSpec};
 use d2b_provider_display_wayland::{
     WaylandSessionResourceStatus, WaylandSessionSpec, session_children,
@@ -161,6 +161,124 @@ impl InteractionEffectsService {
         Ok(true)
     }
 
+    /// The committed generation one owned child row currently carries.
+    fn child_generation(
+        request: &InteractionEffectRequest<'_>,
+        target: &ResourceRef,
+    ) -> Option<u64> {
+        request
+            .children
+            .iter()
+            .find(|child| child.resource_ref == *target)
+            .map(|child| child.generation)
+    }
+
+    /// The admitted User one owned consumer row declares.
+    ///
+    /// A consumer row is the authority for the identity its endpoint
+    /// relationships are evaluated against, so this is read from the committed
+    /// row rather than assumed from the session.
+    async fn consumer_user(
+        &self,
+        consumer: &ResourceRef,
+    ) -> Result<Option<ResourceRef>, InteractionEffectError> {
+        let key = ResourceKey::new(
+            self.facets.zone().as_str(),
+            consumer.resource_type().as_str(),
+            consumer.name().as_str(),
+        );
+        let Some(view) = self
+            .plane()
+            .get(&key)
+            .await
+            .map_err(|_| InteractionEffectError::Unavailable)?
+        else {
+            return Err(InteractionEffectError::InvalidResource);
+        };
+        let value = spec_document_value(&view.spec)?;
+        Ok(value
+            .get("userRef")
+            .and_then(Value::as_str)
+            .and_then(|reference| ResourceRef::parse(reference).ok()))
+    }
+
+    /// The exact uid one owned child row carries.
+    fn child_uid(request: &InteractionEffectRequest<'_>, target: &ResourceRef) -> Option<ResourceUid> {
+        request
+            .children
+            .iter()
+            .find(|child| child.resource_ref == *target)
+            .map(|child| child.uid.clone())
+    }
+
+    /// Whether every endpoint relationship one display worker requires is
+    /// admitted over the exact endpoint and consumer the session derives.
+    ///
+    /// The relationship is re-derived from the session's own row identity and
+    /// spec, then compared with the committed endpoint and consumer rows, so a
+    /// compositor socket, consumer, or reconnect generation from elsewhere -
+    /// or one this session never derived - cannot be substituted. A session
+    /// whose relationship is not admitted is not usable.
+    async fn display_endpoint_authority(
+        &self,
+        request: &InteractionEffectRequest<'_>,
+        spec: &WaylandSessionSpec,
+    ) -> Result<bool, InteractionEffectError> {
+        let bindings = session_children::display_endpoint_bindings(&request.uid, spec)
+            .map_err(|_| InteractionEffectError::InvalidResource)?;
+        for binding in &bindings {
+            let Some(consumer_generation) =
+                Self::child_generation(request, binding.consumer_ref())
+            else {
+                return Ok(false);
+            };
+            let Some(consumer_uid) = Self::child_uid(request, binding.consumer_ref()) else {
+                return Ok(false);
+            };
+            let key = ResourceKey::new(
+                self.facets.zone().as_str(),
+                binding.source_ref().resource_type().as_str(),
+                binding.source_ref().name().as_str(),
+            );
+            let Some(view) = self
+                .plane()
+                .get(&key)
+                .await
+                .map_err(|_| InteractionEffectError::Unavailable)?
+            else {
+                return Ok(false);
+            };
+            let source_uid =
+                ResourceUid::from_bytes(&view.uid).map_err(|_| InteractionEffectError::InvalidResource)?;
+            let endpoint_spec = session_children::decode_endpoint_spec(
+                &spec_document_value(&view.spec)?,
+            )
+            .map_err(|_| InteractionEffectError::InvalidResource)?;
+            let observed = session_children::DisplayEndpointObservation {
+                spec: &endpoint_spec,
+                source_generation: view.generation,
+                consumer_generation,
+                consumer_user: self
+                    .consumer_user(binding.consumer_ref())
+                    .await?,
+            };
+            if session_children::admit_display_endpoint(
+                self.facets.zone(),
+                spec,
+                &request.uid,
+                binding,
+                &observed,
+                &source_uid,
+                &consumer_uid,
+            )
+            .is_err()
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// Spec documents of every row of one ResourceType, from the manager.
     async fn specs_of_type(
         &self,
@@ -245,6 +363,14 @@ impl InteractionEffectsService {
             .map(|intent| intent.target().clone())
             .collect::<Vec<_>>();
         if !self.children_ready(request, &expected).await? {
+            return Ok(InteractionEffectOutcome::phase(
+                InteractionEffectPhase::Pending,
+            ));
+        }
+        // Every host connection the workers make is admitted over the exact
+        // endpoint and consumer this session derives; a session without that
+        // evidence is not usable, however Ready its worker rows look.
+        if !self.display_endpoint_authority(request, &spec).await? {
             return Ok(InteractionEffectOutcome::phase(
                 InteractionEffectPhase::Pending,
             ));
