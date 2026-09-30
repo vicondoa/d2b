@@ -1008,7 +1008,10 @@ fn parse_reset_options(rest: Vec<String>) -> Result<BrokerMode, RunError> {
 /// can relay it verbatim; a refusal is a typed [`RunError::Reset`] rather
 /// than a bare exit so the composition root renders the same code the
 /// caller reports.
-#[cfg(not(feature = "layer1-bootstrap"))]
+// Not feature-gated: the reset runner is an ordinary one-shot broker path
+// rather than bootstrap-only machinery, and `BrokerMode::Reset` exists in
+// every configuration. Gating only the dispatch arm left the `layer1-
+// bootstrap` build with a variant no arm covered.
 fn run_reset(options: &ResetOptions) -> Result<(), RunError> {
     use crate::ops::host_reset::{ResetRequest, run_owned_reset};
     let mut request = ResetRequest::inspect(&options.deployment_root, &options.cgroup_root);
@@ -1035,7 +1038,9 @@ fn run_reset(options: &ResetOptions) -> Result<(), RunError> {
 /// fatally, and [`RunError::Usage`] for a malformed probe invocation.
 pub fn run(command: BrokerMode) -> Result<(), RunError> {
     match command {
-        #[cfg(not(feature = "layer1-bootstrap"))]
+        // Unconditional for the reason given on `run_reset`: the variant is
+        // not feature-gated, so a gated arm would leave this build with a
+        // variant no arm covers.
         BrokerMode::Reset(options) => run_reset(&options),
         BrokerMode::Host(config) | BrokerMode::Guest(config) => run_server(config),
         #[cfg(feature = "layer1-bootstrap")]
