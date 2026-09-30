@@ -216,13 +216,8 @@ const NESTED_VMM_API_SOCKET: &str = concat!(
     "d2b --zone work --json list Process 2>/dev/null | ",
     "jq -c '.resources[] | select(.name | startswith(\"vol-vfd\")) | ",
     "{name: .metadata.name, phase: .status.phase, ",
+    "conditions: [.status.conditions[]? | {type: .type, reason: .reason}], ",
     "outcome: .status.outcome, update: .status.update}' || true; ",
-    "echo '=== broker journal ==='; ",
-    "journalctl -u d2bd.service --no-pager -o cat -b -n 300 2>/dev/null; ",
-    "echo '=== unit state ==='; ",
-    "systemctl show d2bd.service -p ActiveState -p SubState -p NRestarts 2>/dev/null; ",
-    "echo '=== processes ==='; ",
-    "ps -eo pid=,stat=,wchan:20=,comm= 2>/dev/null | head -40; ",
     "exit 1",
 );
 
