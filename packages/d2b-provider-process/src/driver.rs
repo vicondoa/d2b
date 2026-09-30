@@ -52,7 +52,7 @@ use d2b_contracts_resource::v3::{
     ResourceSpec, ResourceTypeName as ContractResourceTypeName, ResourceUid, ZoneId,
     process::{DesiredLifecycle, EphemeralProcessSpec, ProcessSpec, RestartClass},
 };
-use d2b_process_conformance::{GuestExecutionBinding, ProcessStatusReport};
+use d2b_process_conformance::{GuestExecutionBinding, ProcessStatusReport, ResolvedProcessPlan};
 use d2b_resource_runtime::context::{
     EffectCompleted, EffectResult, ResourceContext, SpecDecoder, typed_spec_decoder,
 };
@@ -1371,6 +1371,57 @@ impl ProcessDriver {
     }
 
     /// The durable arm: preserved adopt/launch/stop-stale behavior.
+    /// The one preparation both Process lifetimes run before they act.
+    ///
+    /// A long-running `Process` and a run-to-completion `EphemeralProcess`
+    /// reach their launch, their adoption, and their restart through this
+    /// single call. It derives the committed consumer identity from the row the
+    /// manager already built - so no layer copies the row's identity a second
+    /// time - asks the effect owner for the plan, and refuses a launch whose
+    /// bindings are not prepared (AE20, AE28, R40).
+    ///
+    /// `Ok(None)` is the pre-plan path: the effect owner has not resolved a
+    /// plan for this row, and the row's own posture still drives the launch.
+    /// U34 removes that branch together with the ticket authority.
+    async fn prepare_launch(
+        &self,
+        identity: &ProcessResourceIdentity,
+        op: DriverOp,
+    ) -> Result<Option<ResolvedProcessPlan>, ProcessDriverError> {
+        let subject = identity
+            .subject()
+            .map_err(|refusal| {
+                tracing::warn!(
+                    resource = %identity.resource_ref.to_canonical_string(),
+                    refusal = %refusal,
+                    "process preparation refused"
+                );
+                self.error(ProcessDriverErrorKind::SpecInvalid, op)
+            })?;
+        let plan = self.effects.prepare(identity, &subject).await.map_err(|error| {
+            tracing::warn!(
+                resource = %identity.resource_ref.to_canonical_string(),
+                error = %error,
+                "process plan resolution refused"
+            );
+            self.error(ProcessDriverErrorKind::ResolutionRefused, op)
+        })?;
+        if let Some(plan) = plan.as_ref()
+            && !plan.admits_start()
+        {
+            // The plan resolved but its source side is not complete. A
+            // consumer that started now would be waiting on access that does
+            // not exist, which is exactly the startup cycle R40 removes.
+            return Err(self
+                .error(ProcessDriverErrorKind::ResolutionRefused, op)
+                .with_detail(
+                    FailureDetail::at("prepare/bindings")
+                        .with_note("a required binding is not prepared"),
+                ));
+        }
+        Ok(plan)
+    }
+
     async fn reconcile_process(
         &mut self,
         ctx: &mut ResourceContext,
@@ -1382,6 +1433,10 @@ impl ProcessDriver {
         // of asserting it: `Satisfied` publishes wire `Ready` and fires every
         // `WatchCondition::Ready` watcher on the row, and a live process
         // behind that reading is a realized state the row never reached.
+        // Both lifetimes prepare through this one call before they act, so
+        // the long-running and run-to-completion arms reach their plan the
+        // same way (AE20, AE28).
+        self.prepare_launch(&identity, DriverOp::Reconcile).await?;
         if spec.desired_lifecycle() == DesiredLifecycle::Stopped {
             // A live identity is stopped through the same exact escalation
             // every other path uses; with no verified identity there is
@@ -1606,6 +1661,11 @@ impl ProcessDriver {
         if let Some(completion) = self.ephemeral.completed().await {
             return self.ephemeral_retention(ctx, spec, completion).await;
         }
+
+        // The same single preparation the long-running arm runs. Nothing here
+        // branches on the lifetime: the row's own reference decides it inside
+        // the plan, and both arms then follow the same path (AE20, AE28).
+        self.prepare_launch(identity, DriverOp::Reconcile).await?;
 
         // Runtime deadline (old `ephemeral runtime-deadline` arm): the process
         // this actor started outlived its bounded run, so it stops exactly and
