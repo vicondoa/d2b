@@ -692,7 +692,16 @@ fn stream_carriage_cannot_inject_a_control_operation() {
         .bindings()
         .admit(binding.clone())
         .expect("admitted relationship");
-    let (accepted, peer) = pair(SocketType::STREAM);
+    // A BLOCKING stream pair, so the round trip below observes real carriage
+    // rather than racing a non-blocking read. The portal sets close-on-exec
+    // on the descriptor it is given either way.
+    let (accepted, peer) = socketpair(
+        AddressFamily::UNIX,
+        SocketType::STREAM,
+        SocketFlags::CLOEXEC,
+        None,
+    )
+    .expect("socketpair");
     let opened = service
         .open_under_binding(&binding, &evidence(), stream_request(), accepted)
         .expect("graph-bound open");
@@ -713,7 +722,11 @@ fn stream_carriage_cannot_inject_a_control_operation() {
     let mut carried = Vec::new();
     let mut chunk = [0_u8; 64];
     while carried.len() < forged.len() {
-        let read = rustix::io::read(&peer, &mut chunk).expect("read the carried bytes back");
+        let read = match rustix::io::read(&peer, &mut chunk) {
+            Ok(read) => read,
+            Err(rustix::io::Errno::INTR) => continue,
+            Err(error) => panic!("read the carried bytes back: {error}"),
+        };
         assert!(read > 0, "the real stream must return what was written");
         carried.extend_from_slice(&chunk[..read]);
     }
@@ -807,9 +820,8 @@ fn relationship_pin_not_independently_supplied() {
     // A socket the kernel will not attribute to any peer is a different
     // refusal: the transport could not learn who this is, rather than
     // learning that this is not the peer the relationship admits.
-    let unattributed =
-        socket(AddressFamily::UNIX, SocketType::STREAM, SocketFlags::CLOEXEC)
-            .expect("unconnected unix socket");
+    let unattributed = socket(AddressFamily::UNIX, SocketType::STREAM, None)
+        .expect("unconnected unix socket");
     assert!(
         get_socket_peercred(&unattributed).is_err(),
         "an unconnected socket exposes no peer credentials"
@@ -888,7 +900,7 @@ fn binding_registry_is_bounded_and_finalized_keys_are_not_reissued() {
     );
     registry.finalize();
     assert!(registry.is_empty());
-    assert!(registry.binding(&live.key()).is_none());
+    assert!(registry.binding(live.key()).is_none());
     assert_eq!(
         registry.len(),
         0,
