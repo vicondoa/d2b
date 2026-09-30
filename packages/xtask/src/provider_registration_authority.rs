@@ -31,6 +31,8 @@ use std::{
 };
 
 use crate::authority_common::{collect_rs_files, verify_committed};
+#[cfg(test)]
+use d2b_contracts_provider::v3::projection::PrivatePlanProjection;
 use serde::Deserialize;
 
 /// The directory-glob root the per-crate declarations live under.
@@ -106,6 +108,58 @@ pub fn regenerate(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
         )
     })?;
     Ok(vec![artifact_path])
+}
+
+/// The provider registration rows a declaration projection produces.
+///
+/// The row is the composition root's view of one declaration: the identities a
+/// daemon registers without naming the family. It is derived, so adding a
+/// provider that uses existing primitives needs no handwritten registration.
+#[cfg(test)]
+pub(crate) fn render_declaration_registrations(plan: &PrivatePlanProjection) -> String {
+    let mut out = String::new();
+    out.push_str("// @generated\n");
+    out.push_str("// Provenance: derived from the provider declaration (KTD1/U4). A\n");
+    out.push_str("// generated artifact is an output, not a second source.\n");
+    for row in plan.registrations() {
+        out.push_str("ProviderRegistrationRow {\n");
+        out.push_str(&format!("    artifact_id: {:?},\n", row.artifact_id()));
+        out.push_str(&format!("    provider_ref: {:?},\n", row.provider_ref()));
+        out.push_str(&format!(
+            "    components: &[{}],\n",
+            row.components()
+                .iter()
+                .map(|component| format!("{component:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        out.push_str(&format!(
+            "    resource_types: &[{}],\n",
+            row.resource_types()
+                .iter()
+                .map(|resource_type| format!("{resource_type:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        out.push_str(&format!(
+            "    services: &[{}],\n",
+            row.services()
+                .iter()
+                .map(|service| format!("{service:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        out.push_str(&format!(
+            "    methods: &[{}],\n",
+            row.methods()
+                .iter()
+                .map(|method| format!("{method:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        out.push_str("}\n");
+    }
+    out
 }
 
 /// The declaration-to-source parity violations: a declared provider that is
@@ -341,6 +395,31 @@ fn render(repo_root: &Path) -> Result<String, String> {
 mod tests {
     use super::*;
     use std::fs;
+
+    /// The registration rows are derived, so a provider that uses existing
+    /// primitives registers without a daemon edit or a layout-ratchet row.
+    #[test]
+    fn the_registration_rows_are_derived_from_the_declaration() {
+        let plan = crate::resource_type_authority::declaration_fixture::plan(&["export", "close"]);
+        let rendered = render_declaration_registrations(&plan);
+        assert!(rendered.contains("artifact_id: \"provider-volume-virtiofs\""));
+        assert!(
+            rendered.contains("\"volume-virtiofs.d2bus.org/export\""),
+            "the declared service is registered: {rendered}"
+        );
+        assert_eq!(rendered, render_declaration_registrations(&plan), "byte-stable");
+    }
+
+    /// Adding a method moves the registration row with the declaration.
+    #[test]
+    fn one_changed_method_moves_the_registration_row() {
+        let before =
+            render_declaration_registrations(&crate::resource_type_authority::declaration_fixture::plan(&["export"]));
+        let after = render_declaration_registrations(
+            &crate::resource_type_authority::declaration_fixture::plan(&["export", "close"]),
+        );
+        assert_ne!(before, after);
+    }
 
     /// A throwaway fixture tree under the OS temp dir.
     struct Fixture {

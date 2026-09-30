@@ -33,6 +33,8 @@ use std::{
 use crate::authority_common::{collect_rs_files, verify_committed};
 use crate::gen_broker_operations;
 use crate::resource_type_authority;
+#[cfg(test)]
+use d2b_contracts_provider::v3::projection::PrivatePlanProjection;
 
 /// The directory-glob root the per-crate declarations live under.
 const PACKAGES_DIR: &str = "packages";
@@ -110,6 +112,31 @@ pub fn regenerate(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
     }
     Ok(written)
 }
+/// The resource-and-operation graph rows a declaration projection produces.
+///
+/// The row joins the two facts a method is reachable through: the
+/// ResourceTypes its component exports and the trusted implementation
+/// identity the declaration derives for it. Both come from the declaration, so
+/// a provider that adds a method moves this table with no shared family list
+/// to edit.
+#[cfg(test)]
+pub(crate) fn render_declaration_operation_rows(plan: &PrivatePlanProjection) -> String {
+    let mut out = String::new();
+    out.push_str("# Derived from the provider declaration (KTD1/U4). A generated\n");
+    out.push_str("# artifact is an output, not a second source.\n");
+    for row in plan.operations() {
+        out.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\n",
+            row.implementation().provider().to_canonical_string(),
+            row.component_id(),
+            row.method(),
+            row.presentation_token(),
+            row.resource_types().join(","),
+        ));
+    }
+    out
+}
+
 
 /// The declaration-to-descriptor parity violations: a declared operation the
 /// crate's descriptor sources do not spell, an operation reference the
@@ -370,6 +397,41 @@ fn descriptor_operation_refs(text: &str, consts: &BTreeMap<String, String>) -> B
 mod tests {
     use super::*;
     use std::fs;
+
+    /// The graph rows join each declared method to the trusted implementation
+    /// identity the declaration derives, so no shared family list is a second
+    /// place to edit.
+    #[test]
+    fn the_graph_rows_are_derived_from_the_declaration() {
+        let plan = crate::resource_type_authority::declaration_fixture::plan(&["export", "close"]);
+        let rows = render_declaration_operation_rows(&plan);
+        let methods: Vec<&str> = rows
+            .lines()
+            .filter(|line| line.starts_with("Provider/"))
+            .map(|line| line.split('\t').nth(2).expect("the method column"))
+            .collect();
+        assert_eq!(methods, vec!["close", "export"], "sorted declared methods");
+        assert!(
+            rows.contains("namespace-first-service-source"),
+            "the row carries the declared presentation capability"
+        );
+        assert_eq!(rows, render_declaration_operation_rows(&plan), "byte-stable");
+    }
+
+    /// One changed declared method moves the rows without a hand edit.
+    #[test]
+    fn one_changed_method_moves_the_graph_rows() {
+        let before =
+            render_declaration_operation_rows(&crate::resource_type_authority::declaration_fixture::plan(&["export"]));
+        let after = render_declaration_operation_rows(
+            &crate::resource_type_authority::declaration_fixture::plan(&["export", "close"]),
+        );
+        assert_ne!(before, after);
+        assert_eq!(
+            after.lines().filter(|line| line.starts_with("Provider/")).count(),
+            before.lines().filter(|line| line.starts_with("Provider/")).count() + 1
+        );
+    }
 
     /// A throwaway fixture tree under the OS temp dir.
     struct Fixture {

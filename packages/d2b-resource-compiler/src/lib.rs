@@ -31,9 +31,8 @@ use d2b_contracts_provider::v3::{
     },
 };
 use d2b_contracts_resource::v3::{
-    ArtifactId, CanonicalJsonValue, MountAccess, MountSpec, ResourceName, ResourceRef,
-    ResourceTypeName, ZoneId,
-    canonical_digest, canonical_json_bytes,
+    ArtifactId, MountAccess, MountSpec, ResourceName, ResourceRef,
+    ResourceTypeName, ZoneId, canonical_digest, canonical_json_bytes,
     execution_policy::{BoundedToken, BudgetSpec, ExecutionDomain},
     process::{ExecutionSpec, ProcessClass, ProcessSpec, SandboxSpec, TelemetrySpec},
 };
@@ -1757,13 +1756,8 @@ fn parse_canonical_manifest(
 }
 
 fn ensure_canonical_schema(entry: &ArtifactCatalogEntry, bytes: &[u8]) -> Result<(), Diagnostic> {
-    let value = CanonicalJsonValue::parse(bytes).map_err(|_| {
-        Diagnostic::new(
-            Kind::ProviderManifestNotCanonical,
-            canonical_message(entry, CONFIG_SCHEMA_PATH, 0, 0, bytes.len()),
-        )
-    })?;
-    let expected = canonical_json_bytes(&value).map_err(|_| {
+    let expected = d2b_contracts_provider::v3::projection::canonical_schema_bytes(bytes)
+        .ok_or_else(|| {
         Diagnostic::new(
             Kind::ProviderManifestNotCanonical,
             canonical_message(entry, CONFIG_SCHEMA_PATH, 0, 0, bytes.len()),
@@ -1784,6 +1778,7 @@ fn ensure_canonical_schema(entry: &ArtifactCatalogEntry, bytes: &[u8]) -> Result
     }
     Ok(())
 }
+
 
 fn check_metadata_closure(
     entry: &ArtifactCatalogEntry,
@@ -2533,6 +2528,79 @@ pub fn bound_message(value: &str) -> String {
         output.push_str("...");
     }
     output
+}
+
+// ---------------------------------------------------------------------------
+// The declaration-derived graph projection (KTD1, U4)
+// ---------------------------------------------------------------------------
+//
+// Packaging, the registration table, the service catalog, the private plan,
+// and the Nix projection were five authored views of one provider. The
+// projection that replaces them lives in
+// `d2b_contracts_provider::v3::projection`, beside the declaration whose wire
+// format it projects, so the compiler, the packaging generator, and the Nix
+// inventory generator read one type instead of three derivations.
+//
+// What stays here is the half the compiler owns: the D101 executable-set
+// digest the build output hashes to, and the canonical configuration schema
+// check that keeps an installed schema and a signed `configDigest` in
+// agreement. Both already existed for the artifact check; `build_artifact`
+// is the one place that turns a build's raw output facts into the
+// [`BuiltArtifact`] the projection admits, so a declaration can never supply
+// an executable digest and no signing key has a field to arrive in.
+
+/// Re-export the projection the compiler, the packaging generator, and the
+/// Nix inventory generator all consume.
+pub use d2b_contracts_provider::v3::projection::{
+    BindingSlotDecisionWire, BuiltArtifact, ConsumerRequestInput, GraphProjectionError,
+    ManifestInput, ManifestInputComponent, OperationGraphRow, PrivatePlanProjection,
+    ProviderRegistrationRow, RequiredCapabilityInput, ServiceCatalogRow, ConsumerRequestRow,
+    GRAPH_PROJECTION_CONTRACT_VERSION, GRAPH_PROJECTION_INPUTS,
+};
+
+/// Turn one build's raw output facts into the artifact facts the projection
+/// admits.
+///
+/// `executable_digests` is the build output's own name-to-digest map and
+/// `declared_executable_set_digest` is the digest the verified, signed
+/// manifest pins for the same set. The compiler recomputes the set digest from
+/// the map with the same D101 framing the artifact check uses, so a manifest
+/// cannot pin bytes the build did not produce and the build cannot ship bytes
+/// the manifest does not name.
+///
+/// # Errors
+///
+/// Returns [`GraphProjectionError::SchemaMalformed`] when the installed
+/// configuration schema is not the canonical schema a signed `configDigest`
+/// can name.
+pub fn build_artifact(
+    artifact_id: ArtifactId,
+    contract_version: impl Into<String>,
+    executable_digests: BTreeMap<String, ArtifactDigest>,
+    declared_executable_set_digest: ArtifactDigest,
+    config_schema: Vec<u8>,
+) -> Result<BuiltArtifact, GraphProjectionError> {
+    if d2b_contracts_provider::v3::projection::canonical_schema_bytes(&config_schema)
+        != Some(config_schema.clone())
+    {
+        return Err(GraphProjectionError::SchemaMalformed {
+            artifact_id: artifact_id.as_str().to_owned(),
+            component: artifact_id.as_str().to_owned(),
+            reason: "not-canonical",
+        });
+    }
+    let executable_set_digest = executable_set_digest(&executable_digests).map_err(|_| {
+        GraphProjectionError::DeclarationNotCanonical {
+            artifact_id: artifact_id.as_str().to_owned(),
+        }
+    })?;
+    Ok(BuiltArtifact::new(
+        artifact_id,
+        contract_version,
+        executable_set_digest,
+        declared_executable_set_digest,
+        config_schema,
+    ))
 }
 
 #[cfg(target_os = "linux")]

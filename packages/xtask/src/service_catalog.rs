@@ -6,6 +6,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(test)]
+use d2b_contracts_provider::v3::projection::PrivatePlanProjection;
 use serde::Deserialize;
 
 /// The directory-glob root the per-crate declarations live under.
@@ -36,6 +38,30 @@ struct DeclarationFile {
     /// declaration order (the committed wire order the bus has consumed).
     #[serde(default)]
     services: Vec<String>,
+}
+
+/// The service catalog a declaration projection produces (KTD1/U4).
+///
+/// The rows are the declared services and the provider that answers each one,
+/// derived from the declaration. The per-crate `service-catalog.json` files
+/// this module still reads are the pre-declaration authoring form; the
+/// unchanged production entry point keeps consuming them until the cutover,
+/// and this renderer is what it will consume instead.
+#[cfg(test)]
+pub(crate) fn render_declaration_service_catalog(plan: &PrivatePlanProjection) -> String {
+    let mut out = String::new();
+    out.push_str("// @generated\n");
+    out.push_str("// Provenance: derived from the provider declaration (KTD1/U4). A\n");
+    out.push_str("// generated artifact is an output, not a second source.\n");
+    out.push_str("\n");
+    for row in plan.services() {
+        out.push_str(&format!(
+            "    {:?} => Some({:?}),\n",
+            row.service_id(),
+            row.provider_ref()
+        ));
+    }
+    out
 }
 
 /// The parsed per-crate catalog inputs, crate name -> declaration.
@@ -262,6 +288,28 @@ fn generated_artifact_path(repo_root: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The service catalog is the declared services and their providers, not
+    /// the per-crate `service-catalog.json` files the unchanged production
+    /// entry point still reads.
+    #[test]
+    fn the_service_catalog_is_derived_from_the_declaration() {
+        let plan = crate::resource_type_authority::declaration_fixture::plan(&["export", "close"]);
+        let rendered = render_declaration_service_catalog(&plan);
+        assert_eq!(
+            rendered,
+            render_declaration_service_catalog(&plan),
+            "the catalog is byte-stable"
+        );
+        assert!(
+            rendered.contains("\"volume-virtiofs.d2bus.org/export\" => Some(\"Provider/provider-volume-virtiofs\")"),
+            "the declared service routes to its declaring provider: {rendered}"
+        );
+        assert!(
+            !rendered.contains("d2b-provider-volume-local"),
+            "no per-crate declaration file contributed a row: {rendered}"
+        );
+    }
 
     /// A typo'd declaration key is refused at the boundary instead of being
     /// silently ignored (the daemon's fixed-UID row would otherwise vanish).

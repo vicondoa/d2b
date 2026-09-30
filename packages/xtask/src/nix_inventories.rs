@@ -35,6 +35,8 @@ use std::{
 };
 
 use d2b_contracts::identity::STANDARD_RESOURCE_TYPES;
+#[cfg(test)]
+use d2b_contracts_provider::v3::projection::PrivatePlanProjection;
 use d2b_contracts_provider::v3::semantic_services::{SemanticRole, catalog};
 use d2b_contracts_zone_session::v3::{BINDABLE_SUBJECT_TYPES, RoleResourceVerb, RoleSessionVerb};
 use serde_json::Value;
@@ -697,6 +699,93 @@ fn host_users_module(
     Ok(out)
 }
 
+/// The Nix projection a declaration projection produces (KTD1/U4).
+///
+/// The rendering is the private plan's own Nix view: the providers and their
+/// signed manifest inputs, the service catalog, the registration rows, the
+/// per-method graph rows with the presentation each method needs, and the
+/// compiled consumer requests. Every list is sorted, so two evaluations of one
+/// declaration produce the same bytes and no consumer can hand-order a
+/// projection to make a diff.
+///
+/// The renderer is staged: the production entry point keeps the
+/// pre-declaration inventory until the cutover, so this is exercised by its
+/// owner-local tests rather than by a second generation command.
+#[cfg(test)]
+pub(crate) fn render_declaration_nix_projection(plan: &PrivatePlanProjection) -> String {
+    let mut out = String::new();
+    out.push_str("{\n");
+    out.push_str(&format!(
+        "  contractVersion = \"{}\";\n",
+        plan.contract_version()
+    ));
+    out.push_str("  providers = {\n");
+    for input in plan.manifest_inputs() {
+        out.push_str(&format!(
+            "    \"{}\" = {{\n      providerRef = \"{}\";\n      declarationDigest = \"{}\";\n      executableSetDigest = \"{}\";\n      configDigest = \"{}\";\n      components = [\n",
+            input.artifact_id(),
+            input.provider_ref(),
+            input.declaration_digest(),
+            input.executable_set_digest(),
+            input.config_digest()
+        ));
+        for component in input.components() {
+            out.push_str(&format!(
+                "        {{ componentId = \"{}\"; presentation = \"{}\"; setupRestrictions = {}; }}\n",
+                component.component_id(),
+                component.presentation_token(),
+                nix_string_list(component.setup_restriction_tokens(), 0)
+            ));
+        }
+        out.push_str("      ];\n    };\n");
+    }
+    out.push_str("  };\n");
+    out.push_str("  serviceCatalog = {\n");
+    for service in plan.services() {
+        out.push_str(&format!(
+            "    \"{}\" = \"{}\";\n",
+            service.service_id(),
+            service.provider_ref()
+        ));
+    }
+    out.push_str("  };\n");
+    out.push_str("  registrations = [\n");
+    for registration in plan.registrations() {
+        out.push_str(&format!(
+            "    {{ artifactId = \"{}\"; providerRef = \"{}\"; services = {}; }}\n",
+            registration.artifact_id(),
+            registration.provider_ref(),
+            nix_string_list(registration.services().iter().map(String::as_str), 0)
+        ));
+    }
+    out.push_str("  ];\n");
+    out.push_str("  operations = [\n");
+    for operation in plan.operations() {
+        out.push_str(&format!(
+            "    {{ providerRef = \"{}\"; componentId = \"{}\"; method = \"{}\"; presentation = \"{}\"; }}\n",
+            operation.implementation().provider().to_canonical_string(),
+            operation.component_id(),
+            operation.method(),
+            operation.presentation_token()
+        ));
+    }
+    out.push_str("  ];\n");
+    out.push_str("  consumerRequests = [\n");
+    for request in plan.consumer_requests() {
+        out.push_str(&format!(
+            "    {{ zone = \"{}\"; consumerRef = \"{}\"; slot = \"{}\"; kind = \"{}\"; fingerprint = \"{}\"; }}\n",
+            request.zone(),
+            request.consumer_ref(),
+            request.slot(),
+            request.kind_token(),
+            request.fingerprint()
+        ));
+    }
+    out.push_str("  ];\n");
+    out.push_str("}\n");
+    out
+}
+
 /// Write every Nix inventory the generator owns.
 pub fn gen_nix_inventories(repo_root: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let allocation = principal_allocation(repo_root)?;
@@ -740,6 +829,25 @@ pub fn gen_nix_inventories(repo_root: &Path) -> Result<Vec<PathBuf>, Box<dyn std
 mod tests {
     use super::*;
     use crate::provider_crate_policy::PROVIDER_MATRIX;
+
+    /// The Nix projection is the private plan's own Nix view, so a provider
+    /// method reaches the Nix surface without a hand-written inventory row.
+    #[test]
+    fn the_nix_projection_is_derived_from_the_declaration() {
+        let plan = crate::resource_type_authority::declaration_fixture::plan(&["export", "close"]);
+        let rendered = render_declaration_nix_projection(&plan);
+        assert_eq!(rendered, render_declaration_nix_projection(&plan), "byte-stable");
+        assert!(rendered.contains("contractVersion = \"d2b.zone.v3\""));
+        assert!(rendered.contains("componentId = \"volume-virtiofs\""));
+        assert!(
+            rendered.contains("presentation = \"namespace-first-service-source\""),
+            "the declared capability reaches Nix: {rendered}"
+        );
+        let extended = render_declaration_nix_projection(
+            &crate::resource_type_authority::declaration_fixture::plan(&["export", "close", "reopen"]),
+        );
+        assert_ne!(rendered, extended, "one changed method moves the Nix projection");
+    }
 
     #[test]
     fn every_projection_owner_is_a_closed_provider_matrix_row() {

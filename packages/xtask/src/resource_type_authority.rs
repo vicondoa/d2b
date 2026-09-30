@@ -60,6 +60,8 @@ use std::{
 };
 
 use crate::authority_common::{collect_rs_files, verify_committed};
+#[cfg(test)]
+use d2b_contracts_provider::v3::projection::PrivatePlanProjection;
 use serde::Deserialize;
 
 /// The directory-glob root the per-crate declarations live under.
@@ -962,11 +964,286 @@ fn render(registry: &AuthorityRegistry) -> Result<String, String> {
 
 
 
+/// The canonical manifest inputs a declaration projection produces.
+///
+/// One provider yields one entry: the exact canonical declaration bytes a
+/// provider signs, and the digest that frames them. The bytes come from the
+/// plan, which derived them from the declaration, so packaging and
+/// configuration consume the same source and neither can restate the other's
+/// view.
+///
+/// The renderer is staged: the production entry point keeps the
+/// pre-declaration path until the cutover, so this is exercised by its
+/// owner-local tests rather than by a second generation command.
+#[cfg(test)]
+pub(crate) fn render_declaration_manifest_inputs(
+    plan: &PrivatePlanProjection,
+) -> BTreeMap<String, Vec<u8>> {
+    plan.manifest_inputs()
+        .iter()
+        .map(|input| (input.artifact_id().to_owned(), input.declaration_bytes().to_vec()))
+        .collect()
+}
+
+/// The manifest-input index a generator records beside the declarations.
+///
+/// The index is derived, so a provider that changes its method moves this
+/// table without a handwritten row to edit.
+#[cfg(test)]
+pub(crate) fn render_declaration_manifest_index(plan: &PrivatePlanProjection) -> String {
+    let mut out = String::new();
+    out.push_str("{\n");
+    for input in plan.manifest_inputs() {
+        out.push_str(&format!(
+            "  {} = {{\n    providerRef = {};\n    declarationDigest = {};\n    executableSetDigest = {};\n    configDigest = {};\n  }};\n",
+            nix_string(input.artifact_id()),
+            nix_string(input.provider_ref()),
+            nix_string(input.declaration_digest()),
+            nix_string(input.executable_set_digest()),
+            nix_string(input.config_digest()),
+        ));
+    }
+    out.push_str("}\n");
+    out
+}
+
+/// The one declaration every authority's test projects (KTD1/U4).
+///
+/// A Zone-singleton `VolumeBinding` controller and a namespace-first volume
+/// service, which is the smallest declaration that exercises a ResourceType
+/// export, a method export, a service export, a presentation capability, and
+/// the setup restrictions that capability requires.
+#[cfg(test)]
+pub(crate) mod declaration_fixture {
+    use std::collections::BTreeMap;
+
+    use d2b_contracts_provider::v3::{
+        ArtifactDigest, BinaryRef, ComponentDescriptor, ComponentExecution,
+        ComponentTargetCapability, ComponentType, ControllerInstanceScope, ControllerTargetKind,
+        DeclaredComponent, DeclaredMethod, DeclaredPlacement, DeclaredService, EffectPortClass,
+        PresentationCapability, ProviderDeclarationSpec, SetupRestriction,
+    };
+    use d2b_contracts_resource::v3::{
+        ArtifactId, ResourceTypeName, execution_policy::{BoundedToken, ExecutionDomain},
+        resource_schema::PlacementAnchor,
+    };
+    use d2b_contracts_provider::v3::projection::{
+        BuiltArtifact, GRAPH_PROJECTION_CONTRACT_VERSION, PrivatePlanProjection,
+        project_provider_graph,
+    };
+    use d2b_contracts_resource::v3::{canonical_digest, canonical_json_bytes};
+
+    /// The canonical root configuration schema the fixture components digest.
+    const CONFIG_SCHEMA: &[u8] = br#"{"type":"object"}"#;
+    const DIGEST_B: &str =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000002";
+    const ARTIFACT: &str = "provider-volume-virtiofs";
+    const SERVICE_ID: &str = "volume-virtiofs.d2bus.org/export";
+
+    fn token(value: &str) -> BoundedToken {
+        BoundedToken::parse(value).expect("bounded token")
+    }
+
+    fn resource_type(value: &str) -> ResourceTypeName {
+        ResourceTypeName::parse(value).expect("registered resource type")
+    }
+
+    fn digest(value: &str) -> ArtifactDigest {
+        ArtifactDigest::parse(value).expect("canonical digest")
+    }
+
+    /// A raw SHA-256 digest in the contract spelling.
+    fn sha256_digest(bytes: &[u8]) -> ArtifactDigest {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(bytes);
+        let mut out = String::from("sha256:");
+        for byte in digest {
+            out.push_str(&format!("{byte:02x}"));
+        }
+        ArtifactDigest::parse(out).expect("a raw SHA-256 digest")
+    }
+
+    /// The D101 executable-set digest the build output hashes to, framed the
+    /// way the compiler's artifact check frames it.
+    fn d101_executable_set_digest(
+        executables: &std::collections::BTreeMap<String, ArtifactDigest>,
+    ) -> ArtifactDigest {
+        let object: std::collections::BTreeMap<String, String> = executables
+            .iter()
+            .map(|(name, digest)| (name.clone(), digest.as_str().to_owned()))
+            .collect();
+        let bytes = canonical_json_bytes(&object).expect("a canonical executable map");
+        ArtifactDigest::parse(canonical_digest("d2b:v3:provider-executable-set", &bytes))
+            .expect("a framed canonical digest")
+    }
+
+    fn artifact_id() -> ArtifactId {
+        ArtifactId::parse(ARTIFACT).expect("artifact identifier")
+    }
+
+    fn config_digest() -> ArtifactDigest {
+        BuiltArtifact::new(
+            artifact_id(),
+            GRAPH_PROJECTION_CONTRACT_VERSION,
+            digest(DIGEST_B),
+            digest(DIGEST_B),
+            CONFIG_SCHEMA.to_vec(),
+        )
+        .config_digest()
+    }
+
+    /// The build output the declaration is admitted against.
+    pub(crate) fn built_artifact() -> BuiltArtifact {
+        let mut executables = BTreeMap::new();
+        executables.insert("volume-virtiofs".to_owned(), sha256_digest(b"volume-virtiofs"));
+        let declared = d101_executable_set_digest(&executables);
+        BuiltArtifact::new(
+            artifact_id(),
+            GRAPH_PROJECTION_CONTRACT_VERSION,
+            declared.clone(),
+            declared,
+            CONFIG_SCHEMA.to_vec(),
+        )
+    }
+
+    fn controller() -> DeclaredComponent {
+        let descriptor = ComponentDescriptor::new(
+            token("volume-binding"),
+            ComponentType::Controller,
+            [resource_type("VolumeBinding")],
+            [],
+            [ExecutionDomain::System],
+            1,
+            config_digest(),
+            [],
+        )
+        .expect("controller descriptor")
+        .with_execution(ComponentExecution::Launchable {
+            binary_ref: BinaryRef::parse("volume-binding").expect("binary reference"),
+        })
+        .with_controller_placement(
+            ControllerInstanceScope::ZoneSingleton,
+            [ControllerTargetKind::Zone],
+        )
+        .expect("zone singleton placement")
+        .with_target_capabilities([ComponentTargetCapability::new(
+            ControllerTargetKind::Zone,
+            digest(DIGEST_B),
+            [],
+        )
+        .expect("zone target capability")])
+        .expect("zone target capabilities");
+        DeclaredComponent::new(
+            descriptor,
+            DeclaredPlacement::new([ControllerTargetKind::Zone], Some(PlacementAnchor::Zone))
+                .expect("zone placement"),
+            PresentationCapability::None,
+            [],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("declared controller component")
+    }
+
+    /// The service with exactly the declared methods.
+    pub(crate) fn service(methods: &[&str]) -> DeclaredComponent {
+        let descriptor = ComponentDescriptor::new(
+            token("volume-virtiofs"),
+            ComponentType::Service,
+            [],
+            methods.iter().map(|method| token(method)),
+            [ExecutionDomain::System],
+            1,
+            config_digest(),
+            [],
+        )
+        .expect("service descriptor")
+        .with_execution(ComponentExecution::Launchable {
+            binary_ref: BinaryRef::parse("virtiofsd-mount-helper").expect("binary reference"),
+        })
+        .with_target_capabilities([ComponentTargetCapability::new(
+            ControllerTargetKind::Host,
+            digest(DIGEST_B),
+            [EffectPortClass::Volume],
+        )
+        .expect("host target capability")])
+        .expect("host target capabilities");
+        let presentation = PresentationCapability::NamespaceFirstServiceSource;
+        DeclaredComponent::new(
+            descriptor,
+            DeclaredPlacement::new([ControllerTargetKind::Host], None).expect("host placement"),
+            presentation,
+            SetupRestriction::required_for(presentation).iter().copied(),
+            methods
+                .iter()
+                .map(|method| DeclaredMethod::new(token(method), None, presentation))
+                .collect(),
+            vec![DeclaredService::new(
+                SERVICE_ID,
+                methods.iter().map(|method| token(method)),
+            )
+            .expect("declared service")],
+            [],
+        )
+        .expect("declared service component")
+    }
+
+    /// The fixture declaration.
+    pub(crate) fn declaration(methods: &[&str]) -> ProviderDeclarationSpec {
+        ProviderDeclarationSpec::new(
+            artifact_id(),
+            [controller(), service(methods)],
+            [],
+        )
+        .expect("declaration spec")
+    }
+
+    /// The private plan the fixture declaration projects.
+    pub(crate) fn plan(methods: &[&str]) -> PrivatePlanProjection {
+        project_provider_graph(&[&declaration(methods)], &[built_artifact()], &[])
+            .expect("the fixture declaration projects")
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 mod tests {
     use super::*;
     use std::fs;
+
+    /// The manifest inputs are the declaration's own canonical bytes, so a
+    /// provider that edits its declaration edits its signed manifest input
+    /// without a second authored copy.
+    #[test]
+    fn the_manifest_inputs_are_the_declarations_own_canonical_bytes() {
+        let plan = declaration_fixture::plan(&["export", "close"]);
+        let inputs = render_declaration_manifest_inputs(&plan);
+        assert_eq!(inputs.len(), 1);
+        let bytes = inputs.get("provider-volume-virtiofs").expect("one input per provider");
+        assert_eq!(
+            bytes.as_slice(),
+            d2b_contracts_resource::v3::canonical_json_bytes(
+                &declaration_fixture::declaration(&["export", "close"])
+            )
+            .expect("canonical declaration bytes")
+            .as_slice()
+        );
+        let index = render_declaration_manifest_index(&plan);
+        assert!(index.contains("\"provider-volume-virtiofs\""));
+        assert!(index.contains("namespace-first-service-source") == false);
+        // The index is derived, so it is byte-stable for one declaration.
+        assert_eq!(index, render_declaration_manifest_index(&plan));
+    }
+
+    /// Changing one declared method moves the manifest input and its index.
+    #[test]
+    fn one_changed_method_moves_the_manifest_input() {
+        let before = render_declaration_manifest_index(&declaration_fixture::plan(&["export"]));
+        let after =
+            render_declaration_manifest_index(&declaration_fixture::plan(&["export", "close"]));
+        assert_ne!(before, after, "the index is derived from the declaration");
+    }
 
     /// A throwaway fixture tree under the OS temp dir.
     struct Fixture {

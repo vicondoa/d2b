@@ -767,6 +767,47 @@ fn build_catalog(repo_root: &Path) -> Result<Catalog, Box<dyn std::error::Error>
     merge_catalog(&committed, &declarations)
 }
 
+/// Every authored input this module merges, named so the declaration-driven
+/// generator can prove it reads none of them (KTD1/U4).
+///
+/// These files are the pre-declaration authoring form. The unchanged
+/// production entry point still reads them until the cutover, and the
+/// declaration-driven path this unit stages must not: a projection that read
+/// any of them would be a second source rather than a view of the
+/// declaration.
+#[cfg(test)]
+pub(crate) const RETIRED_MERGE_INPUTS: &[&str] = &[
+    "docs/reference/policy/broker-operations.json",
+    "docs/reference/policy/principal-allocation.json",
+    "packages/d2b-provider-*/operations.json",
+    "packages/d2b-provider-*/registrations.json",
+    "packages/d2b-provider-*/service-catalog.json",
+    "packages/d2b-provider-*/resource-types.json",
+];
+
+/// Write one rendered artifact into a caller-supplied isolated directory.
+///
+/// The declaration-driven generator has no repository-relative output path of
+/// its own: it renders into a directory the caller owns, so exercising it can
+/// never overwrite a committed generated artifact and never becomes a second
+/// supported production generation command.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+#[cfg(test)]
+pub(crate) fn write_isolated_artifact(
+    output_dir: &Path,
+    relative: &str,
+    contents: &str,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let path = output_dir.join(relative);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| render_error(format!("create {}: {error}", parent.display())))?;
+    }
+    fs::write(&path, contents)
+        .map_err(|error| render_error(format!("write {relative}: {error}")))?;
+    Ok(path)
+}
+
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn write(
     repo_root: &Path,
@@ -1307,6 +1348,46 @@ pub fn gen_broker_operations(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The declaration-driven path reads none of the authored inputs this
+    /// module merges. The list is asserted rather than asserted-in-prose: a
+    /// regression that reintroduced one would have to declare it in the
+    /// projection's own closed input list.
+    #[test]
+    fn the_declaration_projection_reads_no_retired_merge_input() {
+        assert!(RETIRED_MERGE_INPUTS.contains(&"docs/reference/policy/broker-operations.json"));
+        for input in d2b_contracts_provider::v3::projection::GRAPH_PROJECTION_INPUTS {
+            assert!(
+                !RETIRED_MERGE_INPUTS.contains(input),
+                "the projection may not read the authored input {input}"
+            );
+        }
+        assert_eq!(d2b_contracts_provider::v3::projection::GRAPH_PROJECTION_INPUTS, &["provider-declaration"]);
+    }
+
+    /// A rendered artifact lands in the caller's isolated directory, and the
+    /// committed generated files are untouched.
+    #[test]
+    fn an_isolated_write_never_touches_a_committed_generated_file() {
+        let plan = crate::resource_type_authority::declaration_fixture::plan(&["export", "close"]);
+        let root = std::env::temp_dir().join(format!(
+            "d2b-u4-isolated-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let path = write_isolated_artifact(
+            &root,
+            "nix/provider-graph-projection.nix",
+            &crate::nix_inventories::render_declaration_nix_projection(&plan),
+        )
+        .expect("isolated write");
+        assert!(path.starts_with(&root), "the write stays inside the caller's directory");
+        assert!(path.is_file());
+        std::fs::remove_dir_all(&root).expect("remove the isolated tree");
+    }
 
     /// The committed catalog document, read once for the validation tests.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
