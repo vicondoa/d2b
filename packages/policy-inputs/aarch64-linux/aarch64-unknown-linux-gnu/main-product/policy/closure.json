@@ -101,7 +101,7 @@
   "features": [],
   "default_features": true,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "a4c584eb90c9ade5edb5f726ae170b36735ab07035c76fc5db0bfa0479c662db",
+  "lock_sha256": "43db895baa720c45fbb6573bb7d025fcc88f045b5220539c0dab7766de90c37f",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -6415,6 +6415,12 @@
     },
     {
       "from": "d2b-provider-guest-azure-container-apps@0.0.0-bootstrap#path",
+      "to": "d2b-provider-toolkit@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-guest-azure-container-apps@0.0.0-bootstrap#path",
       "to": "serde@1.0.229#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
@@ -6452,6 +6458,18 @@
     {
       "from": "d2b-provider-guest-azure-virtual-machine@0.0.0-bootstrap#path",
       "to": "base64@0.22.1#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-guest-azure-virtual-machine@0.0.0-bootstrap#path",
+      "to": "d2b-contracts-provider@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-guest-azure-virtual-machine@0.0.0-bootstrap#path",
+      "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
