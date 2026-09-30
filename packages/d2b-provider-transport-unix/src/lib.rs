@@ -6,6 +6,8 @@
 pub mod admission;
 /// Bounded audit records for transport lifecycle events.
 pub mod audit;
+/// Graph-bound attach authority for admitted transport relationships.
+pub mod graph_binding;
 /// Accepted-socket request binding.
 pub mod identity;
 /// Bounded transport telemetry.
@@ -16,8 +18,16 @@ pub mod portal;
 pub mod service;
 
 pub use admission::{OpenTransportRequest, RouteClass, SocketKind, TransportAdmissionError};
+pub use graph_binding::{
+    AdmittedTransportBinding, AdmittedTransportRoute, ControlPlaneInjectionRefusal,
+    ControlPlaneRequest, ControlRouteToken, KernelPeerPin, RelationshipFence, RelationshipPhase,
+    TransportAttachEvidence, TransportAttachRefusal, TransportBindingRefusal,
+    TransportBindingRegistry, TransportControlOperation, admit_attach,
+    MAX_ADMITTED_TRANSPORT_BINDINGS,
+};
 pub use identity::{BrokerRole, ExpectedPeer, TransportRequestBinding};
 pub use portal::{
     OpenedTransport, PortalError, TransportDescriptor, TransportHandle, TransportObservation,
     TransportPortal,
 };
+pub use service::TransportService;

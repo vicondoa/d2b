@@ -1,5 +1,6 @@
 //! Binding of one accepted Unix socket to one authenticated request.
 
+use crate::graph_binding::KernelPeerPin;
 use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use rustix::{
     fd::{AsFd, OwnedFd},
@@ -94,13 +95,37 @@ pub(crate) struct AcceptedTransport {
 }
 
 impl AcceptedTransport {
+    /// Bind an accepted descriptor to a caller-supplied request binding.
+    ///
+    /// The kernel peer policy on this path is the one the request binding
+    /// carries beside it, which is why the graph-bound path below does not
+    /// use it.
     pub(crate) fn bind(
         binding: TransportRequestBinding,
         fd: OwnedFd,
     ) -> Result<Self, rustix::io::Errno> {
         let peer = get_socket_peercred(fd.as_fd())?;
         if let Some(expected) = binding.expected_peer
-            && (peer.uid.as_raw() != expected.uid || peer.gid.as_raw() != expected.gid)
+            && !peer_is(&peer, (expected.uid(), expected.gid()))
+        {
+            return Err(rustix::io::Errno::ACCESS);
+        }
+        Ok(Self { binding, peer, fd })
+    }
+
+    /// Bind an accepted descriptor under an admitted relationship's own pin.
+    ///
+    /// The pin arrives from the relationship, so the same comparison governs
+    /// both paths and a caller has no field in which to substitute a peer
+    /// identity of its own.
+    pub(crate) fn bind_under_pin(
+        binding: TransportRequestBinding,
+        pin: Option<&KernelPeerPin>,
+        fd: OwnedFd,
+    ) -> Result<Self, rustix::io::Errno> {
+        let peer = get_socket_peercred(fd.as_fd())?;
+        if let Some(pin) = pin
+            && !peer_is(&peer, (pin.uid(), pin.gid()))
         {
             return Err(rustix::io::Errno::ACCESS);
         }
@@ -110,4 +135,9 @@ impl AcceptedTransport {
     pub(crate) fn into_parts(self) -> (TransportRequestBinding, UCred, OwnedFd) {
         (self.binding, self.peer, self.fd)
     }
+}
+
+/// The one kernel peer comparison both binding paths use.
+fn peer_is(peer: &UCred, pinned: (u32, u32)) -> bool {
+    (peer.uid.as_raw(), peer.gid.as_raw()) == pinned
 }

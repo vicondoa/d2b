@@ -38,11 +38,44 @@ workers or binaries: admission and broker access remain daemon-supervised.
 - Seqpacket routes enable `SO_PASSCRED`; stream routes never carry attachments.
 - ZoneLink routes never carry attachments, even when their caller requests
   them.
-- Local portal requests may bind the accepted socket to an expected kernel
-  uid/gid; peer identity is evidence only and is not derived from payload.
 - Every accepted descriptor and portal monitor duplicate is close-on-exec.
 - The portal retains request-bound peer evidence and an owned monitor duplicate;
   callers receive the validated original descriptor exactly once.
+
+### Graph-bound attach
+
+`TransportService::open_under_binding` is the graph-bound path, and it is the
+only path with no independent access list:
+
+- The portal holds a bounded `TransportBindingRegistry` of admitted
+  `EndpointBinding` relationships keyed by their graph binding key. A peer that
+  is not under one of those keys has no attach path at all.
+- `admit_attach` is the single ordered gate: a foreign Zone, a different store
+  incarnation, a revoked or draining relationship, a stale source or consumer
+  generation, an advanced desired revision or Zone desired sequence, and a
+  reconnect ordinal below the relationship's floor each refuse at the shared
+  admission stage and refusal reason.
+- The kernel uid/gid a transport may be pinned to comes from the relationship
+  itself. `open_under_binding` has no argument in which a caller could place a
+  peer identity of its own; the caller-supplied `ExpectedPeer` path is the
+  legacy one and is not the graph-bound decision.
+- A descriptor-carrying open must have been admitted as an `Attach`
+  relationship; a `Connect` or `Listen` relationship refuses with
+  `attachment-kind-conflict`.
+- Revocation is effective at the service, not at the caller's copy: the service
+  attaches against the relationship its registry currently admits, so a
+  reconnect that presents a value admitted before a revoke is refused.
+
+### Data plane and control plane
+
+`ControlPlaneRequest` is the closed set of privileged portal operations
+(`Open`, `Close`, `Observe`). It can only be issued against a live admitted
+route, because issuing one requires the opaque `ControlRouteToken` that only
+`AdmittedTransportRoute::control_token` mints.
+`ControlPlaneRequest::from_carriage` is the one function stream-carried bytes
+could reach if the portal ever parsed its data plane for control: it scans the
+bytes for an operation discriminant and always refuses, because carriage names
+an operation but cannot carry a route token.
 
 ## Lifecycle
 
@@ -68,13 +101,18 @@ host path, credential, remote registry, or ambient broker mutation handle.
 
 Only the authenticated Zone controller and transport service may construct the
 request binding passed to the portal. Broker authority and accepted peer
-evidence remain bound to that one request.
+evidence remain bound to that one request. On the graph-bound path the request
+binding the portal records is DERIVED from the admitted relationship - its Zone
+and its consumer - so a caller cannot widen it.
 
 ## Security posture
 
 The implementation performs only fd-relative socket operations. It never
 accepts a socket path, raw identity claim, caller-supplied descriptor number,
-or payload-derived subject.
+or payload-derived subject. On the graph-bound path it also never accepts a
+caller-supplied peer identity: the uid/gid the open enforces is the one the
+admitted relationship carries, and a mismatch is reported as
+`peer-policy-mismatch` rather than as an unreadable peer credential.
 
 ## State and telemetry
 
@@ -88,4 +126,8 @@ bazel test //packages/d2b-provider-transport-unix:all-tests
 ```
 
 The focused tests cover accepted-fd/peer/request binding, socket-kind and
-attachment refusal, close-on-exec, and owned finalization.
+attachment refusal, close-on-exec, and owned finalization, plus the graph-bound
+path: foreign-Zone and stale-generation attachment refusal, revocation that a
+reconnect cannot revive, a stream-carriage attempt to inject a privileged
+control operation, the relationship-owned peer pin, and the bounded
+relationship registry.

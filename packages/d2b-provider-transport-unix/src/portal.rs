@@ -1,14 +1,22 @@
 //! Bounded local transport-handle ownership and socket observation.
 
 use crate::{
-    admission::{OpenTransportRequest, SocketKind, TransportAdmissionError, validate_and_prepare},
-    identity::{AcceptedTransport, TransportRequestBinding},
+    admission::{
+        OpenTransportRequest, SocketKind, TransportAdmissionError, validate_and_prepare,
+        validate_under_relationship,
+    },
+    graph_binding::{
+        AdmittedTransportBinding, TransportAttachEvidence, TransportBindingRefusal, admit_attach,
+    },
+    identity::{AcceptedTransport, BrokerRole, TransportRequestBinding},
 };
+use d2b_contracts_resource::v3::BindingKey;
 use getrandom::fill;
 use rustix::{
     event::{PollFd, PollFlags, poll},
     fd::{AsFd, OwnedFd},
     io::fcntl_dupfd_cloexec,
+    net::UCred,
 };
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -103,12 +111,26 @@ impl fmt::Debug for OpenedTransport {
 pub enum PortalError {
     /// The requested attachment policy is not valid for this route.
     AttachmentPolicyConflict,
+    /// The open requests descriptor attachments its admitted relationship was
+    /// not admitted for.
+    AttachmentKindConflict,
     /// The accepted descriptor does not match the requested socket kind.
     SocketKindMismatch,
     /// The descriptor cannot be protected with close-on-exec.
     Cloexec,
-    /// The accepted descriptor does not expose kernel peer credentials.
+    /// The kernel would not report who the accepted descriptor's peer is.
     PeerCredentials,
+    /// The accepted peer is not the one the admitted relationship is pinned
+    /// to.
+    PeerPolicyMismatch,
+    /// The presented evidence is not the admitted relationship.
+    RelationshipRefused,
+    /// The admitted-relationship registry is at its frozen ceiling.
+    BindingRegistryFull,
+    /// The registry already holds a relationship under this key.
+    BindingAlreadyAdmitted,
+    /// No admitted relationship carries this key.
+    BindingNotAdmitted,
     /// The per-service monitor table is full.
     HandleTableFull,
     /// The supplied handle is not owned by this portal instance.
@@ -121,9 +143,22 @@ impl From<TransportAdmissionError> for PortalError {
     fn from(value: TransportAdmissionError) -> Self {
         match value {
             TransportAdmissionError::AttachmentPolicyConflict => Self::AttachmentPolicyConflict,
+            TransportAdmissionError::AttachmentKindConflict => Self::AttachmentKindConflict,
             TransportAdmissionError::SocketKindMismatch => Self::SocketKindMismatch,
             TransportAdmissionError::Cloexec => Self::Cloexec,
             TransportAdmissionError::PeerCredentials => Self::PeerCredentials,
+            TransportAdmissionError::PeerPolicyMismatch => Self::PeerPolicyMismatch,
+        }
+    }
+}
+
+impl From<TransportBindingRefusal> for PortalError {
+    fn from(value: TransportBindingRefusal) -> Self {
+        match value {
+            TransportBindingRefusal::AlreadyAdmitted => Self::BindingAlreadyAdmitted,
+            TransportBindingRefusal::RegistryFull => Self::BindingRegistryFull,
+            TransportBindingRefusal::NotAdmitted => Self::BindingNotAdmitted,
+            TransportBindingRefusal::RegistryUnavailable => Self::MonitorUnavailable,
         }
     }
 }
@@ -132,9 +167,15 @@ impl fmt::Display for PortalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::AttachmentPolicyConflict => "attachment-policy-conflict",
+            Self::AttachmentKindConflict => "attachment-kind-conflict",
             Self::SocketKindMismatch => "socket-kind-mismatch",
             Self::Cloexec => "cloexec-set-failed",
             Self::PeerCredentials => "peer-credentials-unavailable",
+            Self::PeerPolicyMismatch => "peer-policy-mismatch",
+            Self::RelationshipRefused => "relationship-refused",
+            Self::BindingRegistryFull => "binding-registry-full",
+            Self::BindingAlreadyAdmitted => "binding-already-admitted",
+            Self::BindingNotAdmitted => "binding-not-admitted",
             Self::HandleTableFull => "handle-table-full",
             Self::UnknownHandle => "unknown-handle",
             Self::MonitorUnavailable => "transport-monitor-unavailable",
@@ -146,7 +187,8 @@ impl Error for PortalError {}
 
 struct MonitorEntry {
     _binding: TransportRequestBinding,
-    _peer: rustix::net::UCred,
+    relationship: Option<BindingKey>,
+    _peer: UCred,
     monitor_fd: OwnedFd,
 }
 
@@ -229,6 +271,85 @@ impl TransportPortal {
             PortalError::PeerCredentials
         })?;
         let (binding, peer, fd) = accepted.into_parts();
+        self.install(request, binding, peer, None, fd)
+    }
+
+    /// Open one transport under an admitted graph relationship.
+    ///
+    /// The presented evidence is measured against the relationship's live
+    /// fence by the one attach gate, the descriptor is validated against the
+    /// attachment kind the relationship was admitted for, and the kernel peer
+    /// is compared against the relationship's own pin. There is no argument
+    /// in which a caller could place a peer identity of its own.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RelationshipRefused` when the presented evidence is not the
+    /// admitted relationship, `AttachmentPolicyConflict`,
+    /// `AttachmentKindConflict`, `SocketKindMismatch`, `Cloexec`,
+    /// `PeerPolicyMismatch`, or `PeerCredentials` when the descriptor fails
+    /// admission, `HandleTableFull` when the per-service monitor table is
+    /// full, and `MonitorUnavailable` when the portal monitor lock is
+    /// unavailable after an internal failure.
+    pub fn open_under_binding(
+        &self,
+        binding: &AdmittedTransportBinding,
+        evidence: &TransportAttachEvidence,
+        request: OpenTransportRequest,
+        fd: OwnedFd,
+    ) -> Result<OpenedTransport, PortalError> {
+        let route = admit_attach(binding, evidence).map_err(|refusal| {
+            tracing::warn!(
+                provider = "transport-unix",
+                reason = %refusal,
+                "graph-bound attach refused: evidence is not the admitted relationship"
+            );
+            PortalError::RelationshipRefused
+        })?;
+        let pin = route.kernel_peer_pin();
+        validate_under_relationship(&fd, request, &route, pin.as_ref()).map_err(|error| {
+            tracing::warn!(
+                provider = "transport-unix",
+                reason = %error,
+                "graph-bound transport admission rejected for accepted socket"
+            );
+            PortalError::from(error)
+        })?;
+        let request_binding = relationship_request_binding(binding);
+        let accepted =
+            AcceptedTransport::bind_under_pin(request_binding, pin.as_ref(), fd).map_err(|error| {
+                let refused = if error == rustix::io::Errno::ACCESS {
+                    PortalError::PeerPolicyMismatch
+                } else {
+                    PortalError::PeerCredentials
+                };
+                tracing::warn!(
+                    provider = "transport-unix",
+                    reason = %error,
+                    "graph-bound transport open rejected on the accepted socket"
+                );
+                refused
+            })?;
+        let (request_binding, peer, fd) = accepted.into_parts();
+        self.install(
+            request,
+            request_binding,
+            peer,
+            Some(route.key().clone()),
+            fd,
+        )
+    }
+
+    /// Take ownership of one validated descriptor in the bounded monitor
+    /// table.
+    fn install(
+        &self,
+        request: OpenTransportRequest,
+        binding: TransportRequestBinding,
+        peer: UCred,
+        relationship: Option<BindingKey>,
+        fd: OwnedFd,
+    ) -> Result<OpenedTransport, PortalError> {
         let descriptor = TransportDescriptor {
             socket_kind: request.socket_kind(),
             attachments_enabled: request.attachments_enabled(),
@@ -261,6 +382,7 @@ impl TransportPortal {
             handle,
             MonitorEntry {
                 _binding: binding,
+                relationship,
                 _peer: peer,
                 monitor_fd,
             },
@@ -270,6 +392,33 @@ impl TransportPortal {
             descriptor,
             transport_fd: fd,
         })
+    }
+
+    /// Return how many transports this portal currently owns.
+    ///
+    /// A portal whose monitor lock is unavailable owns nothing it can prove,
+    /// so it reports zero rather than a count it cannot stand behind.
+    pub fn open_count(&self) -> usize {
+        self.state.try_lock().map_or(0, |state| state.entries.len())
+    }
+
+    /// Return the admitted relationship one owned transport realizes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `UnknownHandle` when the handle is not owned by this portal
+    /// instance, and `MonitorUnavailable` when the portal monitor lock is
+    /// unavailable after an internal failure.
+    pub fn relationship(&self, handle: TransportHandle) -> Result<Option<BindingKey>, PortalError> {
+        let state = self
+            .state
+            .try_lock()
+            .map_err(|_| PortalError::MonitorUnavailable)?;
+        state
+            .entries
+            .get(&handle)
+            .ok_or(PortalError::UnknownHandle)
+            .map(|entry| entry.relationship.clone())
     }
 
     /// Close a monitored transport, refusing handles owned by another portal.
@@ -361,6 +510,21 @@ impl fmt::Debug for TransportPortal {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("TransportPortal(REDACTED)")
     }
+}
+
+/// Derive the request binding a graph-bound open records for its monitor
+/// entry.
+///
+/// Everything in it comes from the admitted relationship: the Zone and the
+/// consumer are the relationship's own, and the role is the one this service
+/// plays when it realizes a committed relationship. No part of it is
+/// supplied by a caller, so a caller-built binding cannot widen it.
+fn relationship_request_binding(binding: &AdmittedTransportBinding) -> TransportRequestBinding {
+    TransportRequestBinding::new(
+        binding.key().zone().clone(),
+        binding.key().consumer_ref().clone(),
+        BrokerRole::TransportService,
+    )
 }
 
 fn next_handle(state: &PortalState) -> Result<TransportHandle, PortalError> {
