@@ -23,7 +23,7 @@ use d2b_contracts_provider::v3::{
 };
 use d2b_contracts_resource::v3::{
     ControllerGeneration, ResourceGeneration, ResourceName, ResourceRef, ResourceTypeName,
-    ResourceUid, SchemaFingerprint, ZoneId, ZoneRevision,
+    ResourceUid, SchemaFingerprint, StoreIncarnation, ZoneId, ZoneRevision,
     identity::ReconnectGeneration,
     process::{ExecutionSpec, ProcessClass, ProcessSpec},
 };
@@ -1109,6 +1109,55 @@ pub struct ProviderDeployment {
     controller_assignments:
         Arc<Mutex<BTreeMap<ControllerAssignmentIdentity, Arc<AssignmentState>>>>,
     next_assignment_epoch: Arc<std::sync::atomic::AtomicU64>,
+    authority: Arc<Mutex<Option<TargetAuthority>>>,
+}
+
+/// The authority one execution target publishes for itself (U31, KTD7).
+///
+/// A target obtains authority only from a verified deployment graph it read
+/// and verified itself; it never inherits the host's policy and never takes
+/// custody of a credential. The declaration records exactly what the
+/// publication grants, so the deployment can refuse one that asks for more
+/// than this target's mode allows rather than silently narrowing it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TargetAuthority {
+    /// The Zone whose resources this target owns locally.
+    pub zone: ZoneId,
+    /// The store incarnation this authority was verified in.
+    pub store_incarnation: StoreIncarnation,
+    /// The exact RoleBinding references this target carries.
+    ///
+    /// A Guest carries only the bindings its own target-local declarations
+    /// name. An empty list is a valid publication: a target with no grants
+    /// admits nothing, which is the correct posture for a Guest that has no
+    /// declared bindings of its own.
+    pub bindings: Vec<String>,
+    /// The authority-bearing surfaces this publication grants.
+    pub surfaces: ModeSurfaces,
+    /// Whether the publication carries credential custody.
+    ///
+    /// Credential delivery stays with the host's credential custody; a
+    /// target that claims it is refused rather than being trusted with the
+    /// material.
+    pub credential_custody: bool,
+}
+
+impl TargetAuthority {
+    /// A target-local publication: the target's own Zone, its own bindings,
+    /// and only the surfaces its mode allows.
+    pub fn target_local(
+        zone: ZoneId,
+        store_incarnation: StoreIncarnation,
+        bindings: Vec<String>,
+    ) -> Self {
+        Self {
+            zone,
+            store_incarnation,
+            bindings,
+            surfaces: DaemonMode::Guest.surfaces(),
+            credential_custody: false,
+        }
+    }
 }
 
 impl ProviderDeployment {
@@ -1120,6 +1169,7 @@ impl ProviderDeployment {
             controllers: Arc::new(Mutex::new(BTreeMap::new())),
             controller_assignments: Arc::new(Mutex::new(BTreeMap::new())),
             next_assignment_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            authority: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -1131,6 +1181,84 @@ impl ProviderDeployment {
     /// The target kind implied by this deployment's mode.
     pub const fn target_kind(&self) -> TargetKind {
        self.mode.target_kind()
+    }
+
+    /// Publish the verified authority this target runs under.
+    ///
+    /// This is the target's whole bootstrap contribution. It refuses a
+    /// publication that asks for a surface this target's mode does not
+    /// carry, one that claims host credential custody, or one whose bindings
+    /// are not this target's own; it never narrows such a publication and
+    /// accepts the remainder. A target with no published authority admits
+    /// nothing.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    pub fn publish_target_authority(
+        &self,
+        authority: TargetAuthority,
+    ) -> Result<(), DeploymentError> {
+        let allowed = self.mode.surfaces();
+        let requested = authority.surfaces;
+        for (name, requested_flag, allowed_flag) in [
+            (
+                "local_zone_store",
+                requested.local_zone_store,
+                allowed.local_zone_store,
+            ),
+            (
+                "public_operator_socket",
+                requested.public_operator_socket,
+                allowed.public_operator_socket,
+            ),
+            (
+                "realm_credentials",
+                requested.realm_credentials,
+                allowed.realm_credentials,
+            ),
+            (
+                "host_controller_authority",
+                requested.host_controller_authority,
+                allowed.host_controller_authority,
+            ),
+            (
+                "parent_component_session",
+                requested.parent_component_session,
+                allowed.parent_component_session,
+            ),
+        ] {
+            if requested_flag && !allowed_flag {
+                return Err(DeploymentError::AuthoritySurfaceRefused(name));
+            }
+        }
+        if authority.credential_custody {
+            return Err(DeploymentError::AuthorityCredentialCustodyRefused);
+        }
+        if authority.zone.as_str().is_empty() {
+            return Err(DeploymentError::AuthorityZoneMissing);
+        }
+        let mut slot = self
+            .authority
+            .lock()
+            .map_err(|_| DeploymentError::StateUnavailable)?;
+        if slot.is_some() {
+            return Err(DeploymentError::AuthorityAlreadyPublished);
+        }
+        *slot = Some(authority);
+        Ok(())
+    }
+
+    /// The authority this target published, when it published one.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    pub fn target_authority(&self) -> Result<Option<TargetAuthority>, DeploymentError> {
+        self.authority
+            .lock()
+            .map(|slot| slot.clone())
+            .map_err(|_| DeploymentError::StateUnavailable)
+    }
+
+    /// Whether this target holds a published authority.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    pub fn has_target_authority(&self) -> bool {
+        self.authority.lock().map(|slot| slot.is_some()).unwrap_or(false)
     }
 
     /// The shared admission budget for this deployment's target-scoped
@@ -2412,6 +2540,16 @@ pub enum DeploymentError {
     ControllerRepairOwnerMismatch,
     ControllerFinalizerMissing,
     ControllerCleanupInvalid,
+    /// A published authority asked for a surface this target's mode does
+    /// not carry. The named surface is the one that was refused.
+    AuthoritySurfaceRefused(&'static str),
+    /// A published authority claimed credential custody, which stays with
+    /// the host.
+    AuthorityCredentialCustodyRefused,
+    /// A published authority named no Zone.
+    AuthorityZoneMissing,
+    /// A second authority was published over the first.
+    AuthorityAlreadyPublished,
 }
 
 impl std::fmt::Display for DeploymentError {
@@ -2458,6 +2596,18 @@ impl std::fmt::Display for DeploymentError {
             }
             Self::ControllerFinalizerMissing => "provider-deployment-controller-finalizer-missing",
             Self::ControllerCleanupInvalid => "provider-deployment-controller-cleanup-invalid",
+            Self::AuthoritySurfaceRefused(surface) => {
+                return write!(formatter, "provider-deployment-authority-surface-refused:{surface}")
+            }
+            Self::AuthorityCredentialCustodyRefused => {
+                return formatter.write_str("provider-deployment-authority-credential-custody-refused")
+            }
+            Self::AuthorityZoneMissing => {
+                return formatter.write_str("provider-deployment-authority-zone-missing")
+            }
+            Self::AuthorityAlreadyPublished => {
+                return formatter.write_str("provider-deployment-authority-already-published")
+            }
         })
     }
 }

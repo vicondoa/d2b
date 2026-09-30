@@ -13,6 +13,7 @@ use d2b_resource_types::{AllowedSources, ChildCustody, WellKnownType};
 
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
     activation_descriptor(ActivationDriverArgs {
+            deployment_graph: None,
         zone: "work".to_owned(),
         facets: recording_facets(RecordingBrokerDispatch::new()),
     })

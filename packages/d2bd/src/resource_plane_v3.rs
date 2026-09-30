@@ -1916,6 +1916,15 @@ pub struct ConstructionInputs {
     /// through the composition root. The family never receives a
     /// daemon-built effect port (R2).
     pub activation_facets: ActivationEffectFacets,
+    /// U31: the verified deployment graph the composition published for this
+    /// process, when it published one.
+    ///
+    /// A family's driver reads the accepted graph to confirm this deployment
+    /// published its own compiled implementation before it plans a runner
+    /// or dispatches an effect. `None` is the pre-cutover construction; the
+    /// cutover makes the publication mandatory in the same step.
+    pub deployment_graph:
+        Option<std::sync::Arc<d2b_provider_activation_nixos::AcceptedDeploymentGraph>>,
     /// The daemon-supplied facet set the User family's effects implementation
     /// is built from (U5): the crate's own bounded local-account probe,
     /// supplied through the composition root. Every probe input is host
@@ -2246,6 +2255,7 @@ Arc::new(DaemonAudioMediatorSource {
             Arc::clone(&registry),
         );
         Ok(Self {
+        deployment_graph: None,
             zone: zone.clone(),
             zone_token,
             spec_store_dir,
@@ -3071,6 +3081,13 @@ impl ResourcePlaneV3 {
             "activation-nixos" => vec![activation_descriptor(ActivationDriverArgs {
                 zone: inputs.zone.as_str().to_owned(),
                 facets: inputs.activation_facets.clone(),
+                // U31: the verified deployment graph this plane published,
+                // when the composition published one. A graph that does not
+                // name this family's implementation refuses the family's
+                // reconcile before any runner is planned; a plane built
+                // before the cutover carries `None` and keeps the
+                // pre-cutover behaviour until the cutover installs it.
+                deployment_graph: inputs.deployment_graph.clone(),
             })],
             // The six interaction types (U12): each type's driver is built
             // over the family's shared effects value (the family's own
@@ -4077,6 +4094,7 @@ host_facets: host_facets.clone(),
                 binding_facets: binding_facets.clone(),
                 endpoint_facets: endpoint_facets.clone(),
                 activation_facets: activation_facets.clone(),
+            deployment_graph: None,
                 usbip_facets: usbip_facets.clone(),
                 security_key_facets: security_key_facets.clone(),
                 device_facets: device_facets.clone(),

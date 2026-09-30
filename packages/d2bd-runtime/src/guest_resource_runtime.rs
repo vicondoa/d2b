@@ -45,6 +45,7 @@ use ttrpc::{
 };
 
 use crate::guest_mode::GuestIdentity;
+use crate::target_runtime::TargetAuthority;
 
 const ROLE_REF: &str = "Role/guest-component-session";
 const SCHEMA_BYTES: &[u8] = br#"{"apiVersion":"d2b-cjson/v1","resourceType":"target-local"}"#;
@@ -71,6 +72,12 @@ pub struct GuestResourceRuntime {
     /// Zero until the first re-adoption; a session below it can never take
     /// them back.
     adopted_generation: Arc<AtomicU64>,
+    /// The verified target-local authority this store serves under.
+    ///
+    /// The authority names the Zone and store incarnation the target-local
+    /// rows were published for, so a target whose deployment identity
+    /// changes cannot keep serving rows admitted under the previous one.
+    authority: Arc<tokio::sync::Mutex<Option<TargetAuthority>>>,
 }
 
 impl core::fmt::Debug for GuestResourceRuntime {
@@ -200,7 +207,35 @@ impl GuestResourceRuntime {
             authorization_state,
             active_generation,
             adopted_generation: Arc::new(AtomicU64::new(0)),
+            authority: Arc::new(tokio::sync::Mutex::new(None)),
         })
+    }
+
+    /// Record the verified target-local authority this store serves under.
+    ///
+    /// A second publication is refused rather than replacing the first: a
+    /// target-local store admitted rows under one deployment identity, and
+    /// silently re-pointing it at another would leave those rows admitted by
+    /// an identity the store no longer serves. The deployment-identity
+    /// switch is a fresh target-local runtime, not a rebind.
+    pub async fn publish_target_authority(
+        &self,
+        authority: TargetAuthority,
+    ) -> Result<(), GuestResourceRuntimeError> {
+        let mut published = self.authority.lock().await;
+        if published.is_some() {
+            return Err(GuestResourceRuntimeError::AuthorityAlreadyPublished);
+        }
+        *published = Some(authority);
+        Ok(())
+    }
+
+    /// The verified target-local authority this store serves under, when it
+    /// published one.
+    pub async fn published_authority(
+        &self,
+    ) -> Result<Option<TargetAuthority>, GuestResourceRuntimeError> {
+        Ok(self.authority.lock().await.clone())
     }
 
     /// This runtime is intentionally not backed by a local Zone store.
@@ -473,6 +508,8 @@ pub enum GuestResourceRuntimeError {
     Authorization,
     SeedPolicy,
     SeedInvalid,
+    /// A second target-local authority was published over the first.
+    AuthorityAlreadyPublished,
 }
 
 impl core::fmt::Display for GuestResourceRuntimeError {
@@ -485,6 +522,7 @@ impl core::fmt::Display for GuestResourceRuntimeError {
             Self::Authorization => "guest-resource-authorization-denied",
             Self::SeedPolicy => "guest-resource-seed-policy-invalid",
             Self::SeedInvalid => "guest-resource-seed-request-invalid",
+            Self::AuthorityAlreadyPublished => "guest-resource-authority-already-published",
         })
     }
 }

@@ -4574,6 +4574,24 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
             detail: "guest process bundle unavailable".to_owned(),
             source: None,
         })?;
+    // U31: the Guest publishes its own verified target-local authority before
+    // it serves anything. It reads and verifies the deployment graph at its
+    // own deployment root, keeps only its own Zone's bindings, and grants
+    // no host surface and no credential custody; a graph it cannot verify
+    // or a publication that asks for host authority refuses the Guest
+    // before its ComponentSession listener is reachable.
+    publish_guest_target_authority(&options.state_dir, &runtime)
+        .await
+        .map_err(|detail| {
+        tracing::error!(
+            error = %detail,
+                "Guest target-local authority refused; refusing to serve the target"
+            );
+            TypedError::InternalConfig {
+                detail,
+                source: None,
+            }
+        })?;
     let gateway_zone_link = load_gateway_guest_zone_link_options(
         options.gateway_zone_link_config_path.as_deref(),
         &identity,
@@ -14554,12 +14572,207 @@ async fn committed_provider_seed_identity(
     Ok((uid, generation))
 }
 
+
+/// The verified deployment bootstrap surface (U31, KTD7).
+///
+/// Re-exported from the crate root so this package's owning integration test
+/// drives the same construction the daemon installs, rather than a
+/// test-local imitation of it.
+pub use crate::foundation_seed::{
+    BootstrapAuthorityRow, BootstrapRefusal, DEPLOYMENT_BOOTSTRAP_DIGEST_DOMAIN,
+    DEPLOYMENT_BOOTSTRAP_FILE, DEPLOYMENT_BOOTSTRAP_SCHEMA, DEFAULT_DEPLOYMENT_ROOT,
+    DeploymentBootstrap, DeploymentIdentity, DeploymentIdentitySwitch, PublicationLayer,
+    PublicationPlan, PublicationStage, PublicationStep, SwitchRefusal,
+    compiled_implementations, required_foundation_bindings,
+};
+// ---------------------------------------------------------------------------
+// The verified deployment bootstrap (U31, KTD7)
+// ---------------------------------------------------------------------------
+
+/// Publish the verified new deployment graph before any provider starts.
+///
+/// This is the daemon's whole bootstrap contribution. It runs once, at the
+/// head of the resource-plane open, before the generation publication, before
+/// any Zone plane opens its store, and before any provider's controller is
+/// activated. A refusal here is terminal for the resource plane: a tampered
+/// graph, a document of another contract version, an implementation this
+/// build does not compile, a publication order that cannot be satisfied, or
+/// a verified graph missing one of the foundation RoleBindings all mean the
+/// daemon has no accepted root to run providers under, and it does not fall
+/// back to one that admits everything.
+fn publish_deployment_bootstrap() -> Result<PublishedDeployment, resource_runtime::ResourceRuntimeError> {
+    use crate::foundation_seed::DeploymentBootstrap;
+
+    let root = DeploymentBootstrap::deployment_root();
+    let bytes = read_deployment_bootstrap_bytes(&root).map_err(|error| {
+        tracing::error!(
+            error = %error,
+            deployment_root = %root.display(),
+            "verified deployment graph refused; refusing to start any provider"
+        );
+        resource_runtime::ResourceRuntimeError::HandlerNotReady
+    })?;
+    let graph = DeploymentBootstrap::decode(&bytes, crate::foundation_seed::DEPLOYMENT_BOOTSTRAP_FILE)
+        .map_err(|error| {
+        tracing::error!(
+            error = %error,
+            deployment_root = %root.display(),
+            "verified deployment graph refused; refusing to start any provider"
+        );
+        resource_runtime::ResourceRuntimeError::HandlerNotReady
+    })?;
+    let declarations = crate::foundation_seed::core_declarations();
+    let published = graph.publish(&declarations).map_err(|error| {
+        tracing::error!(
+            error = %error,
+            "verified deployment graph refused publication; refusing to start any provider"
+        );
+        resource_runtime::ResourceRuntimeError::HandlerNotReady
+    })?;
+    tracing::info!(
+        deployment_root = %root.display(),
+        store_incarnation = %published.store_incarnation().as_str(),
+        implementations = published.implementations().len(),
+        foundation_steps = published
+            .plan()
+            .layer(crate::foundation_seed::PublicationLayer::Foundations)
+            .len(),
+        provider_steps = published
+            .plan()
+            .layer(crate::foundation_seed::PublicationLayer::DeclaredProviders)
+            .len(),
+        "verified deployment graph published before ordinary providers"
+    );
+    Ok(PublishedDeployment {
+        activation: activation_family_view(&bytes)?,
+    })
+}
+
+/// Read the deployment root's verified graph bytes once.
+///
+/// Both the daemon and the Activation family verify the same document; it
+/// is read once so the two views cannot come from different bytes.
+fn read_deployment_bootstrap_bytes(
+    root: &std::path::Path,
+) -> Result<Vec<u8>, crate::foundation_seed::BootstrapRefusal> {
+    let path = root.join(crate::foundation_seed::DEPLOYMENT_BOOTSTRAP_FILE);
+    #[allow(clippy::disallowed_methods, reason = "boot reads the deployment root once")]
+    let bytes = std::fs::read(&path).map_err(|_| {
+        crate::foundation_seed::BootstrapRefusal::DocumentUnreadable {
+            path: crate::foundation_seed::DEPLOYMENT_BOOTSTRAP_FILE.to_owned(),
+        }
+    })?;
+    if bytes.is_empty() || bytes.len() > crate::foundation_seed::MAX_DEPLOYMENT_BOOTSTRAP_BYTES {
+        return Err(crate::foundation_seed::BootstrapRefusal::DocumentUnreadable {
+            path: crate::foundation_seed::DEPLOYMENT_BOOTSTRAP_FILE.to_owned(),
+        });
+    }
+    Ok(bytes)
+}
+
+/// The Activation family's own view of the verified deployment graph.
+///
+/// The family verifies the same document the daemon verified and binds the
+/// implementation identities the compiled declarations already name, so
+/// there is no separate configurable allowlist on either side.
+fn activation_family_view(
+    bytes: &[u8],
+) -> Result<
+    std::sync::Arc<d2b_provider_activation_nixos::AcceptedDeploymentGraph>,
+    resource_runtime::ResourceRuntimeError,
+> {
+    let compiled = crate::foundation_seed::compiled_implementations();
+    d2b_provider_activation_nixos::ActivationController::new()
+        .accept_deployment_graph(bytes, &compiled)
+        .map(std::sync::Arc::new)
+        .map_err(|error| {
+            tracing::error!(
+                error = %error,
+                "the Activation family refused the verified deployment graph"
+            );
+            resource_runtime::ResourceRuntimeError::HandlerNotReady
+        })
+}
+
+/// What the daemon published: the verified graph, the deployment root it was
+/// read from, and the Activation family's own accepted view of the same
+/// bytes.
+struct PublishedDeployment {
+    /// The Activation family's own accepted view of the verified graph.
+    ///
+    /// The verified [`crate::foundation_seed::PublishedBootstrap`] itself is
+    /// consumed by [`publish_deployment_bootstrap`]: it is the authority the
+    /// plane's providers and effects read. The family view is the piece the
+    /// plane's drivers carry.
+    activation: std::sync::Arc<d2b_provider_activation_nixos::AcceptedDeploymentGraph>,
+}
+
+/// Publish the Guest's own verified target-local authority.
+///
+/// The Guest reads and verifies the deployment graph at its own deployment
+/// root - the state directory the Guest was started with - and publishes
+/// only what belongs to the target: its own Zone, the bindings the verified
+/// graph carries for that Zone, and no host surface and no credential
+/// custody. The publication carries the Guest's own store incarnation, so a
+/// Guest that cannot read a verified graph for itself serves nothing rather
+/// than serving under the host's authority.
+async fn publish_guest_target_authority(
+    state_dir: &std::path::Path,
+    runtime: &d2bd_runtime::guest_mode::GuestRuntime,
+) -> Result<(), String> {
+    use crate::foundation_seed::DeploymentBootstrap;
+
+    let root = state_dir.join("deployment");
+    let graph =
+        DeploymentBootstrap::read_from_deployment_root(&root).map_err(|error| error.to_string())?;
+    let identity = runtime.identity();
+    let zone = identity.zone().clone();
+    if graph.zone.as_str() != zone.as_str() {
+        return Err(format!(
+            "deployment bootstrap refused: the graph describes Zone {}, not the Guest's own Zone {}",
+            graph.zone.as_str(),
+            zone.as_str()
+        ));
+    }
+    let bindings = graph
+        .accepted_graph()
+        .map_err(|error| error.to_string())?
+        .role_bindings()
+        .map(|(reference, _)| reference.to_canonical_string())
+        .collect::<Vec<_>>();
+    let authority = d2bd_runtime::target_runtime::TargetAuthority::target_local(
+        zone,
+        graph.store_incarnation.clone(),
+        bindings,
+    );
+    runtime
+        .resource_runtime()
+        .publish_target_authority(authority.clone())
+        .await
+        .map_err(|error| error.to_string())?;
+    runtime
+        .publish_target_authority(authority)
+        .map_err(|error| error.to_string())?;
+    tracing::info!(
+        guest_ref = %identity.guest_ref().name().as_str(),
+        deployment_root = %root.display(),
+        "Guest published its verified target-local authority"
+    );
+    Ok(())
+}
+
 async fn open_resource_plane(
     state: &ServerState,
     resolver: &BundleResolver,
     provider_ready: bool,
     rendezvous: &Arc<crate::forward_rendezvous::ForwardRendezvous>,
 ) -> Result<Arc<resource_runtime::ResourcePlane>, resource_runtime::ResourceRuntimeError> {
+    // U31: the verified deployment graph is published before the generation
+    // publication, before any Zone plane opens its store, and before any
+    // provider's controller is activated. A refusal here fails the plane
+    // open outright: no provider begins effects under an unaccepted
+    // bootstrap graph.
+    let published = publish_deployment_bootstrap()?;
     if !provider_ready {
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
@@ -14811,6 +15024,10 @@ async fn open_resource_plane(
                 resource_runtime::ResourceRuntimeError::HandlerNotReady
             })?;
             inputs.zone = _zone.clone();
+            // U31: the family's own accepted view of the verified deployment
+            // graph, so the Activation family refuses to plan a runner for a
+            // deployment that did not publish it.
+            inputs.deployment_graph = Some(std::sync::Arc::clone(&published.activation));
             // The Provider driver reads the zone's live controller-session
             // evidence (the same seam the G5 reader bridge uses), never a
             // durable status copy.

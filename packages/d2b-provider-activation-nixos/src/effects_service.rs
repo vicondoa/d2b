@@ -101,6 +101,14 @@ async fn serve_inspect_activation() -> Result<EffectResponse, EffectServiceError
 /// dispatch through the same broker boundary.
 pub struct ActivationEffectsService {
     broker: Arc<dyn ActivationBrokerDispatch>,
+    /// The verified deployment graph this target accepted, when it accepted
+    /// one.
+    ///
+    /// U31 keeps this beside the unchanged construction: a service built
+    /// without a graph keeps the pre-cutover behaviour, and the cutover
+    /// installs the accepted graph together with the daemon's publication
+    /// step in the same atomic step.
+    deployment_graph: Option<Arc<crate::controller::AcceptedDeploymentGraph>>,
 }
 
 impl ActivationEffectsService {
@@ -109,7 +117,35 @@ impl ActivationEffectsService {
     pub fn new(facets: ActivationEffectFacets) -> Self {
         Self {
             broker: facets.broker,
+            deployment_graph: None,
         }
+    }
+
+    /// Build the effects over a verified deployment graph this target
+    /// accepted.
+    ///
+    /// The family dispatches its handoff effect only when the accepted
+    /// graph publishes this family's own implementation identity: a
+    /// deployment that did not deploy this family gets no handoff effect,
+    /// even when a desired `NixosGeneration` row asks for one.
+    pub fn with_deployment_graph(
+        facets: ActivationEffectFacets,
+        deployment_graph: Arc<crate::controller::AcceptedDeploymentGraph>,
+    ) -> Self {
+        Self {
+            broker: facets.broker,
+            deployment_graph: Some(deployment_graph),
+        }
+    }
+
+    /// Whether the accepted deployment graph publishes this family.
+    ///
+    /// A service with no accepted graph answers `true`: that is the
+    /// pre-cutover construction.
+    fn publishes_this_family(&self) -> bool {
+        self.deployment_graph
+            .as_ref()
+            .is_none_or(|graph| graph.publishes(crate::driver::ACTIVATION_IMPLEMENTATION))
     }
 
     /// Build the effects over a scripted broker dispatch (test-support
@@ -118,7 +154,10 @@ impl ActivationEffectsService {
     /// back, and failed handoff paths are testable hermetically.
     #[cfg(any(test, feature = "test-support"))]
     pub fn with_broker(broker: Arc<dyn ActivationBrokerDispatch>) -> Self {
-        Self { broker }
+        Self {
+            broker,
+            deployment_graph: None,
+        }
     }
 }
 
@@ -129,6 +168,18 @@ impl ActivationDriverEffects for ActivationEffectsService {
         target: ResourceRef,
         intent: HostGenerationHandoffIntent,
     ) -> HostHandoffResult {
+        // U31: no provider begins effects under an unaccepted bootstrap
+        // graph. A handoff is the family's one host mutation, so it is
+        // refused here as well as at the reconcile, and the refusal names
+        // the deployment graph rather than the generation.
+        if !self.publishes_this_family() {
+            tracing::warn!(
+                target = %target,
+                "activation handoff refused: the accepted deployment graph does not publish this \
+                 family"
+            );
+            return HostHandoffResult::Refused;
+        }
         let request = ApplyHostGenerationHandoff {
             caller_role: HandoffCallerRole::Lifecycle,
             target,

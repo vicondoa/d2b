@@ -29,8 +29,13 @@ use d2b_core::resource_authority::{
     AcceptedGraph, GraphAuthority, GraphMutation, MutationKind, MutationSubjectEvidence,
     TransportIdentity,
 };
+use d2b_contracts_broker::broker_wire::{
+    AuthorityCursor, AuthorityProjectionRow, AuthoritySnapshot,
+};
 use d2b_provider_command::command::{ CommandSpec };
 use d2b_provider_operation::operation::{ OperationSpec };
+use d2b_contracts_resource::v3::{CanonicalJsonObject, DesiredDigest};
+use d2b_core::resource_authority::ProjectionRow;
 use d2b_provider_seccomp_profile::{ SECCOMP_PROFILE_RESOURCE_TYPE, SeccompProfileSpec };
 use d2b_contracts_zone_session::v3::{RoleBindingSpec, RoleResourceVerb, RoleSpec};
 use d2b_resource_runtime::identity::ResourceTypeName;
@@ -41,6 +46,7 @@ use d2b_resource_runtime::provider::ProviderDirectory;
 use d2b_resource_runtime::spec_store::{
     EnsureOutcome, ResourceKey, ResourceProvenance, SpecSelector, SpecStore, StoredDesiredResource,
 };
+use crate::resource_plane_v3::GraphMutationAdmission;
 
 use crate::principal_allocation::{PrincipalAllocation, valid_principal_name};
 
@@ -1237,6 +1243,1155 @@ impl core::fmt::Display for SeedError {
 }
 
 impl std::error::Error for SeedError {}
+// ---------------------------------------------------------------------------
+// The verified deployment bootstrap (U31, KTD7)
+// ---------------------------------------------------------------------------
+
+/// Deployment-root-relative name of the verified deployment graph the daemon
+/// and the broker both bootstrap from.
+///
+/// The deployment root is the same directory the ownership-bounded reset
+/// reads (`/var/lib/d2b` by default), so one deployment publishes one
+/// graph and both halves of the trust root agree on where it lives.
+pub const DEPLOYMENT_BOOTSTRAP_FILE: &str = "deployment-bootstrap.json";
+
+/// The document schema tag this release verifies.
+///
+/// A document carrying any other tag is an artifact of another contract
+/// version and is refused; there is no compatibility parse and no default
+/// for a missing or unknown tag (R43).
+pub const DEPLOYMENT_BOOTSTRAP_SCHEMA: &str = "d2b-deployment-bootstrap/1";
+
+/// The domain tag framing the deployment graph's own self-hash.
+///
+/// This is the same framed-digest profile the Nix bundle compiler and the
+/// artifact catalog already cross with this package, so the deployment
+/// graph is self-hashed by the same mechanism that verifies every other
+/// verified artifact rather than by a second digest spelling.
+pub const DEPLOYMENT_BOOTSTRAP_DIGEST_DOMAIN: &str = "d2b:v3:deployment-bootstrap";
+
+/// The bounded read for the deployment bootstrap document.
+pub const MAX_DEPLOYMENT_BOOTSTRAP_BYTES: usize = 4 * 1024 * 1024;
+
+/// The environment variable naming the deployment root.
+///
+/// The daemon and the broker share one deployment root, so both halves read
+/// the same verified document rather than each resolving their own.
+pub const DEPLOYMENT_ROOT_ENV: &str = "D2B_DEPLOYMENT_ROOT";
+
+/// The deployment root used when the environment names none.
+pub const DEFAULT_DEPLOYMENT_ROOT: &str = "/var/lib/d2b";
+
+/// A refusal of the verified deployment bootstrap.
+///
+/// Every variant names the enforcing stage and the reason. A startup that
+/// cannot produce a verified graph refuses; there is no permissive
+/// fallback that lets a provider or an effect begin anyway.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BootstrapRefusal {
+    /// The document is absent, unreadable, or larger than the bound.
+    DocumentUnreadable {
+        /// The deployment-root-relative path that was read.
+        path: String,
+    },
+    /// The document's own schema tag is not this release's contract.
+    SchemaUnsupported {
+        /// The tag the document carried.
+        observed: String,
+    },
+    /// The document's self-hash does not cover its own bytes.
+    DigestMismatch {
+        /// The digest the document claimed.
+        claimed: String,
+    },
+    /// The document describes a Zone this bootstrap does not own.
+    ZoneMismatch {
+        /// The Zone the document named.
+        observed: String,
+    },
+    /// The document names an implementation this build does not compile.
+    UnknownImplementation {
+        /// The implementation identity the document declared.
+        implementation: String,
+    },
+    /// The document names no deployment implementation at all.
+    NoImplementations,
+    /// The document carries a state Volume reference that is not a resource
+    /// reference, so the foundations could not publish it.
+    InvalidStateVolume {
+        /// The state Volume reference as written.
+        observed: String,
+    },
+    /// A required foundation RoleBinding is absent from the verified graph.
+    ///
+    /// This is the refusal that keeps a graph with no grants from starting:
+    /// the deployment cannot fall back to admitting everything, so the
+    /// daemon refuses to open its planes at all.
+    MissingFoundationBinding {
+        /// The RoleBinding reference the foundations require.
+        reference: String,
+    },
+    /// One authority row is declared twice in the document.
+    DuplicateRow {
+        /// The duplicated resource reference.
+        reference: String,
+    },
+    /// A publication step requires a row that the plan never publishes.
+    UnresolvedRequirement {
+        /// The step whose requirement cannot resolve.
+        step: String,
+        /// The requirement it names.
+        requirement: String,
+    },
+    /// A publication step requires a row published after it.
+    ///
+    /// This is the state-Volume cycle made explicit: a step that needs a
+    /// row that only exists once the step itself has run cannot be ordered,
+    /// and the bootstrap refuses rather than publishing one of the two
+    /// first and leaving the other unadmitted.
+    PublicationCycle {
+        /// The step whose requirement points forward or at itself.
+        step: String,
+        /// The requirement it names.
+        requirement: String,
+    },
+}
+
+impl core::fmt::Display for BootstrapRefusal {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::DocumentUnreadable { path } => write!(
+                formatter,
+                "deployment bootstrap refused: {path} is absent, unreadable, or over the read \
+                 bound"
+            ),
+            Self::SchemaUnsupported { observed } => write!(
+                formatter,
+                "deployment bootstrap refused: schema {observed} is not \
+                 {DEPLOYMENT_BOOTSTRAP_SCHEMA}"
+            ),
+            Self::DigestMismatch { claimed } => write!(
+                formatter,
+                "deployment bootstrap refused: the document does not hash to its claimed digest \
+                 {claimed}"
+            ),
+            Self::ZoneMismatch { observed } => write!(
+                formatter,
+                "deployment bootstrap refused: the document describes Zone {observed}, not the \
+                 foundation Zone {SYSTEM_ZONE}"
+            ),
+            Self::UnknownImplementation { implementation } => write!(
+                formatter,
+                "deployment bootstrap refused: implementation {implementation} is declared by \
+                 the deployment but compiled by no provider declaration"
+            ),
+            Self::NoImplementations => formatter.write_str(
+                "deployment bootstrap refused: the document declares no implementation",
+            ),
+            Self::InvalidStateVolume { observed } => write!(
+                formatter,
+                "deployment bootstrap refused: state Volume {observed} is not a resource \
+                 reference"
+            ),
+            Self::MissingFoundationBinding { reference } => write!(
+                formatter,
+                "deployment bootstrap refused: the verified graph carries no {reference}, so the \
+                 foundations it publishes would be unadmitted"
+            ),
+            Self::DuplicateRow { reference } => write!(
+                formatter,
+                "deployment bootstrap refused: {reference} is declared twice"
+            ),
+            Self::UnresolvedRequirement { step, requirement } => write!(
+                formatter,
+                "deployment bootstrap refused: {step} requires {requirement}, which the plan \
+                 never publishes"
+            ),
+            Self::PublicationCycle { step, requirement } => write!(
+                formatter,
+                "deployment bootstrap refused: {step} requires {requirement}, which is not \
+                 published before it"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for BootstrapRefusal {}
+
+/// One authority row of the verified deployment graph.
+///
+/// The row travels as the canonical bytes the deployment accepted, so the
+/// graph decides exactly what those bytes decide everywhere else. The
+/// reference is the exact resource reference the row was accepted for.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BootstrapAuthorityRow {
+    /// The exact resource reference the row was accepted for.
+    pub reference: String,
+    /// The row's canonical admitted bytes.
+    pub admitted: serde_json::Value,
+}
+
+/// The verified new deployment graph, as published beside the deployment
+/// root.
+///
+/// The document is self-hashed over its own canonical bytes with
+/// `graphDigest` cleared, so a graph whose authority rows or declared
+/// implementations were edited after verification fails closed before a
+/// single provider is published. Its Zone is the foundation Zone and its
+/// root subject is the deployment root, so nothing in it can authorize its
+/// own introduction.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeploymentBootstrap {
+    /// The document's own schema tag.
+    pub schema_version: String,
+    /// The foundation Zone this graph bootstraps.
+    pub zone: ZoneId,
+    /// The store incarnation the deployment is verified in.
+    pub store_incarnation: StoreIncarnation,
+    /// The deployment's own state Volume, published with the foundations.
+    ///
+    /// Required component state is an ordinary Volume (R13), and the
+    /// deployment's own state cannot be one that waits for the providers
+    /// that write it: it is published in the foundation layer so every
+    /// declared provider starts against state that already exists.
+    pub state_volume: String,
+    /// The implementation identities this deployment publishes.
+    ///
+    /// Each entry must be an identity a compiled provider declaration
+    /// binds. There is no separate configurable allowlist: the compiled
+    /// declaration table is the whole set of implementations that exist.
+    pub implementations: Vec<String>,
+    /// The accepted `Role` rows, as canonical bytes.
+    pub roles: Vec<BootstrapAuthorityRow>,
+    /// The accepted `RoleBinding` rows, as canonical bytes.
+    pub role_bindings: Vec<BootstrapAuthorityRow>,
+    /// The framed digest over the canonical bytes of this document
+    /// without `graphDigest`.
+    pub graph_digest: String,
+}
+
+impl DeploymentBootstrap {
+    /// Decode and verify the document bytes.
+    ///
+    /// The three refusals this can return before any provider is published
+    /// are deliberately distinct: an artifact of another contract version,
+    /// a document whose bytes were edited after verification, and a
+    /// document describing a Zone this bootstrap does not own.
+    pub fn decode(bytes: &[u8], path: &str) -> Result<Self, BootstrapRefusal> {
+        if bytes.is_empty() || bytes.len() > MAX_DEPLOYMENT_BOOTSTRAP_BYTES {
+            return Err(BootstrapRefusal::DocumentUnreadable {
+                path: path.to_owned(),
+            });
+        }
+        let graph: Self = serde_json::from_slice(bytes).map_err(|_| {
+            BootstrapRefusal::DocumentUnreadable {
+                path: path.to_owned(),
+            }
+        })?;
+        graph.verify()?;
+        Ok(graph)
+    }
+
+    /// Verify the document's own schema tag, Zone, and self-hash.
+    pub fn verify(&self) -> Result<(), BootstrapRefusal> {
+        if self.schema_version != DEPLOYMENT_BOOTSTRAP_SCHEMA {
+            return Err(BootstrapRefusal::SchemaUnsupported {
+                observed: self.schema_version.clone(),
+            });
+        }
+        if self.zone.as_str() != SYSTEM_ZONE {
+            return Err(BootstrapRefusal::ZoneMismatch {
+                observed: self.zone.as_str().to_owned(),
+            });
+        }
+        let mut without_digest = self.clone();
+        without_digest.graph_digest = String::new();
+        let bytes = canonical_json_bytes(&without_digest)
+            .map_err(|_| BootstrapRefusal::DigestMismatch {
+                claimed: self.graph_digest.clone(),
+            })?;
+        let observed = d2b_contracts_resource::v3::framed_canonical_digest(
+            DEPLOYMENT_BOOTSTRAP_DIGEST_DOMAIN,
+            &bytes,
+        );
+        if observed != self.graph_digest {
+            return Err(BootstrapRefusal::DigestMismatch {
+                claimed: self.graph_digest.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    /// The deployment root this graph publishes.
+    pub fn deployment_root() -> std::path::PathBuf {
+        std::path::PathBuf::from(
+            std::env::var(DEPLOYMENT_ROOT_ENV)
+                .ok()
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| DEFAULT_DEPLOYMENT_ROOT.to_owned()),
+        )
+    }
+
+    /// Read, decode, and verify the graph published at the deployment root.
+    ///
+    /// This is the daemon's and the Guest's only way to learn what it is
+    /// deploying: there is no fallback document and no default graph, so a
+    /// deployment that did not publish a verified graph has nothing to boot.
+    #[allow(clippy::disallowed_methods, reason = "boot reads the deployment root once")]
+    pub fn read_from_deployment_root(root: &std::path::Path) -> Result<Self, BootstrapRefusal> {
+        let path = root.join(DEPLOYMENT_BOOTSTRAP_FILE);
+        let relative = DEPLOYMENT_BOOTSTRAP_FILE.to_owned();
+        let bytes = std::fs::read(&path)
+            .map_err(|_| BootstrapRefusal::DocumentUnreadable { path: relative.clone() })?;
+        Self::decode(&bytes, &relative)
+    }
+
+    /// The deployment's own state Volume, as the exact reference the
+    /// foundations publish.
+    pub fn state_volume_ref(&self) -> Result<ResourceRef, BootstrapRefusal> {
+        ResourceRef::parse(self.state_volume.as_str()).map_err(|_| {
+            BootstrapRefusal::InvalidStateVolume {
+                observed: self.state_volume.clone(),
+            }
+        })
+    }
+
+    /// The accepted authority rows, decoded to their canonical objects.
+    ///
+    /// The returned objects own their bytes, so the projection rows built
+    /// from them never point into a collection this call already dropped.
+    fn decoded_rows(&self) -> Result<Vec<(ResourceRef, CanonicalJsonObject)>, BootstrapRefusal>
+    {
+        let mut decoded: Vec<(ResourceRef, CanonicalJsonObject)> = Vec::new();
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        for rows in [&self.roles, &self.role_bindings] {
+            for row in rows {
+                let reference = ResourceRef::parse(row.reference.as_str()).map_err(|error| {
+                    BootstrapRefusal::UnresolvedRequirement {
+                        step: DEPLOYMENT_BOOTSTRAP_FILE.to_owned(),
+                        requirement: format!("{} ({error})", row.reference),
+                    }
+                })?;
+                if !seen.insert(reference.to_canonical_string()) {
+                    return Err(BootstrapRefusal::DuplicateRow {
+                        reference: row.reference.clone(),
+                    });
+                }
+                let admitted =
+                    serde_json::from_value::<CanonicalJsonObject>(row.admitted.clone()).map_err(
+                        |error| BootstrapRefusal::UnresolvedRequirement {
+                            step: row.reference.clone(),
+                            requirement: format!("canonical row bytes ({error})"),
+                        },
+                    )?;
+                decoded.push((reference, admitted));
+            }
+        }
+        Ok(decoded)
+    }
+
+    /// The prior accepted graph this deployment bootstraps from.
+    ///
+    /// Built through [`AcceptedGraph::from_canonical_rows`] so the graph
+    /// decides exactly what the same rows decide at every other boundary,
+    /// under the deployment root subject rather than under any grant the
+    /// document itself introduces.
+    pub fn accepted_graph(&self) -> Result<AcceptedGraph, BootstrapRefusal> {
+        let decoded = self.decoded_rows()?;
+        let rows = decoded
+            .iter()
+            .map(|(reference, admitted)| ProjectionRow::new(reference, admitted));
+        AcceptedGraph::from_canonical_rows(
+            self.zone.clone(),
+            self.store_incarnation.clone(),
+            AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap),
+            rows,
+        )
+        .map_err(|_| BootstrapRefusal::DocumentUnreadable {
+            path: DEPLOYMENT_BOOTSTRAP_FILE.to_owned(),
+        })
+    }
+}
+
+/// The implementation identities this build actually compiles.
+///
+/// The generated provider registration table is the whole list: it is
+/// emitted from each provider crate's own declaration, so an identity that
+/// is not in it has no compiled implementation behind it and the deployment
+/// that names it is refused. Nothing configurable adds to this set, which is
+/// what removes the separate bootstrap allowlist (R11, R12).
+pub fn compiled_implementations() -> Vec<&'static str> {
+    let mut identities: Vec<&'static str> =
+        crate::resource_plane_v3::PROVIDER_REGISTRATIONS
+            .iter()
+            .map(|registration| registration.provider_ref)
+            .collect();
+    // The framework's own execution providers are bound by the foundation
+    // declarations rather than by a family registration row, so they are
+    // named here from the same crates the seed reads their references from.
+    identities.push(d2b_provider_process_minijail::PROVIDER_REF);
+    identities.push(d2b_provider_process_systemd::PROVIDER_REF);
+    identities.sort_unstable();
+    identities.dedup();
+    identities
+}
+
+/// Which layer of the bootstrap publication a step belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PublicationLayer {
+    /// The fixed foundations: the Zone, the deployment's state Volume, the
+    /// declared policy rows, the provider self-bindings, the materialized
+    /// operations, and the operator bindings.
+    Foundations,
+    /// The declared providers, published only once every foundation they
+    /// read has been published under an accepted graph.
+    DeclaredProviders,
+}
+
+impl PublicationLayer {
+    /// The stable label for this layer.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Foundations => "foundations",
+            Self::DeclaredProviders => "declared-providers",
+        }
+    }
+}
+
+/// One row or implementation the bootstrap publishes, and the exact rows it
+/// must already be published under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicationStep {
+    /// The layer this step publishes in.
+    pub layer: PublicationLayer,
+    /// The exact resource reference, or the exact implementation identity.
+    pub reference: String,
+    /// The exact references this step reads before it may be published.
+    pub requires: Vec<String>,
+}
+
+impl PublicationStep {
+    /// A foundation step with no prerequisites.
+    pub fn foundation(reference: impl Into<String>) -> Self {
+        Self {
+            layer: PublicationLayer::Foundations,
+            reference: reference.into(),
+            requires: Vec::new(),
+        }
+    }
+
+    /// A step that publishes `reference` once every named requirement is
+    /// already published.
+    pub fn step(
+        layer: PublicationLayer,
+        reference: impl Into<String>,
+        requires: Vec<String>,
+    ) -> Self {
+        Self {
+            layer,
+            reference: reference.into(),
+            requires,
+        }
+    }
+}
+
+/// The ordered publication plan the bootstrap publishes.
+///
+/// The plan is ordered, and every step's requirements must already appear
+/// strictly earlier in it. That is the whole cycle argument: a plan whose
+/// steps are ordered and whose requirements all point backwards cannot
+/// contain a cycle, and a plan that does contain one is refused with the
+/// exact step and requirement that close it. The deployment's own state
+/// Volume is a foundation step precisely so a provider that needs it never
+/// waits on a row only that provider can create.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicationPlan {
+    steps: Vec<PublicationStep>,
+}
+
+impl PublicationPlan {
+    /// Assemble a plan from its steps, refusing an unorderable one.
+    pub fn new(steps: Vec<PublicationStep>) -> Result<Self, BootstrapRefusal> {
+        let plan = Self { steps };
+        plan.verify()?;
+        Ok(plan)
+    }
+
+    /// The steps, in publication order.
+    pub fn steps(&self) -> &[PublicationStep] {
+        &self.steps
+    }
+
+    /// The steps of one layer, in publication order.
+    pub fn layer(&self, layer: PublicationLayer) -> Vec<&PublicationStep> {
+        self.steps.iter().filter(|step| step.layer == layer).collect()
+    }
+
+    /// The index a reference publishes at, when the plan publishes it.
+    pub fn position(&self, reference: &str) -> Option<usize> {
+        self.steps
+            .iter()
+            .position(|step| step.reference == reference)
+    }
+
+    /// Refuse a plan whose requirements are not published before the step
+    /// that reads them.
+    ///
+    /// A requirement naming a row the plan never publishes and a
+    /// requirement naming a row the plan publishes later are refused
+    /// separately: the first is an unresolvable reference, the second is
+    /// the cycle.
+    pub fn verify(&self) -> Result<(), BootstrapRefusal> {
+        let mut published: BTreeMap<&str, usize> = BTreeMap::new();
+        for (index, step) in self.steps.iter().enumerate() {
+            for requirement in &step.requires {
+                match published.get(requirement.as_str()) {
+                    None if self.position(requirement).is_none() => {
+                        return Err(BootstrapRefusal::UnresolvedRequirement {
+                            step: step.reference.clone(),
+                            requirement: requirement.clone(),
+                        });
+                    }
+                    None => {
+                        return Err(BootstrapRefusal::PublicationCycle {
+                            step: step.reference.clone(),
+                            requirement: requirement.clone(),
+                        });
+                    }
+                    Some(earlier) if *earlier >= index => {
+                        return Err(BootstrapRefusal::PublicationCycle {
+                            step: step.reference.clone(),
+                            requirement: requirement.clone(),
+                        });
+                    }
+                    Some(_) => {}
+                }
+            }
+            published.insert(step.reference.as_str(), index);
+        }
+        Ok(())
+    }
+}
+
+/// The verified deployment graph the daemon has published.
+///
+/// Publication is the whole of this unit's contribution: it is the point at
+/// which the verified graph, the bound implementations, and the ordered
+/// plan become the one accepted root every provider and effect reads. It is
+/// only constructible through [`DeploymentBootstrap::publish`], so a
+/// deployment that failed verification has no published root to run under.
+#[derive(Debug, Clone)]
+pub struct PublishedBootstrap {
+    accepted: AcceptedGraph,
+    plan: PublicationPlan,
+    implementations: Vec<String>,
+}
+
+impl PublishedBootstrap {
+    /// The accepted graph every later decision reads.
+    pub fn accepted(&self) -> &AcceptedGraph {
+        &self.accepted
+    }
+
+    /// The ordered publication plan.
+    pub fn plan(&self) -> &PublicationPlan {
+        &self.plan
+    }
+
+    /// The implementation identities this deployment published.
+    pub fn implementations(&self) -> &[String] {
+        &self.implementations
+    }
+
+    /// The store incarnation this deployment is verified in.
+    pub fn store_incarnation(&self) -> &StoreIncarnation {
+        self.accepted.store()
+    }
+
+    /// The mutation admission this publication installs.
+    ///
+    /// It is the plane's existing identity evaluator over the accepted
+    /// graph, so a request is decided by the grants the verified graph
+    /// actually carries. There is no permissive constructor on this type:
+    /// an admission can only be obtained from a graph that published every
+    /// foundation binding it required.
+    pub fn admission(&self, transport: TransportIdentity) -> GraphMutationAdmission {
+        GraphMutationAdmission::new(
+            std::sync::Arc::new(self.accepted.clone()),
+            self.accepted.zone().clone(),
+            transport,
+        )
+    }
+
+    /// The deployment identity this publication installs at a broker that
+    /// is already running.
+    ///
+    /// The identity carries the accepted root subject and the cursor the
+    /// publication commits at, so a later switch is decided against the same
+    /// root the cold start established.
+    pub fn identity(
+        &self,
+        cursor: AuthorityCursor,
+        snapshot_digest: DesiredDigest,
+    ) -> DeploymentIdentity {
+        DeploymentIdentity {
+            zone: self.accepted.zone().clone(),
+            store_incarnation: self.accepted.store().clone(),
+            root_subject: AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap),
+            cursor,
+            snapshot_digest,
+        }
+    }
+}
+
+impl DeploymentBootstrap {
+    /// Verify the graph, bind its implementations, and publish the ordered
+    /// plan.
+    ///
+    /// Nothing here is best-effort. An implementation this build does not
+    /// compile, an unorderable plan, or a graph missing one of the
+    /// foundation RoleBindings the declarations require all refuse, and a
+    /// refusal means the caller has no published root and must not start a
+    /// provider.
+    pub fn publish(
+        &self,
+        declarations: &FoundationDeclarations,
+    ) -> Result<PublishedBootstrap, BootstrapRefusal> {
+        self.verify()?;
+        if self.implementations.is_empty() {
+            return Err(BootstrapRefusal::NoImplementations);
+        }
+        let compiled = compiled_implementations();
+        for implementation in &self.implementations {
+            if !compiled.contains(&implementation.as_str()) {
+                return Err(BootstrapRefusal::UnknownImplementation {
+                    implementation: implementation.clone(),
+                });
+            }
+        }
+        let state_volume = self.state_volume_ref()?;
+        let accepted = self.accepted_graph()?;
+        let plan = self.publication_plan(declarations, &state_volume)?;
+        let bound = accepted
+            .role_bindings()
+            .map(|(reference, _)| reference.to_canonical_string())
+            .collect::<BTreeSet<_>>();
+        for required in required_foundation_bindings(declarations) {
+            if !bound.contains(&required) {
+                return Err(BootstrapRefusal::MissingFoundationBinding {
+                    reference: required,
+                });
+            }
+        }
+        Ok(PublishedBootstrap {
+            accepted,
+            plan,
+            implementations: self.implementations.clone(),
+        })
+    }
+
+    /// The ordered publication plan for this deployment.
+    ///
+    /// Foundations come first, in the order the seed itself commits them,
+    /// and every declared provider follows. A provider's step names the
+    /// exact foundation rows it reads: its own self-binding and the
+    /// deployment's state Volume.
+    pub fn publication_plan(
+        &self,
+        declarations: &FoundationDeclarations,
+        state_volume: &ResourceRef,
+    ) -> Result<PublicationPlan, BootstrapRefusal> {
+        let state_volume_ref = state_volume.to_canonical_string();
+        let mut steps = Vec::new();
+        // 0. The foundation Zone itself.
+        steps.push(PublicationStep::foundation(format!(
+            "Zone/{SYSTEM_ZONE}"
+        )));
+        // 1. The deployment's own state Volume. It is a foundation row, so
+        // a provider that stores component state in it never waits on a row
+        // only that provider could create.
+        steps.push(PublicationStep::foundation(state_volume_ref.clone()));
+        // 2. The declared policy vocabulary, then the roles that select it.
+        for profile in &declarations.profiles {
+            steps.push(PublicationStep::foundation(format!(
+                "{SECCOMP_PROFILE_RESOURCE_TYPE}/{}",
+                profile.name
+            )));
+        }
+        for policy in &declarations.policies {
+            steps.push(PublicationStep::foundation(format!(
+                "{EXECUTION_POLICY_RESOURCE_TYPE}/{}",
+                policy.name
+            )));
+        }
+        for role in &declarations.roles {
+            steps.push(PublicationStep::foundation(role_ref(&role.name)));
+        }
+        for command in &declarations.commands {
+            steps.push(PublicationStep::foundation(command_ref(&command.name)));
+        }
+        // 3. The provider self-bindings, each requiring the role it binds.
+        for provider in &declarations.providers {
+            for binding in &provider.self_bindings {
+                let name = bound_binding_name(provider, binding)?;
+                steps.push(PublicationStep::step(
+                    PublicationLayer::Foundations,
+                    format!("RoleBinding/{name}"),
+                    vec![binding.role_ref.to_canonical_string()],
+                ));
+            }
+        }
+        // 4. The operations the controller materializes, each requiring the
+        // self-binding that authorizes its materialization.
+        for command in &declarations.commands {
+            steps.push(PublicationStep::step(
+                PublicationLayer::Foundations,
+                format!("Operation/{}", materialized_operation(&command.name)?),
+                materialization_requirements(declarations),
+            ));
+        }
+        // 5. The operator bindings from the host contract.
+        for binding in &declarations.operator_bindings {
+            steps.push(PublicationStep::step(
+                PublicationLayer::Foundations,
+                format!("RoleBinding/{}", binding.name),
+                vec![binding.spec.role_ref().to_canonical_string()],
+            ));
+        }
+        // 6. The declared providers, last: every one of them reads its own
+        // self-binding and the deployment's state Volume.
+        for implementation in &self.implementations {
+            steps.push(PublicationStep::step(
+                PublicationLayer::DeclaredProviders,
+                implementation.clone(),
+                vec![state_volume_ref.clone()],
+            ));
+        }
+        for provider in &declarations.providers {
+            let mut requires = vec![state_volume_ref.clone()];
+            for binding in &provider.self_bindings {
+                requires.push(format!(
+                    "RoleBinding/{}",
+                    bound_binding_name(provider, binding)?
+                ));
+            }
+            steps.push(PublicationStep::step(
+                PublicationLayer::DeclaredProviders,
+                provider.provider_ref.to_canonical_string(),
+                requires,
+            ));
+        }
+        PublicationPlan::new(steps)
+    }
+}
+
+/// The exact RoleBinding references the foundations require to exist before
+/// any provider may publish.
+///
+/// This is the set whose absence refuses startup. It is derived from the
+/// declarations the seed commits, not from a table in shared code, so a
+/// deployment cannot declare a provider whose authorizing binding is absent
+/// from the graph it published.
+pub fn required_foundation_bindings(declarations: &FoundationDeclarations) -> Vec<String> {
+    let mut required: Vec<String> = Vec::new();
+    for provider in &declarations.providers {
+        for binding in &provider.self_bindings {
+            required.push(format!(
+                "RoleBinding/{}",
+                bound_binding_name(provider, binding).unwrap_or_default()
+            ));
+        }
+    }
+    for binding in &declarations.operator_bindings {
+        required.push(format!("RoleBinding/{}", binding.name));
+    }
+    required.sort();
+    required.dedup();
+    required
+}
+
+/// The framework-generated binding name, as a bootstrap refusal when the
+/// seed would refuse it.
+fn bound_binding_name(
+    provider: &SeedProvider,
+    binding: &SeedSelfBinding,
+) -> Result<String, BootstrapRefusal> {
+    self_binding_name(provider, binding).map_err(|error| BootstrapRefusal::UnresolvedRequirement {
+        step: provider.provider_ref.to_canonical_string(),
+        requirement: format!("RoleBinding/{error}"),
+    })
+}
+
+/// The canonical operation name one command materializes, as a bootstrap
+/// refusal when the seed would refuse it.
+fn materialized_operation(command: &str) -> Result<String, BootstrapRefusal> {
+    materialized_operation_name(command).map_err(|error| BootstrapRefusal::UnresolvedRequirement {
+        step: command_ref(command),
+        requirement: format!("Operation/{error}"),
+    })
+}
+
+/// The exact foundation rows that authorize command materialization.
+///
+/// Materialization is authorized by a committed self-binding alone (the
+/// seed refuses an operator binding for the same purpose), so the plan
+/// requires exactly the controller's own bindings and nothing else.
+fn materialization_requirements(declarations: &FoundationDeclarations) -> Vec<String> {
+    let Some(controller) = declarations.controller.as_ref() else {
+        return Vec::new();
+    };
+    declarations
+        .providers
+        .iter()
+        .filter(|provider| &provider.provider_ref == controller)
+        .flat_map(|provider| provider.self_bindings.iter())
+        .map(|binding| {
+            format!(
+                "RoleBinding/{}-self-{}",
+                controller.name().as_str(),
+                binding.role_ref.name().as_str()
+            )
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// The deployment identity switch (U31, KTD6-KTD7)
+// ---------------------------------------------------------------------------
+
+/// The stage one deployment-identity switch is in.
+///
+/// The order is freeze, commit, publish, acknowledge. A broker that
+/// already holds an accepted identity only ever moves to a new one through
+/// that order, so there is no path on which a provider begins effects under
+/// an identity the broker has not acknowledged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublicationStage {
+    /// No switch is in flight.
+    Idle,
+    /// The Zone's new-effect admission is frozen and the candidate is
+    /// being validated against the prior accepted graph.
+    Prepare,
+    /// The candidate was admitted; the broker advances its projection.
+    Commit,
+    /// The advanced projection is published to accepted visibility.
+    Publish,
+    /// The published identity is awaiting the broker's acknowledgment.
+    Acknowledge,
+}
+
+impl PublicationStage {
+    /// The stable label for this stage.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Prepare => "prepare",
+            Self::Commit => "commit",
+            Self::Publish => "publish",
+            Self::Acknowledge => "acknowledge",
+        }
+    }
+}
+
+/// One deployment identity: the Zone, the store incarnation, the accepted
+/// root subject, and the cursor plus snapshot digest the broker holds for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeploymentIdentity {
+    /// The Zone this identity describes.
+    pub zone: ZoneId,
+    /// The store incarnation this identity was accepted in.
+    pub store_incarnation: StoreIncarnation,
+    /// The deployment root the graph bootstraps.
+    pub root_subject: AuthoritySubject,
+    /// The accepted cursor.
+    pub cursor: AuthorityCursor,
+    /// The digest of the published snapshot document.
+    pub snapshot_digest: DesiredDigest,
+}
+
+impl DeploymentIdentity {
+    /// The initial identity for a freshly initialized store: the deployment
+    /// root and the initial cursor.
+    pub fn initial(
+        zone: ZoneId,
+        store_incarnation: StoreIncarnation,
+    ) -> Self {
+        Self {
+            zone,
+            store_incarnation,
+            root_subject: AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap),
+            cursor: AuthorityCursor::initial(),
+            snapshot_digest: DesiredDigest::of(&[]),
+        }
+    }
+
+    /// The bounded snapshot document this identity publishes.
+    pub fn snapshot(&self, rows: Vec<AuthorityProjectionRow>) -> AuthoritySnapshot {
+        AuthoritySnapshot {
+            zone: self.zone.as_str().to_owned(),
+            store_incarnation: self.store_incarnation.clone(),
+            cursor: self.cursor.clone(),
+            root_subject: self.root_subject.clone(),
+            rows,
+            outstanding: None,
+        }
+    }
+}
+
+/// A refusal of one deployment-identity switch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SwitchRefusal {
+    /// The candidate describes a different Zone.
+    ZoneMismatch {
+        /// The Zone the candidate named.
+        observed: String,
+    },
+    /// The candidate names a different store incarnation.
+    ///
+    /// A store incarnation is an identity, not an ordered counter: moving
+    /// between incarnations is the ownership-bounded reset's job, never an
+    /// ordinary publication's.
+    IncarnationMismatch {
+        /// The incarnation the broker holds.
+        accepted: String,
+        /// The incarnation the candidate named.
+        observed: String,
+    },
+    /// A switch is already in flight for this Zone.
+    Busy,
+    /// A protocol step was attempted out of order.
+    OutOfOrder {
+        /// The stage the switch is in.
+        stage: PublicationStage,
+        /// The step that was attempted.
+        action: &'static str,
+    },
+    /// The candidate's cursor moves below the accepted cursor.
+    SequenceRegression {
+        /// The sequence the broker has accepted.
+        accepted: u64,
+        /// The sequence the candidate named.
+        observed: u64,
+    },
+    /// The candidate contradicts the accepted digest at its own sequence.
+    DigestContradiction {
+        /// The sequence the contradiction was observed at.
+        sequence: u64,
+    },
+    /// The candidate carries a row the prior accepted graph refuses.
+    GraphRefused {
+        /// The exact resource reference that was refused.
+        row: String,
+        /// The stage the evaluator refused at.
+        stage: AdmissionStage,
+        /// Why it refused.
+        reason: RefusalReason,
+    },
+}
+
+impl core::fmt::Display for SwitchRefusal {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ZoneMismatch { observed } => {
+                write!(formatter, "deployment identity refused: Zone {observed}")
+            }
+            Self::IncarnationMismatch { accepted, observed } => write!(
+                formatter,
+                "deployment identity refused: store incarnation {observed} is not the accepted \
+                 {accepted}; a different incarnation requires an explicit reset"
+            ),
+            Self::Busy => {
+                formatter.write_str("deployment identity refused: a switch is already in flight")
+            }
+            Self::OutOfOrder { stage, action } => write!(
+                formatter,
+                "deployment identity refused: {action} is not the next step after {}",
+                stage.as_str()
+            ),
+            Self::SequenceRegression { accepted, observed } => write!(
+                formatter,
+                "deployment identity refused: sequence {observed} is below the accepted \
+                 {accepted}"
+            ),
+            Self::DigestContradiction { sequence } => write!(
+                formatter,
+                "deployment identity refused: sequence {sequence} contradicts the accepted digest"
+            ),
+            Self::GraphRefused { row, stage, reason } => write!(
+                formatter,
+                "deployment identity refused {row}: the prior accepted graph refused it at \
+                 {stage:?} for {reason:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SwitchRefusal {}
+
+/// One deployment-identity switch on a broker that already holds an
+/// accepted identity.
+///
+/// This is the daemon half of the frozen publication protocol, restricted to
+/// what changes when the *deployment* changes rather than when a desired row
+/// changes: the same Zone, the same store incarnation, a cursor that never
+/// moves backwards, and a root subject the broker already accepted. The
+/// broker re-evaluates every candidate row against the prior accepted graph
+/// (never against a grant the candidate itself introduces), so an update
+/// that arrives while the broker is already running is admitted on the same
+/// terms as the cold start.
+#[derive(Debug, Clone)]
+pub struct DeploymentIdentitySwitch {
+    accepted: DeploymentIdentity,
+    pending: Option<DeploymentIdentity>,
+    stage: PublicationStage,
+}
+
+impl DeploymentIdentitySwitch {
+    /// Open the switch for a broker that already holds `accepted`.
+    pub const fn open(accepted: DeploymentIdentity) -> Self {
+        Self {
+            accepted,
+            pending: None,
+            stage: PublicationStage::Idle,
+        }
+    }
+
+    /// The identity the broker currently holds.
+    pub const fn accepted(&self) -> &DeploymentIdentity {
+        &self.accepted
+    }
+
+    /// The stage this switch is in.
+    pub const fn stage(&self) -> PublicationStage {
+        self.stage
+    }
+
+    /// Begin the switch: freeze the Zone and validate the candidate.
+    ///
+    /// Every candidate row is admitted against the prior accepted graph, so
+    /// a running broker refuses the same rows a cold start would refuse. The
+    /// candidate's Zone and store incarnation must be the ones the broker
+    /// already accepted.
+    pub fn begin(
+        &mut self,
+        candidate: DeploymentIdentity,
+        rows: &[ResourceRef],
+        prior: &AcceptedGraph,
+    ) -> Result<(), SwitchRefusal> {
+        if self.pending.is_some() {
+            return Err(SwitchRefusal::Busy);
+        }
+        if candidate.zone != self.accepted.zone {
+            return Err(SwitchRefusal::ZoneMismatch {
+                observed: candidate.zone.as_str().to_owned(),
+            });
+        }
+        if candidate.store_incarnation != self.accepted.store_incarnation {
+            return Err(SwitchRefusal::IncarnationMismatch {
+                accepted: self.accepted.store_incarnation.as_str().to_owned(),
+                observed: candidate.store_incarnation.as_str().to_owned(),
+            });
+        }
+        let evidence = MutationSubjectEvidence::new(
+            candidate.root_subject.clone(),
+            TransportIdentity::Daemon,
+        );
+        for row in rows {
+            let request = GraphMutation::new(
+                candidate.zone.clone(),
+                evidence.clone(),
+                MutationKind::Create,
+                row.clone(),
+            );
+            if let GraphAdmissionDecision::Refused { stage, reason } =
+                GraphAuthority::admit_mutation(&request, prior)
+            {
+                return Err(SwitchRefusal::GraphRefused {
+                    row: row.to_canonical_string(),
+                    stage,
+                    reason,
+                });
+            }
+        }
+        self.pending = Some(candidate);
+        self.stage = PublicationStage::Prepare;
+        Ok(())
+    }
+
+    /// The frozen prepare completed; the broker advances its projection.
+    pub fn freeze(&mut self) -> Result<(), SwitchRefusal> {
+        self.expect(PublicationStage::Prepare, "freeze")?;
+        self.stage = PublicationStage::Commit;
+        Ok(())
+    }
+
+    /// The projection advanced; publish it to accepted visibility.
+    ///
+    /// The cursor rules are enforced here, at the point the new identity
+    /// becomes visible: a candidate below the accepted sequence, or one that
+    /// contradicts the accepted digest at its own sequence, never reaches
+    /// publication.
+    pub fn commit(&mut self) -> Result<(), SwitchRefusal> {
+        self.expect(PublicationStage::Commit, "commit")?;
+        let candidate = self
+            .pending
+            .as_ref()
+            .ok_or(SwitchRefusal::OutOfOrder {
+                stage: self.stage,
+                action: "commit",
+            })?;
+        let accepted_sequence = self.accepted.cursor.sequence.get();
+        let candidate_sequence = candidate.cursor.sequence.get();
+        if candidate_sequence < accepted_sequence {
+            return Err(SwitchRefusal::SequenceRegression {
+                accepted: accepted_sequence,
+                observed: candidate_sequence,
+            });
+        }
+        if candidate_sequence == accepted_sequence
+            && candidate.snapshot_digest != self.accepted.snapshot_digest
+        {
+            return Err(SwitchRefusal::DigestContradiction {
+                sequence: candidate_sequence,
+            });
+        }
+        self.stage = PublicationStage::Publish;
+        Ok(())
+    }
+
+    /// The projection is published; the broker acknowledges it.
+    pub fn publish(&mut self) -> Result<(), SwitchRefusal> {
+        self.expect(PublicationStage::Publish, "publish")?;
+        self.stage = PublicationStage::Acknowledge;
+        Ok(())
+    }
+
+    /// The broker acknowledged; the candidate becomes the accepted
+    /// identity and the Zone unfreezes.
+    pub fn acknowledge(&mut self) -> Result<DeploymentIdentity, SwitchRefusal> {
+        self.expect(PublicationStage::Acknowledge, "acknowledge")?;
+        let acknowledged = self
+            .pending
+            .take()
+            .ok_or(SwitchRefusal::OutOfOrder {
+                stage: self.stage,
+                action: "acknowledge",
+            })?;
+        self.accepted = acknowledged.clone();
+        self.stage = PublicationStage::Idle;
+        Ok(acknowledged)
+    }
+
+    fn expect(&self, stage: PublicationStage, action: &'static str) -> Result<(), SwitchRefusal> {
+        if self.stage == stage {
+            Ok(())
+        } else {
+            Err(SwitchRefusal::OutOfOrder { stage: self.stage, action })
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Tests

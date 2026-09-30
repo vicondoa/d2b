@@ -463,6 +463,51 @@ impl GuestRuntime {
         Err(GuestModeError::HostSurfaceUnavailable)
     }
 
+    /// Publish the verified target-local authority this Guest runs under.
+    ///
+    /// A Guest obtains authority only from a deployment graph it read and
+    /// verified itself. The publication is target-local by construction: it
+    /// grants no host policy, opens no host surface, and never takes
+    /// credential custody, and a publication that asks for any of those is
+    /// refused rather than narrowed. A Guest with no published authority
+    /// serves nothing.
+    pub fn publish_target_authority(
+        &self,
+        authority: crate::target_runtime::TargetAuthority,
+    ) -> Result<(), GuestModeError> {
+        self.inner
+            .deployment
+            .publish_target_authority(authority)
+            .map_err(GuestModeError::Deployment)
+    }
+
+    /// The authority this Guest published, when it published one.
+    pub fn target_authority(
+        &self,
+    ) -> Result<Option<crate::target_runtime::TargetAuthority>, GuestModeError> {
+        self.inner
+            .deployment
+            .target_authority()
+            .map_err(GuestModeError::Deployment)
+    }
+
+    /// Whether this Guest holds a published target-local authority.
+    pub fn has_target_authority(&self) -> bool {
+        self.inner.deployment.has_target_authority()
+    }
+
+    /// The verified authority publication this Guest runs under.
+    ///
+    /// A Guest with no published authority serves nothing: the host
+    /// ComponentSession handshake and every routed operation resolve
+    /// against the published graph, so an unaccepted target has no accepted
+    /// answer to give.
+    pub fn require_target_authority(
+        &self,
+    ) -> Result<crate::target_runtime::TargetAuthority, GuestModeError> {
+        self.target_authority()?.ok_or(GuestModeError::AuthorityUnpublished)
+    }
+
     /// Admit a route only after identity, boot, Zone, purpose, schema, and
     /// generation binding has passed. Reconnects require a new generation and
     /// are bounded before replacing state.
@@ -861,6 +906,8 @@ pub enum GuestModeError {
     StaleSession,
     StateUnavailable,
     HostSurfaceUnavailable,
+    /// The Guest has not published a verified target-local authority yet.
+    AuthorityUnpublished,
     OldProtocol,
     Broker(ModeBoundBrokerError),
     Session(d2b_session::SessionError),
@@ -882,6 +929,7 @@ impl std::fmt::Display for GuestModeError {
             Self::StaleSession => "guest-mode-stale-session",
             Self::StateUnavailable => "guest-mode-state-unavailable",
             Self::HostSurfaceUnavailable => "guest-mode-host-surface-unavailable",
+            Self::AuthorityUnpublished => "guest-mode-authority-unpublished",
             Self::OldProtocol => "guest-mode-old-protocol",
             Self::Broker(error) => return error.fmt(formatter),
             Self::Session(error) => return error.fmt(formatter),

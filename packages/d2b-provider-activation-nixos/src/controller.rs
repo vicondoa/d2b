@@ -517,6 +517,17 @@ pub enum ActivationVerificationError {
     ArtifactCatalogDigestMismatch,
     /// A required verification token was malformed.
     InvalidEvidence,
+    /// The deployment graph was absent, oversized, or undecodable.
+    DeploymentGraphUnreadable,
+    /// The deployment graph carried another contract version.
+    DeploymentGraphSchemaUnsupported,
+    /// The deployment graph's bytes were edited after verification.
+    DeploymentGraphDigestMismatch,
+    /// The deployment graph published no implementation identity.
+    DeploymentGraphNoImplementations,
+    /// The deployment graph named an implementation no compiled provider
+    /// declaration binds.
+    UnknownDeploymentImplementation,
 }
 
 impl core::fmt::Display for ActivationVerificationError {
@@ -531,8 +542,154 @@ impl core::fmt::Display for ActivationVerificationError {
             Self::ArtifactDigestMismatch => "activation-artifact-digest-mismatch",
             Self::ArtifactCatalogDigestMismatch => "activation-artifact-catalog-digest-mismatch",
             Self::InvalidEvidence => "activation-trust-evidence-invalid",
+            Self::DeploymentGraphUnreadable => "activation-deployment-graph-unreadable",
+            Self::DeploymentGraphSchemaUnsupported => "activation-deployment-graph-schema-unsupported",
+            Self::DeploymentGraphDigestMismatch => "activation-deployment-graph-digest-mismatch",
+            Self::DeploymentGraphNoImplementations => "activation-deployment-graph-no-implementations",
+            Self::UnknownDeploymentImplementation => "activation-deployment-implementation-unknown",
         })
     }
+}
+
+// ---------------------------------------------------------------------------
+// The verified deployment graph (U31, KTD7)
+// ---------------------------------------------------------------------------
+
+/// The document schema tag the activation family verifies.
+pub const DEPLOYMENT_GRAPH_SCHEMA: &str = "d2b-deployment-bootstrap/1";
+
+/// The domain tag framing the deployment graph's self-hash.
+///
+/// The same framed-digest profile the daemon, the Nix bundle compiler, and
+/// the artifact catalog already share, so the activation family verifies
+/// the deployment's graph with the mechanism every other verified artifact
+/// uses rather than a second digest spelling.
+pub const DEPLOYMENT_GRAPH_DIGEST_DOMAIN: &str = "d2b:v3:deployment-bootstrap";
+
+/// The bounded read for the deployment graph document.
+pub const MAX_DEPLOYMENT_GRAPH_BYTES: usize = 4 * 1024 * 1024;
+
+/// A verified deployment graph this target accepted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcceptedDeploymentGraph {
+    implementations: Vec<String>,
+    graph_digest: String,
+}
+
+impl AcceptedDeploymentGraph {
+    /// The exact implementation identities the deployment published.
+    pub fn implementations(&self) -> &[String] {
+        &self.implementations
+    }
+
+    /// The document's own self-hash.
+    pub fn graph_digest(&self) -> &str {
+        &self.graph_digest
+    }
+
+    /// Whether this deployment published one implementation identity.
+    pub fn publishes(&self, implementation: &str) -> bool {
+        self.implementations
+            .iter()
+            .any(|identity| identity == implementation)
+    }
+}
+
+impl ActivationController {
+    /// Verify one deployment graph and bind the identities it publishes.
+    ///
+    /// Three refusals, deliberately distinct, and none of them has a
+    /// fallback: a document of another contract version, a document whose
+    /// bytes were edited after verification, and a document naming an
+    /// implementation this build does not compile are all refusals, and a
+    /// refusal means this family plans no runner at all.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ActivationVerificationError::DeploymentGraphUnreadable`]
+    /// for an absent, oversized, or undecodable document,
+    /// `DeploymentGraphSchemaUnsupported` for another contract version,
+    /// `DeploymentGraphDigestMismatch` for a tampered document, and
+    /// `UnknownDeploymentImplementation` for an identity no compiled
+    /// provider declaration binds.
+    pub fn accept_deployment_graph(
+        &self,
+        bytes: &[u8],
+        compiled_implementations: &[&str],
+    ) -> Result<AcceptedDeploymentGraph, ActivationVerificationError> {
+        if bytes.is_empty() || bytes.len() > MAX_DEPLOYMENT_GRAPH_BYTES {
+            return Err(ActivationVerificationError::DeploymentGraphUnreadable);
+        }
+        let document: serde_json::Value = serde_json::from_slice(bytes)
+            .map_err(|_| ActivationVerificationError::DeploymentGraphUnreadable)?;
+        let object = document
+            .as_object()
+            .ok_or(ActivationVerificationError::DeploymentGraphUnreadable)?;
+        // Verification reads the schema tag, the declared implementation
+        // identities, and the self-hash. The authority rows stay out of
+        // this family's view entirely: activation never reads host policy.
+        match object.get("schemaVersion").and_then(serde_json::Value::as_str) {
+            Some(DEPLOYMENT_GRAPH_SCHEMA) => {}
+            Some(_) => return Err(ActivationVerificationError::DeploymentGraphSchemaUnsupported),
+            None => return Err(ActivationVerificationError::DeploymentGraphUnreadable),
+        }
+        let claimed = object
+            .get("graphDigest")
+            .and_then(serde_json::Value::as_str)
+            .ok_or(ActivationVerificationError::DeploymentGraphUnreadable)?
+            .to_owned();
+        let implementations: Vec<String> = object
+            .get("implementations")
+            .and_then(serde_json::Value::as_array)
+            .ok_or(ActivationVerificationError::DeploymentGraphUnreadable)?
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or(ActivationVerificationError::DeploymentGraphUnreadable)
+            })
+            .collect::<Result<_, _>>()?;
+        let digest = d2b_contracts_resource::v3::framed_canonical_digest(
+            DEPLOYMENT_GRAPH_DIGEST_DOMAIN,
+            &canonical_bytes_without_digest(bytes)?,
+        );
+        if digest != claimed {
+            return Err(ActivationVerificationError::DeploymentGraphDigestMismatch);
+        }
+        if implementations.is_empty() {
+            return Err(ActivationVerificationError::DeploymentGraphNoImplementations);
+        }
+        for implementation in &implementations {
+            if !compiled_implementations.contains(&implementation.as_str()) {
+                return Err(ActivationVerificationError::UnknownDeploymentImplementation);
+            }
+        }
+        Ok(AcceptedDeploymentGraph {
+            implementations,
+            graph_digest: claimed,
+        })
+    }
+}
+
+/// Re-canonicalize the whole document with its own `graphDigest` cleared.
+///
+/// The digest covers the canonical bytes of every other field in the
+/// document - not only the fields this family reads - so a graph whose
+/// authority rows were edited after verification fails closed here too.
+fn canonical_bytes_without_digest(
+    bytes: &[u8],
+) -> Result<Vec<u8>, ActivationVerificationError> {
+    use d2b_contracts_resource::v3::CanonicalJsonValue;
+    let mut document = CanonicalJsonValue::parse(bytes)
+        .map_err(|_| ActivationVerificationError::DeploymentGraphUnreadable)?;
+    let CanonicalJsonValue::Object(fields) = &mut document else {
+        return Err(ActivationVerificationError::DeploymentGraphUnreadable);
+    };
+    if fields.remove("graphDigest").is_none() {
+        return Err(ActivationVerificationError::DeploymentGraphUnreadable);
+    }
+    Ok(document.to_canonical_bytes())
 }
 
 impl std::error::Error for ActivationVerificationError {}

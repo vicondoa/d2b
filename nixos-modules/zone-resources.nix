@@ -284,13 +284,96 @@ let
         sensitivity = "nonSecret";
       })
     cfg.zones;
+
+  # ---------------------------------------------------------------------------
+  # The verified deployment graph (U31, KTD7)
+  # ---------------------------------------------------------------------------
+  #
+  # This is the document the daemon and the broker bootstrap from, and the
+  # Activation family verifies for itself. It is derived from the generated
+  # provider projections - the same generated declarations the daemon
+  # compiles - so the implementation identities it publishes are exactly the
+  # compiled set and there is no separate configurable allowlist anywhere on
+  # either side of the boundary.
+  #
+  # The authority rows are the fixed foundation vocabulary: the publisher
+  # Role and the Process provider's self-binding. They are ordinary graph
+  # rows with canonical admitted bytes, evaluated by the one admission
+  # evaluator, exactly as every other Role and RoleBinding is.
+  deploymentProviderProjections = import ./generated/provider-projections.nix;
+  deploymentImplementations =
+    builtins.attrNames deploymentProviderProjections.owners
+    ++ [ "system-minijail" "systemd" ];
+  publisherRole = {
+    rules = [
+      {
+        resourceTypes = [ "Operation" ];
+        verbs = [ "create" ];
+        subresources = [ ];
+        resourceNames = [ ];
+        zones = [ ];
+        executionRefs = [ ];
+        sessionVerbs = [ ];
+      }
+    ];
+    operationRefs = [ ];
+    commandRefs = [ ];
+  };
+  foundationAuthorityRows = [
+    {
+      reference = "Role/operation-publisher";
+      admitted = publisherRole;
+    }
+    {
+      reference = "RoleBinding/system-minijail-self-operation-publisher";
+      admitted = {
+        roleRef = "Role/operation-publisher";
+        subjects = [ "Provider/system-minijail" ];
+      };
+    }
+  ];
+  deploymentBootstrapPreimage = {
+    schemaVersion = "d2b-deployment-bootstrap/1";
+    zone = "system";
+    storeIncarnation = "foundation-1";
+    stateVolume = "Volume/d2b-state";
+    implementations = builtins.sort builtins.compareStrings
+      deploymentImplementations;
+    roles = builtins.filter (row: builtins.match "^Role/" row.reference != null)
+      foundationAuthorityRows;
+    roleBindings =
+      builtins.filter (row: builtins.match "^RoleBinding/" row.reference != null)
+        foundationAuthorityRows;
+  };
+  deploymentBootstrapPreimageJson =
+    builtins.toJSON (resourcesBundle.canonical deploymentBootstrapPreimage);
+  deploymentBootstrapDigest = "sha256:${resourcesBundle.framedDigest
+    "d2b:v3:deployment-bootstrap" deploymentBootstrapPreimageJson}";
+  deploymentBootstrapDocument = deploymentBootstrapPreimage // {
+    graphDigest = deploymentBootstrapDigest;
+  };
+  deploymentBootstrapJson =
+    builtins.toJSON (resourcesBundle.canonical deploymentBootstrapDocument);
 in
 {
-  config = lib.mkIf (cfg.zones != { }) {
+  config = {
     # Keep only the old eval data for compatibility. Its legacy path and
     # install metadata are deliberately not exposed to the bundle aggregator.
-    d2b._bundle.zoneResourceBundlesCompatibility = lib.mapAttrs
-      (_: bundle: { data = bundle.data; })
-      zoneBundles;
+    d2b._bundle.zoneResourceBundlesCompatibility =
+      lib.mkIf (cfg.zones != { })
+        (lib.mapAttrs (_: bundle: { data = bundle.data; }) zoneBundles);
+
+    # The verified deployment graph the daemon publishes before any provider
+    # starts. It is emitted outside the per-Zone gate: a deployment publishes
+    # exactly one graph, and a host with no Zone rows still has a fixed
+    # foundation vocabulary to publish. It is internal and non-secret - it
+    # carries no credential - and the daemon and broker both re-verify its
+    # self-hash before reading a row out of it.
+    d2b._bundle.deploymentBootstrap = {
+      path = "deployment-bootstrap.json";
+      inherit (deploymentBootstrapDocument) graphDigest;
+      preimageJson = deploymentBootstrapPreimageJson;
+      documentJson = deploymentBootstrapJson;
+    };
   };
 }
