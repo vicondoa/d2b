@@ -503,6 +503,119 @@ impl DeliverySessionParams {
     }
 }
 
+/// The exact non-secret identity one delivery session is authorized under.
+///
+/// The delivery session's wire binding already carries these fields, but they
+/// are authority-bearing: comparing them is what decides whether a presented
+/// session is still the one an admitted delivery relationship authorized. A
+/// component restart, a credential replacement, a re-scoped audience, or a
+/// re-minted session changes at least one of them, so the earlier session
+/// cannot renew itself.
+///
+/// The identity deliberately excludes the transcript hash, the plaintext
+/// record, and every value that only exists inside an established session, so
+/// a Provider can hold one across a call and compare it without a secret ever
+/// entering the comparison.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DeliveryIdentity {
+    credential_ref: ResourceRef,
+    credential_uid: ResourceUid,
+    credential_generation: ResourceGeneration,
+    consumer_provider_ref: ResourceRef,
+    consumer_component_generation: ResourceGeneration,
+    audience: AudienceToken,
+    operation_class: OperationClass,
+    sequence: u64,
+}
+
+impl DeliveryIdentity {
+    /// Construct one identity from its exact authority-bearing fields.
+    pub const fn new(
+        credential_ref: ResourceRef,
+        credential_uid: ResourceUid,
+        credential_generation: ResourceGeneration,
+        consumer_provider_ref: ResourceRef,
+        consumer_component_generation: ResourceGeneration,
+        audience: AudienceToken,
+        operation_class: OperationClass,
+        sequence: u64,
+    ) -> Self {
+        Self {
+            credential_ref,
+            credential_uid,
+            credential_generation,
+            consumer_provider_ref,
+            consumer_component_generation,
+            audience,
+            operation_class,
+            sequence,
+        }
+    }
+
+    /// Borrow the Credential reference the session is bound to.
+    pub const fn credential_ref(&self) -> &ResourceRef {
+        &self.credential_ref
+    }
+
+    /// Return the Credential UID the session is bound to.
+    pub const fn credential_uid(&self) -> &ResourceUid {
+        &self.credential_uid
+    }
+
+    /// Return the Credential generation the session is bound to.
+    pub const fn credential_generation(&self) -> ResourceGeneration {
+        self.credential_generation
+    }
+
+    /// Borrow the consumer Provider reference the session is bound to.
+    pub const fn consumer_provider_ref(&self) -> &ResourceRef {
+        &self.consumer_provider_ref
+    }
+
+    /// Return the consumer component generation the session is bound to.
+    pub const fn consumer_component_generation(&self) -> ResourceGeneration {
+        self.consumer_component_generation
+    }
+
+    /// Borrow the audience the session is bound to.
+    pub const fn audience(&self) -> &AudienceToken {
+        &self.audience
+    }
+
+    /// Return the method-derived operation class the session authorizes.
+    pub const fn operation_class(&self) -> OperationClass {
+        self.operation_class
+    }
+
+    /// Return the replay-safe sequence the session was minted with.
+    pub const fn sequence(&self) -> u64 {
+        self.sequence
+    }
+}
+
+impl fmt::Debug for DeliveryIdentity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("DeliveryIdentity(<redacted>)")
+    }
+}
+
+impl DeliverySessionParams {
+    /// The exact non-secret identity this delivery session is authorized
+    /// under.
+    pub fn delivery_identity(&self) -> DeliveryIdentity {
+        DeliveryIdentity::new(
+            self.credential_ref.clone(),
+            self.credential_uid.clone(),
+            self.credential_generation,
+            self.consumer_provider_ref.clone(),
+            self.consumer_component_generation,
+            self.audience.clone(),
+            self.operation_class,
+            self.sequence,
+        )
+    }
+}
+
 impl fmt::Debug for DeliverySessionParams {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("DeliverySessionParams(<redacted>)")
@@ -805,6 +918,42 @@ impl CredentialAuthorization {
         self.session_proof
             .as_deref()
             .and_then(|proof| proof.downcast_ref::<T>())
+    }
+
+    /// Whether this authorization is the delivery authority `admitted`
+    /// issued for `method`.
+    ///
+    /// The check is on the whole authority-bearing identity: the Credential
+    /// and its generation, the consumer Provider and its component
+    /// generation, the audience, the method-derived operation class, and the
+    /// replay sequence. A session authorized under a different component
+    /// generation, a replaced Credential, a re-scoped audience, or an earlier
+    /// mint is a *different* authority, so presenting it again cannot renew
+    /// the delivery the relationship already gave up.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialServiceErrorCode::OperationDenied`] when the
+    /// method does not establish a delivery session or any authority-bearing
+    /// field of the presented session differs from `admitted`.
+    pub fn verifies_delivery(
+        &self,
+        method: CredentialMethod,
+        admitted: &DeliveryIdentity,
+    ) -> Result<(), CredentialServiceError> {
+        let denied =
+            || CredentialServiceError::new(CredentialServiceErrorCode::OperationDenied);
+        let presented = self
+            .delivery_session_params()
+            .ok_or_else(denied)?
+            .delivery_identity();
+        if !method.requires_delivery()
+            || presented.operation_class() != method.operation_class()
+            || &presented != admitted
+        {
+            return Err(denied());
+        }
+        Ok(())
     }
 }
 
@@ -1928,6 +2077,113 @@ mod tests {
         assert_eq!(
             record.copy_to(&mut destination).unwrap_err().code(),
             CredentialServiceErrorCode::InvariantFailure
+        );
+    }
+
+    /// A delivery session is recognized only by the whole authority-bearing
+    /// identity it was minted under. Advancing any one of the credential
+    /// generation, the consumer component generation, the audience, the
+    /// method-derived operation class, or the replay sequence produces a
+    /// different identity, so a Provider handed the earlier session cannot
+    /// present it as the authority a relationship admitted.
+    #[test]
+    fn a_delivery_session_is_recognized_only_by_its_full_identity() {
+        let params = delivery_params();
+        let admitted = params.delivery_identity();
+        assert_eq!(admitted, params.delivery_identity());
+        assert_eq!(admitted.credential_ref(), &credential_ref());
+        assert_eq!(admitted.credential_uid(), &uid());
+        assert_eq!(admitted.credential_generation(), generation());
+        assert_eq!(admitted.consumer_provider_ref(), &consumer_ref());
+        assert_eq!(admitted.consumer_component_generation(), generation());
+        assert_eq!(admitted.audience(), &audience());
+        assert_eq!(admitted.operation_class(), OperationClass::AcquireToken);
+        assert_eq!(admitted.sequence(), 1);
+        assert_eq!(format!("{admitted:?}"), "DeliveryIdentity(<redacted>)");
+        assert!(!format!("{admitted:?}").contains("root-token"));
+
+        let advanced = DeliverySessionParams::new(
+            credential_ref(),
+            uid(),
+            ResourceGeneration::new(2).unwrap(),
+            consumer_ref(),
+            generation(),
+            audience(),
+            OperationClass::AcquireToken,
+            1_000,
+            500,
+            route_digest(),
+            4_096,
+            1,
+        )
+        .unwrap();
+        assert_ne!(advanced.delivery_identity(), admitted);
+
+        let restated = DeliveryIdentity::new(
+            credential_ref(),
+            uid(),
+            generation(),
+            consumer_ref(),
+            generation(),
+            audience(),
+            OperationClass::RefreshToken,
+            1,
+        );
+        assert_ne!(restated, admitted);
+    }
+
+    /// The service boundary enforces the same rule: a delivery method is
+    /// verified against the admitted identity, and a metadata method - which
+    /// establishes no delivery session at all - can never satisfy the check.
+    #[test]
+    fn the_service_verifies_a_delivery_against_the_admitted_identity() {
+        let params = delivery_params();
+        let admitted = params.delivery_identity();
+        let authorization = CredentialAuthorization::new(
+            CredentialMethod::AcquireToken,
+            Some(params.clone()),
+        )
+        .unwrap();
+        authorization
+            .verifies_delivery(CredentialMethod::AcquireToken, &admitted)
+            .expect("the authorized session is the admitted one");
+        assert_eq!(
+            authorization
+                .verifies_delivery(CredentialMethod::RefreshToken, &admitted)
+                .unwrap_err()
+                .code(),
+            CredentialServiceErrorCode::OperationDenied,
+            "a method the session was not authorized for is refused"
+        );
+
+        let metadata_authorization =
+            CredentialAuthorization::new(CredentialMethod::InspectMetadata, None).unwrap();
+        assert_eq!(
+            metadata_authorization
+                .verifies_delivery(CredentialMethod::InspectMetadata, &admitted)
+                .unwrap_err()
+                .code(),
+            CredentialServiceErrorCode::OperationDenied,
+            "a non-delivery method carries no session to verify"
+        );
+
+        let replaced = DeliveryIdentity::new(
+            credential_ref(),
+            uid(),
+            generation(),
+            consumer_ref(),
+            ResourceGeneration::new(2).unwrap(),
+            audience(),
+            OperationClass::AcquireToken,
+            1,
+        );
+        assert_eq!(
+            authorization
+                .verifies_delivery(CredentialMethod::AcquireToken, &replaced)
+                .unwrap_err()
+                .code(),
+            CredentialServiceErrorCode::OperationDenied,
+            "a restarted consumer component is refused"
         );
     }
 }

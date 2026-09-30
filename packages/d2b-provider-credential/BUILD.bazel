@@ -66,6 +66,17 @@ d2b_rust_test(
 )
 
 d2b_rust_test(
+    name = "credential_binding",
+    srcs = ["tests/credential_binding.rs"],
+    compile_data = ["Cargo.toml"],
+    deps = [
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        ":d2b_provider_credential",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
     name = "d2b_provider_credential_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_credential",

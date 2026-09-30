@@ -38,12 +38,14 @@
 use std::sync::Arc;
 
 use d2b_contracts_provider::v3::credential::{
-    CredentialLeaseState, CredentialSpec, PlacementBinding,
+    AudienceToken, CredentialLeaseState, CredentialSpec, OperationClass, PlacementBinding,
 };
 use d2b_contracts_provider::v3::credential_controller::CredentialProviderKind;
 use d2b_contracts_resource::v3::{
-    CanonicalJsonObject, CanonicalJsonValue, ControllerGeneration, DesiredLifecycle, ResourceRef,
-    ResourceSpec, ResourceUid, ZoneId,
+    AdmissionStage, BindingRefusal, CanonicalJsonObject, CanonicalJsonValue, ControllerGeneration,
+    CredentialBindingRequest, DesiredLifecycle, RefusalReason, ResourceRef, ResourceSpec,
+    ResourceUid, ZoneId,
+    credential_binding::CredentialOperation,
     execution_policy::{BoundedToken, BudgetSpec, DurationMs, ExecutionDomain},
     identity::ReconnectGeneration,
     process::{
@@ -68,8 +70,7 @@ use crate::effects_service::{CREDENTIAL_EFFECTS_SERVICE, CredentialEffectsServic
 use crate::facets::CredentialEffectFacets;
 use crate::session::{
     CredentialResourceRuntimeError, CredentialRevocationEvidence, CredentialRevocationInputs,
-    CredentialRevocationOutcome, CredentialRevocationRequest, CredentialSession,
-    credential_provider_kind,
+    CredentialRevocationRequest, CredentialSession, credential_provider_kind,
 };
 
 /// The one resource type this factory serves (KTD4 Phase A).
@@ -255,6 +256,122 @@ pub struct CredentialLeaseFacts {
     pub rotation_generation: u64,
 }
 
+/// The source-side policy one `Credential` row admits delivery under (R24).
+///
+/// This is the driver source controller's own reading of the committed spec:
+/// the audience the row is for, the operation classes it grants, the Provider
+/// the delivery is scoped to, and the lease-lifetime ceiling. A
+/// `CredentialBinding` request is bound against this rather than against its
+/// own fields, so a consumer can never widen the row's authority by asking
+/// for more; and because it is derived from the spec, a spec change produces
+/// a different policy instead of leaving the old one in force.
+#[derive(Clone, PartialEq, Eq)]
+pub struct CredentialSourcePolicy {
+    audience: AudienceToken,
+    allowed_operations: Vec<OperationClass>,
+    consumer_ref: Option<ResourceRef>,
+    max_lease_lifetime_ms: u64,
+}
+
+impl core::fmt::Debug for CredentialSourcePolicy {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("CredentialSourcePolicy")
+            .field("audience", &"<redacted>")
+            .field("allowed_operations", &self.allowed_operations)
+            .field("consumer_ref", &self.consumer_ref)
+            .field("max_lease_lifetime_ms", &self.max_lease_lifetime_ms)
+            .finish()
+    }
+}
+
+impl CredentialSourcePolicy {
+    /// Read one decoded `Credential` spec's delivery policy.
+    pub fn from_spec(spec: &CredentialSpec) -> Self {
+        Self {
+            audience: spec.audience().clone(),
+            allowed_operations: spec.allowed_operations().to_vec(),
+            consumer_ref: spec.consumer_ref().cloned(),
+            max_lease_lifetime_ms: spec.rotation().max_lease_lifetime_ms(),
+        }
+    }
+
+    /// The audience this row delivers for.
+    pub const fn audience(&self) -> &AudienceToken {
+        &self.audience
+    }
+
+    /// The operation classes this row grants.
+    pub fn allowed_operations(&self) -> &[OperationClass] {
+        &self.allowed_operations
+    }
+
+    /// The Provider the delivery is scoped to, when the row names one.
+    pub const fn consumer_ref(&self) -> Option<&ResourceRef> {
+        self.consumer_ref.as_ref()
+    }
+
+    /// The lease-lifetime ceiling this row imposes; `0` is the Provider
+    /// default, which leaves the contract's own lifetime bound in force.
+    pub const fn max_lease_lifetime_ms(&self) -> u64 {
+        self.max_lease_lifetime_ms
+    }
+
+    /// Whether this policy admits one credential delivery request.
+    ///
+    /// Three checks, each closed: the audience the delivery session is bound
+    /// to must be the row's audience, every requested operation must be one
+    /// the row grants, and the requested lifetime must fit inside the row's
+    /// ceiling. A request outside any of them is refused here, before the
+    /// generic evaluator's reservation and before any provider is asked for
+    /// material.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BindingRefusal`] at the admit stage with
+    /// [`RefusalReason::SourcePolicyRefused`].
+    pub fn admits_delivery(
+        &self,
+        request: &CredentialBindingRequest,
+        delivered: &AudienceToken,
+    ) -> Result<(), BindingRefusal> {
+        let refused = || {
+            BindingRefusal::new(
+                AdmissionStage::Admit,
+                RefusalReason::SourcePolicyRefused,
+            )
+        };
+        if delivered.as_str() != self.audience.as_str()
+            || !request
+                .operations()
+                .iter()
+                .copied()
+                .all(|operation| self.admits_class(delivery_class(operation)))
+        {
+            return Err(refused());
+        }
+        let requested = request.lifetime().expires_in().as_millis();
+        if self.max_lease_lifetime_ms != 0 && requested > self.max_lease_lifetime_ms {
+            return Err(refused());
+        }
+        Ok(())
+    }
+
+    /// Whether this policy grants one service operation class.
+    pub fn admits_class(&self, operation: OperationClass) -> bool {
+        self.allowed_operations.contains(&operation)
+    }
+}
+
+/// The service operation class one desired-state operation class names.
+const fn delivery_class(operation: CredentialOperation) -> OperationClass {
+    match operation {
+        CredentialOperation::AcquireToken => OperationClass::AcquireToken,
+        CredentialOperation::RefreshToken => OperationClass::RefreshToken,
+        CredentialOperation::SignChallenge => OperationClass::SignChallenge,
+    }
+}
+
 /// The provider-facing effect surface the Credential driver needs. The
 /// production implementation delegates to the preserved Provider reads and
 /// the ProviderSupervisor session handoff registry; test doubles implement
@@ -375,6 +492,23 @@ impl CredentialDriver {
         let spec = serde_json::from_slice::<CredentialSpec>(&envelope.base.to_canonical_bytes())
             .map_err(|_| self.error(CredentialDriverErrorKind::SpecInvalid, op))?;
         Ok((envelope.clone(), spec))
+    }
+
+    /// Read this row's source-side delivery policy.
+    ///
+    /// The driver is the source controller for `Credential` rows, so this is
+    /// where a consumer's `CredentialBinding` request is checked against the
+    /// row's own committed audience, granted operation classes, delivery
+    /// Provider, and lifetime ceiling before any delivery authority is minted
+    /// ([`CredentialSourcePolicy::admits_delivery`]). Reading it decodes the
+    /// stored spec through the same path every other verb uses, so a spec
+    /// that fails the closed contract fails the binding admission too.
+    pub fn source_policy(
+        &self,
+        ctx: &ResourceContext,
+    ) -> Result<CredentialSourcePolicy, CredentialDriverError> {
+        let (_, spec) = self.decoded_spec(ctx, DriverOp::Reconcile)?;
+        Ok(CredentialSourcePolicy::from_spec(&spec))
     }
 
     /// The Credential Provider this row selects, restricted to the three
@@ -682,31 +816,32 @@ impl CredentialDriver {
                 _ => unconfirmed(),
             })?;
         let evidence = CredentialRevocationEvidence::confirmed(&request, outcome);
-        match outcome {
-            CredentialRevocationOutcome::Revoked | CredentialRevocationOutcome::AlreadyRevoked => {
-                // The old reconciler persisted this evidence in the durable
-                // status; the new runtime keeps no status store (R11), so the
-                // journal is where the confirmed revocation stays observable.
-                tracing::info!(
-                    credential = %self.credential_ref(ctx, op)?.to_canonical_string(),
-                    outcome = evidence.outcome_code(),
-                    session_generation = evidence.session_generation().get(),
-                    "credential lease revocation confirmed",
-                );
-                ctx.set_status(CredentialDriverStatus::LeaseRevoked { evidence });
-                Ok(())
-            }
-            CredentialRevocationOutcome::Uncertain => {
-                tracing::warn!(
-                    credential = %self.credential_ref(ctx, op)?.to_canonical_string(),
-                    session_generation = request.session_generation().get(),
-                    "credential lease revocation unconfirmed; cleanup withheld",
-                );
-                ctx.set_status(CredentialDriverStatus::RevocationUncertain {
-                    evidence: Some(evidence),
-                });
-                Err(unconfirmed())
-            }
+        // `is_confirmed` is the same closed split the conservative
+        // `CredentialRevocationReport` uses, so the driver's own status and
+        // the generic binding lifecycle agree on what a confirmed revocation
+        // is: anything else stays unconfirmed and cleanup is withheld.
+        if outcome.is_confirmed() {
+            // The old reconciler persisted this evidence in the durable
+            // status; the new runtime keeps no status store (R11), so the
+            // journal is where the confirmed revocation stays observable.
+            tracing::info!(
+                credential = %self.credential_ref(ctx, op)?.to_canonical_string(),
+                outcome = evidence.outcome_code(),
+                session_generation = evidence.session_generation().get(),
+                "credential lease revocation confirmed",
+            );
+            ctx.set_status(CredentialDriverStatus::LeaseRevoked { evidence });
+            Ok(())
+        } else {
+            tracing::warn!(
+                credential = %self.credential_ref(ctx, op)?.to_canonical_string(),
+                session_generation = request.session_generation().get(),
+                "credential lease revocation unconfirmed; cleanup withheld",
+            );
+            ctx.set_status(CredentialDriverStatus::RevocationUncertain {
+                evidence: Some(evidence),
+            });
+            Err(unconfirmed())
         }
     }
 }
@@ -1298,6 +1433,40 @@ mod tests {
     /// double the driver tests drive directly.
     fn facets() -> CredentialEffectFacets {
         crate::test_support::recording_facets(crate::test_support::RecordingRuntime::new(log()))
+    }
+
+    /// The source-side delivery policy is read from the committed spec
+    /// through the same closed decode every other verb uses: a row whose
+    /// granted operation set or audience changes produces a different
+    /// policy, and a request outside the committed one is refused at the
+    /// source rather than at the provider.
+    #[test]
+    fn the_source_policy_is_read_from_the_committed_spec() {
+        let driver = driver(FakeEffects::new(log()));
+        let ctx = context(row(MI_PROVIDER), RecordingManager::new(log()));
+        let policy = driver.source_policy(&ctx).expect("source policy");
+        assert_eq!(policy.audience().as_str(), "relay");
+        assert_eq!(
+            policy.allowed_operations(),
+            &[d2b_contracts_provider::v3::credential::OperationClass::AcquireToken]
+        );
+        assert!(policy.admits_class(d2b_contracts_provider::v3::credential::OperationClass::AcquireToken));
+        assert!(!policy.admits_class(d2b_contracts_provider::v3::credential::OperationClass::SignChallenge));
+        assert_eq!(policy.consumer_ref(), None);
+        // A zero ceiling is the Provider default: only the contract's own
+        // lifetime bound applies.
+        assert_eq!(policy.max_lease_lifetime_ms(), 0);
+
+        let mut spec = credential_spec_json(MI_PROVIDER, "Guest/gateway");
+        spec["allowedOperations"] = serde_json::json!(["sign-challenge"]);
+        spec["audience"] = serde_json::json!("other-audience");
+        let mut changed = row(MI_PROVIDER);
+        changed.spec = serde_json::to_vec(&spec).expect("spec bytes");
+        let ctx = context(changed, RecordingManager::new(log()));
+        let changed = driver.source_policy(&ctx).expect("source policy");
+        assert_eq!(changed.audience().as_str(), "other-audience");
+        assert!(!changed.admits_class(d2b_contracts_provider::v3::credential::OperationClass::AcquireToken));
+        assert!(changed.admits_class(d2b_contracts_provider::v3::credential::OperationClass::SignChallenge));
     }
 
     // -- tests ---------------------------------------------------------------
