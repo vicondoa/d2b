@@ -6,6 +6,7 @@ use tokio::sync::Mutex;
 use d2b_contracts_resource::v3::{
     ResourceRef,
     execution_policy::{BoundedToken, ExecutionDomain},
+    identity::ReconnectGeneration,
     process::{ExecutionSpec, ProcessClass, ProcessSpec},
 };
 
@@ -98,6 +99,130 @@ impl AttachRequest {
             expected_generation,
             tail_bytes,
         })
+    }
+}
+
+/// The admitted `EndpointBinding` relationship one terminal stream rides.
+///
+/// The binding is what the graph committed for a session's interactive
+/// stream: the exact `Process` that consumes it, the exact `Endpoint` it is
+/// attached to, and the reconnect generation below which the admission no
+/// longer speaks. Nothing beside the binding may widen it - the endpoint is
+/// named here rather than beside the binding, so a stream cannot be granted
+/// a host directory because its socket happens to live in one (R23).
+#[derive(Clone, PartialEq, Eq)]
+pub struct TerminalStreamBinding {
+    consumer: ResourceRef,
+    endpoint: ResourceRef,
+    minimum_reconnect: ReconnectGeneration,
+}
+
+impl TerminalStreamBinding {
+    /// Construct the admitted relationship for one session's stream.
+    ///
+    /// The consumer is the session's own supervisor `Process`; the endpoint
+    /// is the one exact stream endpoint the graph bound to it.
+    pub const fn admitted(
+        consumer: ResourceRef,
+        endpoint: ResourceRef,
+        minimum_reconnect: ReconnectGeneration,
+    ) -> Self {
+        Self {
+            consumer,
+            endpoint,
+            minimum_reconnect,
+        }
+    }
+
+    /// Borrow the `Process` row that consumes the stream.
+    pub const fn consumer(&self) -> &ResourceRef {
+        &self.consumer
+    }
+
+    /// Borrow the exact admitted stream endpoint.
+    pub const fn endpoint(&self) -> &ResourceRef {
+        &self.endpoint
+    }
+
+    /// Return the lowest reconnect generation this admission still accepts.
+    pub const fn minimum_reconnect(&self) -> ReconnectGeneration {
+        self.minimum_reconnect
+    }
+
+    /// Measure one incoming observation against the admitted relationship.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShellTerminalError::EndpointBindingMismatch`] when the
+    /// observation names a different consumer or endpoint, and
+    /// [`ShellTerminalError::StaleReconnect`] when it was made in a
+    /// reconnect generation this relationship no longer admits.
+    pub fn admit(
+        &self,
+        evidence: &TerminalAttachEvidence,
+    ) -> Result<(), ShellTerminalError> {
+        if evidence.consumer() != &self.consumer || evidence.endpoint() != &self.endpoint {
+            return Err(ShellTerminalError::EndpointBindingMismatch);
+        }
+        if evidence.reconnect() < self.minimum_reconnect {
+            return Err(ShellTerminalError::StaleReconnect);
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Debug for TerminalStreamBinding {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("TerminalStreamBinding(<redacted>)")
+    }
+}
+
+/// The live, non-secret observations one incoming terminal stream presents.
+///
+/// Evidence is measured against the admitted binding and never merges with
+/// it: a connecting stream cannot move the fence by presenting evidence, and
+/// the fence cannot adopt a stream's claims without the graph having
+/// committed them.
+#[derive(Clone, PartialEq, Eq)]
+pub struct TerminalAttachEvidence {
+    consumer: ResourceRef,
+    endpoint: ResourceRef,
+    reconnect: ReconnectGeneration,
+}
+
+impl TerminalAttachEvidence {
+    /// Construct the evidence one attach attempt presents.
+    pub const fn presented(
+        consumer: ResourceRef,
+        endpoint: ResourceRef,
+        reconnect: ReconnectGeneration,
+    ) -> Self {
+        Self {
+            consumer,
+            endpoint,
+            reconnect,
+        }
+    }
+
+    /// Borrow the `Process` row the stream claims to ride.
+    pub const fn consumer(&self) -> &ResourceRef {
+        &self.consumer
+    }
+
+    /// Borrow the stream endpoint the stream claims to be attached to.
+    pub const fn endpoint(&self) -> &ResourceRef {
+        &self.endpoint
+    }
+
+    /// Return the reconnect generation this attempt is.
+    pub const fn reconnect(&self) -> ReconnectGeneration {
+        self.reconnect
+    }
+}
+
+impl std::fmt::Debug for TerminalAttachEvidence {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("TerminalAttachEvidence(<redacted>)")
     }
 }
 
@@ -216,6 +341,82 @@ struct AuthorityState {
     next_capability: u64,
 }
 
+
+/// The Process provider that realizes every shell supervisor.
+///
+/// This is provider contract data, not per-session configuration: the shell
+/// Provider names one Process implementation and the graph admits which
+/// backend realizes it on the selected target. No session, pool, or caller
+/// chooses it.
+pub const SUPERVISOR_PROCESS_PROVIDER_REF: &str = "Provider/system-systemd";
+
+/// The trusted executable template the shell Provider's supervisor runs from.
+///
+/// The template is the provider's own declared executable (R31); it is a
+/// declared method's target, not an argv a caller composes.
+pub const SUPERVISOR_PROCESS_TEMPLATE: &str = "shell-supervisor-main";
+
+/// The execution fields one shell supervisor runs under.
+///
+/// The execution target and workload user are the exact admitted graph
+/// references; the template is the provider's declared executable. There is
+/// no argument through which a caller could place a different identity,
+/// executable, or argv, so a user-domain supervisor can only ever run as the
+/// `User` its session was admitted for.
+///
+/// # Errors
+///
+/// Propagates the typed execution-spec refusal when the supplied references
+/// cannot describe a user-domain service.
+pub fn supervisor_execution_spec(
+    execution_ref: ResourceRef,
+    user_ref: ResourceRef,
+) -> Result<ExecutionSpec, ShellTerminalError> {
+    ExecutionSpec::new(
+        execution_ref,
+        Some(ExecutionDomain::User),
+        Some(user_ref),
+        ProcessClass::Service,
+        BoundedToken::parse(SUPERVISOR_PROCESS_TEMPLATE)
+            .map_err(|_| ShellTerminalError::SupervisorAmbiguous)?,
+        None,
+        Vec::new(),
+        Vec::new(),
+        Default::default(),
+        Default::default(),
+        None,
+        Vec::new(),
+        Default::default(),
+    )
+    .map_err(|_| ShellTerminalError::SupervisorAmbiguous)
+}
+
+/// The authenticated `User` identity a supervisor launch actually ran under.
+///
+/// The process adapter proves this from the launched unit, so it is evidence
+/// about the running process rather than a claim carried beside the request.
+#[derive(Clone, PartialEq, Eq)]
+pub struct WorkloadIdentity {
+    user_ref: ResourceRef,
+}
+
+impl WorkloadIdentity {
+    /// Construct the proven workload identity from the observed `User` row.
+    pub const fn proven(user_ref: ResourceRef) -> Self {
+        Self { user_ref }
+    }
+
+    /// Borrow the `User` the supervisor was proved to run as.
+    pub const fn user_ref(&self) -> &ResourceRef {
+        &self.user_ref
+    }
+}
+
+impl std::fmt::Debug for WorkloadIdentity {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("WorkloadIdentity(<redacted>)")
+    }
+}
 /// The target-local Process resource created for one ShellSession supervisor.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SupervisorProcessResource {
@@ -231,20 +432,9 @@ impl SupervisorProcessResource {
         let owner_ref =
             ResourceRef::parse(&format!("{}/{}", session.resource_type(), session.name()))
                 .expect("validated ShellSession resource reference");
-        let execution = ExecutionSpec::new(
+        let execution = supervisor_execution_spec(
             session.supervisor_execution_ref().clone(),
-            Some(ExecutionDomain::User),
-            Some(session.supervisor_user_ref().clone()),
-            ProcessClass::Service,
-            BoundedToken::parse("shell-supervisor-main").expect("static process template"),
-            None,
-            Vec::new(),
-            Vec::new(),
-            Default::default(),
-            Default::default(),
-            None,
-            Vec::new(),
-            Default::default(),
+            session.supervisor_user_ref().clone(),
         )
         .expect("validated supervisor Process execution spec");
         Self {
@@ -252,6 +442,25 @@ impl SupervisorProcessResource {
             owner_ref,
             spec: ProcessSpec::minimal(execution),
         }
+    }
+
+    /// Build the Process intent only for the exact admitted workload user.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShellTerminalError::WorkloadIdentityMismatch`] when the
+    /// identity the launch actually ran under is not the `User` this
+    /// session's supervisor was admitted for. A user-domain supervisor is
+    /// never selectable onto another user's identity, and the refusal lands
+    /// before any row is realized rather than after it has launched.
+    pub fn admitted_for_session(
+        session: &ShellSession,
+        workload: &WorkloadIdentity,
+    ) -> Result<Self, ShellTerminalError> {
+        if workload.user_ref() != session.supervisor_user_ref() {
+            return Err(ShellTerminalError::WorkloadIdentityMismatch);
+        }
+        Ok(Self::for_session(session))
     }
 
     /// Borrow the target-local Process identity.
@@ -878,6 +1087,100 @@ impl ShellAuthorityPort for ShellAuthorityLedger {
 pub struct InMemoryShellAuthority {
     ledger: ShellAuthorityLedger,
     supervisor_processes: Mutex<BTreeMap<String, SupervisorProcessResource>>,
+    user_processes: Mutex<BTreeMap<String, UserDomainProcess>>,
+}
+
+impl InMemoryShellAuthority {
+    /// Declare a `Process` row this Provider does not own.
+    ///
+    /// A real user domain holds far more than this Provider's supervisors.
+    /// Placing those rows in the census is what makes a removal's scope
+    /// observable: a teardown that matched on the workload user rather than
+    /// on the owning session would delete them, and the provider's own
+    /// removal scenario fails.
+    pub fn declare_user_process(&self, process: UserDomainProcess) {
+        if let Ok(mut processes) = self.user_processes.try_lock() {
+            processes.insert(process.resource_ref().to_canonical_string(), process);
+        }
+    }
+
+    /// Return one row of the user-domain census.
+    pub fn user_process(&self, resource_ref: &str) -> Option<UserDomainProcess> {
+        self.user_processes
+            .try_lock()
+            .ok()
+            .and_then(|processes| processes.get(resource_ref).cloned())
+    }
+
+    /// Return the `Process` rows still running for one workload user.
+    pub fn user_process_names_for(&self, user_ref: &ResourceRef) -> Vec<String> {
+        self.user_processes
+            .try_lock()
+            .map(|processes| {
+                processes
+                    .values()
+                    .filter(|process| process.user_ref() == user_ref)
+                    .map(|process| process.resource_ref().to_canonical_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// One `Process` row of the user-domain census a removal path must respect.
+///
+/// The census exists so a removal can be observed to be scoped rather than
+/// broad: a shell session owns exactly one row, and every other row - another
+/// session of the same pool, a workload process of the same `User`, or a
+/// process of a different user entirely - belongs to somebody else and stays.
+#[derive(Clone, PartialEq, Eq)]
+pub struct UserDomainProcess {
+    resource_ref: ResourceRef,
+    user_ref: ResourceRef,
+    owned_by: Option<String>,
+}
+
+impl UserDomainProcess {
+    /// Declare a `Process` row the shell Provider does not own.
+    pub fn unowned(resource_ref: ResourceRef, user_ref: ResourceRef) -> Self {
+        Self {
+            resource_ref,
+            user_ref,
+            owned_by: None,
+        }
+    }
+
+    /// Borrow the `Process` row identity.
+    pub const fn resource_ref(&self) -> &ResourceRef {
+        &self.resource_ref
+    }
+
+    /// Borrow the `User` the row runs as.
+    pub const fn user_ref(&self) -> &ResourceRef {
+        &self.user_ref
+    }
+
+    /// Borrow the owning session name, when this row is a shell supervisor.
+    pub fn owned_by(&self) -> Option<&str> {
+        self.owned_by.as_deref()
+    }
+
+    fn for_session(session: &ShellSession) -> Self {
+        Self {
+            resource_ref: session.supervisor_process_ref().clone(),
+            user_ref: session.supervisor_user_ref().clone(),
+            owned_by: Some(session.name().to_owned()),
+        }
+    }
+}
+
+impl std::fmt::Debug for UserDomainProcess {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("UserDomainProcess")
+            .field("owned_by", &self.owned_by)
+            .finish_non_exhaustive()
+    }
 }
 
 impl InMemoryShellAuthority {
@@ -903,6 +1206,7 @@ impl InMemoryShellAuthority {
     ) -> Result<(), ShellTerminalError> {
         self.ledger.validate_session(session)?;
         let value = SupervisorProcessResource::from_session(session);
+        let owned = UserDomainProcess::for_session(session);
         let mut processes = self
             .supervisor_processes
             .try_lock()
@@ -911,9 +1215,13 @@ impl InMemoryShellAuthority {
             if existing != &value {
                 return Err(ShellTerminalError::SupervisorAmbiguous);
             }
-            return Ok(());
+        } else {
+            processes.insert(session.name().to_owned(), value);
         }
-        processes.insert(session.name().to_owned(), value);
+        drop(processes);
+        if let Ok(mut census) = self.user_processes.try_lock() {
+            census.insert(owned.resource_ref().to_canonical_string(), owned);
+        }
         Ok(())
     }
 
@@ -929,6 +1237,13 @@ impl InMemoryShellAuthority {
             .try_lock()
             .map_err(|_| ShellTerminalError::SupervisorAmbiguous)?
             .remove(session.name());
+        // Removal is scoped to the one row this session owns. Matching on the
+        // workload `User` instead would drain every process that user runs,
+        // including rows this Provider never created and rows another session
+        // still depends on.
+        if let Ok(mut census) = self.user_processes.try_lock() {
+            census.remove(&session.supervisor_process_ref().to_canonical_string());
+        }
         Ok(())
     }
 }
@@ -1119,6 +1434,46 @@ impl SessionSupervisor {
             ring,
             authority,
         }
+    }
+
+    /// Authorize and attach a terminal stream measured against the admitted
+    /// `EndpointBinding` relationship.
+    ///
+    /// This is the graph-bound attach: the bounded replay stays a data-plane
+    /// payload carried by the receipt, while the control decision is only
+    /// "does this observation still speak for the relationship the graph
+    /// committed". A stream carrying older evidence, a different consumer
+    /// `Process`, or a different endpoint never reaches the attachment
+    /// census, so it cannot consume a slot or read another session's ring.
+    ///
+    /// # Errors
+    ///
+    /// Returns the authorization refusal, the stale-generation refusal, the
+    /// [`TerminalStreamBinding::admit`] refusal, or the authority's refusal.
+    pub fn attach_admitted(
+        &mut self,
+        subject: &Subject,
+        request: AttachRequest,
+        stream: &TerminalStreamBinding,
+        evidence: &TerminalAttachEvidence,
+    ) -> Result<AttachReceipt, ShellTerminalError> {
+        stream.admit(evidence).inspect_err(|error| {
+            warn!(
+                provider = "shell-terminal",
+                session = self.session.name(),
+                error = ?error,
+                "attach rejected: observation is outside the admitted terminal binding"
+            );
+        })?;
+        if stream.consumer() != self.session.supervisor_process_ref() {
+            warn!(
+                provider = "shell-terminal",
+                session = self.session.name(),
+                "attach rejected: admitted binding belongs to another supervisor Process"
+            );
+            return Err(ShellTerminalError::EndpointBindingMismatch);
+        }
+        self.attach(subject, request)
     }
 
     /// Authorize and attach a direct named terminal stream.

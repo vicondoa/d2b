@@ -40,6 +40,10 @@ pub enum ShellTerminalError {
     CapacityExceeded,
     /// Restart adoption could not identify exactly one owned supervisor.
     SupervisorAmbiguous,
+    /// An attachment named an endpoint or consumer the graph never admitted.
+    EndpointBindingMismatch,
+    /// A stream or supervisor observation predates the relationship's fence.
+    StaleReconnect,
 }
 
 impl std::fmt::Display for ShellTerminalError {
@@ -50,6 +54,8 @@ impl std::fmt::Display for ShellTerminalError {
             Self::InvalidLoginShell => "shell-terminal-login-shell-invalid",
             Self::NotAuthorized => "shell-terminal-not-authorized",
             Self::WrongZone => "shell-terminal-zone-mismatch",
+            Self::EndpointBindingMismatch => "shell-terminal-endpoint-binding-mismatch",
+            Self::StaleReconnect => "shell-terminal-stale-reconnect",
             Self::RelayHostUserDomainDenied => "shell-terminal-relay-host-user-domain-denied",
             Self::WorkloadIdentityMismatch => "shell-terminal-workload-identity-mismatch",
             Self::GuestUserDomainUnsupported => "shell-terminal-guest-user-domain-unsupported",

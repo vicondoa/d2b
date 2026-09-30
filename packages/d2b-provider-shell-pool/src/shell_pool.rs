@@ -39,6 +39,28 @@ pub const SHELL_POOL_PROVIDER_REF: &str = d2b_provider_shell_terminal::PROVIDER_
 /// The preserved reconcile resync cadence of the type.
 pub const SHELL_POOL_RESYNC: Duration = Duration::from_secs(SHELL_REPAIR_INTERVAL_SECS);
 
+/// The optional terminal stream `Endpoint` this pool's sessions ride.
+///
+/// The pool owns the bounded attachment census, so it is where the stream's
+/// endpoint relationship is declared. The field is optional in the spec only
+/// so a pool authored before the relationship still decodes; when it is
+/// declared it must name an `Endpoint`, because admission is scoped to that
+/// exact endpoint rather than to the directory that contains it (R23).
+fn pool_terminal_endpoint(
+    envelope: &InteractionSpecEnvelope,
+) -> Result<Option<ResourceRef>, InteractionEffectError> {
+    envelope
+        .base()
+        .get("endpointRef")
+        .and_then(|declared| declared.as_str())
+        .map(|reference| {
+            ResourceRef::parse(reference)
+                .ok()
+                .filter(|endpoint| endpoint.resource_type().as_str() == "Endpoint")
+                .ok_or(InteractionEffectError::InvalidResource)
+        })
+        .transpose()
+}
 /// The `ShellPool` driver behavior and declaration.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ShellPool;
@@ -55,22 +77,29 @@ impl InteractionType for ShellPool {
         SHELL_POOL_RESYNC
     }
 
-    /// The pool's execution, user, and login-shell reference shapes.
+    /// The pool's execution, user, login-shell, and terminal endpoint shapes.
     fn validate(
         &self,
         envelope: &InteractionSpecEnvelope,
     ) -> Result<(), InteractionEffectError> {
-        shell_pool_spec(envelope.base(), envelope.provider_ref()).map(|_| ())
+        shell_pool_spec(envelope.base(), envelope.provider_ref())?;
+        pool_terminal_endpoint(envelope).map(|_| ())
     }
 
-    /// The execution target and user the pool's sessions run as.
+    /// The graph relationships the pool's sessions request: the Process
+    /// execution target, the workload `User`, and the terminal stream
+    /// endpoint its sessions' interactive streams are admitted on.
     fn dependencies(
         &self,
         envelope: &InteractionSpecEnvelope,
     ) -> Result<Vec<ResourceRef>, InteractionEffectError> {
         let (execution_ref, user_ref) =
             shell_pool_spec(envelope.base(), envelope.provider_ref())?;
-        Ok(vec![execution_ref, user_ref])
+        let mut dependencies = vec![execution_ref, user_ref];
+        if let Some(endpoint) = pool_terminal_endpoint(envelope)? {
+            dependencies.push(endpoint);
+        }
+        Ok(dependencies)
     }
 
     /// A pool realizes nothing through resource rows.

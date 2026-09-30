@@ -12120,6 +12120,10 @@ fn map_shell_authority_error(error: ShellTerminalError) -> TypedError {
         | ShellTerminalError::AttachmentUnknown => {
             shell_failed(d2bd_runtime::typed_error::ComponentSessionShellErrorKind::StaleSession)
         }
+        ShellTerminalError::EndpointBindingMismatch
+        | ShellTerminalError::StaleReconnect => shell_failed(
+            d2bd_runtime::typed_error::ComponentSessionShellErrorKind::StaleSession,
+        ),
         ShellTerminalError::NotAuthorized => TypedError::AuthzNotAdmin {
             verb: "shell".to_owned(),
         },

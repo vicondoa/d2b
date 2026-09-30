@@ -6,16 +6,18 @@
 //! shell Provider's attachment and output-ring lifecycle through the family
 //! effect port, and its teardown drains the supervisor child before the
 //! Provider stage runs.
-
 use std::sync::Arc;
 use std::time::Duration;
 
 use d2b_contracts_resource::v3::ResourceRef;
-use d2b_provider_shell_terminal::SHELL_REPAIR_INTERVAL_SECS;
+use d2b_contracts_resource::v3::process::ProcessSpec;
+use d2b_provider_shell_terminal::{
+    SHELL_REPAIR_INTERVAL_SECS, SUPERVISOR_PROCESS_PROVIDER_REF, supervisor_execution_spec,
+};
 use d2b_resource_runtime::context::{ChildEnsure, SpecDecoder};
 use d2b_resource_runtime::identity::ResourceTypeName;
 use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use d2b_provider_wayland_policy::{
     shell_session_execution, shell_session_pool_ref,
@@ -35,11 +37,56 @@ pub const SHELL_SESSION_PROVIDER_REF: &str = d2b_provider_shell_terminal::PROVID
 /// The preserved reconcile resync cadence of the type.
 pub const SHELL_SESSION_RESYNC: Duration = Duration::from_secs(SHELL_REPAIR_INTERVAL_SECS);
 
-/// The Process Provider that launches the session's supervisor child.
-const SHELL_SUPERVISOR_PROVIDER_REF: &str = "Provider/system-systemd";
+/// The optional terminal stream `Endpoint` this session's stream rides.
+///
+/// The relationship is optional in the spec only so an older row still
+/// decodes; when it is declared it must name an `Endpoint`, because the
+/// stream's admission is scoped to that exact endpoint rather than to the
+/// directory that happens to contain it.
+fn session_terminal_endpoint(
+    envelope: &InteractionSpecEnvelope,
+) -> Result<Option<ResourceRef>, InteractionEffectError> {
+    envelope
+        .base()
+        .get("endpointRef")
+        .and_then(Value::as_str)
+        .map(|reference| {
+            ResourceRef::parse(reference)
+                .ok()
+                .filter(|endpoint| endpoint.resource_type().as_str() == "Endpoint")
+                .ok_or(InteractionEffectError::InvalidResource)
+        })
+        .transpose()
+}
 
-/// The supervisor Process template the session's child is launched from.
-const SHELL_SUPERVISOR_TEMPLATE: &str = "shell-supervisor-main";
+/// The supervisor Process child spec, derived from the Provider's declared
+/// launch contract rather than composed by this driver.
+///
+/// The execution target, workload `User`, executable template, and Process
+/// provider all come from the shell Provider's own contract, so the session
+/// driver has no argv, executable, or Process provider of its own to
+/// configure.
+fn supervisor_child_spec(
+    execution_ref: &ResourceRef,
+    user_ref: &ResourceRef,
+    pool_ref: &ResourceRef,
+) -> Result<Vec<u8>, InteractionEffectError> {
+    let invalid = || InteractionEffectError::InvalidResource;
+    let execution = supervisor_execution_spec(execution_ref.clone(), user_ref.clone())
+        .map_err(|_| invalid())?;
+    let spec = ProcessSpec::minimal(execution);
+    let mut value = serde_json::to_value(&spec).map_err(|_| invalid())?;
+    let object = value.as_object_mut().ok_or_else(invalid)?;
+    object.insert(
+        "providerRef".to_owned(),
+        Value::String(SUPERVISOR_PROCESS_PROVIDER_REF.to_owned()),
+    );
+    object.insert(
+        "dependencies".to_owned(),
+        json!([pool_ref.to_canonical_string()]),
+    );
+    serde_json::to_vec(&value).map_err(|_| invalid())
+}
 
 /// The `ShellSession` driver behavior and declaration.
 #[derive(Debug, Clone, Copy, Default)]
@@ -57,16 +104,20 @@ impl InteractionType for ShellSession {
         SHELL_SESSION_RESYNC
     }
 
-    /// The session's execution, user, login-shell, and pool reference shapes.
+    /// The session's execution, user, login-shell, pool, and terminal
+    /// endpoint reference shapes.
     fn validate(
         &self,
         envelope: &InteractionSpecEnvelope,
     ) -> Result<(), InteractionEffectError> {
         shell_session_execution(envelope.base(), envelope.provider_ref())?;
-        shell_session_pool_ref(envelope.base(), envelope.provider_ref()).map(|_| ())
+        shell_session_pool_ref(envelope.base(), envelope.provider_ref())?;
+        session_terminal_endpoint(envelope).map(|_| ())
     }
 
-    /// The pool, execution target, and user the session runs against.
+    /// The graph relationships the session requests: its pool, its Process
+    /// execution target, its `User`, and the terminal stream endpoint its
+    /// interactive stream is admitted on.
     fn dependencies(
         &self,
         envelope: &InteractionSpecEnvelope,
@@ -78,6 +129,9 @@ impl InteractionType for ShellSession {
         dependencies.push(execution_ref);
         if let Some(user_ref) = user_ref {
             dependencies.push(user_ref);
+        }
+        if let Some(endpoint) = session_terminal_endpoint(envelope)? {
+            dependencies.push(endpoint);
         }
         Ok(dependencies)
     }
@@ -101,22 +155,11 @@ impl InteractionType for ShellSession {
             children.key.name
         ))
         .map_err(|_| invalid())?;
-        let process_spec = json!({
-            "providerRef": SHELL_SUPERVISOR_PROVIDER_REF,
-            "executionRef": execution_ref.to_canonical_string(),
-            "domain": "user",
-            "userRef": user_ref.to_canonical_string(),
-            "processClass": "service",
-            "template": SHELL_SUPERVISOR_TEMPLATE,
-            "desiredLifecycle": "running",
-            "deviceUsage": [],
-            "networkUsage": null,
-            "dependencies": [pool_ref.to_canonical_string()],
-        });
+        let process_spec = supervisor_child_spec(&execution_ref, &user_ref, &pool_ref)?;
         Ok(vec![ChildEnsure {
             type_name: ResourceTypeName::new(process_ref.resource_type().as_str()),
             name: process_ref.name().as_str().to_owned(),
-            spec: serde_json::to_vec(&process_spec).map_err(|_| invalid())?,
+            spec: process_spec,
             metadata: serde_json::to_vec(&json!({
                 "ownerRef": key_ref(children.key)
                     .map_err(|_| invalid())?

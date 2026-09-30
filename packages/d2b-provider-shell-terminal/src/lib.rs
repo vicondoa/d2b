@@ -28,12 +28,15 @@ pub use resources::{
 };
 pub use service::{
     AttachReceipt, AttachRequest, Attachment, CONTROLLER_SERVICE, InMemoryShellAuthority,
-    OpenSessionRequest, OpenSessionResult, SUPERVISOR_SERVICE, SessionCapability, SessionGrant,
+    OpenSessionRequest, OpenSessionResult, SUPERVISOR_PROCESS_PROVIDER_REF,
+    SUPERVISOR_PROCESS_TEMPLATE, SUPERVISOR_SERVICE, SessionCapability, SessionGrant,
     SessionSupervisor, ShellAuthorityLedger, ShellAuthorityPort, SHELL_REPAIR_INTERVAL_SECS,
-    ShellTerminalController, SupervisorProcessResource, TERMINAL_STREAM,
+    ShellTerminalController, SupervisorProcessResource, TERMINAL_STREAM, TerminalAttachEvidence,
+    TerminalStreamBinding, UserDomainProcess, WorkloadIdentity, supervisor_execution_spec,
 };
 pub use session::{
-    AdoptionDecision, OutputRing, SupervisorCandidate, SupervisorIdentity, adopt_supervisor,
+    AdoptionDecision, OutputRing, SupervisorCandidate, SupervisorIdentity, SupervisorObservation,
+    adopt_supervisor,
 };
 
 /// Canonical Provider reference.
