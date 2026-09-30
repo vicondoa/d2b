@@ -12,8 +12,13 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     ResourceRef, ResourceUid,
-    execution_policy::{BoundedToken, PrimitiveSpecError},
-    identity::{ResourceGeneration, ZoneRevision},
+    binding::{
+        BindingConsumerKind, BindingContractError, BindingKey, BindingKind, BindingRealizationFacet,
+        BindingSlot, BindingSpecFingerprint, ExecutionParentInput, MAX_CONSUMER_DEVICE_SLOT,
+        RequestedRights,
+    },
+    execution_policy::{BoundedToken, PrimitiveSpecError, redacted_debug, require_resource_type},
+    identity::{ResourceGeneration, ZoneId, ZoneRevision},
     resource_status::StatusCode,
     volume::{AttachmentAccess, validate_mount_path},
 };
@@ -134,6 +139,271 @@ wire_deserialize!(
     )
     .map_err(serde::de::Error::custom)
 );
+
+// ---------------------------------------------------------------------------
+// The graph-era VolumeBinding request.
+//
+// The `VolumeBindingSpec` above is the existing production DTO: a Guest-only
+// durable record whose source is named by reference and whose destination is
+// a Guest-visible mount path. It stays exactly as it is until the production
+// cutover switches public schema exports; nothing below changes it.
+//
+// `VolumeBindingRequest` is the canonical desired request KTD2 places in the
+// consumer's own spec. It is the one authoritative declaration of one
+// Volume/view/consumer relationship: a Process mount, an EphemeralProcess
+// mount, and a Host or Guest attachment all normalize into this shape
+// instead of authoring a second list. It names the source Volume by exact
+// reference, never a raw host path, and it names the consumer by exact
+// reference, never a numerical principal.
+// ---------------------------------------------------------------------------
+
+/// The consumer-side presentation one admitted Volume view takes.
+///
+/// The destination is a location inside the consumer. It is never the source:
+/// a host source path is resolved privately from the admitted source and its
+/// named view, never authored here.
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, tag = "presentation")]
+pub enum VolumePresentation {
+    /// The exact named view presented at a destination inside the consumer.
+    #[serde(rename = "filesystem")]
+    Filesystem {
+        /// The consumer-side destination path.
+        destination: String,
+    },
+    /// The exact named view presented as a block device in a consumer slot.
+    #[serde(rename = "block-device")]
+    BlockDevice {
+        /// The consumer-side device slot.
+        device_slot: u16,
+    },
+}
+
+impl VolumePresentation {
+    /// Construct a filesystem presentation after validating its destination.
+    pub fn filesystem(destination: impl Into<String>) -> Result<Self, BindingContractError> {
+        let destination = destination.into();
+        if !validate_mount_path(&destination) {
+            return Err(BindingContractError::InvalidField);
+        }
+        Ok(Self::Filesystem { destination })
+    }
+
+    /// Construct a block presentation after checking its slot bound.
+    pub const fn block_device(device_slot: u16) -> Result<Self, BindingContractError> {
+        if device_slot > MAX_CONSUMER_DEVICE_SLOT {
+            return Err(BindingContractError::OutOfRange);
+        }
+        Ok(Self::BlockDevice { device_slot })
+    }
+
+    /// The realization facet this presentation requires.
+    pub const fn required_facets(&self) -> &'static [BindingRealizationFacet] {
+        match self {
+            Self::Filesystem { .. } => &[BindingRealizationFacet::FilesystemPresentation],
+            Self::BlockDevice { .. } => &[BindingRealizationFacet::ConsumerDeviceSlot],
+        }
+    }
+
+    /// Borrow the consumer-side destination of a filesystem presentation.
+    pub const fn destination(&self) -> Option<&str> {
+        match self {
+            Self::Filesystem { destination } => Some(destination.as_str()),
+            Self::BlockDevice { .. } => None,
+        }
+    }
+
+    /// The consumer-side device slot of a block presentation.
+    pub const fn device_slot(&self) -> Option<u16> {
+        match self {
+            Self::BlockDevice { device_slot } => Some(*device_slot),
+            Self::Filesystem { .. } => None,
+        }
+    }
+}
+
+redacted_debug!(VolumePresentation);
+
+wire_deserialize!(
+    VolumePresentation,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        presentation: String,
+        destination: Option<String>,
+        device_slot: Option<u16>,
+    },
+    wire,
+    match (wire.presentation.as_str(), wire.destination, wire.device_slot) {
+        ("filesystem", Some(destination), None) => Self::filesystem(destination),
+        ("block-device", None, Some(device_slot)) => Self::block_device(device_slot),
+        _ => Err(BindingContractError::InvalidField),
+    }
+    .map_err(serde::de::Error::custom)
+);
+
+/// The desired request for one Volume view used by one consumer.
+///
+/// This is the canonical declaration site under KTD2: the consumer's own
+/// desired spec states the relationship here, the source Volume admits it,
+/// and the admitted binding is the source-owned row. The source owns writer
+/// arbitration across every realization of the view, so a Process mount and a
+/// Guest attachment cannot each obtain a writer independently.
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct VolumeBindingRequest {
+    source_ref: ResourceRef,
+    consumer_ref: ResourceRef,
+    slot: BindingSlot,
+    view: BoundedToken,
+    access: AttachmentAccess,
+    presentation: VolumePresentation,
+}
+
+impl VolumeBindingRequest {
+    /// Construct one request from typed references.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a source that is not a `Volume`, a consumer that is not one of
+    /// the four admitted consumer kinds, and an access level this binding
+    /// kind does not admit.
+    pub fn new(
+        source: ResourceRef,
+        consumer: ResourceRef,
+        slot: BindingSlot,
+        view: BoundedToken,
+        access: AttachmentAccess,
+        presentation: VolumePresentation,
+    ) -> Result<Self, BindingContractError> {
+        require_resource_type(&source, BindingKind::Volume.source_resource_type())?;
+        let consumer_kind = BindingConsumerKind::from_resource_type(consumer.resource_type().as_str())
+            .ok_or(BindingContractError::WrongResourceType)?;
+        if !BindingKind::Volume.admits_consumer(consumer_kind) {
+            return Err(BindingContractError::UnsupportedConsumerKind);
+        }
+        if !BindingKind::Volume.admits_rights(volume_access_rights(access)) {
+            return Err(BindingContractError::UnsupportedRight);
+        }
+        Ok(Self {
+            source_ref: source,
+            consumer_ref: consumer,
+            slot,
+            view,
+            access,
+            presentation,
+        })
+    }
+
+    /// The binding kind this request belongs to.
+    pub const fn kind(&self) -> BindingKind {
+        BindingKind::Volume
+    }
+
+    /// Borrow the exact source Volume.
+    pub const fn source_ref(&self) -> &ResourceRef {
+        &self.source_ref
+    }
+
+    /// Borrow the exact consumer.
+    pub const fn consumer_ref(&self) -> &ResourceRef {
+        &self.consumer_ref
+    }
+
+    /// Borrow the stable consumer slot.
+    pub const fn slot(&self) -> &BindingSlot {
+        &self.slot
+    }
+
+    /// Borrow the named Volume view.
+    pub const fn view(&self) -> &BoundedToken {
+        &self.view
+    }
+
+    /// Return the requested access level.
+    pub const fn access(&self) -> AttachmentAccess {
+        self.access
+    }
+
+    /// Borrow the consumer-side presentation.
+    pub const fn presentation(&self) -> &VolumePresentation {
+        &self.presentation
+    }
+
+    /// The right this request asks the source to admit.
+    pub const fn requested_rights(&self) -> RequestedRights {
+        volume_access_rights(self.access)
+    }
+
+    /// The realization facets this request depends on.
+    pub const fn required_facets(&self) -> &'static [BindingRealizationFacet] {
+        self.presentation.required_facets()
+    }
+
+    /// Derive this relationship's KTD3 key from its committed identities.
+    pub fn key(
+        &self,
+        zone: ZoneId,
+        source_uid: ResourceUid,
+        consumer_uid: ResourceUid,
+    ) -> Result<BindingKey, BindingContractError> {
+        BindingKey::new(
+            zone,
+            self.kind(),
+            self.source_ref.clone(),
+            source_uid,
+            self.consumer_ref.clone(),
+            consumer_uid,
+            self.slot.clone(),
+        )
+    }
+
+    /// The digest of this request's exact desired bytes.
+    pub fn fingerprint(&self) -> BindingSpecFingerprint {
+        BindingSpecFingerprint::from_request(self)
+    }
+}
+
+redacted_debug!(VolumeBindingRequest);
+
+wire_deserialize!(
+    VolumeBindingRequest,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        source_ref: ResourceRef,
+        consumer_ref: ResourceRef,
+        slot: BindingSlot,
+        view: BoundedToken,
+        access: AttachmentAccess,
+        presentation: VolumePresentation,
+    },
+    wire,
+    Self::new(
+        wire.source_ref,
+        wire.consumer_ref,
+        wire.slot,
+        wire.view,
+        wire.access,
+        wire.presentation,
+    )
+    .map_err(serde::de::Error::custom)
+);
+
+/// A Host or Guest volume attachment input, classified.
+///
+/// The old flattened fragment carried one overloaded attachment list. This
+/// alias carries the conversion's result instead: a child support ceiling, a
+/// parent use, or defaults for one named child.
+pub type VolumeExecutionParentInput = ExecutionParentInput<VolumeBindingRequest>;
+
+/// The shared right one Volume access level requests.
+const fn volume_access_rights(access: AttachmentAccess) -> RequestedRights {
+    match access {
+        AttachmentAccess::ReadOnly => RequestedRights::Observe,
+        AttachmentAccess::ReadWrite => RequestedRights::Mutate,
+        AttachmentAccess::SharedWrite => RequestedRights::Share,
+    }
+}
+
 
 /// The UID / generation / revision fence on readiness evidence.
 ///

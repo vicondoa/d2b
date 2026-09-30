@@ -2,27 +2,32 @@
 
 pub mod activation_nixos;
 pub mod artifact;
-pub mod bridge;
-pub mod device;
 pub mod authority;
+pub mod binding;
+pub mod bridge;
+pub mod credential_binding;
+pub mod device;
+pub mod device_binding;
+pub mod endpoint_binding;
 pub mod error;
 pub mod execution_policy;
+pub mod execution_policy_resource;
 pub mod host;
 pub mod identity;
 pub mod limits;
 pub mod network;
-pub mod execution_policy_resource;
+pub mod network_binding;
+pub mod operation;
 pub mod operations;
 pub mod payload_schema;
 pub mod process;
 pub mod resource;
 pub mod resource_schema;
 pub mod resource_status;
+pub mod seccomp_profile;
 pub mod storage;
 pub mod user;
 pub mod volume;
-pub mod operation;
-pub mod seccomp_profile;
 pub mod volume_binding;
 pub mod volume_state;
 
@@ -33,8 +38,31 @@ pub use authority::{
     DesiredRevision, FreshnessTuple, RefusalReason, RevisionError, StoreIncarnation,
     ZoneDesiredSequence, DESIRED_ROW_DIGEST_DOMAIN_TAG, MAX_STORE_INCARNATION_BYTES,
 };
+pub use binding::{
+    admit_binding_request, BindingAdmission, BindingArbitration, BindingAuthorization,
+    BindingConsumerKind, BindingContractError, BindingEvidence, BindingKey, BindingKind,
+    BindingLifecycleState, BindingObservation, BindingRealizationFacet, BindingRealizationSupport,
+    BindingRefusal, BindingSlot, BindingSlotAddress, BindingSlotDecision, BindingSlotEntry,
+    BindingSlotIndex, BindingSpecFingerprint, BindingSupportEntry, ChildBindingRequest,
+    ChildRequestDefaults, ChildSupportCeiling, CompletionCondition, DefaultedSource,
+    ExecutionParentInput, ExecutionParentInputClass, ReleaseOutcome, RequestedRights,
+    SourceAdmission, SourceReservation, MAX_BINDING_DEPENDENCIES, MAX_BINDING_SLOT_BYTES,
+    MAX_BINDING_SUPPORT_ENTRIES, MAX_CONSUMER_DEVICE_SLOT,
+};
 pub use bridge::*;
+pub use credential_binding::{
+    CredentialBindingRequest, CredentialLifetime, CredentialOperation,
+    CREDENTIAL_BINDING_RESOURCE_TYPE, MAX_CREDENTIAL_LIFETIME_MS, MAX_CREDENTIAL_OPERATIONS,
+    MIN_CREDENTIAL_LIFETIME_MS,
+};
 pub use device::*;
+pub use device_binding::{
+    DeviceAttachmentMode, DeviceBindingRequest, DeviceClaimRequest, DeviceFunction,
+    DEVICE_BINDING_RESOURCE_TYPE,
+};
+pub use endpoint_binding::{
+    EndpointAttachmentKind, EndpointBindingRequest, ENDPOINT_BINDING_RESOURCE_TYPE,
+};
 pub use error::{
     MAX_RESOURCE_ERROR_REASON_BYTES, MAX_RESOURCE_ERROR_RETRY_AFTER_MS, ResourceError,
     ResourceErrorKind, ResourceErrorReason, ResourceErrorValidation, RetryClass,
@@ -63,6 +91,9 @@ pub use d2b_contracts::identity::ResourceRef;
 pub use ifname::*;
 pub use limits::*;
 pub use network::*;
+pub use network_binding::{
+    NetworkBindingRequest, NetworkMembership, NetworkPresentation, NETWORK_BINDING_RESOURCE_TYPE,
+};
 pub use operation::{
     AuditJoin, AuditMode, BrokerRequirement, CallableOperation, FdContract, FdKind,
     OperationAudit, OperationAuthority, OperationBounds, OperationContractError, OperationDomain,
