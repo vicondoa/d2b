@@ -300,7 +300,7 @@ impl Harness {
                 store_incarnation: incarnation(STORE),
                 cursor,
                 total_chunks,
-                total_bytes: total_bytes,
+                total_bytes,
             },
         ))
         .await
@@ -423,6 +423,7 @@ impl Harness {
         }
     }
 
+    #[allow(clippy::too_many_arguments, reason = "the fixture mirrors the wire request")]
     fn prepare_request(
         &self,
         id: &str,

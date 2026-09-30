@@ -128,7 +128,7 @@ impl Phase {
 /// What one exchange through the link produced.
 enum Step {
     /// The broker answered.
-    Answer(AuthorityPublicationResponse),
+    Answer(Box<AuthorityPublicationResponse>),
     /// The answer was dropped on the floor at this boundary.
     Dropped,
     /// The answer never arrives.
@@ -270,7 +270,7 @@ impl Broker {
             return Step::Stalled;
         }
         match self.answer(&envelope.request) {
-            Some(response) => Step::Answer(response),
+            Some(response) => Step::Answer(Box::new(response)),
             None => Step::Dropped,
         }
     }
@@ -459,7 +459,7 @@ impl AuthorityPublicationLink for Broker {
         envelope: AuthorityPublicationEnvelope,
     ) -> Result<AuthorityPublicationResponse, String> {
         match self.step(&envelope) {
-            Step::Answer(response) => Ok(response),
+            Step::Answer(response) => Ok(*response),
             Step::Dropped => Err(format!(
                 "interrupted before {} was answered",
                 envelope.request.op_name()
