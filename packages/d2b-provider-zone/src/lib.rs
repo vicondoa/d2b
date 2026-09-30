@@ -12,10 +12,12 @@
 //! projection (`zone_status`), which always emits the mandatory system-core
 //! handler pair.
 
+mod declaration;
 mod driver;
 
 mod zone_status;
 
+pub use declaration::{ZONE_ARTIFACT_ID, zone_bindings, zone_declaration};
 pub use driver::zone_descriptor;
 
 pub use zone_status::{

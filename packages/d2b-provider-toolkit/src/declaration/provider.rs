@@ -169,6 +169,30 @@ impl BoundTables<'_> {
                 && creation.provider_ref == provider
         })
     }
+
+    /// Whether a bound service answers this method with real code.
+    ///
+    /// A method the session layer addresses directly is answered inside the
+    /// declaring component's own process, and the bound [`ServiceDecl`] is
+    /// that answer: the composition root hosts the service through the
+    /// provider's declared effects-service factory, so there is no second
+    /// table a zone-plane method could be missing from. A method that does
+    /// name a committed operation row is dispatched through that row's
+    /// handler instead, so the handler table is the authority for it - a
+    /// method naming an operation no crate bound is still a method with no
+    /// implementation.
+    fn answers(&self, name: &str) -> bool {
+        self.services.iter().any(|service| {
+            service
+                .method(name)
+                .and_then(ServiceMethod::operation)
+                .map_or(true, |operation| {
+                    self.operations
+                        .iter()
+                        .any(|handler| handler.serves_named_operation(operation))
+                })
+        })
+    }
 }
 
 /// One provider's authoritative declaration (KTD1).
@@ -277,20 +301,9 @@ impl ProviderDeclaration {
                         .execution()
                         .binary_ref()
                         .is_some_and(|binary| binary.as_str() == template.as_str()),
-                    // A provider method is served by the bound service method
-                    // of that name, and the committed operation row that
-                    // method names must have a bound handler.
-                    None => bound.services.iter().any(|service| {
-                        service
-                            .method(name)
-                            .and_then(ServiceMethod::operation)
-                            .is_some_and(|operation| {
-                                bound
-                                    .operations
-                                    .iter()
-                                    .any(|handler| handler.serves_named_operation(operation))
-                            })
-                    }),
+                    // Any other method is served by the bound service that
+                    // answers its name.
+                    None => bound.answers(name),
                 };
                 if !implemented {
                     return Err(ProviderDeclarationError::MethodUnimplemented {
