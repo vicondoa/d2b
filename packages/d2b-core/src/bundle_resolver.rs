@@ -1737,6 +1737,16 @@ impl BundleResolver {
         self.site.as_ref()
     }
 
+    /// Every store-view intent this bundle resolved, in canonical id order.
+    ///
+    /// A consumer that must bound a host path against the bundle's
+    /// closure-sourced store-view farms needs the whole set, not one
+    /// zone-qualified lookup, because the zone is exactly the value such a
+    /// bound cannot take from the launch it is fencing.
+    pub fn store_view_intents(&self) -> impl Iterator<Item = &ResolvedStoreViewIntent> {
+        self.store_view_intents.values()
+    }
+
     /// The realm-workloads launcher v2 contract, when the bundle carries one.
     pub fn realm_workloads_launcher_v2(&self) -> Option<&RealmWorkloadsLauncherV2Json> {
         self.realm_workloads_launcher_v2.as_ref()

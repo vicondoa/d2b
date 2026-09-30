@@ -1595,9 +1595,13 @@ fn verified_char_device_metadata(path: &Path, file: &File) -> Result<DeviceIdent
     })
 }
 
-fn env_value<'a>(plan: &'a SpawnRunnerPlan, key: &str) -> Option<&'a str> {
-    plan.env
-        .iter()
+/// One `KEY=VALUE` entry's value out of a runner plan's environment, by
+/// key. The environment is wire payload, so nothing here is trusted: the
+/// ACL arms pair every read with
+/// [`bound_session_runtime_dir`]'s proof against the bundle's own
+/// declaration.
+fn env_value<'a>(env: &'a [String], key: &str) -> Option<&'a str> {
+    env.iter()
         .filter_map(|entry| entry.split_once('='))
         .find_map(|(entry_key, value)| (entry_key == key).then_some(value))
 }
@@ -1824,9 +1828,112 @@ async fn live_set_verified_device_acl(
         })
 }
 
+/// The broker-owned host session runtime directory this plan's environment
+/// names, or a refusal.
+///
+/// `XDG_RUNTIME_DIR` / `PIPEWIRE_RUNTIME_DIR` selects which host directory
+/// the per-runner session ACLs (and their revocations) are applied to, and
+/// it arrives on the wire: the plan's environment is payload, so a launch
+/// naming any absolute host path there would have the broker open it, and
+/// open the compositor/PipeWire/Pulse sockets below it, to the launched
+/// principal.
+///
+/// The value is therefore acted on only when it IS the directory the
+/// verified bundle's `site.json` declares for the site's own Wayland
+/// session - the declaration `nixos-modules/site-json.nix` emits from the
+/// same `d2b.site.waylandUser` option the session wiring uses, and the one
+/// the GPU sidecar's own Wayland socket is already resolved from. An
+/// unbound slot (a bundle that predates the artifact, or a site with no
+/// Wayland session) and a launch naming any other directory both refuse by
+/// name; neither is repaired with a default.
+fn bound_session_runtime_dir<'a>(
+    named: &str,
+    uid: u32,
+    session: Option<&'a crate::ops::launch_acl_bounds::SessionRuntimeDir>,
+) -> Result<&'a crate::ops::launch_acl_bounds::SessionRuntimeDir, LiveHandlerError> {
+    let Some(session) = session else {
+        return Err(LiveHandlerError::SpawnFailed {
+            detail: format!(
+                "graphical-session-not-active: the bundle declares no host Wayland session, \
+                 so the session runtime directory {} named for runner uid {uid} is unbound",
+                named
+            ),
+        });
+    };
+    if !session.admits(named) {
+        return Err(LiveHandlerError::SpawnFailed {
+            detail: format!(
+                "graphical-session-not-active: session runtime directory {named} is not the \
+                 host session directory {} the bundle declares for runner uid {uid}",
+                session.directory().display()
+            ),
+        });
+    }
+    Ok(session)
+}
+
+/// The compositor socket a `WAYLAND_DISPLAY` names inside the broker-owned
+/// session runtime directory, or a refusal.
+///
+/// `Path::join` DISCARDS its base whenever the argument is absolute, so
+/// `XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=/run/d2b/attacker.sock`
+/// composes `/run/d2b/attacker.sock` and the `rwx` socket grant lands on a
+/// path outside the very directory the grant just proved. The composed
+/// path must therefore be the runtime directory plus EXACTLY ONE normal
+/// component: an absolute spelling is honoured only when it lands back
+/// inside, and `..`, a nested subdirectory and an empty value are refused.
+fn session_socket_in(runtime: &Path, display: &str) -> Result<PathBuf, String> {
+    let socket = runtime.join(display);
+    let inside = socket.strip_prefix(runtime).map_err(|_| {
+        format!(
+            "WAYLAND_DISPLAY {display} does not name a socket inside the session \
+             runtime directory {}",
+            runtime.display()
+        )
+    })?;
+    let mut components = inside.components();
+    match (components.next(), components.next()) {
+        (Some(std::path::Component::Normal(_)), None) => Ok(socket),
+        _ => Err(format!(
+            "WAYLAND_DISPLAY {display} must name one socket directly inside the session \
+             runtime directory {}",
+            runtime.display()
+        )),
+    }
+}
+
+/// Whether one plan's ACL refresh reads a host session runtime directory
+/// out of its own environment, so the dispatch layer resolves that
+/// directory's trusted bundle declaration only for a launch that actually
+/// asks for a session grant and every other spawn stays bundle-free.
+///
+/// The role list is the same one the arms below branch on; a plan whose
+/// environment names no session directory has no session grant to bound,
+/// and is not a launch this fence refuses.
+pub(crate) fn plan_reads_host_session_runtime_dir(plan: &SpawnRunnerPlanInput) -> bool {
+    matches!(
+        plan.seccomp_policy_ref.as_deref(),
+        Some(
+            "w1-audio"
+                | "w1-gpu"
+                | "w1-gpu-render-node"
+                | "w1-video"
+                | "w1-wayland-proxy"
+                | "w1-qemu-media"
+        )
+    ) && ["PIPEWIRE_RUNTIME_DIR", "XDG_RUNTIME_DIR"]
+        .iter()
+        .any(|key| env_value(&plan.env, key).is_some())
+}
+
 async fn refresh_spawn_runner_acls(
     plan: &SpawnRunnerPlan,
     broker_state_dir: &Path,
+    // The broker-owned host session runtime directory the verified bundle
+    // declares, resolved by the dispatch layer so this handler stays
+    // bundle-free; `None` for a bundle or site that declares none, which
+    // refuses every launch whose environment names a session directory.
+    session: Option<&crate::ops::launch_acl_bounds::SessionRuntimeDir>,
 ) -> Result<(), LiveHandlerError> {
     if plan.uid == 0 {
         return Ok(());
@@ -1854,8 +1961,13 @@ async fn refresh_spawn_runner_acls(
         Some("w1-audio" | "w1-gpu" | "w1-gpu-render-node")
     ) {
         let runtime_dir =
-            env_value(plan, "PIPEWIRE_RUNTIME_DIR").or_else(|| env_value(plan, "XDG_RUNTIME_DIR"));
+            env_value(&plan.env, "PIPEWIRE_RUNTIME_DIR")
+                .or_else(|| env_value(&plan.env, "XDG_RUNTIME_DIR"));
         if let Some(runtime_dir) = runtime_dir {
+            // The named directory is only opened once it is proved to BE the
+            // host session directory the bundle declares; the sockets below
+            // it then inherit that proof.
+            bound_session_runtime_dir(runtime_dir, plan.uid, session)?;
             let runtime = Path::new(runtime_dir);
             setfacl_fd_safe(
                 runtime,
@@ -1885,8 +1997,10 @@ async fn refresh_spawn_runner_acls(
     }
     if plan.seccomp_policy_ref.as_deref() == Some("w1-video") {
         let runtime_dir =
-            env_value(plan, "PIPEWIRE_RUNTIME_DIR").or_else(|| env_value(plan, "XDG_RUNTIME_DIR"));
+            env_value(&plan.env, "PIPEWIRE_RUNTIME_DIR")
+                .or_else(|| env_value(&plan.env, "XDG_RUNTIME_DIR"));
         if let Some(runtime_dir) = runtime_dir {
+            bound_session_runtime_dir(runtime_dir, plan.uid, session)?;
             let runtime = Path::new(runtime_dir);
             setfacl_fd_safe(
                 runtime,
@@ -1928,7 +2042,7 @@ async fn refresh_spawn_runner_acls(
         // step. The ACL is then applied directly through the verified fd via
         // /proc/self/fd/<fd> (run_setfacl_op_on_fd), eliminating the TOCTOU
         // window that would exist if the path were re-opened after validation.
-        let runtime_dir = env_value(plan, "XDG_RUNTIME_DIR");
+        let runtime_dir = env_value(&plan.env, "XDG_RUNTIME_DIR");
         match runtime_dir {
             None => {
                 return Err(LiveHandlerError::SpawnFailed {
@@ -1940,15 +2054,29 @@ async fn refresh_spawn_runner_acls(
                 });
             }
             Some(runtime_dir) => {
+                // The named directory must BE the host session directory the
+                // verified bundle declares, and the uid that owns it is the
+                // declaration's own - never a uid parsed back out of the
+                // payload string this arm was handed.
+                let session = bound_session_runtime_dir(runtime_dir, plan.uid, session)?;
                 let runtime = Path::new(runtime_dir);
-                // Derive the expected runtime-dir owner uid from the
-                // declarative path `/run/user/<uid>` (from the bundle's
-                // XDG_RUNTIME_DIR value, which originates in
-                // d2b.site.waylandUser). Do not shell out.
-                let wayland_user_uid = runtime
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .and_then(|s| s.parse::<u32>().ok());
+                let wayland_user_uid = session.owner_uid();
+                // Both payload-named paths are proved before the first
+                // mutation, so a refused `WAYLAND_DISPLAY` leaves no
+                // half-applied traverse grant behind.
+                let wayland_display =
+                    env_value(&plan.env, "WAYLAND_DISPLAY").unwrap_or("wayland-0");
+                // `join` would discard the runtime directory for an absolute
+                // `WAYLAND_DISPLAY`, so the composed socket is proved to be
+                // one component directly inside the declared directory.
+                let socket_path = session_socket_in(runtime, wayland_display).map_err(|detail| {
+                    LiveHandlerError::SpawnFailed {
+                        detail: format!(
+                            "graphical-session-not-active: {detail} (wayland-proxy uid {})",
+                            plan.uid
+                        ),
+                    }
+                })?;
 
                 // Open, verify ownership, and hold the fd. The traverse ACL
                 // is applied through this fd so the inode that was verified
@@ -1973,13 +2101,11 @@ async fn refresh_spawn_runner_acls(
                         });
                     }
                     Ok(Some((file, meta))) => {
-                        if let Some(expected_uid) = wayland_user_uid
-                            && meta.uid() != expected_uid
-                        {
+                        if meta.uid() != wayland_user_uid {
                             return Err(LiveHandlerError::SpawnFailed {
                                 detail: format!(
                                     "graphical-session-not-active: runtime dir owner mismatch for wayland-proxy uid {}: \
-                                             expected owner uid {expected_uid}",
+                                             expected owner uid {wayland_user_uid}",
                                     plan.uid,
                                 ),
                             });
@@ -2000,10 +2126,6 @@ async fn refresh_spawn_runner_acls(
                         plan.uid
                     ),
                 })?;
-
-                let wayland_display = env_value(plan, "WAYLAND_DISPLAY").unwrap_or("wayland-0");
-                let socket_path = runtime.join(wayland_display);
-
                 // Open, verify socket type, and hold the fd. The socket ACL
                 // is applied through this fd (no re-open window).
                 let socket_file = match open_o_path_metadata(&socket_path) {
@@ -2070,10 +2192,22 @@ async fn refresh_spawn_runner_acls(
     if plan.seccomp_policy_ref.as_deref() == Some("w1-qemu-media") {
         // qemu-media uses QEMU's GTK/Wayland display path. Grant only the
         // compositor socket plus directory traversal; keep audio sockets denied.
-        let runtime_dir = env_value(plan, "XDG_RUNTIME_DIR");
+        let runtime_dir = env_value(&plan.env, "XDG_RUNTIME_DIR");
         if let Some(runtime_dir) = runtime_dir {
+            bound_session_runtime_dir(runtime_dir, plan.uid, session)?;
             let runtime = Path::new(runtime_dir);
-            let wayland_display = env_value(plan, "WAYLAND_DISPLAY").unwrap_or("wayland-0");
+            let wayland_display = env_value(&plan.env, "WAYLAND_DISPLAY").unwrap_or("wayland-0");
+            // Same one-component-inside-the-session proof the wayland-proxy
+            // arm applies: an absolute `WAYLAND_DISPLAY` must not discard the
+            // runtime directory the grant just proved.
+            let wayland_socket = session_socket_in(runtime, wayland_display).map_err(|detail| {
+                LiveHandlerError::SpawnFailed {
+                    detail: format!(
+                        "graphical-session-not-active: {detail} (qemu-media uid {})",
+                        plan.uid
+                    ),
+                }
+            })?;
             setfacl_fd_safe(
                 runtime,
                 &format!("u:{}:rx", plan.uid),
@@ -2086,7 +2220,7 @@ async fn refresh_spawn_runner_acls(
                 ),
             })?;
             setfacl_fd_safe(
-                &runtime.join(wayland_display),
+                &wayland_socket,
                 &format!("u:{}:rwx", plan.uid),
                 AclPathKind::Socket,
             )
@@ -2361,31 +2495,58 @@ fn serving_worker_launch_paths(argv: &[String]) -> Result<ServingWorkerLaunchPat
     })
 }
 
-/// Per-runner ACL targets for one served view root: search
-/// (`u:<uid>:--x`) on every ancestor no unprivileged principal can already
-/// search, and read/traverse (`u:<uid>:r-x`) - or read/write/traverse for a
-/// read-write attachment - on the served root itself.
+/// The proof that one `--shared-dir=` value is a shared-storage root the
+/// broker's own verified bundle declares, or a refusal.
 ///
-/// Unlike [`runner_tree_acl_targets`] there is no broker-owned bound to
-/// stop at: a served root is a bundle-declared storage path, so the walk
-/// stops at the first ancestor every principal can already search. That
-/// level (and every level above it) already grants search to everyone, so
-/// nothing outside the served tree is ever opened.
-fn served_view_root_acl_targets(
-    root: &Path,
-    uid: u32,
-    read_only: bool,
-) -> Result<Vec<(PathBuf, String)>, String> {
+/// `owned_roots` is the set
+/// [`crate::ops::launch_acl_bounds::served_view_root_roots`] derives: every
+/// storage row's `path_template` plus every store-view farm root, which is
+/// exactly what the daemon composes `--shared-dir=` under. The comparison
+/// is the same `strip_prefix` proof
+/// [`runner_tree_acl_targets`] applies to its broker-owned root - absolute,
+/// normalized, and refused when it does not resolve inside - and a root
+/// under none of them is refused, never clamped.
+fn prove_served_view_root_declared(root: &Path, owned_roots: &[PathBuf]) -> Result<(), String> {
     if !is_anchored_absolute(root) {
         return Err("served view root must be an absolute normalized path".to_owned());
     }
-    // `/` has no ancestors to stop the walk at, so the loop below would fall
+    // `/` has no ancestors to stop the walk at, so the walk below would fall
     // through to the leaf push and open the filesystem root itself to the
     // runner principal. A served view root is a bundle-declared storage path;
     // the filesystem root is never one.
     if root.parent().is_none() {
         return Err("served view root must not be the filesystem root".to_owned());
     }
+    if !owned_roots
+        .iter()
+        .any(|owned| root.strip_prefix(owned).is_ok())
+    {
+        return Err(format!(
+            "served view root {} is outside every shared-storage root the bundle declares",
+            root.display()
+        ));
+    }
+    Ok(())
+}
+
+/// Per-runner ACL targets for one served view root: search
+/// (`u:<uid>:--x`) on every ancestor no unprivileged principal can already
+/// search, and read/traverse (`u:<uid>:r-x`) - or read/write/traverse for a
+/// read-write attachment - on the served root itself.
+///
+/// `root` is the `--shared-dir=` value out of the launch argv and argv is
+/// wire payload, so [`prove_served_view_root_declared`] runs before any
+/// ancestor is walked. The walk itself then stops at the first ancestor
+/// every principal can already search, which keeps the grant from reaching
+/// above the served tree; the `strip_prefix` proof keeps it from reaching
+/// outside the declared storage in the first place.
+fn served_view_root_acl_targets(
+    root: &Path,
+    owned_roots: &[PathBuf],
+    uid: u32,
+    read_only: bool,
+) -> Result<Vec<(PathBuf, String)>, String> {
+    prove_served_view_root_declared(root, owned_roots)?;
     let mut targets = Vec::new();
     for directory in root.ancestors().skip(1) {
         if directory.as_os_str().is_empty() {
@@ -2445,12 +2606,13 @@ fn validate_served_view_root(root: &Path) -> Result<(), String> {
 ///   plus search on the non-world-searchable chain above it.
 ///
 /// Every failure is fail-closed: a path that is absent, not a directory, a
-/// symlink, outside `runtime_root`, or unopenable for setfacl refuses the
-/// launch instead of spawning a worker that cannot serve.
+/// symlink, outside `runtime_root`, outside `owned_roots`, or unopenable for
+/// setfacl refuses the launch instead of spawning a worker that cannot serve.
 pub(crate) fn grant_serving_worker_launch_acls(
     argv: &[String],
     uid: u32,
     runtime_root: &Path,
+    owned_roots: &[PathBuf],
 ) -> Result<(), LiveHandlerError> {
     let paths = serving_worker_launch_paths(argv)
         .map_err(|detail| LiveHandlerError::SpawnFailed { detail })?;
@@ -2467,8 +2629,16 @@ pub(crate) fn grant_serving_worker_launch_acls(
         });
     }
     // All path validation happens before any mutation: a launch whose view
-    // root is unusable must not leave a half-opened socket tree behind.
+    // root is unusable, or names no shared-storage root the bundle
+    // declares, must not leave a half-opened socket tree behind.
     validate_served_view_root(&paths.shared_dir)
+        .map_err(|detail| LiveHandlerError::SpawnFailed { detail })?;
+    // The served view root is bundle-declared storage, not broker runtime
+    // state, so `runtime_root` cannot bound it. `owned_roots` is the same
+    // trusted declaration the daemon composes the ticket from: the launch
+    // argv only says WHICH declared volume and view it wants, and a root
+    // under none of them never named a shared volume at all.
+    prove_served_view_root_declared(&paths.shared_dir, owned_roots)
         .map_err(|detail| LiveHandlerError::SpawnFailed { detail })?;
     grant_runner_tree_acls(
         &paths.socket_dir,
@@ -2484,8 +2654,9 @@ pub(crate) fn grant_serving_worker_launch_acls(
     .map_err(|detail| LiveHandlerError::SpawnFailed {
         detail: format!("serving worker private socket directory ACL: {detail}"),
     })?;
-    for (directory, acl) in served_view_root_acl_targets(&paths.shared_dir, uid, paths.read_only)
-        .map_err(|detail| LiveHandlerError::SpawnFailed { detail })?
+    for (directory, acl) in
+        served_view_root_acl_targets(&paths.shared_dir, owned_roots, uid, paths.read_only)
+            .map_err(|detail| LiveHandlerError::SpawnFailed { detail })?
     {
         setfacl_fd_safe(&directory, &acl, AclPathKind::Directory).map_err(|detail| {
             LiveHandlerError::SpawnFailed {
@@ -3291,6 +3462,12 @@ pub async fn live_spawn_runner(
     // Broker runtime root: the tree the worker's per-Guest socket directory
     // must strictly live under before this handler opens it.
     runtime_root: &Path,
+    // The broker-owned host session runtime directory the verified bundle
+    // declares (`site.json`), resolved by the dispatch layer so this
+    // handler stays bundle-free; `None` for a bundle or site that declares
+    // none, which refuses every launch whose environment names a session
+    // directory rather than opening the one the payload named.
+    session_runtime_dir: Option<&crate::ops::launch_acl_bounds::SessionRuntimeDir>,
 ) -> Result<SpawnRunnerResult, LiveHandlerError> {
     let plan = preflight(plan_input).map_err(LiveHandlerError::SpawnPreflight)?;
 
@@ -3329,7 +3506,7 @@ pub async fn live_spawn_runner(
         build_cstring_vectors(&plan).map_err(LiveHandlerError::SpawnPreflight)?;
     let seccomp_program = load_runner_seccomp(&plan).await?;
     let cgroup_fds = prepare_runner_cgroup_fds(&plan.cgroup_placement)?;
-    refresh_spawn_runner_acls(&plan, broker_state_dir).await?;
+    refresh_spawn_runner_acls(&plan, broker_state_dir, session_runtime_dir).await?;
 
     let api_socket_acl_path = cloud_hypervisor_api_socket(&plan);
 
@@ -3523,6 +3700,27 @@ mod tests {
         fn join(&self, name: &str) -> PathBuf {
             self.path.join(name)
         }
+    }
+
+    /// The trusted shared-storage roots a test serving-worker launch is
+    /// bounded against: the declared store root the served view lives
+    /// under, standing in for the storage rows the real dispatch derives
+    /// them from.
+    fn declared_store_roots(store_root: &Path) -> Vec<PathBuf> {
+        vec![store_root.to_path_buf()]
+    }
+
+    /// The trusted host session runtime directory a test runner's
+    /// environment must name, standing in for the `site.json` projection
+    /// the real dispatch derives it from.
+    fn declared_session_dir(
+        directory: &Path,
+        owner_uid: u32,
+    ) -> crate::ops::launch_acl_bounds::SessionRuntimeDir {
+        crate::ops::launch_acl_bounds::session_runtime_dir_for_test(
+            directory.to_path_buf(),
+            owner_uid,
+        )
     }
 
     impl Drop for TestDir {
@@ -4542,6 +4740,7 @@ mod tests {
             &crate::ops::device_worker::DeviceWorkerLaunch::default(),
             None,
             Path::new("/run/d2b"),
+            None,
         )
         .await
         .unwrap_err();
@@ -5024,6 +5223,7 @@ mod tests {
             .expect("chmod runtime root");
         let shared = root.join("view");
         std::fs::create_dir_all(&shared).expect("create view root");
+        let owned_roots = declared_store_roots(&root.path);
 
         for socket in [
             root.join("elsewhere").join("vol.vfd.sock"),
@@ -5039,7 +5239,7 @@ mod tests {
                 format!("--shared-dir={}", shared.display()),
             ];
             assert!(
-                grant_serving_worker_launch_acls(&argv, 4242, &runtime_root).is_err(),
+                grant_serving_worker_launch_acls(&argv, 4242, &runtime_root, &owned_roots).is_err(),
                 "a socket directory outside the runtime root must be refused: {}",
                 socket.display()
             );
@@ -5051,7 +5251,7 @@ mod tests {
             format!("--socket-path={}", outside.display()),
             format!("--shared-dir={}", shared.display()),
         ];
-        let error = grant_serving_worker_launch_acls(&argv, 4242, &runtime_root)
+        let error = grant_serving_worker_launch_acls(&argv, 4242, &runtime_root, &owned_roots)
             .expect_err("a socket outside the runtime root must be refused");
         assert!(
             error.to_string().contains("outside the broker runtime"),
@@ -5066,7 +5266,7 @@ mod tests {
             ),
             format!("--shared-dir={}", shared.display()),
         ];
-        let error = grant_serving_worker_launch_acls(&argv, 4242, &runtime_root)
+        let error = grant_serving_worker_launch_acls(&argv, 4242, &runtime_root, &owned_roots)
             .expect_err("the runtime root itself must not be opened");
         assert!(
             error.to_string().contains("outside the broker runtime"),
@@ -5088,6 +5288,7 @@ mod tests {
         std::fs::set_permissions(&socket_dir, std::fs::Permissions::from_mode(0o700))
             .expect("chmod socket dir");
         let absent = root.join("absent-view");
+        let owned_roots = declared_store_roots(&root.path);
 
         let argv = |shared: &Path| {
             vec![
@@ -5099,15 +5300,17 @@ mod tests {
                 format!("--shared-dir={}", shared.display()),
             ]
         };
-        let error = grant_serving_worker_launch_acls(&argv(&absent), 4242, &runtime_root)
-            .expect_err("an absent view root must be refused");
+        let error =
+            grant_serving_worker_launch_acls(&argv(&absent), 4242, &runtime_root, &owned_roots)
+                .expect_err("an absent view root must be refused");
         assert!(error.to_string().contains("does not exist"), "{error}");
 
         // A regular file is not a servable root either.
         let file = root.join("view-is-a-file");
         std::fs::write(&file, b"x").expect("write file");
-        let error = grant_serving_worker_launch_acls(&argv(&file), 4242, &runtime_root)
-            .expect_err("a non-directory view root must be refused");
+        let error =
+            grant_serving_worker_launch_acls(&argv(&file), 4242, &runtime_root, &owned_roots)
+                .expect_err("a non-directory view root must be refused");
         assert!(error.to_string().contains("not a directory"), "{error}");
 
         // A symlinked view root is refused by the NOFOLLOW open.
@@ -5115,7 +5318,7 @@ mod tests {
         std::fs::create_dir_all(&real).expect("create real view");
         let link = root.join("linked-view");
         std::os::unix::fs::symlink(&real, &link).expect("symlink view root");
-        grant_serving_worker_launch_acls(&argv(&link), 4242, &runtime_root)
+        grant_serving_worker_launch_acls(&argv(&link), 4242, &runtime_root, &owned_roots)
             .expect_err("a symlinked view root must be refused");
 
         // Nothing was opened on the worker's behalf.
@@ -5149,15 +5352,21 @@ mod tests {
         std::fs::set_permissions(&world_x, std::fs::Permissions::from_mode(0o755))
             .expect("make outer ancestor world traversable");
 
+        // The store root the bundle declares, and the served view the
+        // attachment actually serves out of it.
+        let owned_roots = declared_store_roots(&private);
+
         assert_eq!(
-            served_view_root_acl_targets(&served, 4242, true).expect("read-only targets"),
+            served_view_root_acl_targets(&served, &owned_roots, 4242, true)
+                .expect("read-only targets"),
             vec![
                 (private.clone(), "u:4242:--x".to_owned()),
                 (served.clone(), "u:4242:r-x".to_owned()),
             ]
         );
         assert_eq!(
-            served_view_root_acl_targets(&served, 4242, false).expect("read-write targets"),
+            served_view_root_acl_targets(&served, &owned_roots, 4242, false)
+                .expect("read-write targets"),
             vec![
                 (private.clone(), "u:4242:--x".to_owned()),
                 (served.clone(), "u:4242:rwx".to_owned()),
@@ -5166,14 +5375,15 @@ mod tests {
         // The `ancestors()` walk of `/` has nowhere to stop and would open the
         // filesystem root to the runner principal: a `/`-shaped shared dir is
         // refused by name, before any ACL target is produced.
-        let root_error = served_view_root_acl_targets(Path::new("/"), 4242, true)
+        let root_error = served_view_root_acl_targets(Path::new("/"), &owned_roots, 4242, true)
             .expect_err("the filesystem root must never be a served view root");
         assert!(
             root_error.contains("must not be the filesystem root"),
             "{root_error}"
         );
         assert!(
-            served_view_root_acl_targets(Path::new("relative/view"), 4242, true).is_err(),
+            served_view_root_acl_targets(Path::new("relative/view"), &owned_roots, 4242, true)
+                .is_err(),
             "a relative view root must be refused"
         );
     }
@@ -5221,7 +5431,9 @@ mod tests {
         ];
         // The principal the resolver mints for the binding template.
         let uid = 50_123;
-        grant_serving_worker_launch_acls(&argv, uid, &runtime_root).expect("grant ACLs");
+        let owned_roots = declared_store_roots(&root.path);
+        grant_serving_worker_launch_acls(&argv, uid, &runtime_root, &owned_roots)
+            .expect("grant ACLs");
 
         for (path, label) in [(&socket_dir, "socket dir"), (&shared, "view root")] {
             let fd = crate::sys::path_safe::open_dir_path_safe(path).expect("open dir");
@@ -5251,6 +5463,134 @@ mod tests {
             view_mode & 0o050,
             0o050,
             "the view-root mask must carry `r-x`"
+        );
+    }
+
+    /// A well-formed serving launch - a view the bundle declares a storage
+    /// root for - is NOT refused by the shared-storage bound. This is the
+    /// test that keeps the fence from being over-broad: the refusal tests
+    /// beside it prove the bound bites, this one proves it bites nothing
+    /// else.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn serving_worker_accepts_a_shared_dir_under_a_declared_storage_root() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = TestDir::new("serving-worker-shared-dir-declared");
+        let runtime_root = root.join("run");
+        let socket_dir = runtime_root.join("vms").join("guest");
+        std::fs::create_dir_all(&socket_dir).expect("create socket dir");
+        std::fs::set_permissions(&runtime_root, std::fs::Permissions::from_mode(0o700))
+            .expect("chmod runtime root");
+        std::fs::set_permissions(&socket_dir, std::fs::Permissions::from_mode(0o700))
+            .expect("chmod socket dir");
+        // The declared store root and the named view served out of it.
+        let store = root.path.join("store");
+        let served = store.join("system");
+        std::fs::create_dir_all(&served).expect("create declared store view");
+
+        let argv = vec![
+            "virtiofsd".to_owned(),
+            format!(
+                "--socket-path={}",
+                socket_dir.join("vol.vfd.sock").display()
+            ),
+            format!("--shared-dir={}", served.display()),
+            "--readonly".to_owned(),
+        ];
+        // The bound is pure planning: the targets are produced for the
+        // declared view, and no socket anywhere is named instead.
+        let targets = served_view_root_acl_targets(
+            &served,
+            &declared_store_roots(&store),
+            4242,
+            true,
+        )
+        .expect("a view under a declared storage root must be planned, not refused");
+        assert!(
+            targets.iter().any(|(path, _)| path == &served),
+            "the declared view itself must carry the grant: {targets:?}"
+        );
+        assert!(
+            !grant_serving_worker_launch_acls(
+                &argv,
+                4242,
+                &runtime_root,
+                &declared_store_roots(&store),
+            )
+            .is_err_and(|error| error.to_string().contains("shared-storage root")),
+            "a view under a declared storage root must not be refused by the bound"
+        );
+    }
+
+    /// A `--shared-dir=` naming no declared shared-storage root is refused,
+    /// and the arbitrary host directory it named is left WITHOUT an ACL.
+    /// The launch argv is wire payload, so without the bound any launch
+    /// could name any absolute host directory and have the broker open it
+    /// to the launched principal.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn serving_worker_refuses_a_shared_dir_outside_the_declared_storage_roots() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = TestDir::new("serving-worker-shared-dir-bound");
+        let runtime_root = root.join("run");
+        let socket_dir = runtime_root.join("vms").join("guest");
+        std::fs::create_dir_all(&socket_dir).expect("create socket dir");
+        std::fs::set_permissions(&runtime_root, std::fs::Permissions::from_mode(0o700))
+            .expect("chmod runtime root");
+        std::fs::set_permissions(&socket_dir, std::fs::Permissions::from_mode(0o700))
+            .expect("chmod socket dir");
+        // A declared store root with a well-formed view under it.
+        let store = root.path.join("store");
+        std::fs::create_dir_all(store.join("system")).expect("create declared store view");
+        // A sibling of it: existing, absolute, a directory, and named by
+        // nothing the bundle declares.
+        let outside = root.join("shadow");
+        std::fs::create_dir_all(&outside).expect("create outside dir");
+
+        let argv = vec![
+            "virtiofsd".to_owned(),
+            format!(
+                "--socket-path={}",
+                socket_dir.join("vol.vfd.sock").display()
+            ),
+            format!("--shared-dir={}", outside.display()),
+        ];
+        let error = grant_serving_worker_launch_acls(
+            &argv,
+            4242,
+            &runtime_root,
+            &declared_store_roots(&store),
+        )
+        .expect_err("a shared dir outside every declared storage root must be refused");
+        assert!(
+            error.to_string().contains("outside every shared-storage root"),
+            "the refusal must name the fence it crossed: {error}"
+        );
+
+        // Nothing was opened on the worker's behalf, on either tree.
+        for (path, label) in [(&outside, "outside dir"), (&socket_dir, "socket dir")] {
+            let fd = crate::sys::path_safe::open_dir_path_safe(path).expect("open dir");
+            assert_eq!(
+                crate::sys::path_safe::fd_extended_acl_present(fd.as_fd()).expect("inspect ACL"),
+                (false, false),
+                "a refused launch must leave the {label} unopened"
+            );
+        }
+    }
+
+    /// A declaration that names no shared-storage root at all refuses every
+    /// view root, rather than falling back to whatever the argv named.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn serving_worker_refuses_a_shared_dir_when_no_storage_root_is_declared() {
+        let root = TestDir::new("serving-worker-shared-dir-unbound");
+        let served = root.join("view");
+        std::fs::create_dir_all(&served).expect("create view root");
+        assert!(
+            served_view_root_acl_targets(&served, &[], 4242, true).is_err(),
+            "an unbound declaration must refuse, never accept, a view root"
         );
     }
 
@@ -6085,6 +6425,7 @@ mod tests {
             &launch,
             Some(test_posture()),
             &runtime_root,
+            None,
         )
         .await
         .expect_err("the argv fence refuses the launch");
@@ -6393,6 +6734,7 @@ mod tests {
             &crate::ops::device_worker::DeviceWorkerLaunch::default(),
             None,
             Path::new("/run/d2b"),
+            None,
         )
         .await
         .expect("spawn privileged test child");
@@ -6439,7 +6781,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn wayland_proxy_acls_error_when_xdg_runtime_dir_not_set() {
         let plan = wayland_proxy_plan(None, None);
-        let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"))
+        let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"), None)
             .await
             .expect_err("missing XDG_RUNTIME_DIR must fail");
         let detail = match err {
@@ -6463,7 +6805,8 @@ mod tests {
         // Point at a path that does not exist beneath the tempdir.
         let absent = root.join("run").join("user").join("1000");
         let plan = wayland_proxy_plan(Some(absent.to_str().unwrap()), None);
-        let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"))
+        let session = declared_session_dir(&absent, 1000);
+        let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"), Some(&session))
             .await
             .expect_err("absent runtime dir must fail");
         let detail = match err {
@@ -6493,7 +6836,8 @@ mod tests {
         let runtime = root.join(&format!("{mismatch_uid}"));
         std::fs::create_dir(&runtime).expect("create runtime dir");
         let plan = wayland_proxy_plan(Some(runtime.to_str().unwrap()), None);
-        let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"))
+        let session = declared_session_dir(&runtime, mismatch_uid);
+        let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"), Some(&session))
             .await
             .expect_err("owner uid mismatch must fail");
         let detail = match err {
@@ -6524,7 +6868,8 @@ mod tests {
         std::fs::create_dir(&runtime).expect("create runtime dir");
         // Do NOT create the socket. Use a known display name.
         let plan = wayland_proxy_plan(Some(runtime.to_str().unwrap()), Some("wayland-test-99"));
-        let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"))
+        let session = declared_session_dir(&runtime, current_uid);
+        let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"), Some(&session))
             .await
             .expect_err("absent Wayland socket must fail");
         let detail = match err {
@@ -6555,7 +6900,8 @@ mod tests {
         let socket_path = runtime.join("wayland-type-test");
         tokio::fs::write(&socket_path, b"not a socket").await.expect("write file");
         let plan = wayland_proxy_plan(Some(runtime.to_str().unwrap()), Some("wayland-type-test"));
-        let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"))
+        let session = declared_session_dir(&runtime, current_uid);
+        let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"), Some(&session))
             .await
             .expect_err("regular file at socket location must fail");
         let detail = match err {
@@ -6569,6 +6915,224 @@ mod tests {
                 || detail.contains("not a socket"),
             "must fail with graphical-session-not-active or type error: {detail}"
         );
+    }
+
+    /// An `XDG_RUNTIME_DIR` / `PIPEWIRE_RUNTIME_DIR` naming any host
+    /// directory other than the one the verified bundle declares is
+    /// refused, and the directory the payload named is left WITHOUT an
+    /// ACL. The plan's environment is wire payload, so without the bound
+    /// any launch could name any absolute host directory and have the
+    /// broker open it, plus its PipeWire/Wayland/Pulse sockets, to the
+    /// launched principal.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn session_runtime_dir_outside_the_declared_host_session_is_refused() {
+        for (seccomp, key) in [
+            ("w1-audio", "PIPEWIRE_RUNTIME_DIR"),
+            ("w1-gpu", "XDG_RUNTIME_DIR"),
+            ("w1-video", "XDG_RUNTIME_DIR"),
+            ("w1-wayland-proxy", "XDG_RUNTIME_DIR"),
+            ("w1-qemu-media", "XDG_RUNTIME_DIR"),
+        ] {
+            let root = TestDir::new("session-runtime-bound");
+            let declared = root.join("run").join("user").join("1000");
+            tokio::fs::create_dir_all(&declared)
+                .await
+                .expect("create declared session dir");
+            // A different absolute host directory the payload names instead.
+            let outside = root.join("shadow");
+            tokio::fs::create_dir_all(&outside)
+                .await
+                .expect("create outside dir");
+
+            let mut plan = test_spawn_plan_with_argv(vec!["runner@corp".to_owned()], seccomp);
+            plan.env.push(format!("{key}={}", outside.display()));
+            let session = declared_session_dir(&declared, 1000);
+
+            let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"), Some(&session))
+                .await
+                .expect_err(
+                    "a session runtime directory the bundle does not declare must be refused"
+                );
+            assert!(
+                err.to_string().contains("is not the host session directory"),
+                "{seccomp}: the refusal must name the fence it crossed: {err}"
+            );
+
+            let fd = crate::sys::path_safe::open_dir_path_safe(&outside).expect("open dir");
+            assert_eq!(
+                crate::sys::path_safe::fd_extended_acl_present(fd.as_fd()).expect("inspect ACL"),
+                (false, false),
+                "{seccomp}: a refused launch must not open the directory its environment named"
+            );
+        }
+    }
+
+    /// A bundle or site that declares no host Wayland session leaves the
+    /// slot unbound, and every launch whose environment names a session
+    /// directory is refused rather than granted one at the path the
+    /// payload picked.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn session_runtime_dir_is_refused_when_the_bundle_declares_no_host_session() {
+        let root = TestDir::new("session-runtime-unbound");
+        let named = root.join("run").join("user").join("1000");
+        tokio::fs::create_dir_all(&named)
+            .await
+            .expect("create named session dir");
+        let mut plan = test_spawn_plan_with_argv(vec!["runner@corp".to_owned()], "w1-audio");
+        plan.env.push(format!("PIPEWIRE_RUNTIME_DIR={}", named.display()));
+
+        let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"), None)
+            .await
+            .expect_err("an unbound host session declaration must refuse, not default");
+        assert!(
+            err.to_string().contains("declares no host Wayland session"),
+            "the refusal must say the declaration is absent: {err}"
+        );
+
+        let fd = crate::sys::path_safe::open_dir_path_safe(&named).expect("open dir");
+        assert_eq!(
+            crate::sys::path_safe::fd_extended_acl_present(fd.as_fd()).expect("inspect ACL"),
+            (false, false),
+            "an unbound declaration must not open the directory the environment named"
+        );
+    }
+
+    /// A well-formed audio launch - one whose environment names exactly the
+    /// host session directory the bundle declares - is NOT refused, and its
+    /// session grant lands on that directory. This is the test that keeps
+    /// the bound from being over-broad.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn well_formed_audio_launch_opens_the_declared_host_session_directory() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        if ![
+            "/run/current-system/sw/bin/setfacl",
+            "/usr/bin/setfacl",
+            "/bin/setfacl",
+        ]
+        .iter()
+        .any(|candidate| Path::new(candidate).exists())
+        {
+            eprintln!("skipping session ACL application test: no setfacl binary");
+            return;
+        }
+
+        let current_uid = nix::unistd::Uid::current().as_raw();
+        let root = TestDir::new("session-runtime-granted");
+        let declared = root.join("run").join("user").join(&format!("{current_uid}"));
+        tokio::fs::create_dir_all(&declared)
+            .await
+            .expect("create declared session dir");
+        tokio::fs::set_permissions(&declared, std::fs::Permissions::from_mode(0o700))
+            .await
+            .expect("chmod session dir");
+
+        let mut plan = test_spawn_plan_with_argv(vec!["runner@corp".to_owned()], "w1-audio");
+        plan.env
+            .push(format!("PIPEWIRE_RUNTIME_DIR={}", declared.display()));
+        let session = declared_session_dir(&declared, current_uid);
+
+        refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"), Some(&session))
+            .await
+            .expect("a launch naming the declared session directory must reach its grant");
+
+        let fd = crate::sys::path_safe::open_dir_path_safe(&declared).expect("open dir");
+        assert_eq!(
+            crate::sys::path_safe::fd_extended_acl_present(fd.as_fd()).expect("inspect ACL"),
+            (true, false),
+            "the declared host session directory must carry the runner's access ACL entry"
+        );
+    }
+
+    /// `Path::join` discards its base whenever the argument is absolute, so
+    /// an absolute `WAYLAND_DISPLAY` would compose outside the very session
+    /// directory the grant just proved. The socket grant must refuse it,
+    /// and leave both the session directory and the path it pointed at
+    /// untouched.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn absolute_wayland_display_cannot_escape_the_declared_session_directory() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let current_uid = nix::unistd::Uid::current().as_raw();
+        let root = TestDir::new("wayland-display-escape");
+        let declared = root.join("run").join("user").join(&format!("{current_uid}"));
+        tokio::fs::create_dir_all(&declared)
+            .await
+            .expect("create declared session dir");
+        tokio::fs::set_permissions(&declared, std::fs::Permissions::from_mode(0o700))
+            .await
+            .expect("chmod session dir");
+        // A directory at the socket path the escaping value names: the grant
+        // is path-shaped, so an ACL landing here is exactly what must not
+        // happen, and a directory is what the ACL inspector can read.
+        let escaped = root.join("elsewhere");
+        tokio::fs::create_dir(&escaped)
+            .await
+            .expect("create the path the value points at");
+
+        for (seccomp, key) in [
+            ("w1-wayland-proxy", "XDG_RUNTIME_DIR"),
+            ("w1-qemu-media", "XDG_RUNTIME_DIR"),
+        ] {
+            let mut plan = test_spawn_plan_with_argv(vec!["runner@corp".to_owned()], seccomp);
+            plan.env.push(format!("{key}={}", declared.display()));
+            plan.env
+                .push(format!("WAYLAND_DISPLAY={}", escaped.display()));
+            let session = declared_session_dir(&declared, current_uid);
+
+            let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"), Some(&session))
+                .await
+                .expect_err("an absolute WAYLAND_DISPLAY must not discard the session directory");
+            assert!(
+                err.to_string().contains("WAYLAND_DISPLAY"),
+                "{seccomp}: the refusal must name the value that escaped: {err}"
+            );
+        }
+
+        // The escape is refused before the first mutation: neither tree
+        // carries an ACL.
+        for (path, label) in [(&declared, "session dir"), (&escaped, "escaped socket")] {
+            let fd = crate::sys::path_safe::open_dir_path_safe(path).expect("open path");
+            assert_eq!(
+                crate::sys::path_safe::fd_extended_acl_present(fd.as_fd()).expect("inspect ACL"),
+                (false, false),
+                "an escaping WAYLAND_DISPLAY must leave the {label} unopened"
+            );
+        }
+    }
+
+    /// The same `WAYLAND_DISPLAY` value spelled relative - the shape every
+    /// well-formed compositor launch uses - still resolves to a socket
+    /// directly inside the declared session directory, so the fix rejects
+    /// only the escaping spelling.
+    #[test]
+    fn relative_wayland_display_resolves_inside_the_declared_session_directory() {
+        let runtime = Path::new("/run/user/1000");
+        assert_eq!(
+            session_socket_in(runtime, "wayland-0").expect("a bare display name is inside"),
+            Path::new("/run/user/1000/wayland-0")
+        );
+        // An absolute spelling that lands back inside is honoured too.
+        assert_eq!(
+            session_socket_in(runtime, "/run/user/1000/wayland-1")
+                .expect("an absolute display inside the session is inside"),
+            Path::new("/run/user/1000/wayland-1")
+        );
+        for display in [
+            "/run/d2b/attacker.sock",
+            "../wayland-0",
+            "nested/wayland-0",
+            "",
+        ] {
+            assert!(
+                session_socket_in(runtime, display).is_err(),
+                "WAYLAND_DISPLAY {display:?} must not escape {runtime:?}"
+            );
+        }
     }
 
     /// One pending refresh per socket. A second caller while a refresh is

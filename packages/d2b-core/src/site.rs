@@ -11,7 +11,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::path::Component;
+use std::path::{Component, Path};
 
 /// Private site-runtime contract emitted by the NixOS site module.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -35,6 +35,20 @@ impl SiteJson {
         self.wayland_socket
             .as_deref()
             .filter(|socket| wayland_socket_ok(socket))
+    }
+
+    /// The session runtime directory the declared socket lives in
+    /// (`/run/user/<uid>`), projected next to the artifact that defines it
+    /// so a consumer outside this crate needs no name from the socket's own
+    /// family.
+    ///
+    /// `None` for a site that declares no Wayland session and for a
+    /// malformed value, so the consumer leaves its slot unbound instead of
+    /// naming a directory the artifact does not describe.
+    pub fn session_runtime_directory(&self) -> Option<&std::path::Path> {
+        Path::new(self.wayland_socket()?)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
     }
 
     /// Fail-closed artifact validation: a malformed socket is an emitter
