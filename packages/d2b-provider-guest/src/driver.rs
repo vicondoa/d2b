@@ -370,6 +370,17 @@ impl GuestSpecEnvelope {
     pub fn provider_ref(&self) -> Option<&str> {
         self.value.get("providerRef").and_then(Value::as_str)
     }
+
+    /// The declared Provider row this Guest selects, as a canonical reference.
+    ///
+    /// This is the one provider identity the common Guest target/session
+    /// contract ([`crate::GuestTargetContract`]) consumes, and it is graph
+    /// data: the contract carries it and never branches on which Provider it
+    /// names. That is what lets the local VM, media, and remote-cloud Guest
+    /// providers each build the same contract.
+    pub fn declared_provider(&self) -> Option<ResourceRef> {
+        ResourceRef::parse(self.provider_ref()?).ok()
+    }
 }
 
 /// Closed decode error for a Guest spec envelope.

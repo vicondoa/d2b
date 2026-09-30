@@ -18,6 +18,16 @@
 //! the daemon drives for the other three kinds. The production implementation
 //! lives in the daemon behind that port, so this crate owns no host state and
 //! depends on no daemon runtime.
+//!
+//! ## The common Guest target/session contract
+//!
+//! [`GuestTargetContract`] is the part every Guest implementation shares: the
+//! graph evidence one accepted parent session presents, the per-source
+//! ownership that evidence admits, and the rules that fence a target-local
+//! effect on the enrolled Guest identity, the boot identity, the source uid,
+//! and the desired generation. The declared Provider is carried as graph data
+//! and is never matched, so the local VM, media, and remote-cloud Guest
+//! providers each consume it independently and none waits for another.
 
 #![deny(missing_docs)]
 
@@ -49,5 +59,11 @@ pub use shutdown::{
     CloudHypervisorShutdown, GracefulVmShutdown, ProviderGuestState, ProviderKind,
     ProviderRequestOutcome, ProviderShutdownTarget, ProviderVmmExitOutcome,
 };
-pub use target_control::{GuestTargetSession, guest_target_ref, session_target_control};
-pub use target_service::{GuestTargetService, production_guest_target_effects, target_control_services};
+pub use target_control::{
+    GuestTargetBinding, GuestTargetContract, GuestTargetSession, graph_target_control,
+    guest_target_ref, session_target_control,
+};
+pub use target_service::{
+    GuestTargetRefusal, GuestTargetService, production_guest_target_effects,
+    target_control_services,
+};

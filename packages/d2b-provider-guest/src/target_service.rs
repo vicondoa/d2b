@@ -41,20 +41,19 @@
 //! type's realize frames are refused instead of recording phantom state.
 //! Registering the effect code is what admits a type.
 
-use std::{collections::BTreeMap, collections::HashMap, fmt, sync::Arc};
+use std::{collections::BTreeMap, collections::HashMap, fmt, sync::Arc, sync::Mutex};
 
 use async_trait::async_trait;
 use d2b_contracts_resource::v3::ZoneId;
 use d2b_resource_runtime::guest_target::{
     target_local_spec_digest, GuestAdoption, GuestRealizeRequest, GuestTargetError,
-    GuestTargetRuntime, TargetControlFrame, TargetControlRequest, TargetControlResponse,
-    TARGET_CONTROL_METHOD, TARGET_CONTROL_SERVICE,
+    GuestTargetRuntime, TargetControlAssignment, TargetControlFrame, TargetControlRequest,
+    TargetControlResponse, TargetResourceInstance, TARGET_CONTROL_METHOD, TARGET_CONTROL_SERVICE,
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 
-/// Target-local effect code for one converted resource type: the Guest half
-/// of that type's driver.
-///
+use crate::target_control::GuestTargetContract;
+
 /// One implementation serves one resource type and owns the target-local
 /// effect for every source of that type on this Guest. Realize and delete are
 /// idempotent per source: a repeated realize converges on the same effect
@@ -119,13 +118,30 @@ pub enum GuestTargetRefusal {
     ForeignZone,
     /// This Guest has no target-local effect code for the resource type.
     UnknownType,
+    /// The request names an execution target other than this Guest's.
+    TargetMismatch,
+    /// The source's uid is not the uid this Guest owns for that source: a
+    /// replaced source never inherits the previous source's realization.
+    SourceReplaced,
+    /// The named desired generation is older than the one already admitted.
+    AssignmentRegression,
+    /// The request belongs to a session generation that is not the live one.
+    StaleSessionGeneration,
+    /// No parent session is live: nothing is read, written, or deleted.
+    SessionUnavailable,
 }
 
 impl GuestTargetRefusal {
-    const fn code(self) -> &'static str {
+    /// The stable refusal code this reason reports.
+    pub const fn code(self) -> &'static str {
         match self {
             Self::ForeignZone => "guest-target-foreign-zone",
             Self::UnknownType => "guest-target-unknown-type",
+            Self::TargetMismatch => "guest-target-target-mismatch",
+            Self::SourceReplaced => "guest-target-source-replaced",
+            Self::AssignmentRegression => "guest-target-assignment-regression",
+            Self::StaleSessionGeneration => "guest-target-stale-session-generation",
+            Self::SessionUnavailable => "guest-target-session-unavailable",
         }
     }
 }
@@ -166,15 +182,123 @@ pub fn production_guest_target_effects() -> GuestTargetEffects {
     GuestTargetEffects::new()
 }
 
+/// What admits one target-control request before any state exists.
+///
+/// Two scopes, one dispatch. [`TargetAdmissionScope::ZoneScoped`] is the
+/// pre-graph surface the daemon still composes: the authority Zone alone.
+/// [`TargetAdmissionScope::Graph`] is the common Guest target/session contract
+/// ([`GuestTargetContract`]), which adds the enrolled Guest identity, the boot
+/// identity, the source uid, and the desired generation to that same decision.
+#[derive(Debug)]
+enum TargetAdmissionScope {
+    ZoneScoped { zone: ZoneId },
+    Graph(Arc<Mutex<GuestTargetContract>>),
+}
+
+impl TargetAdmissionScope {
+    fn zone(&self) -> Result<ZoneId, GuestTargetRefusal> {
+        match self {
+            Self::ZoneScoped { zone } => Ok(zone.clone()),
+            Self::Graph(contract) => contract
+                .lock()
+                .map(|contract| contract.evidence().zone().clone())
+                .map_err(|_| GuestTargetRefusal::SessionUnavailable),
+        }
+    }
+
+    /// Admit one source for an effect that takes ownership, or report the
+    /// closed refusal.
+    fn admit(
+        &self,
+        assignment: &TargetControlAssignment,
+    ) -> Result<(), GuestTargetRefusal> {
+        match self {
+            Self::ZoneScoped { zone } => Self::check_zone(zone, assignment),
+            Self::Graph(contract) => {
+                let mut contract = contract
+                    .lock()
+                    .map_err(|_| GuestTargetRefusal::SessionUnavailable)?;
+                let target = contract.target().clone();
+                contract.admit(&target, assignment).map(|_| ())
+            }
+        }
+    }
+
+    /// Check one source that only reads or retires, without taking
+    /// ownership of it.
+    fn check(&self, assignment: &TargetControlAssignment) -> Result<(), GuestTargetRefusal> {
+        match self {
+            Self::ZoneScoped { zone } => Self::check_zone(zone, assignment),
+            Self::Graph(contract) => {
+                let contract = contract
+                    .lock()
+                    .map_err(|_| GuestTargetRefusal::SessionUnavailable)?;
+                let target = contract.target().clone();
+                contract.check(&target, assignment)
+            }
+        }
+    }
+
+    fn check_zone(
+        zone: &ZoneId,
+        assignment: &TargetControlAssignment,
+    ) -> Result<(), GuestTargetRefusal> {
+        if assignment.source().zone != zone.as_str() {
+            return Err(GuestTargetRefusal::ForeignZone);
+        }
+        Ok(())
+    }
+
+    /// Re-admit one binding under the live session after target-local
+    /// discovery confirmed it.
+    fn re_bind(
+        &self,
+        source: &ResourceKey,
+        session_generation: u64,
+    ) -> Result<(), GuestTargetRefusal> {
+        let Self::Graph(contract) = self else {
+            return Ok(());
+        };
+        let mut contract = contract
+            .lock()
+            .map_err(|_| GuestTargetRefusal::SessionUnavailable)?;
+        if contract.session_generation() != Some(session_generation) {
+            return Err(GuestTargetRefusal::StaleSessionGeneration);
+        }
+        let Some(assignment) = contract.binding(source).map(|binding| {
+            TargetControlAssignment::new(
+                binding.source().clone(),
+                binding.source_uid(),
+                binding.assignment_generation(),
+                session_generation,
+            )
+        }) else {
+            return Err(GuestTargetRefusal::SessionUnavailable);
+        };
+        let target = contract.target().clone();
+        contract.admit(&target, &assignment).map(|_| ())
+    }
+
+    /// Release one source's ownership.
+    fn release(&self, source: &ResourceKey) {
+        let Self::Graph(contract) = self else {
+            return;
+        };
+        if let Ok(mut contract) = contract.lock() {
+            contract.release(source);
+        }
+    }
+}
+
 /// The Guest-mode target-control service.
 ///
-/// One service owns the Guest's [`GuestTargetRuntime`], the authority Zone the
-/// Guest realizes for, and the registered target-local effect code. The
+/// One service owns the Guest's [`GuestTargetRuntime`], the admission scope
+/// that fences its requests, and the registered target-local effect code. The
 /// service survives reconnects: realizations stay on the target runtime and a
 /// reconnected session re-adopts them (F5).
 pub struct GuestTargetService {
     runtime: Arc<GuestTargetRuntime>,
-    zone: ZoneId,
+    scope: TargetAdmissionScope,
     effects: GuestTargetEffects,
 }
 
@@ -182,7 +306,7 @@ impl fmt::Debug for GuestTargetService {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("GuestTargetService")
-            .field("zone", &self.zone)
+            .field("zone", &self.scope.zone().ok())
             .field(
                 "effect_types",
                 &self.effects.keys().map(ResourceTypeName::as_str).collect::<Vec<_>>(),
@@ -201,26 +325,107 @@ impl GuestTargetService {
         zone: ZoneId,
         effects: GuestTargetEffects,
     ) -> Self {
-        Self { runtime, zone, effects }
+        Self { runtime, scope: TargetAdmissionScope::ZoneScoped { zone }, effects }
+    }
+
+    /// Own the target runtime under the common Guest target/session contract.
+    ///
+    /// Same service, same dispatch, same effect registry: the only difference
+    /// is that admission is evaluated against the enrolled Guest identity,
+    /// the boot identity, the source uid, and the desired generation instead
+    /// of the authority Zone alone.
+    pub fn graph_backed(
+        runtime: Arc<GuestTargetRuntime>,
+        contract: Arc<Mutex<GuestTargetContract>>,
+        effects: GuestTargetEffects,
+    ) -> Self {
+        Self { runtime, scope: TargetAdmissionScope::Graph(contract), effects }
     }
 
     /// Bind the authenticated session generation the fence validates against.
     ///
     /// Called once per accepted ComponentSession from the session's own
     /// authenticated route: this value is the live generation, never a value
-    /// a request carries.
+    /// a request carries. Under the common contract this also connects the
+    /// contract itself, so a reconnect adopts the ownership the lost session
+    /// retained instead of starting an empty ledger.
     pub fn bind_session(&self, session_generation: u64) -> Result<(), GuestTargetError> {
+        if let TargetAdmissionScope::Graph(contract) = &self.scope {
+            contract
+                .lock()
+                .map_err(|_| GuestTargetError::SessionUnavailable)?
+                .connect(session_generation)
+                .map_err(|error| {
+                    tracing::warn!(
+                        code = error.code(),
+                        "Guest target session refused: the reconnect is not newer than the live session"
+                    );
+                    GuestTargetError::SessionUnavailable
+                })?;
+        }
         self.runtime.bind_session(session_generation)
     }
 
-    /// Serve one target-control request: admit, fence, consume, answer.
+    /// Record the loss of the live parent session.
+    ///
+    /// The target runtime keeps its realizations and the contract keeps its
+    /// bindings, so nothing is deleted and no ownership is dropped; a request
+    /// from a session that is gone is refused by both fences. The Guest
+    /// therefore cannot mint fresh Host authority for a lost session, and a
+    /// reconnecting session must re-adopt the retained ownership.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`GuestTargetError`] when `session_generation` is not the
+    /// live one, so a retained caller cannot close a session it does not own.
+    pub fn disconnect_session(&self, session_generation: u64) -> Result<(), GuestTargetError> {
+        if let TargetAdmissionScope::Graph(contract) = &self.scope {
+            contract
+                .lock()
+                .map_err(|_| GuestTargetError::SessionUnavailable)?
+                .disconnect(session_generation)
+                .map_err(|_| GuestTargetError::SessionUnavailable)?;
+        }
+        Ok(())
+    }
+
+    /// Serve one target-control request: verify, admit, fence, consume,
+    /// answer.
     pub async fn handle(&self, request: TargetControlRequest) -> TargetControlResponse {
-        if let Err(refusal) = self.admit(request.source()) {
+        // The commitment is recomputed from the carried bytes before anything
+        // is admitted: a spec that was substituted or truncated on the way
+        // never takes ownership, and the effect never sees it.
+        if let TargetControlRequest::Realize(realize) = &request
+            && target_local_spec_digest(realize.spec()) != realize.spec_digest()
+        {
+            tracing::warn!(
+                code = "guest-target-spec-commitment-mismatch",
+                source = %realize.source(),
+                "Guest target-control realize refused: the spec does not match its commitment",
+            );
+            return TargetControlResponse::SessionUnavailable;
+        }
+        let admitted = match &request {
+            TargetControlRequest::Realize(_) | TargetControlRequest::Adopt { .. } => {
+                self.admit(&request)
+            }
+            TargetControlRequest::Observe { .. } | TargetControlRequest::Delete { .. } => {
+                self.check(&request)
+            }
+        };
+        if let Err(refusal) = admitted {
             tracing::warn!(
                 code = refusal.code(),
                 source = %request.source(),
                 "Guest target-control request refused before any effect",
             );
+            if refusal == GuestTargetRefusal::SourceReplaced {
+                // The named source is not the one this Guest owns. Drop the
+                // stale record instead of re-binding it, so the host's next
+                // realize of the replacement converges instead of being
+                // refused forever by a record it may not inherit.
+                self.forget(request.source());
+            }
             return TargetControlResponse::SessionUnavailable;
         }
         match request {
@@ -235,17 +440,6 @@ impl GuestTargetService {
     /// owning Host-zone source, then the type's effect code applies the exact
     /// spec bytes and the realization is reported `ready` once serving.
     async fn realize(&self, realize: GuestRealizeRequest) -> TargetControlResponse {
-        // The commitment is recomputed from the carried bytes: a spec that was
-        // substituted or truncated on the way is refused before the effect
-        // sees it, and nothing is recorded.
-        if target_local_spec_digest(realize.spec()) != realize.spec_digest() {
-            tracing::warn!(
-                code = "guest-target-spec-commitment-mismatch",
-                source = %realize.source(),
-                "Guest target-control realize refused: the spec does not match its commitment",
-            );
-            return TargetControlResponse::SessionUnavailable;
-        }
         let response = self.runtime.handle(TargetControlRequest::Realize(realize.clone()));
         let TargetControlResponse::Realized { realization } = &response else {
             return response;
@@ -288,22 +482,27 @@ impl GuestTargetService {
         let source = request.source().clone();
         let present = self.runtime.instance(&source).is_some();
         let response = self.runtime.handle(request);
-        if present
-            && matches!(response, TargetControlResponse::Deleted)
-            && let Some(effect) = self.effect(&source)
-            && let Err(error) = effect.delete(&source).await
-        {
-            tracing::warn!(
-                code = error.code(),
-                source = %source,
-                "Guest target-local effect delete did not converge",
-            );
+        if matches!(response, TargetControlResponse::Deleted) {
+            // A delete retires the assignment whether or not a realization
+            // was there, so the ownership goes with it either way.
+            self.scope.release(&source);
+            if present
+                && let Some(effect) = self.effect(&source)
+                && let Err(error) = effect.delete(&source).await
+            {
+                tracing::warn!(
+                    code = error.code(),
+                    source = %source,
+                    "Guest target-local effect delete did not converge",
+                );
+            }
         }
         response
     }
 
     /// Adopt one realization after a reconnect (F5): the runtime re-binds the
-    /// instance to the live session generation, and the type's effect code
+    /// instance to the live session generation, the common contract re-binds
+    /// the same ownership to the same source uid, and the type's effect code
     /// re-discovers the target-local effect. An effect that is gone - or whose
     /// discovery cannot answer - answers `missing`, so the owning Host actor
     /// realizes the resource again (idempotently) instead of inheriting a
@@ -314,6 +513,9 @@ impl GuestTargetService {
         let TargetControlResponse::Adopted(GuestAdoption::Adopted(instance)) = &response else {
             return response;
         };
+        if self.scope.re_bind(&source, instance.session_generation()).is_err() {
+            return self.missing(&source, instance);
+        }
         let Some(effect) = self.effect(&source) else {
             return response;
         };
@@ -342,34 +544,82 @@ impl GuestTargetService {
                 );
             }
         }
-        // Forgetting the unresolved record is the fenced delete the protocol
-        // already serves, at the same live generation the adoption named, so
-        // the host sees `missing` and realizes the resource again instead of
-        // holding a realization nobody could confirm.
+        self.missing(&source, instance)
+    }
+
+    /// Forget one unresolved realization and report it missing.
+    ///
+    /// Forgetting the record is the fenced delete the protocol already serves,
+    /// at the same live generation the adoption named, so the host sees
+    /// `missing` and realizes the resource again instead of holding a
+    /// realization nobody could confirm. The contract's ownership goes with
+    /// it: a Guest never keeps a binding for a realization it just disowned.
+    fn missing(
+        &self,
+        source: &ResourceKey,
+        instance: &TargetResourceInstance,
+    ) -> TargetControlResponse {
         self.runtime.handle(TargetControlRequest::Delete {
-            assignment: d2b_resource_runtime::guest_target::TargetControlAssignment::new(
-                source,
+            assignment: TargetControlAssignment::new(
+                source.clone(),
                 *instance.source_uid(),
                 instance.assignment_generation(),
                 instance.session_generation(),
             ),
         });
+        self.scope.release(source);
         TargetControlResponse::Adopted(GuestAdoption::Missing)
     }
 
     /// Admit one source before any state or effect exists.
-    fn admit(&self, source: &ResourceKey) -> Result<(), GuestTargetRefusal> {
-        if source.zone != self.zone.as_str() {
-            return Err(GuestTargetRefusal::ForeignZone);
-        }
-        if !self.effects.contains_key(&ResourceTypeName::new(source.type_name.clone())) {
+    fn admit(&self, request: &TargetControlRequest) -> Result<(), GuestTargetRefusal> {
+        self.scope
+            .admit(request_assignment(request))?;
+        self.effect_registered(request)
+    }
+
+    /// Check one source that only reads or retires it, without taking
+    /// ownership.
+    fn check(&self, request: &TargetControlRequest) -> Result<(), GuestTargetRefusal> {
+        self.scope
+            .check(request_assignment(request))?;
+        self.effect_registered(request)
+    }
+
+    fn effect_registered(
+        &self,
+        request: &TargetControlRequest,
+    ) -> Result<(), GuestTargetRefusal> {
+        if !self
+            .effects
+            .contains_key(&ResourceTypeName::new(request.source().type_name.clone()))
+        {
             return Err(GuestTargetRefusal::UnknownType);
         }
         Ok(())
     }
 
+    /// Drop one source's realization and its contract ownership together.
+    fn forget(&self, source: &ResourceKey) {
+        if let Some(instance) = self.runtime.instance(source) {
+            self.missing(source, &instance);
+            return;
+        }
+        self.scope.release(source);
+    }
+
     fn effect(&self, source: &ResourceKey) -> Option<&Arc<dyn GuestTargetEffect>> {
         self.effects.get(&ResourceTypeName::new(source.type_name.clone()))
+    }
+}
+
+/// The assignment one target-control request carries.
+fn request_assignment(request: &TargetControlRequest) -> &TargetControlAssignment {
+    match request {
+        TargetControlRequest::Realize(request) => request.assignment(),
+        TargetControlRequest::Observe { assignment }
+        | TargetControlRequest::Delete { assignment }
+        | TargetControlRequest::Adopt { assignment } => assignment,
     }
 }
 
@@ -433,7 +683,7 @@ mod tests {
     };
     use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
     use d2b_resource_runtime::target::TargetRef;
-
+    
     use super::{
         GuestTargetEffect, GuestTargetEffectError, GuestTargetEffects, GuestTargetService,
     };

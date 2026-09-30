@@ -467,6 +467,91 @@
       "reason": "test-support recorder lock"
     },
     {
+      "file": "packages/d2b-provider-guest/tests/graph_target_contract.rs",
+      "line": 263,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2b-provider-guest/tests/graph_target_contract.rs",
+      "line": 268,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2b-provider-guest/tests/graph_target_contract.rs",
+      "line": 273,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2b-provider-guest/tests/graph_target_contract.rs",
+      "line": 349,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2b-provider-guest/tests/graph_target_contract.rs",
+      "line": 493,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2b-provider-guest/tests/graph_target_contract.rs",
+      "line": 503,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2b-provider-guest/tests/graph_target_contract.rs",
+      "line": 507,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2b-provider-guest/tests/graph_target_contract.rs",
+      "line": 667,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2b-provider-guest/tests/graph_target_contract.rs",
+      "line": 715,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2b-provider-guest/tests/graph_target_contract.rs",
+      "line": 757,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2b-provider-guest/tests/graph_target_contract.rs",
+      "line": 792,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2b-provider-guest/tests/graph_target_contract.rs",
+      "line": 806,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2b-provider-guest/tests/graph_target_contract.rs",
+      "line": 819,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2b-provider-guest/tests/graph_target_contract.rs",
+      "line": 821,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2b-provider-guest/tests/graph_target_contract.rs",
+      "line": 832,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2b-provider-guest/tests/graph_target_contract.rs",
+      "line": 834,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2b-provider-guest/tests/graph_target_contract.rs",
+      "line": 864,
+      "reason": "test-support recorder lock"
+    },
+    {
       "file": "packages/d2b-provider-process/src/driver.rs",
       "line": 2453,
       "reason": "synchronous lock acquisition, no await while the guard is held"
@@ -873,22 +958,17 @@
     },
     {
       "file": "packages/d2bd/tests/guest_target_service.rs",
-      "line": 93,
+      "line": 94,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/guest_target_service.rs",
-      "line": 96,
+      "line": 97,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/guest_target_service.rs",
-      "line": 106,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2bd/tests/guest_target_service.rs",
-      "line": 112,
+      "line": 107,
       "reason": "test-support recorder lock"
     },
     {
@@ -898,12 +978,17 @@
     },
     {
       "file": "packages/d2bd/tests/guest_target_service.rs",
-      "line": 116,
+      "line": 114,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/guest_target_service.rs",
-      "line": 427,
+      "line": 117,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2bd/tests/guest_target_service.rs",
+      "line": 428,
       "reason": "test-support recorder lock"
     },
     {

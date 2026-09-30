@@ -14,6 +14,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::guest_mode::{BootIdentity, GuestIdentity};
+
 use d2b_contracts_broker::broker_wire::BrokerProfile;
 use d2b_contracts_provider::v3::{
     ArtifactDigest, ComponentDescriptor, ComponentExecution, ComponentType,
@@ -26,6 +28,7 @@ use d2b_contracts_resource::v3::{
     process::{ExecutionSpec, ProcessClass, ProcessSpec},
 };
 use sha2::{Digest, Sha256};
+
 
 /// The only daemon modes. A mode is selected before the runtime starts and is
 /// never read from a request or changed on a live instance.
@@ -2241,6 +2244,142 @@ fn revoke_record_assignments_all(
     count
 }
 
+/// Provider-neutral evidence of one accepted Guest parent ComponentSession.
+///
+/// Every Guest implementation - a local VM, a media-backed VM, or a remote
+/// cloud Guest - reaches its target through the same parent session, so the
+/// evidence a target-control channel rides names exactly the enrolled Guest
+/// identity, the authority Zone, the live reconnect generation, and the
+/// declared Provider row the accepted graph bound to this Guest.
+///
+/// The declared Provider is carried as graph data and is never matched:
+/// nothing here - or in the contract that consumes this value - decides
+/// behavior from which Provider it names. That is what lets a second Guest
+/// implementation consume the same contract without waiting for the first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuestParentSessionEvidence {
+    zone: ZoneId,
+    guest_ref: ResourceRef,
+    guest_uid: ResourceUid,
+    boot_identity: BootIdentity,
+    provider_ref: ResourceRef,
+    reconnect_generation: ReconnectGeneration,
+    session_generation: u64,
+}
+
+impl GuestParentSessionEvidence {
+    /// Bind one accepted parent session to the enrolled Guest identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DeploymentError::GenerationZero`] for a session generation
+    /// of zero (never a valid ComponentSession),
+    /// [`DeploymentError::ProviderWrongKind`] when the declared row is not a
+    /// `Provider`, and [`DeploymentError::TargetWrongKind`] when the
+    /// enrolled execution reference is not a `Guest`.
+    pub fn bind(
+        identity: &GuestIdentity,
+        provider_ref: ResourceRef,
+        session_generation: u64,
+    ) -> Result<Self, DeploymentError> {
+        if session_generation == 0 {
+            return Err(DeploymentError::GenerationZero);
+        }
+        if provider_ref.resource_type().as_str() != "Provider" {
+            return Err(DeploymentError::ProviderWrongKind);
+        }
+        if identity.guest_ref().resource_type().as_str() != "Guest" {
+            return Err(DeploymentError::TargetWrongKind);
+        }
+        Ok(Self {
+            zone: identity.zone().clone(),
+            guest_ref: identity.guest_ref().clone(),
+            guest_uid: identity.guest_uid().clone(),
+            boot_identity: identity.boot_identity(),
+            provider_ref,
+            reconnect_generation: identity.reconnect_generation(),
+            session_generation,
+        })
+    }
+
+    /// Borrow the authority Zone the accepted graph placed this Guest in.
+    pub const fn zone(&self) -> &ZoneId {
+        &self.zone
+    }
+
+    /// Borrow the enrolled `Guest/<name>` execution reference.
+    pub const fn guest_ref(&self) -> &ResourceRef {
+        &self.guest_ref
+    }
+
+    /// Borrow the enrolled Guest's stable uid.
+    pub const fn guest_uid(&self) -> &ResourceUid {
+        &self.guest_uid
+    }
+
+    /// Return the kernel boot identity this evidence was enrolled against.
+    ///
+    /// A different boot is a different Guest: the evidence cannot be carried
+    /// across one, so a request that presents another boot identity is
+    /// refused rather than adopted.
+    pub const fn boot_identity(&self) -> BootIdentity {
+        self.boot_identity
+    }
+
+    /// Borrow the declared Provider row the accepted graph bound to this
+    /// Guest.
+    ///
+    /// This is graph data, never a dispatch key.
+    pub const fn provider_ref(&self) -> &ResourceRef {
+        &self.provider_ref
+    }
+
+    /// Return the enrolled reconnect generation this evidence requires.
+    pub const fn reconnect_generation(&self) -> ReconnectGeneration {
+        self.reconnect_generation
+    }
+
+    /// Return the live authenticated session generation.
+    pub const fn session_generation(&self) -> u64 {
+        self.session_generation
+    }
+
+    /// Rebind the evidence to a strictly newer reconnect generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DeploymentError::GenerationZero`] for generation zero and
+    /// [`DeploymentError::ControllerSessionStale`] when the new generation is
+    /// not strictly newer than the one this evidence already names: a
+    /// reconnect can never inherit an older session's authority.
+    pub fn reconnect(self, session_generation: u64) -> Result<Self, DeploymentError> {
+        if session_generation == 0 {
+            return Err(DeploymentError::GenerationZero);
+        }
+        if session_generation <= self.session_generation {
+            return Err(DeploymentError::ControllerSessionStale);
+        }
+        let generation = ReconnectGeneration::new(session_generation)
+            .map_err(|_| DeploymentError::GenerationZero)?;
+        Ok(Self {
+            reconnect_generation: generation,
+            session_generation,
+            ..self
+        })
+    }
+
+    /// Whether a session at `session_generation` may still carry work for
+    /// this Guest.
+    ///
+    /// False for a generation that is not the live one and for a generation
+    /// below the enrolled reconnect floor, so a retained capability from a
+    /// lost session cannot act for its successor.
+    pub const fn carries(&self, session_generation: u64) -> bool {
+        session_generation == self.session_generation
+            && session_generation >= self.reconnect_generation.get()
+    }
+}
+
 /// ProviderDeployment refusal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeploymentError {
@@ -2335,6 +2474,120 @@ mod tests {
             ResourceTypeName::parse(kind).expect("resource type"),
             ResourceName::parse(name).expect("resource name"),
         )
+    }
+
+    fn guest_identity(reconnect_generation: u64) -> GuestIdentity {
+        GuestIdentity::new(
+            resource("Guest", "workload"),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("Guest UID"),
+            ZoneId::parse("work").expect("zone"),
+            crate::guest_mode::BootIdentity::from_kernel_boot_id("guest-evidence-test")
+                .expect("boot identity"),
+            d2b_contracts_resource::v3::identity::SessionPurpose::parse(
+                crate::guest_mode::GUEST_COMPONENT_SESSION_PURPOSE,
+            )
+            .expect("purpose"),
+            SchemaFingerprint::parse(format!("sha256:{}", "1".repeat(64))).expect("schema"),
+            ReconnectGeneration::new(reconnect_generation).expect("reconnect generation"),
+            1,
+            1,
+            1,
+        )
+        .expect("Guest identity")
+    }
+
+    /// The evidence the common Guest target/session contract is fenced on
+    /// names exactly the enrolled identity: the Guest uid, the boot identity,
+    /// the authority Zone, the live reconnect generation, and the declared
+    /// Provider as graph data.
+    #[test]
+    fn guest_parent_session_evidence_carries_the_enrolled_identity() {
+        let identity = guest_identity(3);
+        let evidence = GuestParentSessionEvidence::bind(
+            &identity,
+            resource("Provider", "runtime-example"),
+            7,
+        )
+        .expect("evidence");
+        assert_eq!(evidence.zone().as_str(), "work");
+        assert_eq!(evidence.guest_ref(), identity.guest_ref());
+        assert_eq!(evidence.guest_uid(), identity.guest_uid());
+        assert_eq!(evidence.boot_identity(), identity.boot_identity());
+        assert_eq!(evidence.reconnect_generation(), ReconnectGeneration::new(3).expect("floor"));
+        assert_eq!(evidence.session_generation(), 7);
+        assert_eq!(evidence.provider_ref(), &resource("Provider", "runtime-example"));
+    }
+
+    /// The evidence is refused for a zero session generation, a row that is
+    /// not a Provider, and a non-Guest execution reference.
+    #[test]
+    fn guest_parent_session_evidence_refuses_a_shape_it_cannot_carry() {
+        let identity = guest_identity(3);
+        assert_eq!(
+            GuestParentSessionEvidence::bind(&identity, resource("Provider", "p"), 0),
+            Err(DeploymentError::GenerationZero),
+        );
+        assert_eq!(
+            GuestParentSessionEvidence::bind(&identity, resource("Guest", "p"), 7),
+            Err(DeploymentError::ProviderWrongKind),
+        );
+        let host = GuestIdentity::new(
+            resource("Host", "desktop"),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("UID"),
+            ZoneId::parse("work").expect("zone"),
+            crate::guest_mode::BootIdentity::from_kernel_boot_id("guest-evidence-test")
+                .expect("boot identity"),
+            d2b_contracts_resource::v3::identity::SessionPurpose::parse(
+                crate::guest_mode::GUEST_COMPONENT_SESSION_PURPOSE,
+            )
+            .expect("purpose"),
+            SchemaFingerprint::parse(format!("sha256:{}", "1".repeat(64))).expect("schema"),
+            ReconnectGeneration::new(3).expect("reconnect generation"),
+            1,
+            1,
+            1,
+        );
+        assert!(
+            host.is_err(),
+            "a Guest target contract is never built for a non-Guest identity"
+        );
+    }
+
+    /// Only the live generation carries target-control work: an older session
+    /// never inherits its successor's authority, and a reconnect can only
+    /// advance.
+    #[test]
+    fn guest_parent_session_evidence_carries_only_its_live_generation() {
+        let evidence = GuestParentSessionEvidence::bind(
+            &guest_identity(3),
+            resource("Provider", "runtime-example"),
+            7,
+        )
+        .expect("evidence");
+        assert!(evidence.carries(7), "the live generation is the one that carries");
+        assert!(!evidence.carries(6), "an older session carries nothing");
+        assert!(!evidence.carries(8), "an unknown newer generation carries nothing");
+        assert!(!evidence.carries(0), "generation zero is never a session");
+
+        let advanced = evidence.clone().reconnect(9).expect("newer generation");
+        assert_eq!(advanced.session_generation(), 9);
+        assert_eq!(advanced.reconnect_generation(), ReconnectGeneration::new(9).expect("floor"));
+        assert_eq!(advanced.guest_uid(), evidence.guest_uid());
+        assert_eq!(
+            evidence.clone().reconnect(7),
+            Err(DeploymentError::ControllerSessionStale),
+            "the same generation is not a reconnect"
+        );
+        assert_eq!(
+            evidence.clone().reconnect(6),
+            Err(DeploymentError::ControllerSessionStale),
+            "an older generation is not a reconnect"
+        );
+        assert_eq!(
+            evidence.reconnect(0),
+            Err(DeploymentError::GenerationZero),
+            "generation zero is never a session"
+        );
     }
 
     fn assignment(session_generation: u64) -> ControllerAssignmentKey {
