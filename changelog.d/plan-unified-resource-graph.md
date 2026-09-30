@@ -43,3 +43,27 @@ operation row, and the role posture remain in place for the production entry
 point that has not switched yet; the conversion units that own those callers
 switch them to these contracts, and the integrated cutover removes what they
 replace. Production schema and generation output are unchanged by this entry.
+
+### Changed
+
+- QEMU's runner now takes its private descriptor slots from admitted graph
+  relationships. The acceleration `Device`, the tap `Network`, each media
+  `Volume`, and the display `Endpoint` each contribute one private slot, and
+  every slot carries the `BindingKey`, `SourceReservation`, admitted right,
+  and source arbitration that authorized it. A relationship whose source
+  refused the right, whose access mode the Provider does not realize, whose
+  committed rows have moved on, or whose lifecycle admits no new use produces
+  no slot at all, and the projection is total: it returns a complete
+  descriptor list or nothing.
+- The QEMU runner is realized as a helper on the Guest's own reservation. It
+  takes an attenuated realization leg derived from its parent relationship's
+  own key, reservation, source, and right - never a second reservation, a
+  competing writer, or a second device allocation - and a helper asking for a
+  right its parent was not admitted for is refused before the leg is built.
+- QEMU media shutdown now closes the consumer's descriptors, drops the
+  runner's realization legs while the reservation is still held, stops the
+  process, and only then releases the source.
+- The controller-created runtime `Volume` derives the runner's storage request
+  as an ordinary typed `VolumeBinding` request, so the QMP and serial sockets
+  reach the runner through an admitted relationship rather than a mount the
+  `Process` contract hard-coded.

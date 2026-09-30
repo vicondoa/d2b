@@ -11,15 +11,24 @@ pub mod qmp;
 pub mod types;
 
 pub use adoption::{AdoptionOutcome, ProcessIdentity, verify_identity};
+#[doc(hidden)]
+pub use controller::attachments::test_fixtures;
 pub use config::{
     ControllerConfigProjection, ProviderConfig, ProviderConfigError, WorkerConfigProjection,
 };
 pub use controller::{
-    AttachmentKind, AttachmentSlot, DeviceAdmission, DeviceAdmissionError, DeviceObservation,
-    DevicePhase, LayoutEntry, LaunchTicket, PlatformClass, ProcessSpec, ProcessSpecError,
-    QemuMediaController, QemuMediaDependencies, QemuMediaEffectPort, QemuMediaError,
-    QemuMediaPhase, QemuMediaReconcileOutcome, QemuMediaRecoveryState, RuntimeVolumeSpec,
-    RuntimeVolumeView, VolumeLayoutType, VolumeQuota, build_process_spec, validate_process_spec,
+    AdmittedAttachment, AdmittedAttachments, AdmittedRelationship, AttachmentKind, AttachmentSlot,
+    DeclaredAttachments, DeviceAdmission, DeviceAdmissionError, DeviceObservation, DevicePhase, GuestMediaBindings,
+    ImplementationLeg, LayoutEntry, LaunchAttachments, LaunchTicket, MediaAdmissionError,
+    MediaRequest, PlatformClass,
+    ProcessSpec, ProcessSpecError, QemuMediaController, QemuMediaDependencies,
+    QemuMediaEffectPort, QemuMediaError, QemuMediaPhase, QemuMediaReconcileOutcome,
+    QemuMediaRecoveryState, RelationshipEvidence, RuntimeVolumeSpec, RuntimeVolumeView,
+    SlotRequirements, VolumeLayoutType, VolumeQuota, build_process_spec,
+    qemu_media_realization_support,
+    validate_process_spec, DISPLAY_PURPOSE, DISPLAY_SLOT, KVM_FUNCTION, KVM_SLOT,
+    MEDIA_SLOT_PREFIX, QEMU_MEDIA_REALIZATION_FACETS,
+    RUNTIME_VOLUME_MOUNT_PATH, RUNTIME_VOLUME_RUNNER_VIEW, RUNTIME_VOLUME_SLOT, TAP_SLOT,
 };
 pub use controller::process_builder::PROCESS_TEMPLATE;
 pub use controller::reconcile::QEMU_MEDIA_REPAIR_INTERVAL_SECS;

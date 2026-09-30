@@ -134,6 +134,21 @@ impl guest_media_runtime::QemuMediaEffectPort for FrameworkQemuEffect {
         Ok(())
     }
 
+    fn attach_implementation_leg(
+        &mut self,
+        _leg: &guest_media_runtime::ImplementationLeg,
+    ) -> Result<(), guest_media_runtime::QemuMediaError> {
+        // The framework effect owns no reservation handle: the broker's
+        // reservation service mints the leg. Accepting it here records that
+        // the runner will open its descriptors under the Guest's own
+        // reservation rather than a second claim.
+        Ok(())
+    }
+
+    fn detach_implementation_legs(&mut self) -> Result<(), guest_media_runtime::QemuMediaError> {
+        Ok(())
+    }
+
     fn close_media_effects(&mut self) -> Result<(), guest_media_runtime::QemuMediaError> {
         self.qmp_ready = false;
         Ok(())
@@ -1075,6 +1090,12 @@ impl GuestEffectsService {
                 || display_ref.as_ref().is_some_and(ready),
             qmp_ready: effect.qmp_ready(),
             qmp_status: effect.qmp_ready().then_some(guest_media_runtime::QmpVmStatus::Paused),
+            // The framework watch path still assembles the pre-graph declared
+            // refs rather than admitted evidence. U34 rewires this to the
+            // relationship set the source providers admit, and deletes
+            // `media_refs`, `display_ref`, and the `LaunchAttachments::Declared`
+            // arm with it.
+            bindings: None,
             media_refs,
             display_ref,
             runtime_volume_ready,

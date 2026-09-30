@@ -6,8 +6,9 @@ use crate::{
     config::{ProviderConfig, ProviderConfigError},
     controller::process_builder::{PROCESS_TEMPLATE, validate_process_spec},
     controller::{
-        DeviceAdmission, DeviceAdmissionError, DeviceObservation, LaunchTicket, ProcessSpec,
-        ProcessSpecError,
+        AdmittedAttachments, DeviceAdmission, DeviceAdmissionError, DeviceObservation,
+        GuestMediaBindings, ImplementationLeg, LaunchTicket, MediaAdmissionError, ProcessSpec,
+        ProcessSpecError, SlotRequirements,
     },
     qmp::QmpVmStatus,
     types::{GuestProviderSpecSettings, GuestSpecError},
@@ -56,7 +57,7 @@ pub enum QemuMediaReconcileOutcome {
 }
 
 /// Closed QEMU media controller failure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QemuMediaError {
     /// Provider or Process configuration is invalid.
     InvalidConfiguration,
@@ -64,6 +65,8 @@ pub enum QemuMediaError {
     DependencyNotReady,
     /// Device admission failed.
     Device(DeviceAdmissionError),
+    /// A relationship the Guest's own spec requires was not admitted.
+    Binding(MediaAdmissionError),
     /// Process identity was ambiguous.
     AdoptionAmbiguous,
     /// A typed effect failed.
@@ -78,11 +81,12 @@ pub enum QemuMediaError {
 
 impl QemuMediaError {
     /// Return the stable Provider error code.
-    pub const fn code(self) -> &'static str {
+    pub fn code(&self) -> &'static str {
         match self {
             Self::InvalidConfiguration => "runtime-qemu-media-invalid-configuration",
             Self::DependencyNotReady => "dependency-not-ready",
             Self::Device(error) => error.code(),
+            Self::Binding(error) => error.code(),
             Self::AdoptionAmbiguous => "process-adoption-ambiguous",
             Self::Effect => "runtime-qemu-media-effect-failed",
             Self::QmpNotReady => "qmp-greeting-timeout",
@@ -118,8 +122,14 @@ impl From<ProcessSpecError> for QemuMediaError {
     }
 }
 
+impl From<MediaAdmissionError> for QemuMediaError {
+    fn from(error: MediaAdmissionError) -> Self {
+        Self::Binding(error)
+    }
+}
+
 /// Dependency snapshot supplied by Core's authenticated watch path.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct QemuMediaDependencies {
     /// KVM Device observation.
     pub device: Option<DeviceObservation>,
@@ -133,9 +143,19 @@ pub struct QemuMediaDependencies {
     pub qmp_ready: bool,
     /// Current QMP VM state.
     pub qmp_status: Option<QmpVmStatus>,
-    /// Authorized media Volume refs for the LaunchTicket.
+    /// Every relationship the Guest declared, with each source's own decision.
+    ///
+    /// The private descriptor list is projected from this set and from
+    /// nothing else, so a watch path that is Ready while a relationship is
+    /// absent, refused, or stale still refuses preparation (R34, R35, R38).
+    ///
+    /// `None` selects the pre-graph declared path below, which the unchanged
+    /// daemon composition still supplies. U34 deletes this fallback and the
+    /// two declared fields with it.
+    pub bindings: Option<GuestMediaBindings>,
+    /// Pre-graph declared media Volume refs. U34 deletes this field.
     pub media_refs: Vec<ResourceRef>,
-    /// Authorized display Endpoint ref for the LaunchTicket.
+    /// Pre-graph declared display Endpoint ref. U34 deletes this field.
     pub display_ref: Option<ResourceRef>,
     /// Controller-created runtime Volume is Ready.
     pub runtime_volume_ready: bool,
@@ -143,26 +163,9 @@ pub struct QemuMediaDependencies {
     pub qmp_elapsed_seconds: u32,
 }
 
-impl Default for QemuMediaDependencies {
-    fn default() -> Self {
-        Self {
-            device: None,
-            network_ready: false,
-            media_ready: false,
-            display_ready: true,
-            qmp_ready: false,
-            qmp_status: None,
-            media_refs: Vec::new(),
-            display_ref: None,
-            runtime_volume_ready: false,
-            qmp_elapsed_seconds: 0,
-        }
-    }
-}
-
 impl QemuMediaDependencies {
-    /// Construct a fully-ready dependency snapshot.
-    pub fn ready(device: DeviceObservation) -> Self {
+    /// Construct a fully-ready dependency snapshot from admitted evidence.
+    pub fn ready(device: DeviceObservation, bindings: GuestMediaBindings) -> Self {
         Self {
             device: Some(device),
             network_ready: true,
@@ -170,6 +173,7 @@ impl QemuMediaDependencies {
             display_ready: true,
             qmp_ready: true,
             qmp_status: Some(QmpVmStatus::Paused),
+            bindings: Some(bindings),
             media_refs: Vec::new(),
             display_ref: None,
             runtime_volume_ready: true,
@@ -192,6 +196,25 @@ pub trait QemuMediaEffectPort {
         authority_key: [u8; 32],
         owner_ref: &ResourceRef,
     ) -> Result<(), QemuMediaError>;
+    /// Attach the runner to the Guest's own reservation as an attenuated leg.
+    ///
+    /// The port has no reserve call for the runner: the VMM is a helper on a
+    /// reservation the Guest already holds, so the only thing the broker is
+    /// asked for is a leg naming the parent's own source, identity, and
+    /// permitted right subset. A leg naming another source, or a right the
+    /// parent was not admitted for, is refused there and refused again by
+    /// [`ImplementationLeg::with_rights`] before it is ever constructed
+    /// (R21, R38-R40, AE27).
+    fn attach_implementation_leg(
+        &mut self,
+        leg: &ImplementationLeg,
+    ) -> Result<(), QemuMediaError>;
+    /// Drop every realization leg after the consumer descriptors are closed.
+    ///
+    /// A leg is a view of the parent's claim, not a claim of its own, so it
+    /// is detached before the consumer stops using the source and long before
+    /// the source itself is released (R36, R38).
+    fn detach_implementation_legs(&mut self) -> Result<(), QemuMediaError>;
     /// Close all QMP/media effects before stopping the Process.
     fn close_media_effects(&mut self) -> Result<(), QemuMediaError>;
     /// Continue a paused Guest when pauseAtBoot is false.
@@ -236,6 +259,8 @@ pub struct QemuMediaController<E> {
     process_stopped: bool,
     authority_released: bool,
     runtime_volume_deleted: bool,
+    legs_attached: bool,
+    legs_detached: bool,
     marker: PhantomData<E>,
 }
 
@@ -270,6 +295,8 @@ impl<E> QemuMediaController<E> {
             process_stopped: false,
             authority_released: false,
             runtime_volume_deleted: false,
+            legs_attached: false,
+            legs_detached: false,
             marker: PhantomData,
         })
     }
@@ -320,6 +347,12 @@ impl<E> QemuMediaController<E> {
         self.process_stopped = recovery.phase == QemuMediaPhase::Finalized;
         self.authority_released = recovery.phase == QemuMediaPhase::Finalized;
         self.runtime_volume_deleted = recovery.phase == QemuMediaPhase::Finalized;
+        // A recovered controller holds no leg: the legs were views of a
+        // reservation the previous incarnation held, and recovery re-derives
+        // them from current admitted evidence rather than trusting a cached
+        // "attached" flag (R41, AE18).
+        self.legs_attached = false;
+        self.legs_detached = recovery.phase == QemuMediaPhase::Finalized;
         Ok(self)
     }
 
@@ -330,6 +363,23 @@ impl<E> QemuMediaController<E> {
         self.finalizer_installed = true;
         self.authority_reserved = true;
         self.initial_pause_observed = self.settings.pause_at_boot;
+    }
+
+    /// What this Guest's own spec requires its private descriptor list to
+    /// hold.
+    ///
+    /// The requirements come from the two declared specs that already named
+    /// the attachment list: the runner's own `Process` contract, which
+    /// declares whether a network is attached, and the Guest's provider
+    /// settings, which declare the media Volumes and the host display window.
+    /// Nothing else can add or drop a descriptor (R15, R16).
+    fn slot_requirements(&self) -> SlotRequirements {
+        let boot_media = usize::from(self.settings.boot_media_ref.is_some());
+        SlotRequirements::derive(
+            self.process.execution().network_usage().is_some(),
+            boot_media + self.settings.removable_volume_refs.len(),
+            self.settings.display_window,
+        )
     }
 }
 
@@ -386,6 +436,23 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
                 );
                 QemuMediaError::Device(error)
             })?;
+        // The private descriptor list is projected, and every leg derived,
+        // before any effect runs. A missing, refused, or stale relationship
+        // therefore costs the Guest nothing: no authority is reserved, no leg
+        // is attached, and no process is launched (R34, R40).
+        let attachments = match &dependencies.bindings {
+            Some(bindings) => Some(
+                bindings
+                    .project(&self.guest_ref, self.slot_requirements())
+                    .inspect_err(|error| {
+                        tracing::warn!(
+                            code = error.code(),
+                            "attachment projection refused for guest"
+                        );
+                    })?,
+            ),
+            None => None,
+        };
         if !self.authority_reserved {
             effect.reserve_device_authority(device.authority_key, &self.guest_ref)?;
             self.authority_reserved = true;
@@ -434,11 +501,29 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
                     return Err(QemuMediaError::AdoptionAmbiguous);
                 }
                 self.phase = QemuMediaPhase::Starting;
-                let ticket = LaunchTicket::new(
-                    self.process.clone(),
-                    dependencies.media_refs.clone(),
-                    dependencies.display_ref.clone(),
-                )?;
+                if let Some(admitted) = attachments.as_ref().filter(|_| !self.legs_attached) {
+                    for leg in AdmittedAttachments::legs(admitted)? {
+                        effect.attach_implementation_leg(&leg).inspect_err(|error| {
+                            tracing::warn!(
+                                code = error.code(),
+                                identity = ?leg.identity,
+                                "runner leg refused on the guest's own reservation"
+                            );
+                        })?;
+                    }
+                    self.legs_attached = true;
+                    self.legs_detached = false;
+                }
+                let ticket = match attachments {
+                    Some(attachments) => {
+                        LaunchTicket::admitted(self.process.clone(), attachments)?
+                    }
+                    None => LaunchTicket::declared(
+                        self.process.clone(),
+                        dependencies.media_refs.clone(),
+                        dependencies.display_ref.clone(),
+                    )?,
+                };
                 let candidate = effect.launch(&ticket).inspect_err(|error| {
                     tracing::warn!(
                         code = error.code(),
@@ -554,7 +639,14 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
         Ok(QemuMediaReconcileOutcome::Ready)
     }
 
-    /// Finalize QMP/media effects, then stop the Process and release authority.
+    /// Finalize QMP/media effects, drop the runner's legs, stop the Process,
+    /// then release the source authority.
+    ///
+    /// The order is the KTD10 pre-drain order and it is not rearranged: the
+    /// consumer's own descriptors close first, the runner's legs are dropped
+    /// while the reservation is still held, the process stops, and only then
+    /// is the source released. A release that ran first would retire a
+    /// relationship the running Guest still had open (R6, R36, R38).
     #[tracing::instrument(skip(self, effect), fields(resource = %self.guest_ref, provider = "runtime-qemu-media"))]
     pub fn finalize(&mut self, effect: &mut E) -> Result<(), QemuMediaError> {
         if !self.finalizer_installed {
@@ -564,6 +656,11 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
         if !self.media_closed {
             effect.close_media_effects()?;
             self.media_closed = true;
+        }
+        if self.legs_attached && !self.legs_detached {
+            effect.detach_implementation_legs()?;
+            self.legs_detached = true;
+            self.legs_attached = false;
         }
         let observed = effect.observe().inspect_err(|error| {
             tracing::warn!(
