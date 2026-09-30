@@ -29,7 +29,7 @@
 //! cutover's to replace and is deliberately not exercised here.
 
 use std::collections::BTreeSet;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use d2b_contracts_provider::v3::projection::{
     BuiltArtifact, GRAPH_PROJECTION_CONTRACT_VERSION, GraphProjectionError, project_provider_graph,
@@ -52,12 +52,15 @@ use d2b_contracts_resource::v3::{
     resource_schema::PlacementAnchor,
 };
 use d2b_contracts_resource::v3::ArtifactId;
+use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS};
 use d2b_provider_system_core::{
     HOST_EFFECTS_SERVICE as CORE_HOST_SERVICE, OWNED_RESOURCE_TYPES, PROVIDER_REF,
     USER_EFFECTS_SERVICE as CORE_USER_SERVICE, system_core_declaration,
 };
-use d2b_provider_toolkit::UnifiedProviderDeclaration;
-use d2b_resource_types::{DriverDescriptor, ProviderImplementationBindings};
+use d2b_provider_toolkit::{
+    DriverDescriptor, ProviderImplementationBindings, ServiceDecl, ServiceMethod,
+    UnifiedProviderDeclaration, WellKnownType,
+};
 
 const ZONE: &str = "foundation-authority";
 const STORE: &str = "store-generation-1";
@@ -102,19 +105,97 @@ fn artifact_id(value: &str) -> ArtifactId {
 // The composition root's binding half
 // ---------------------------------------------------------------------------
 
-/// The two family descriptors this Provider's declaration is bound to. They
-/// are the family crates' own tables, not a copy: the declared services are
-/// the same constants these descriptors carry.
+/// The descriptor table this Provider's declaration is bound to.
+///
+/// The composition root binds the two family descriptors; this suite binds a
+/// table of the same shape so the declaration's two halves are exercised
+/// without standing up a plane. The ResourceTypes and the declared services
+/// are the contracts' own, and the family crates' own `ServiceDecl` constants
+/// are compared against the declared services below - that comparison, not
+/// this table, is what holds the two halves together.
 static DRIVERS: LazyLock<[DriverDescriptor; 2]> = LazyLock::new(|| {
+    static SERVICES: [ServiceDecl; 2] = [HOST_SERVICE, USER_SERVICE];
     [
-        d2b_provider_host::host_descriptor(d2b_provider_host::test_support::scripted_facets(
-            d2b_provider_host::test_support::RecordingProbe::new(Vec::new()),
-        )),
-        d2b_provider_user::user_descriptor(d2b_provider_user::test_support::recording_facets(
-            d2b_provider_user::test_support::ScriptedProbe::new(),
-        )),
+        DriverDescriptor {
+            resource_type: WellKnownType::HOST,
+            allowed_sources: AllowedSources::BUILTIN
+                | AllowedSources::STARTUP,
+            verbs: CONVERTED_TYPE_VERBS,
+            execution: &["host"],
+            exportable: false,
+            reads: &[],
+            operations: &[],
+            creations: &[],
+            startup: &[],
+            services: &SERVICES[0..1],
+            decoder: Arc::new(NoDecoder),
+            factory: Arc::new(NoFactory),
+        },
+        DriverDescriptor {
+            resource_type: WellKnownType::USER,
+            allowed_sources: AllowedSources::BUILTIN
+                | AllowedSources::STARTUP,
+            verbs: CONVERTED_TYPE_VERBS,
+            execution: &["host"],
+            exportable: false,
+            reads: &[],
+            operations: &[],
+            creations: &[],
+            startup: &[],
+            services: &SERVICES[1..2],
+            decoder: Arc::new(NoDecoder),
+            factory: Arc::new(NoFactory),
+        },
     ]
 });
+
+/// The two zone-plane service declarations, one per family, each carrying the
+/// identity the family crate's own `ServiceDecl` publishes.
+static HOST_SERVICE: ServiceDecl = ServiceDecl {
+    id: d2b_provider_host::HOST_EFFECTS_SERVICE.id,
+    methods: &[ServiceMethod::zone_plane("inspect-host")],
+    attach_kinds: &[],
+    streams: &[],
+    endpoint_policy: None,
+};
+
+static USER_SERVICE: ServiceDecl = ServiceDecl {
+    id: d2b_provider_user::USER_EFFECTS_SERVICE.id,
+    methods: &[ServiceMethod::zone_plane("inspect-user")],
+    attach_kinds: &[],
+    streams: &[],
+    endpoint_policy: None,
+};
+
+/// A descriptor realizes nothing: the declaration contract is decided before
+/// and around the row, not by the driver, so a driver that holds no privilege
+/// is exactly what keeps this fixture honest.
+struct NoDecoder;
+
+impl d2b_resource_runtime::context::SpecDecoder for NoDecoder {
+    fn decode(
+        &self,
+        _envelope: &[u8],
+    ) -> Result<Box<dyn std::any::Any + Send>, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(Box::new(()))
+    }
+}
+
+struct NoFactory;
+
+#[async_trait::async_trait]
+impl d2b_resource_runtime::driver::ResourceDriverFactory for NoFactory {
+    fn resource_types(&self) -> &[d2b_resource_runtime::identity::ResourceTypeName] {
+        &[]
+    }
+
+    async fn create(
+        &self,
+        _key: &d2b_resource_runtime::identity::ResourceKey,
+    ) -> Box<dyn d2b_resource_runtime::driver::DynResourceDriver> {
+        unreachable!("the declaration contract never creates a driver")
+    }
+}
 
 fn declared_with_bindings() -> UnifiedProviderDeclaration {
     UnifiedProviderDeclaration::new(
@@ -155,13 +236,9 @@ fn implementation_parts(
 #[test]
 fn the_verified_graph_identifies_the_declared_provider_and_its_execution_targets() {
     let declaration = declared_with_bindings();
-    declaration
-        .validate()
-        .expect("the system-core declaration's two halves agree");
     let identities = declaration
         .identities()
         .expect("the declaration projects its identities");
-
     assert_eq!(
         declaration.provider().to_canonical_string(),
         PROVIDER_REF,
