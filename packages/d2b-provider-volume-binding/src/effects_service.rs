@@ -172,6 +172,7 @@ mod tests {
             &BoundedToken::parse("work".to_owned()).expect("zone"),
             &ResourceRef::parse("Volume/work").expect("volume"),
             &ResourceRef::parse("Guest/acceptance-guest").expect("guest"),
+            &BoundedToken::parse("named".to_owned()).expect("view"),
         );
         let key = ResourceKey::new("work", "VolumeBinding", "binding");
         let binding = StoredBinding::new(

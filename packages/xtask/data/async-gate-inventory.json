@@ -93,7 +93,7 @@
     },
     {
       "file": "packages/d2b-broker/src/ops/store_sync.rs",
-      "line": 682,
+      "line": 739,
       "reason": "tokio OpenOptions builder flag, not a lock acquisition"
     },
     {

@@ -582,23 +582,35 @@ impl BindingDriver {
             .with_detail(FailureDetail::at("plan/derive").with_note(reason))
     }
 
-    /// Re-derive the path-free launch plan from the persisted binding plus
-    /// the bundle-resolved view spec (KTD7). Tuning travels in the plan,
-    /// never in the resource (KTD1): the serving posture is the frozen
-    /// default declared by `VirtiofsdWorkerPlan::for_binding`. A plan the
-    /// frozen contract rejects is terminal, and its reason is preserved.
+    /// Re-derive the path-free launch plan from the persisted binding, the
+    /// parent Volume, and the bundle-resolved view spec (KTD7). Tuning
+    /// travels in the plan, never in the resource (KTD1): the serving
+    /// posture is the frozen default declared by
+    /// `VirtiofsdWorkerPlan::for_binding`, and the plan carries the source
+    /// locator and the socket identity DERIVED FROM THE BINDING, so no
+    /// launch argument, Guest row, or Device row takes part in deciding
+    /// what a serving worker serves. A plan the frozen contract rejects is
+    /// terminal, and its reason is preserved.
     fn derive_plan(
         &self,
         ctx: &mut ResourceContext,
         binding: &StoredBinding,
+        volume: &VolumeSpec,
         view: &ViewSpec,
         op: DriverOp,
     ) -> Result<VirtiofsdWorkerPlan, BindingDriverError> {
         let principal = binding
             .worker_principal()
             .map_err(|reason| self.rejected(ctx, reason.code(), op))?;
-        VirtiofsdWorkerPlan::for_binding(binding, view, self.vcpu_count, principal)
-            .map_err(|reason| self.rejected(ctx, reason.code(), op))
+        VirtiofsdWorkerPlan::for_binding(
+            binding,
+            volume,
+            view,
+            self.vcpu_count,
+            principal,
+            self.zone_bounded(),
+        )
+        .map_err(|reason| self.rejected(ctx, reason.code(), op))
     }
 
     /// The status handle carrying the exact re-derived plan (KTD7).
@@ -873,7 +885,7 @@ impl ResourceDriver for BindingDriver {
             .views()
             .get(stored.spec().view().as_str())
             .ok_or_else(|| self.rejected(ctx, VirtiofsBindingError::ViewNotFound.code(), op))?;
-        let plan = self.derive_plan(ctx, &stored, view, op)?;
+        let plan = self.derive_plan(ctx, &stored, &volume_spec, view, op)?;
         let derived = self.derived_plan(&stored, plan, op)?;
         let desired = self.desired_child_keys(&stored, op)?;
         let owned = ctx
@@ -912,7 +924,7 @@ impl ResourceDriver for BindingDriver {
             .views()
             .get(stored.spec().view().as_str())
             .ok_or_else(|| self.rejected(ctx, VirtiofsBindingError::ViewNotFound.code(), op))?;
-        let plan = self.derive_plan(ctx, &stored, view, op)?;
+        let plan = self.derive_plan(ctx, &stored, &volume_spec, view, op)?;
         let derived = self.derived_plan(&stored, plan, op)?;
 
         let mut mutated = self.ensure_children(ctx, &stored, op).await?;

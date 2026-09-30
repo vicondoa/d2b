@@ -6,6 +6,7 @@
 //! writes a Volume row.
 
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -14,12 +15,14 @@ use d2b_contracts_resource::v3::{
     ResourceGeneration, ResourceRef, ResourceUid, ZoneRevision,
     execution_policy::BoundedToken,
     resource_status::StatusCode,
+    volume::{SourceKind, ViewSpec, VolumeSpec},
     volume_binding::{
         VolumeBindingReadinessFence, VolumeBindingSpec, VolumeBindingStatusResource,
     },
 };
 
 use crate::error::VirtiofsBindingError;
+use crate::socket_path::{SocketPathRefusal, derive_serving_socket_path};
 
 /// The standard ResourceType name this Provider serves (canonical contract).
 pub use d2b_contracts_resource::v3::volume_binding::VOLUME_BINDING_RESOURCE_TYPE;
@@ -27,6 +30,119 @@ pub use d2b_contracts_resource::v3::volume_binding::VOLUME_BINDING_RESOURCE_TYPE
 /// The finalizer volume-virtiofs adds to each VolumeBinding, and to
 /// nothing else.
 pub const VOLUME_BINDING_FINALIZER: &str = "volume-virtiofs.d2bus.org/volume-binding";
+
+/// Admit a view's relative path, or refuse it before it reaches a
+/// composition step.
+///
+/// A view path is joined onto a declared root, so an absolute path, a
+/// `.`/`..` component, or an empty interior component is refused here
+/// rather than being normalized into a sibling of the root it belongs
+/// under. An empty path names the root itself, which is the one legal
+/// empty spelling.
+fn admitted_view_path(view: &ViewSpec) -> Result<String, VirtiofsBindingError> {
+    let path = view.path();
+    if path.is_empty() {
+        return Ok(String::new());
+    }
+    if path.starts_with('/')
+        || path.contains('\0')
+        || path
+            .split('/')
+            .any(|component| component.is_empty() || component == "." || component == "..")
+    {
+        return Err(VirtiofsBindingError::InvalidBinding);
+    }
+    Ok(path.to_owned())
+}
+
+/// The source a binding's serving worker realizes, derived from the
+/// admitted binding and the Volume it names.
+///
+/// The value is a LOCATOR, not a host path: it names the declared
+/// storage row or the broker-managed store-view generation the view lives
+/// in, plus the view's own relative path, and the composing side resolves
+/// it against its own verified bundle. Nothing here is read back out of a
+/// launch argument, and nothing here names a Device, a Guest runtime
+/// directory, or a socket (R17-R20).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServingSource {
+    /// A Volume whose source kind names a declared storage root.
+    ///
+    /// The view root is `<declared row root>/<volume name>/<view path>`,
+    /// composed by the side that holds the trusted declaration. A source
+    /// that names no storage row admits no view at all: serving an
+    /// unnamed subtree is exactly the case a refusal exists for.
+    DeclaredStorageRoot {
+        /// The storage path row the Volume's own source policy names.
+        source_policy: BoundedToken,
+        /// The volume name the row's root is composed with.
+        volume_name: BoundedToken,
+        /// The view's relative path under that root; empty names the root.
+        view_path: String,
+    },
+    /// A closure-sourced Volume.
+    ///
+    /// The bytes are the broker-managed per-consumer store-view farm, never
+    /// a path into the shared content store: the farm holds hardlinks, and
+    /// the shared store's own inodes are never a mutation target.
+    ///
+    /// No generation is named here. The generation is the broker's to pin,
+    /// and it pins it on the export the publication runs under; a Provider
+    /// that carried its own copy would be carrying a number it cannot
+    /// enforce and that nothing would compare it against.
+    ClosureStoreView {
+        /// The volume name the farm is keyed by.
+        volume_name: BoundedToken,
+        /// The view's relative path under the farm's live tree.
+        view_path: String,
+    },
+}
+
+impl ServingSource {
+    /// The view's relative path inside whichever root this source names.
+    pub fn view_path(&self) -> &str {
+        match self {
+            Self::DeclaredStorageRoot { view_path, .. }
+            | Self::ClosureStoreView { view_path, .. } => view_path,
+        }
+    }
+
+    /// The volume name this source was derived for.
+    pub const fn volume_name(&self) -> &BoundedToken {
+        match self {
+            Self::DeclaredStorageRoot { volume_name, .. }
+            | Self::ClosureStoreView { volume_name, .. } => volume_name,
+        }
+    }
+}
+
+impl fmt::Display for ServingSource {
+    /// Renders the source CLASS, never its material: a log line, an audit
+    /// record, or an error never carries a root, a store path, or a
+    /// generation id.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::DeclaredStorageRoot { .. } => "declared-storage-root",
+            Self::ClosureStoreView { .. } => "closure-store-view",
+        })
+    }
+}
+
+impl Serialize for ServingSource {
+    /// Serializes the source CLASS, exactly as [`fmt::Display`] does.
+    ///
+    /// The worker plan is a public, serializable type that reaches logs
+    /// and audit records, so a serialized source must not carry the
+    /// storage row, the volume name, the view path, or the generation it
+    /// resolves to. The composing side already holds the locator it was
+    /// handed in the plan itself.
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(match self {
+            Self::DeclaredStorageRoot { .. } => "declared-storage-root",
+            Self::ClosureStoreView { .. } => "closure-store-view",
+        })
+    }
+}
 
 /// The opaque identity of one binding's private listening socket.
 ///
@@ -38,19 +154,34 @@ pub const VOLUME_BINDING_FINALIZER: &str = "volume-virtiofs.d2bus.org/volume-bin
 pub struct SocketIdentity([u8; 32]);
 
 impl SocketIdentity {
-    /// Derive the identity of one binding's socket.
+    /// Derive the identity of one relationship's socket.
+    ///
+    /// The digest covers the whole relationship - the Zone, the source, the
+    /// consumer, and the NAMED VIEW. Two relationships that share a source
+    /// and a consumer but name different views are two exports with two
+    /// private sockets, so a worker can never be handed another view's
+    /// socket, and a helper that restarted re-derives byte-identical output
+    /// for its own relationship.
+    ///
+    /// [`StoredBinding::socket_identity`] and
+    /// [`SocketIdentity::derive`] are the same function, so the serving
+    /// side and the side that composes the launch can never disagree about
+    /// which socket a binding stands for.
     pub fn derive(
         zone: &BoundedToken,
         volume_ref: &ResourceRef,
         execution_ref: &ResourceRef,
+        view: &BoundedToken,
     ) -> Self {
         let mut hasher = Sha256::new();
-        hasher.update(b"d2b/volume-virtiofs/binding-socket/v1");
+        hasher.update(b"d2b/volume-virtiofs/binding-socket/v3");
         hasher.update(zone.as_str().as_bytes());
         hasher.update([0u8]);
         hasher.update(volume_ref.to_canonical_string().as_bytes());
         hasher.update([0u8]);
         hasher.update(execution_ref.to_canonical_string().as_bytes());
+        hasher.update([0u8]);
+        hasher.update(view.as_str().as_bytes());
         let mut bytes = [0u8; 32];
         bytes.copy_from_slice(&hasher.finalize());
         Self(bytes)
@@ -251,7 +382,23 @@ impl StoredBinding {
             zone,
             self.binding.volume_ref(),
             self.binding.execution_ref(),
+            self.binding.view(),
         )
+    }
+
+    /// Derive one relationship's private socket identity from its parts.
+    ///
+    /// The composing side holds the same four facts the binding does, and
+    /// deriving through this entry point instead of a second copy of the
+    /// digest is what keeps the two sides from disagreeing about which
+    /// socket a binding stands for.
+    pub fn socket_identity_for(
+        zone: &BoundedToken,
+        volume_ref: &ResourceRef,
+        execution_ref: &ResourceRef,
+        view: &BoundedToken,
+    ) -> SocketIdentity {
+        SocketIdentity::derive(zone, volume_ref, execution_ref, view)
     }
 
     /// Derive the binding-owned virtiofsd Process reference.
@@ -274,6 +421,69 @@ impl StoredBinding {
         )
     }
 
+    /// The source this binding's serving worker realizes.
+    ///
+    /// Derived from the admitted binding and the Volume it names, and
+    /// from nothing else: a Guest with no Device children derives exactly
+    /// the source a Guest with children derives (AE6). A source kind this
+    /// Provider cannot realize - a block image, a tmpfs, or a local path
+    /// naming no storage row - is refused instead of served from a
+    /// subtree the graph never admitted.
+    pub fn serving_source(
+        &self,
+        volume: &VolumeSpec,
+        view: &ViewSpec,
+    ) -> Result<ServingSource, VirtiofsBindingError> {
+        let view_path = admitted_view_path(view)?;
+        let volume_name = BoundedToken::parse(self.binding.volume_ref().name().as_str())
+            .map_err(|_| VirtiofsBindingError::InvalidBinding)?;
+        match volume.source().settings().kind() {
+            SourceKind::LocalPath => {
+                let policy = volume
+                    .source()
+                    .settings()
+                    .source_policy_id()
+                    .ok_or(VirtiofsBindingError::SourceKindUnsupported)?;
+                Ok(ServingSource::DeclaredStorageRoot {
+                    source_policy: policy.clone(),
+                    volume_name,
+                    view_path,
+                })
+            }
+            SourceKind::NixClosure => Ok(ServingSource::ClosureStoreView {
+                volume_name,
+                view_path,
+            }),
+            SourceKind::BlockImage | SourceKind::Tmpfs => {
+                Err(VirtiofsBindingError::SourceKindUnsupported)
+            }
+        }
+    }
+
+    /// The private socket this binding's worker binds, as an opaque
+    /// identity.
+    ///
+    /// Only the Zone token and this binding's own relationship reach the
+    /// digest, so it is stable across a helper restart and distinct
+    /// between two bindings that share a volume or a consumer.
+    pub fn serving_socket(&self, zone: &BoundedToken) -> SocketIdentity {
+        self.socket_identity(zone)
+    }
+
+    /// The private socket path this binding's worker binds.
+    ///
+    /// The path is derived from [`Self::serving_socket`] and the
+    /// broker-owned runtime root the launch composes. No Guest row, no
+    /// Device row, and no parsed launch argument reaches it, and a root
+    /// that cannot be fenced with a component comparison or cannot hold a
+    /// socket address is refused rather than normalized.
+    pub fn serving_socket_path(
+        &self,
+        zone: &BoundedToken,
+        runtime_root: &Path,
+    ) -> Result<PathBuf, SocketPathRefusal> {
+        derive_serving_socket_path(runtime_root, &self.socket_identity(zone))
+    }
 }
 
 fn derive_child_ref(

@@ -44,6 +44,7 @@ use crate::ops::store_sync_audit::{
     CleanupReason, CleanupStatus, ErrorStage, StoreSyncAuditContext, StoreSyncAuditFields,
     StoreSyncTimings,
 };
+use crate::ops::store_view_farm::{ExportRefusal, StoreViewExportBinding};
 use crate::ops::store_view_posture::{
     PostureError, plant_live_marker_with_matrix_posture, posture_store_view_matrix_paths,
     posture_store_view_matrix_paths_before_build,
@@ -250,6 +251,62 @@ pub async fn run_store_sync(
     wire_generation: u32,
 ) -> Result<StoreSyncOutcome, StoreSyncError> {
     run_store_sync_inner(intent, wire_vm, wire_generation, false).await
+}
+
+/// Why one admitted export could not be published.
+///
+/// A generation that the trusted intent does not resolve is the ordinary
+/// `StoreSyncError::GenerationMismatch` case; every other refusal is a
+/// property of the relationship itself.
+#[derive(Debug)]
+pub enum StoreSyncExportError {
+    /// The relationship does not admit this publication.
+    Refused(ExportRefusal),
+    /// The publication itself failed.
+    Sync(StoreSyncError),
+}
+
+impl std::fmt::Display for StoreSyncExportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Refused(refusal) => write!(f, "store-sync export refused: {refusal}"),
+            Self::Sync(error) => write!(f, "store-sync export: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for StoreSyncExportError {}
+
+/// Publish one store-view generation for one admitted export.
+///
+/// The export is the authority: it names the consumer, the named view, and
+/// the single generation that consumer was admitted for. A publication
+/// whose generation is not that one is refused before the lock is taken
+/// and before anything is created, so a stale or superseding request can
+/// neither relink nor republish behind an admitted relationship.
+///
+/// Everything this function writes is the farm's own: the live pool, the
+/// generation metadata, the two `current` pointers, and the live marker.
+/// The content-store inodes the links share are never written, and no
+/// ownership or permission change is issued anywhere under the farm.
+pub async fn run_store_sync_for_export(
+    intent: &ResolvedStoreViewIntent,
+    export: &StoreViewExportBinding,
+) -> Result<StoreSyncOutcome, StoreSyncExportError> {
+    if export.generation() != intent.generation {
+        return Err(StoreSyncExportError::Refused(
+            ExportRefusal::GenerationNotAdmitted,
+        ));
+    }
+    let generation = u32::try_from(intent.generation).map_err(|_| {
+        StoreSyncExportError::Sync(StoreSyncError::GenerationOverflow {
+            wire: u32::MAX,
+            resolved: intent.generation,
+        })
+    })?;
+    run_store_sync(intent, &intent.vm, generation)
+        .await
+        .map_err(StoreSyncExportError::Sync)
 }
 
 pub async fn run_store_sync_repair(

@@ -93,7 +93,9 @@ pub mod host_reset;
 // Typed broker op that hardlink-farms per-VM closures into
 // `/var/lib/d2b/vms/<vm>/store/` and atomically swaps the `current`
 // symlink. Replaces the `d2b-<vm>-store-sync.service` bash oneshot.
-pub(crate) mod store_sync;
+// Public so the binding-scoped publication can be driven from the
+// owning test target rather than from a second copy of the policy.
+pub mod store_sync;
 
 // Signed ADR 0027 terminal audit schema for `StoreSync` (enums +
 // invariant-enforcing constructors + validation).
@@ -111,8 +113,10 @@ pub(crate) mod store_view_posture;
 
 // Out-of-process, mount-namespace-isolated store-view hardlink farm
 // build. Used by `store_sync` so the farm hardlinks succeed even when
-// `/nix/store` is a separate (bind) mount from `/var/lib/d2b`.
-pub(crate) mod store_view_farm;
+// `/nix/store` is a separate (bind) mount from `/var/lib/d2b`. Public
+// so the admitted-export admission and the read-only build it guards
+// are exercised where the mutation rule is observable.
+pub mod store_view_farm;
 
 // Per-VM writable store overlay disk-image provisioning. Runs before
 // SpawnRunner when `DiskInit` plan-ops are present.

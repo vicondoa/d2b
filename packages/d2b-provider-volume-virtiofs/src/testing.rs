@@ -5,6 +5,8 @@
 //! sandbox, and privacy obligations without a virtiofsd binary, a socket,
 //! a broker, or a guest.
 
+use std::path::PathBuf;
+
 use tokio::sync::Mutex;
 
 use d2b_contracts_resource::v3::{ResourceGeneration, ResourceRef, ResourceUid, ZoneRevision};
@@ -12,7 +14,7 @@ use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 use d2b_contracts_resource::v3::volume_binding::VolumeBindingStatusResource;
 use crate::error::VirtiofsBindingError;
 use crate::bindings::StoredBinding;
-use crate::port::{LaunchedWorker, VirtiofsBindingEffectPort};
+use crate::port::{LaunchedWorker, MountObservation, ServingWorkerLaunch, VirtiofsBindingEffectPort};
 use crate::worker::VirtiofsdWorkerPlan;
 
 /// One recorded effect-port call.
@@ -43,16 +45,17 @@ pub enum PortCall {
 pub struct ScriptedPort {
     store_view_marker: bool,
     socket_ready: bool,
-    guest_mount_ready: bool,
-    guest_mount_after_delete: bool,
+    consumer_mount_slot: Mutex<MountObservation>,
+    mount_after_delete: MountObservation,
     launched_plans: Mutex<Vec<VirtiofsdWorkerPlan>>,
+    launched_sockets: Mutex<Vec<PathBuf>>,
     current_fence: Mutex<Option<(ResourceUid, ResourceGeneration, ZoneRevision)>>,
     calls: Mutex<Vec<PortCall>>,
     status_writes: Mutex<Vec<VolumeBindingStatusResource>>,
 }
 
 impl ScriptedPort {
-    /// A port whose worker serves and whose guest mounts.
+    /// A port whose worker serves and whose consumer has mounted.
     ///
     /// The server side opens holding the canonical fixture binding
     /// identity, so writes under the fixture fence are current.
@@ -61,9 +64,10 @@ impl ScriptedPort {
         Self {
             store_view_marker: true,
             socket_ready: true,
-            guest_mount_ready: true,
-            guest_mount_after_delete: false,
+            consumer_mount_slot: Mutex::new(MountObservation::Present),
+            mount_after_delete: MountObservation::Absent,
             launched_plans: Mutex::new(Vec::new()),
+            launched_sockets: Mutex::new(Vec::new()),
             calls: Mutex::new(Vec::new()),
             current_fence: Mutex::new(Some((
                 fixture.uid().clone(),
@@ -74,16 +78,41 @@ impl ScriptedPort {
         }
     }
 
+    /// A port whose consumer has not started yet.
+    ///
+    /// The source still serves; only the consumer is absent. This is the
+    /// pre-boot steady state a Guest's prepared export is in.
+    pub fn consumer_not_running(mut self) -> Self {
+        self.consumer_mount_slot = Mutex::new(MountObservation::ConsumerNotRunning);
+        self
+    }
+
+    /// A port whose running consumer reports no mount.
+    pub fn consumer_mount_absent(mut self) -> Self {
+        self.consumer_mount_slot = Mutex::new(MountObservation::Absent);
+        self
+    }
+
     /// A port whose socket never comes up.
     pub const fn socket_never_ready(mut self) -> Self {
         self.socket_ready = false;
         self
     }
 
-    /// A port whose guest never reports the mount.
-    pub const fn guest_never_mounts(mut self) -> Self {
-        self.guest_mount_ready = false;
+    /// A port whose consumer never reports the mount.
+    pub fn guest_never_mounts(mut self) -> Self {
+        self.consumer_mount_slot = Mutex::new(MountObservation::Absent);
         self
+    }
+
+    /// Move the consumer to a new observation.
+    ///
+    /// The consumer is the outside world to this double: the same port
+    /// that reported "not running" before a boot reports "present" after
+    /// one, so one controller instance can be observed across the boot
+    /// the two completion conditions are separated for.
+    pub async fn set_consumer_mount(&self, observation: MountObservation) {
+        *self.consumer_mount_slot.lock().await = observation;
     }
 
     /// A store-view marker that has not been published yet.
@@ -94,7 +123,7 @@ impl ScriptedPort {
 
     /// A port whose guest mount survives worker deletion.
     pub const fn mount_survives_delete(mut self) -> Self {
-        self.guest_mount_after_delete = true;
+        self.mount_after_delete = MountObservation::Present;
         self
     }
 
@@ -153,6 +182,19 @@ impl ScriptedPort {
             .unwrap_or_default()
     }
 
+    /// Return every private socket path the controller asked to bind, in
+    /// launch order.
+    ///
+    /// Synchronous surface (consumed from plain `#[test]` fns without a
+    /// runtime): non-blocking `try_lock` per plan U4, failing closed on a
+    /// collision instead of parking the caller's thread.
+    pub fn launched_sockets(&self) -> Vec<PathBuf> {
+        self.launched_sockets
+            .try_lock()
+            .map(|sockets| sockets.clone())
+            .unwrap_or_default()
+    }
+
     async fn record(&self, call: PortCall) {
         self.calls.lock().await.push(call);
     }
@@ -166,10 +208,11 @@ impl VirtiofsBindingEffectPort for &ScriptedPort {
     async fn launch_worker(
         &self,
         binding: &StoredBinding,
-        plan: &VirtiofsdWorkerPlan,
+        launch: &ServingWorkerLaunch,
     ) -> Result<LaunchedWorker, VirtiofsBindingError> {
         self.record(PortCall::LaunchWorker).await;
-        self.launched_plans.lock().await.push(plan.clone());
+        self.launched_plans.lock().await.push(launch.plan.clone());
+        self.launched_sockets.lock().await.push(launch.socket_path.clone());
         Ok(LaunchedWorker {
             process_ref: ResourceRef::parse("Process/vol-work-state-virtiofsd-work-vm")
                 .expect("valid fixture ref"),
@@ -185,12 +228,12 @@ impl VirtiofsBindingEffectPort for &ScriptedPort {
     async fn observe_guest_mount(
         &self,
         _binding: &StoredBinding,
-    ) -> Result<bool, VirtiofsBindingError> {
+    ) -> Result<MountObservation, VirtiofsBindingError> {
         self.record(PortCall::ObserveGuestMount).await;
         if self.deleted() {
-            return Ok(self.guest_mount_after_delete);
+            return Ok(self.mount_after_delete);
         }
-        Ok(self.guest_mount_ready)
+        Ok(*self.consumer_mount_slot.lock().await)
     }
 
     async fn observe_store_view_marker(
@@ -302,5 +345,50 @@ pub mod fixtures {
             },
         }))
         .expect("conformant fixture Volume spec")
+    }
+
+    /// A closure-sourced Volume served read-only out of the broker-managed
+    /// store-view farm rather than out of the shared content store.
+    pub fn closure_store_view_volume() -> VolumeSpec {
+        serde_json::from_value(json!({
+            "source": {
+                "executionRef": "Host/host-system",
+                "settings": { "kind": "nix-closure", "systemArtifactId": "base-system" },
+            },
+            "kind": "durable",
+            "layout": [],
+            "views": {
+                "ro-store": { "path": "live", "rights": ["read", "traverse"] },
+            },
+        }))
+        .expect("conformant closure fixture Volume spec")
+    }
+
+    /// The closure fixture's named view.
+    pub fn closure_view() -> ViewSpec {
+        serde_json::from_value(json!({ "path": "live", "rights": ["read", "traverse"] }))
+            .expect("conformant closure fixture view")
+    }
+
+    /// A Volume whose source kind admits no serving view at all.
+    ///
+    /// A tmpfs is a private per-consumer scratch source: it names no
+    /// declared storage row and no store-view generation, so there is
+    /// nothing to compose a view root from and the serving side refuses it
+    /// rather than inventing one.
+    pub fn unservable_source_volume() -> VolumeSpec {
+        serde_json::from_value(json!({
+            "source": {
+                "executionRef": "Host/host-system",
+                "settings": { "kind": "tmpfs" },
+            },
+            "kind": "ephemeral",
+            "layout": [],
+            "quota": { "maxBytes": 1048576, "maxInodes": 16, "enforcement": "hard" },
+            "views": {
+                "ro-store": { "path": "live", "rights": ["read", "traverse"] },
+            },
+        }))
+        .expect("conformant tmpfs fixture Volume spec")
     }
 }

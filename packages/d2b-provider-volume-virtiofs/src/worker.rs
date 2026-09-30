@@ -9,10 +9,10 @@
 use serde::Serialize;
 
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
-use d2b_contracts_resource::v3::volume::{AttachmentAccess, AttachmentCache, ViewRight, ViewSpec};
+use d2b_contracts_resource::v3::volume::{AttachmentAccess, AttachmentCache, ViewRight, ViewSpec, VolumeSpec};
 
 use crate::error::VirtiofsBindingError;
-use crate::bindings::StoredBinding;
+use crate::bindings::{ServingSource, SocketIdentity, StoredBinding};
 
 /// The frozen sandbox mode of every virtiofsd worker.
 pub const SANDBOX_MODE: &str = "chroot";
@@ -22,16 +22,52 @@ pub const WORKER_TEMPLATE: &str = "virtiofsd-worker";
 /// launch port.
 pub const USER_NAMESPACE_MAPPING_CLASS: &str = "process-principal-root";
 
+/// The presentation capability this Provider's serving component declares.
+///
+/// The worker serves the admitted view from inside its own verified
+/// sandbox and is never handed a host mount to realize, so its
+/// presentation is namespace-first: the source is opened by the service
+/// itself, under a steady-state mount namespace it holds itself, with
+/// zero host capabilities.
+///
+/// It is DECLARED here, on the component, as the contract requires. It is
+/// not inferred from the `virtiofsd-worker` launch role, not inherited
+/// from a seccomp label, and not defaulted from the old serving-worker
+/// setup mode: a Provider whose role name or confinement label changes
+/// still presents the same way, and a Provider that never declared it
+/// presents nothing.
+pub const PRESENTATION_CAPABILITY: &str = "namespace-first-service-source";
+
+/// The setup restrictions [`PRESENTATION_CAPABILITY`] implies.
+///
+/// They are the contract's own requirement list for the capability, held
+/// next to it so the declaration and its restrictions cannot drift apart:
+/// the service supplies its source itself, so the launch must already
+/// carry a steady-state mount namespace and must carry no host
+/// capability at all.
+pub const SETUP_RESTRICTIONS: [&str; 2] =
+    ["steady-state-mount-namespace", "zero-host-capability"];
+
 /// The path-free launch plan of one binding's virtiofsd worker.
 ///
 /// It names no socket path, no shared directory, no numeric group, and
-/// no store path. The effect adapter joins it to the private root
-/// descriptor and the private socket path it alone derives.
+/// no store path. It carries the [`ServingSource`] locator and the opaque
+/// [`SocketIdentity`] the controller derived FROM THE ADMITTED BINDING, so
+/// the effect adapter joins a launch it was handed to a source and a
+/// socket it did not choose.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VirtiofsdWorkerPlan {
     /// The Process template this worker instantiates.
     pub template: &'static str,
+    /// The source the worker serves, derived from the admitted binding.
+    pub source: ServingSource,
+    /// The opaque identity of the private socket the worker binds.
+    pub socket: SocketIdentity,
+    /// The presentation capability this worker realizes.
+    pub presentation: &'static str,
+    /// The setup restrictions the capability implies.
+    pub setup_restrictions: [&'static str; 2],
     /// The number of worker threads, resolved from the target Guest's
     /// vcpu count.
     pub thread_pool_size: u32,
@@ -53,6 +89,11 @@ pub struct VirtiofsdWorkerPlan {
 impl VirtiofsdWorkerPlan {
     /// Build the worker plan for one binding.
     ///
+    /// The plan is built from the admitted binding, the Volume it names,
+    /// and the Zone the binding lives in. It reads no Guest row, no
+    /// Device row, and no launch argument, so a Guest with no Device
+    /// children plans the same worker a Guest with children does (AE6).
+    ///
     /// `vcpu_count` supplies the thread-pool size. The plan is read-only
     /// whenever the binding declares read-only access or the selected
     /// view grants no write right, so a view that never granted write
@@ -63,9 +104,11 @@ impl VirtiofsdWorkerPlan {
     /// invariant holds by construction.
     pub fn for_binding(
         binding: &StoredBinding,
+        volume: &VolumeSpec,
         view: &ViewSpec,
         vcpu_count: u32,
         principal: BoundedToken,
+        zone: &BoundedToken,
     ) -> Result<Self, VirtiofsBindingError> {
         if vcpu_count == 0 {
             return Err(VirtiofsBindingError::InvalidBinding);
@@ -77,6 +120,10 @@ impl VirtiofsdWorkerPlan {
         }
         Ok(Self {
             template: WORKER_TEMPLATE,
+            source: binding.serving_source(volume, view)?,
+            socket: binding.serving_socket(zone),
+            presentation: PRESENTATION_CAPABILITY,
+            setup_restrictions: SETUP_RESTRICTIONS,
             thread_pool_size: vcpu_count,
             readonly: access == AttachmentAccess::ReadOnly || !writes,
             posix_acl: false,
@@ -87,6 +134,7 @@ impl VirtiofsdWorkerPlan {
         })
     }
 }
+
 
 /// The frozen sandbox posture every virtiofsd worker declares.
 ///
@@ -164,7 +212,14 @@ mod tests {
         // settings produced (KTD9).
         let binding = fixtures::binding("read-only");
         let view = fixtures::read_only_view();
-        let plan = VirtiofsdWorkerPlan::for_binding(&binding, &view, 4, fixtures::principal())
+        let plan = VirtiofsdWorkerPlan::for_binding(
+            &binding,
+            &fixtures::store_view_volume(),
+            &view,
+            4,
+            fixtures::principal(),
+            &fixtures::zone(),
+        )
             .expect("conformant plan");
         assert_eq!(plan.template, WORKER_TEMPLATE);
         assert!(!plan.posix_acl);
@@ -179,7 +234,15 @@ mod tests {
         let binding = fixtures::binding("read-only");
         let view = fixtures::read_only_view();
         assert_eq!(
-            VirtiofsdWorkerPlan::for_binding(&binding, &view, 0, fixtures::principal()).unwrap_err(),
+            VirtiofsdWorkerPlan::for_binding(
+                &binding,
+                &fixtures::store_view_volume(),
+                &view,
+                0,
+                fixtures::principal(),
+                &fixtures::zone(),
+            )
+            .unwrap_err(),
             VirtiofsBindingError::InvalidBinding
         );
     }

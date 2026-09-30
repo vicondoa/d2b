@@ -1237,15 +1237,12 @@ impl ProductionProcessProviders {
             context.device_worker_launch.as_ref(),
         ) {
             (Some(launch), None) => ticket
-                .with_launch_args(
-                    serving_worker_launch_args(
-                        &self.bundle,
-                        &self.socket_runtime_dir,
-                        &context.zone,
-                        launch,
-                    )
-                    .await?,
-                )
+                .with_launch_args(serving_worker_launch_args(
+                    &self.bundle,
+                    &self.socket_runtime_dir,
+                    &context.zone,
+                    launch,
+                )?)
                 .map_err(|_| "provider-ticket:serving-args-invalid".to_owned())?,
             (None, Some(launch)) => ticket
                 .with_launch_args(device_worker_launch_args(
@@ -3399,90 +3396,23 @@ fn validate_resource_execution_target(
     Ok(())
 }
 
-/// The mode the trusted `path:vm-run:<guest>` storage row declares for one
-/// Guest's per-Guest runtime socket directory.
+/// The private socket a binding-owned serving worker binds.
 ///
-/// The daemon stamps the very same directory the broker's Device-worker grant
-/// creates, so the mode comes from the row that declares it rather than from
-/// a default here: the row carries the sticky bit that stops one principal
-/// renaming another's socket in the shared tree, and a default that silently
-/// dropped it would leave that guarantee unenforced on whichever side won the
-/// create. `None` when the contract names no such row for that Guest, when
-/// the row is scoped to another Guest or is not a directory, when the
-/// declared mode cannot be parsed, or when it carries no group bits at all -
-/// which is the very stamp this replaces, and the one that both drops the
-/// sticky bit and zeroes the ACL mask. The caller then refuses instead of
-/// inventing a posture.
-fn declared_vm_run_dir_mode(bundle: &BundleResolver, guest: &str) -> Option<u32> {
-    let spec = bundle.find_storage_path_spec(&format!("path:vm-run:{guest}"))?;
-    if spec.scope.as_str() != format!("vm:{guest}")
-        || spec.kind != d2b_core::storage::StoragePathKind::Directory
-    {
-        return None;
-    }
-    let trimmed = spec.mode.trim_start_matches('0');
-    let normalized = if trimmed.is_empty() { "0" } else { trimmed };
-    let mode = u32::from_str_radix(normalized, 8).ok()?;
-    // The group bits ARE the stamp: POSIX rewrites a directory's ACL mask
-    // from them on every `chmod`, so a mode without them cannot carry this
-    // tree's posture at all - it nullifies the named entry every sibling
-    // worker's grant depends on, and it drops the sticky bit with it. The
-    // same refusal the broker's own side makes on `EEXIST`, made here
-    // before anything is created rather than after a directory exists.
-    (mode & 0o070 != 0).then_some(mode)
-}
-
-/// Realize one serving worker's private socket directory, before the launch
-/// ticket carries it.
+/// It is derived from the binding's own opaque socket identity under the
+/// broker-owned runtime root, and it lands directly in that root: no
+/// per-Guest directory is created for it, so no per-Guest directory mode
+/// has to be resolved, and no `path:vm-run:<guest>` row - the row a Device
+/// worker and its siblings share - has to exist first. A Guest with no
+/// Device children therefore derives exactly the socket a Guest with
+/// children derives, which is the whole of AE6 for this launch path.
 ///
-/// Only a directory THIS call creates is stamped, and it is stamped with the
-/// mode the trusted `path:vm-run:<guest>` row declares for that Guest. The
-/// directory is shared with the Device workers for the same Guest, and the
-/// broker postures it to that same row's mode and grants every worker
-/// principal a named ACL entry on it; a mode of this daemon's own choosing
-/// would land no group bits, and POSIX rewrites a file's ACL mask from its
-/// group bits on every `chmod`, so that both drops the sticky bit the shared
-/// tree depends on AND nullifies those entries: the Device worker then cannot
-/// bind its own socket there, exits, and is relaunched into the same revoked
-/// state.
-///
-/// A directory that already exists is left exactly as it is, for that same
-/// reason - re-stamping it rewrites its mask - and the broker's own grant
-/// reconciles its mode to the declared posture on the way past.
-async fn realize_serving_socket_dir(
-    parent: &std::path::Path,
-    zone: &ZoneId,
-    declared_mode: u32,
-) -> Result<(), String> {
-    let created = match tokio::fs::create_dir(parent).await {
-        Ok(()) => true,
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
-        // The `vms` parent host activation provisions can be missing on a
-        // zone-native host; realize the whole chain, which also proves the
-        // leaf was absent (its parent did not exist a moment ago).
-        Err(_) => {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|_| "provider-ticket:serving-socket-dir-create".to_owned())?;
-            true
-        }
-    };
-    if !created {
-        return Ok(());
-    }
-    use std::os::unix::fs::PermissionsExt as _;
-    if let Err(error) =
-        tokio::fs::set_permissions(parent, std::fs::Permissions::from_mode(declared_mode)).await
-    {
-        tracing::warn!(
-            zone = %zone,
-            socket_dir = %parent.display(),
-            declared_mode = format!("{declared_mode:o}"),
-            error = %error,
-            "failed to enforce the declared mode on the serving worker socket directory"
-        );
-    }
-    Ok(())
+/// The broker already owns and has already postured its runtime root, so
+/// there is no create race with a sibling worker's grant either.
+fn serving_socket_path(
+    socket_runtime_dir: &std::path::Path,
+    socket: &d2b_provider_volume_virtiofs::SocketIdentity,
+) -> Option<std::path::PathBuf> {
+    d2b_provider_volume_virtiofs::derive_serving_socket_path(socket_runtime_dir, socket).ok()
 }
 
 /// Compose one binding-owned serving worker's launch arguments.
@@ -3491,7 +3421,7 @@ async fn realize_serving_socket_dir(
 /// template pins it, and the broker composes `argv[0]` from it. These
 /// arguments carry the per-binding data the binding controller declared
 /// (private socket path, served view root, thread pool, cache, flags).
-async fn serving_worker_launch_args(
+fn serving_worker_launch_args(
     bundle: &BundleResolver,
     socket_runtime_dir: &std::path::Path,
     zone: &ZoneId,
@@ -3499,13 +3429,14 @@ async fn serving_worker_launch_args(
 ) -> Result<Vec<String>, String> {
     let zone_token = BoundedToken::parse(zone.as_str().to_owned())
         .map_err(|_| "provider-ticket:serving-zone-invalid".to_owned())?;
-    let socket_path = crate::resource_plane_v3::serving_socket_path(
-        socket_runtime_dir,
+    let socket_identity = d2b_provider_volume_virtiofs::StoredBinding::socket_identity_for(
         &zone_token,
         &launch.volume_ref,
         &launch.guest_ref,
-    )
-    .ok_or_else(|| "provider-ticket:serving-socket-path-unresolved".to_owned())?;
+        &launch.view,
+    );
+    let socket_path = serving_socket_path(socket_runtime_dir, &socket_identity)
+        .ok_or_else(|| "provider-ticket:serving-socket-path-unresolved".to_owned())?;
     let root = launch
         .root
         .as_ref()
@@ -3541,17 +3472,6 @@ async fn serving_worker_launch_args(
             .any(|component| matches!(component, std::path::Component::ParentDir))
     {
         return Err("provider-ticket:serving-view-root-unresolved".to_owned());
-    }
-    // The shared per-Guest tree is declared by the `path:vm-run:<guest>` row,
-    // and its mode is read out of that row BEFORE anything is created: a
-    // Guest this daemon cannot resolve a declared posture for is a launch it
-    // refuses, not one it realizes with a mode of its own.
-    let declared_mode = declared_vm_run_dir_mode(bundle, launch.guest_ref.name().as_str())
-        .ok_or_else(|| "provider-ticket:serving-socket-dir-mode-unresolved".to_owned())?;
-    // The worker binds its private socket as the in-namespace principal; the
-    // directory is realized before the launch (old-plane runtime-dir prep).
-    if let Some(parent) = socket_path.parent() {
-        realize_serving_socket_dir(parent, zone, declared_mode).await?;
     }
     let cache = match launch.cache {
         AttachmentCache::Auto => "auto",
@@ -4665,275 +4585,6 @@ mod tests {
         assert_eq!(converted.kernel_major, 5);
         assert_eq!(converted.kernel_minor, 2);
         assert!(!converted.cgroup_kill_available);
-    }
-
-    /// The per-Guest runtime directory is shared, and each worker principal
-    /// reaches it through its own named ACL entry the broker installed: the
-    /// Device worker's socket and this serving worker's private socket share
-    /// one directory. This prep creates that directory when it is the one to
-    /// create it, so the mode it stamps has to be the one the trusted
-    /// `path:vm-run:<guest>` row declares - `1770`, group bits and sticky bit
-    /// both. The hardcoded `0700` it used to stamp carried neither: POSIX
-    /// rewrites a file's ACL mask from its group bits on every `chmod`, so
-    /// that dropped the mask to `---`, turned every sibling principal's
-    /// named entry into `#effective:---`, and left the shared tree with no
-    /// sticky bit at all - which is the bit that stops one principal
-    /// renaming another's socket and binding its own at that name.
-    ///
-    /// The fixture's filesystem work lives in the synchronous helpers below
-    /// rather than in this body: a `#[tokio::test]` runs on a runtime, and
-    /// parking a worker on `std::fs` is the shape the async gate refuses
-    /// (and the deny list replaces with `tokio::fs`). Only the awaits this
-    /// test is actually about stay in the async body.
-    // `#[tokio::test]`'s own expansion drives the body through
-    // `Runtime::block_on`; that generated bridge is the test harness's, and
-    // the sanctioned inline allow is what keeps it out of the census.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn the_serving_socket_dir_prep_leaves_an_existing_grant_effective() {
-        if ![
-            "/run/current-system/sw/bin/setfacl",
-            "/usr/bin/setfacl",
-            "/bin/setfacl",
-        ]
-        .iter()
-        .any(|candidate| std::path::Path::new(candidate).exists())
-        {
-            eprintln!("skipping serving socket-directory ACL test: no setfacl binary");
-            return;
-        }
-
-        let parent = std::env::temp_dir().join(format!("serving-socket-dir-{}", std::process::id()));
-        let socket_dir = parent.join("acceptance-guest");
-        prepare_granted_socket_dir(&socket_dir);
-        assert_eq!(
-            socket_dir_mode(&socket_dir) & 0o070,
-            0o070,
-            "the grant starts effective"
-        );
-
-        let zone = ZoneId::parse("work").expect("zone id");
-        realize_serving_socket_dir(&socket_dir, &zone, 0o1770)
-            .await
-            .expect("realize an existing socket directory");
-        assert_eq!(
-            socket_dir_mode(&socket_dir) & 0o070,
-            0o070,
-            "the prep must not restamp a directory it did not create: the chmod \
-             revoked every other principal's grant on the shared tree"
-        );
-
-        // A directory this call does create is stamped with the DECLARED
-        // mode, so whichever side of the create race wins, the shared tree
-        // lands on the same posture.
-        let fresh = parent.join("fresh-guest");
-        realize_serving_socket_dir(&fresh, &zone, 0o1770)
-            .await
-            .expect("realize a fresh socket directory");
-        assert_eq!(
-            socket_dir_mode(&fresh) & 0o7777,
-            0o1770,
-            "a directory this call created carries the mode the row declares, \
-             sticky bit and group bits both"
-        );
-        assert_ne!(
-            socket_dir_mode(&fresh) & 0o070,
-            0o000,
-            "the created directory must carry group bits: without them the \
-             stamp zeroes the ACL mask every sibling worker's grant depends on"
-        );
-
-        // The removed stamp, on the very directory the assertion above
-        // protects: this is exactly what the prep used to do unconditionally,
-        // and it is the whole regression - the mask drops to `---` and the
-        // Device worker's entry goes `#effective:---`, so it can no longer
-        // bind the socket it shares this tree with.
-        stamp_socket_dir(&socket_dir, 0o700);
-        assert_eq!(
-            socket_dir_mode(&socket_dir) & 0o070,
-            0o000,
-            "an unconditional 0700 stamp is what nullifies the shared grants; \
-             the fixture would not prove anything if it did not"
-        );
-
-        remove_socket_dir_fixture(&parent);
-    }
-
-    /// The socket directory this daemon creates is the SAME directory the
-    /// broker's Device-worker grant creates, so its mode is the one the
-    /// trusted `path:vm-run:<guest>` row declares and nothing else. A Guest
-    /// the contract names no such row for, a row scoped to another Guest or
-    /// naming something other than a directory, an unparseable mode, and a
-    /// group-bitless one - which is exactly the shape that zeroes the ACL
-    /// mask every sibling worker's grant depends on - all resolve to nothing,
-    /// and the caller refuses rather than defaulting to a mode that silently
-    /// drops the sticky bit the shared tree depends on.
-    #[test]
-    fn the_serving_socket_dir_mode_is_the_one_the_trusted_row_declares() {
-        let declared = resolver_with_vm_run_row("acceptance-guest", "vm:acceptance-guest", "1770");
-        assert_eq!(
-            declared_vm_run_dir_mode(&declared, "acceptance-guest"),
-            Some(0o1770),
-            "the mode is read out of the row the shared tree is declared by"
-        );
-        assert_eq!(
-            declared_vm_run_dir_mode(&declared, "other-guest"),
-            None,
-            "a Guest the contract names no runtime row for has no declared mode"
-        );
-        assert_eq!(
-            declared_vm_run_dir_mode(
-                &resolver_with_vm_run_row("acceptance-guest", "vm:other-guest", "1770"),
-                "acceptance-guest",
-            ),
-            None,
-            "a row scoped to another Guest is not this Guest's posture"
-        );
-        assert_eq!(
-            declared_vm_run_dir_mode(
-                &resolver_with_vm_run_row("acceptance-guest", "vm:acceptance-guest", "not-a-mode"),
-                "acceptance-guest",
-            ),
-            None,
-            "a mode the contract cannot state in octal is not a posture to apply"
-        );
-        assert_eq!(
-            declared_vm_run_dir_mode(
-                &resolver_with_vm_run_row("acceptance-guest", "vm:acceptance-guest", "0700"),
-                "acceptance-guest",
-            ),
-            None,
-            "a group-bitless declared mode is the very stamp this must stop \
-             producing: it drops the sticky bit and zeroes the ACL mask"
-        );
-    }
-
-    /// A resolver whose storage contract declares one `path:vm-run:<guest>`
-    /// row - the declaration the shared per-Guest runtime tree is postured
-    /// from on both sides of the create race.
-    fn resolver_with_vm_run_row(guest: &str, scope: &str, mode: &str) -> BundleResolver {
-        use d2b_contracts::contract_id::{ContractId, PathTemplate};
-        use d2b_core::storage::{
-            ActorKind, ActorRef, CleanupPolicy, LeaseClass, PrincipalKind, PrincipalRef,
-            RepairPolicy, SensitivityClass, StorageAdoptionPolicy, StorageJson, StorageLifecycle,
-            StoragePathKind, StoragePathSpec, StoragePersistence, StorageRestartPolicy,
-        };
-        let host = serde_json::from_str::<d2b_core::host::HostJson>(include_str!(
-            "../../../tests/fixtures/deny-unknown/host-valid.json"
-        ))
-        .expect("host fixture");
-        let manifest = d2b_core::manifest_v04::ManifestV04::from_slice(
-            include_str!("../../../tests/golden/manifest_v04/baseline-vms.json").as_bytes(),
-        )
-        .expect("manifest fixture");
-        let mut resolver = BundleResolver::from_artifacts_with_zone_resource_bundles(
-            Bundle {
-                bundle_version: 1,
-                schema_version: "v3".to_owned(),
-                privileges_path: "privileges.json".to_owned(),
-                storage_path: None,
-                realm_workloads_launcher_v2_path: None,
-                generation: BundleGeneration {
-                    generator: "test".to_owned(),
-                    source_revision: None,
-                    generated_at: None,
-                },
-                bundle_hash: Some("sha256:bundle".to_owned()),
-                artifact_hashes: None,
-            },
-            host,
-            ProcessesJson {
-                schema_version: "v2".to_owned(),
-                vms: Vec::new(),
-            },
-            manifest,
-            BTreeMap::new(),
-        );
-        resolver.set_storage(StorageJson {
-            schema_version: "v2".to_owned(),
-            roots: Vec::new(),
-            paths: vec![StoragePathSpec {
-                id: ContractId::parse(format!("path:vm-run:{guest}")).expect("row id"),
-                scope: ContractId::parse(scope).expect("row scope"),
-                path_template: PathTemplate::parse(format!("/run/d2b/vms/{guest}"))
-                    .expect("row path"),
-                kind: StoragePathKind::Directory,
-                lifecycle: StorageLifecycle::BootScopedReadoptable,
-                persistence: StoragePersistence::BootScoped,
-                owner: PrincipalRef {
-                    kind: PrincipalKind::Uid,
-                    value: ContractId::parse("64025").expect("owner"),
-                },
-                group: PrincipalRef {
-                    kind: PrincipalKind::Gid,
-                    value: ContractId::parse("64025").expect("group"),
-                },
-                mode: mode.to_owned(),
-                access_acl: Vec::new(),
-                default_acl: Vec::new(),
-                creator: ActorRef {
-                    kind: ActorKind::NixModule,
-                    value: ContractId::parse("tmpfiles").expect("creator"),
-                },
-                writers: Vec::new(),
-                readers: Vec::new(),
-                cleanup_policy: CleanupPolicy::Boot,
-                repair_policy: RepairPolicy::NixActivation,
-                restart_policy: StorageRestartPolicy::PreserveAcrossDaemonRestart,
-                adoption_policy: StorageAdoptionPolicy::QuarantineOnAmbiguity,
-                lease_class: LeaseClass::ProcessPidfd,
-                sensitivity: SensitivityClass::Private,
-                no_follow: true,
-                recursive: false,
-                invariants: Vec::new(),
-            }],
-            restart_policies: Vec::new(),
-            degraded_states: Vec::new(),
-            remediations: Vec::new(),
-        });
-        resolver
-    }
-
-    /// Stamp `path` with `mode`. The state under test is what a `chmod` does
-    /// to an inode, so the fixture produces it with the real call, off the
-    /// runtime worker.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn stamp_socket_dir(path: &std::path::Path, mode: u32) {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
-            .unwrap_or_else(|error| panic!("stamp {} with {mode:o}: {error}", path.display()));
-    }
-
-    /// The mode bits `path` currently carries, read off the inode.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn socket_dir_mode(path: &std::path::Path) -> u32 {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::metadata(path)
-            .unwrap_or_else(|error| panic!("stat {}: {error}", path.display()))
-            .permissions()
-            .mode()
-    }
-
-    /// Build the shared socket directory the way the broker's Device-worker
-    /// grant leaves it: created, postured to the mode the `path:vm-run` row
-    /// declares, and carrying one named ACL entry for the worker principal.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn prepare_granted_socket_dir(socket_dir: &std::path::Path) {
-        std::fs::create_dir_all(socket_dir).expect("create the socket directory");
-        stamp_socket_dir(socket_dir, 0o1770);
-        // The Device worker's grant, as `grant_runner_tree_acls` leaves it.
-        let granted = std::process::Command::new("setfacl")
-            .args(["-m", "u:50123:rwx"])
-            .arg(socket_dir)
-            .status()
-            .expect("run setfacl");
-        assert!(granted.success(), "the fixture must start from a granted ACL");
-    }
-
-    /// Remove the fixture tree.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn remove_socket_dir_fixture(parent: &std::path::Path) {
-        std::fs::remove_dir_all(parent).expect("remove the fixture");
     }
 
     fn controller_bootstrap_context_for_fence(

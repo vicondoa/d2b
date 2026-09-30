@@ -37,6 +37,13 @@ pub enum VirtiofsBindingError {
     /// A status or finalizer mutation was rejected because the writer is
     /// not the virtiofs controller identity (KTD3).
     UnauthorizedWriter,
+    /// The Volume's source kind admits no serving view: a block image, a
+    /// tmpfs, a local path naming no storage row, or a closure source
+    /// with no admitted store-view generation.
+    SourceKindUnsupported,
+    /// The private socket path could not be derived from the binding's
+    /// own identity and the broker runtime root it composes.
+    ServingSocketPathUnresolved,
 }
 
 impl VirtiofsBindingError {
@@ -54,11 +61,13 @@ impl VirtiofsBindingError {
             Self::SharedWriteUnsupported => "shared-write-unsupported",
             Self::StaleFence => "stale-fence",
             Self::UnauthorizedWriter => "unauthorized-writer",
+            Self::SourceKindUnsupported => "source-kind-unsupported",
+            Self::ServingSocketPathUnresolved => "serving-socket-path-unresolved",
         }
     }
 
     /// The complete closed code set, for conformance assertions.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 13] = [
         Self::InvalidBinding,
         Self::ViewNotFound,
         Self::ViewRightsInsufficient,
@@ -70,6 +79,8 @@ impl VirtiofsBindingError {
         Self::SharedWriteUnsupported,
         Self::StaleFence,
         Self::UnauthorizedWriter,
+        Self::SourceKindUnsupported,
+        Self::ServingSocketPathUnresolved,
     ];
 }
 
