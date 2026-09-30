@@ -849,6 +849,81 @@ wire_deserialize!(
     .map_err(serde::de::Error::custom)
 );
 
+/// The authorization-only Role desired state.
+///
+/// A Role says what a subject may do: which resource verbs it may use, on
+/// which selectors, and which declared operations it may call. It says
+/// nothing about how an instance is confined and nothing about what the
+/// instance may reach on disk. Confinement is an `ExecutionPolicy` the
+/// instance selects and must be authorized for; storage, device, network,
+/// endpoint, and credential access are admitted typed binding
+/// relationships, each with its own source policy and release evidence.
+///
+/// The retired `RolePosture`, its `RoleMount` path grants, and its
+/// `commandRefs` are exactly the independent execution and access authority
+/// this contract removes, so the wire mirror denies them: a row that still
+/// carries a posture, a mount, or a command reference is rejected rather
+/// than decoded with its authority quietly dropped.
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthorizedRole {
+    rules: Vec<RoleRule>,
+    operation_refs: Vec<ResourceRef>,
+}
+
+impl AuthorizedRole {
+    /// Construct an authorization-only Role after checking every bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RoleContractError::BoundExceeded` when a list is over its
+    /// frozen ceiling and `RoleContractError::InvalidOperationRef` when a
+    /// reference does not name an `Operation`.
+    pub fn new(
+        rules: Vec<RoleRule>,
+        operation_refs: Vec<ResourceRef>,
+    ) -> Result<Self, RoleContractError> {
+        if rules.len() > MAX_ROLE_RULES
+            || operation_refs.len() > MAX_ROLE_OPERATION_REFS
+        {
+            return Err(RoleContractError::BoundExceeded);
+        }
+        for reference in &operation_refs {
+            if reference.resource_type().as_str() != OPERATION_RESOURCE_TYPE {
+                return Err(RoleContractError::InvalidOperationRef);
+            }
+        }
+        Ok(Self {
+            rules,
+            operation_refs,
+        })
+    }
+
+    /// Borrow the exact authorization rules.
+    pub fn rules(&self) -> &[RoleRule] {
+        &self.rules
+    }
+
+    /// Borrow the declared operations this Role may call.
+    pub fn operation_refs(&self) -> &[ResourceRef] {
+        &self.operation_refs
+    }
+}
+
+redacted_debug!(AuthorizedRole);
+
+wire_deserialize!(
+    AuthorizedRole,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        rules: Vec<RoleRule>,
+        #[serde(default)]
+        operation_refs: Vec<ResourceRef>,
+    },
+    wire,
+    AuthorizedRole::new(wire.rules, wire.operation_refs).map_err(serde::de::Error::custom)
+);
+
 /// Closed Role condition names.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
@@ -1149,5 +1224,45 @@ mod tests {
         assert_eq!(posture.umask(), None);
         assert!(!posture.user_ns());
         assert!(!posture.namespaces().mount());
+    }
+
+    #[test]
+    fn an_authorization_only_role_refuses_a_posture_or_a_command_reference() {
+        let rule = r#"{"resourceTypes":["Process"],"verbs":["get"],"subresources":[],"resourceNames":["worker"],"zones":[],"executionRefs":[],"sessionVerbs":[]}"#;
+        let role: AuthorizedRole =
+            serde_json::from_str(&format!(r#"{{"rules":[{rule}],"operationRefs":["Operation/launch"]}}"#))
+                .expect("an authorization-only role decodes");
+        assert_eq!(role.operation_refs().len(), 1);
+        assert!(role.rules().len() == 1);
+
+        for retired in [
+            r#""posture":{"seccompRef":"SeccompProfile/worker","principalRef":"Principal/worker"}"#,
+            r#""commandRefs":["Command/worker"]"#,
+            r#""mounts":[{"path":"/var/lib/d2b","writable":true}]"#,
+        ] {
+            let row = format!(r#"{{"rules":[{rule}],{retired}}}"#);
+            assert!(
+                serde_json::from_str::<AuthorizedRole>(&row).is_err(),
+                "a row that still carries retired execution or access authority is refused"
+            );
+        }
+    }
+
+    #[test]
+    fn an_authorization_only_role_admits_only_operations() {
+        assert_eq!(
+            AuthorizedRole::new(
+                Vec::new(),
+                vec![ResourceRef::parse("Command/worker").expect("command ref")],
+            ),
+            Err(RoleContractError::InvalidOperationRef)
+        );
+        assert!(
+            AuthorizedRole::new(
+                Vec::new(),
+                vec![ResourceRef::parse("Operation/launch").expect("operation ref")],
+            )
+            .is_ok()
+        );
     }
 }
