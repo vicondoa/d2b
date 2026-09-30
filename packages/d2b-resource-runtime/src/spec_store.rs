@@ -31,16 +31,60 @@
 //! R7/R10, AE1). File posture: the store creates its file with mode 0600
 //! (directory 0700 when it creates the directory); the database's
 //! `<name>-wal` and `<name>-shm` side files are tightened to 0600 as well.
+//!
+//! ## Store formats
+//!
+//! [`StoreFormat`] names the two formats this module opens.
+//! [`Self::open`] keeps the production desired-row schema and does not move;
+//! [`Self::open_authority_journal`] opens the authority-journal format
+//! (U5, KTD5-KTD6), which persists a per-row desired revision, a per-Zone
+//! desired sequence, durable publication transactions, their outbox, and the
+//! accepted-publication cursor.
+//!
+//! The two formats never mix writes. A production-format store refuses every
+//! journal operation and an authority-journal store refuses the direct
+//! desired-row mutations, because a durable authority change that could be
+//! written outside the journal protocol is exactly the change KTD6 requires to
+//! be staged, fenced, published, and acknowledged. There is no migration
+//! between them: opening one format's database as the other is refused by
+//! [`crate::schema::apply_authority_journal`].
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::sync::mpsc::sync_channel;
 use std::time::Duration;
 
+use d2b_contracts_resource::v3::authority::{StoreIncarnation, ZoneDesiredSequence};
 use rusqlite::{Connection, OptionalExtension, params};
 use tokio::sync::oneshot;
 
+use crate::authority_journal::{
+    AcceptedCursor, AcceptedPublication, CommitOutcome, DesiredMutation, DesiredRow,
+    PublicationTransaction, StagedMutation, ZoneRecovery,
+};
+use crate::identity::TransactionId;
+use crate::schema::StoreFormat;
+
 pub const MODULE_NAME: &str = "spec_store";
+
+/// The production format's projection. It stores no desired revision, so the
+/// trailing column is an explicit `NULL`: a production row can never be
+/// mistaken for a row whose revision was read back.
+pub(crate) const LEGACY_ROW_COLUMNS: &str = "zone, type, name, uid, generation, owner_uid, \
+     provenance, deleting, spec, metadata, created_at, NULL AS desired_revision";
+
+/// The authority-journal format's projection, which carries the durable
+/// desired revision the format exists to persist.
+pub(crate) const AUTHORITY_ROW_COLUMNS: &str = "zone, type, name, uid, generation, owner_uid, \
+     provenance, deleting, spec, metadata, created_at, desired_revision";
+
+/// The projection the store's own format reads rows through.
+fn row_columns(format: StoreFormat) -> &'static str {
+    match format {
+        StoreFormat::DesiredRows => LEGACY_ROW_COLUMNS,
+        StoreFormat::AuthorityJournal => AUTHORITY_ROW_COLUMNS,
+    }
+}
 
 /// Deadline one writer request waits on the busy connection before failing.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -200,6 +244,64 @@ pub enum SpecStoreError {
     /// full queue - a full queue is [`Self::Busy`].
     #[error("spec store writer unavailable")]
     WriterGone,
+    /// The opened store's format cannot serve the requested operation: the
+    /// journal protocol is absent from the production format, and the direct
+    /// desired-row mutations are absent from the journal format, so no
+    /// durable authority change can be written outside the protocol.
+    #[error("spec store format {actual:?} cannot serve this operation, which requires {required:?}")]
+    WrongStoreFormat { actual: StoreFormat, required: StoreFormat },
+    /// The authority-journal schema could not be applied. The refusal case
+    /// carries the database's own `user_version`: this release starts from a
+    /// fresh store and never converts existing data.
+    #[error(transparent)]
+    Schema(#[from] crate::schema::SchemaError),
+    /// A publication transaction is not recorded in this store.
+    #[error("publication transaction {transaction} is not recorded in this store")]
+    TransactionNotFound { transaction: TransactionId },
+    /// A publication transaction exists but not in a state that permits the
+    /// requested transition.
+    #[error("publication transaction {transaction} is {state}; {transition} is not permitted")]
+    TransactionStateConflict {
+        transaction: TransactionId,
+        state: &'static str,
+        transition: &'static str,
+    },
+    /// The Zone already has an outstanding transaction, so another authority
+    /// mutation must queue behind it rather than overtake its fence.
+    #[error("zone {zone} already has publication transaction {transaction} outstanding")]
+    ZoneTransactionOutstanding { zone: String, transaction: TransactionId },
+    /// An acknowledgment names facts this store never committed. Publishing
+    /// visibility for them is refused rather than accepted.
+    #[error("publication transaction {transaction} was acknowledged for facts this store did not commit")]
+    PublicationMismatch { transaction: TransactionId },
+    /// The Zone's durable desired sequence cannot advance. The counter fails
+    /// closed instead of wrapping into a sequence that looks older than what
+    /// it replaced.
+    #[error("zone {zone} desired sequence is exhausted; no further desired mutation can be ordered")]
+    ZoneSequenceExhausted { zone: String },
+    /// One row's spec generation cannot advance.
+    #[error("spec generation for {zone}/{type_name}/{name} is exhausted")]
+    GenerationExhausted { zone: String, type_name: String, name: String },
+    /// One row's durable desired revision cannot advance.
+    #[error("desired revision for {zone}/{type_name}/{name} is exhausted")]
+    RowRevisionExhausted { zone: String, type_name: String, name: String },
+    /// The accepted cursor cannot move to the sequence being acknowledged.
+    #[error("publication transaction {transaction} commits sequence {committed}, which the accepted cursor at {acknowledged} does not accept")]
+    AcceptedSequenceConflict {
+        transaction: TransactionId,
+        committed: u64,
+        acknowledged: String,
+    },
+    /// A stored counter column is not a usable counter, or a journal record
+    /// cannot be decoded. Authority ordered against a counter the store
+    /// cannot account for has no meaning, so the read fails instead of
+    /// folding it into an unrelated revision.
+    #[error("spec store durable counter for {zone} is not a usable counter")]
+    CorruptCounter { zone: String },
+    #[error("spec store journal record is not readable: {detail}")]
+    JournalCorrupt { transaction: TransactionId, detail: &'static str },
+    #[error("spec store journal payload is not a canonical encoding: {detail}")]
+    CorruptJournalPayload { detail: &'static str },
 }
 
 // ---------------------------------------------------------------------------
@@ -234,6 +336,89 @@ enum Request {
     Migrate {
         reply: oneshot::Sender<Result<(), SpecStoreError>>,
     },
+    StageMutation {
+        mutation: DesiredMutation,
+        reply: oneshot::Sender<Result<StagedMutation, SpecStoreError>>,
+    },
+    RecordPrepared {
+        transaction: TransactionId,
+        prepared: String,
+        reply: oneshot::Sender<Result<PublicationTransaction, SpecStoreError>>,
+    },
+    CommitMutation {
+        transaction: TransactionId,
+        reply: oneshot::Sender<Result<CommitOutcome, SpecStoreError>>,
+    },
+    Acknowledge {
+        accepted: AcceptedPublication,
+        reply: oneshot::Sender<Result<AcceptedCursor, SpecStoreError>>,
+    },
+    CancelTransaction {
+        transaction: TransactionId,
+        reply: oneshot::Sender<Result<PublicationTransaction, SpecStoreError>>,
+    },
+    DesiredRow {
+        key: ResourceKey,
+        reply: oneshot::Sender<Result<DesiredRow, SpecStoreError>>,
+    },
+    DesiredRows {
+        selector: SpecSelector,
+        reply: oneshot::Sender<Result<Vec<DesiredRow>, SpecStoreError>>,
+    },
+    ZoneSequence {
+        zone: String,
+        reply: oneshot::Sender<Result<ZoneDesiredSequence, SpecStoreError>>,
+    },
+    AcceptedCursor {
+        zone: String,
+        reply: oneshot::Sender<Result<Option<AcceptedCursor>, SpecStoreError>>,
+    },
+    ZoneRecovery {
+        zone: String,
+        reply: oneshot::Sender<Result<ZoneRecovery, SpecStoreError>>,
+    },
+    StoreIncarnation {
+        reply: oneshot::Sender<Result<StoreIncarnation, SpecStoreError>>,
+    },
+}
+
+/// Run an operation only the authority-journal format provides.
+///
+/// The refusal is the enforcement point for KTD6: a production-format store
+/// has no publication journal, so it cannot stage, fence, publish, or
+/// acknowledge an authority change.
+fn journal_only<T>(
+    format: StoreFormat,
+    conn: &mut Connection,
+    run: impl FnOnce(&mut Connection) -> Result<T, SpecStoreError>,
+) -> Result<T, SpecStoreError> {
+    match format {
+        StoreFormat::AuthorityJournal => run(conn),
+        StoreFormat::DesiredRows => Err(SpecStoreError::WrongStoreFormat {
+            actual: format,
+            required: StoreFormat::AuthorityJournal,
+        }),
+    }
+}
+
+/// Run an operation only the production format provides.
+///
+/// The mirror image of [`journal_only`]: an authority-journal store has no
+/// direct desired-row mutation, because a durable authority change that could
+/// commit without an outbox entry and an accepted-publication acknowledgment
+/// would leave the broker's projection permanently behind the store.
+fn desired_rows_only<T>(
+    format: StoreFormat,
+    conn: &mut Connection,
+    run: impl FnOnce(&mut Connection) -> Result<T, SpecStoreError>,
+) -> Result<T, SpecStoreError> {
+    match format {
+        StoreFormat::DesiredRows => run(conn),
+        StoreFormat::AuthorityJournal => Err(SpecStoreError::WrongStoreFormat {
+            actual: format,
+            required: StoreFormat::DesiredRows,
+        }),
+    }
 }
 
 /// The writer thread's exclusive connection owner. All SQLite happens here.
@@ -243,30 +428,107 @@ enum Request {
 /// the blocking recv parks only the writer's own thread. The reply travels
 /// back over a `tokio::sync::oneshot`, exactly the loader_worker shape.
 #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
-fn writer_loop(mut conn: Connection, requests: Receiver<Request>) {
+fn writer_loop(mut conn: Connection, format: StoreFormat, requests: Receiver<Request>) {
     while let Ok(request) = requests.recv() {
         match request {
             Request::Ensure { row, reply } => {
-                let _ = reply.send(ensure_transactional(&mut conn, row));
+                let result = desired_rows_only(format, &mut conn, |conn| {
+                    ensure_transactional(conn, row, format)
+                });
+                let _ = reply.send(result);
             }
             Request::Get { key, reply } => {
-                let _ = reply.send(get(&conn, &key).map(Some));
+                let _ = reply.send(get(&conn, &key, format).map(Some));
             }
             Request::List { selector, reply } => {
-                let _ = reply.send(list(&conn, &selector));
+                let _ = reply.send(list(&conn, &selector, format));
             }
             Request::MarkDeleting { key, reply } => {
-                let _ = reply.send(mark_deleting_transactional(&mut conn, &key));
+                let result = desired_rows_only(format, &mut conn, |conn| {
+                    mark_deleting_transactional(conn, &key, format)
+                });
+                let _ = reply.send(result);
             }
             Request::RemoveAfterCleanup { key, reply } => {
-                let _ = reply.send(remove_after_cleanup(&mut conn, &key));
+                let result = desired_rows_only(format, &mut conn, |conn| {
+                    remove_after_cleanup(conn, &key, format)
+                });
+                let _ = reply.send(result);
             }
             Request::History { limit, reply } => {
                 let _ = reply.send(history(&conn, limit));
             }
             Request::Migrate { reply } => {
-                let result = crate::schema::migrate(&mut conn)
-                    .map_err(|err| SpecStoreError::Migration(err.to_string()));
+                let result = desired_rows_only(format, &mut conn, |conn| {
+                    crate::schema::migrate(conn)
+                        .map_err(|err| SpecStoreError::Migration(err.to_string()))
+                });
+                let _ = reply.send(result);
+            }
+            Request::StageMutation { mutation, reply } => {
+                let result = journal_only(format, &mut conn, |conn| {
+                    crate::authority_journal::stage_mutation(conn, mutation)
+                });
+                let _ = reply.send(result);
+            }
+            Request::RecordPrepared { transaction, prepared, reply } => {
+                let result = journal_only(format, &mut conn, |conn| {
+                    crate::authority_journal::record_prepared(conn, transaction, &prepared)
+                });
+                let _ = reply.send(result);
+            }
+            Request::CommitMutation { transaction, reply } => {
+                let result = journal_only(format, &mut conn, |conn| {
+                    crate::authority_journal::commit_mutation(conn, transaction)
+                });
+                let _ = reply.send(result);
+            }
+            Request::Acknowledge { accepted, reply } => {
+                let result = journal_only(format, &mut conn, |conn| {
+                    crate::authority_journal::acknowledge(conn, accepted)
+                });
+                let _ = reply.send(result);
+            }
+            Request::CancelTransaction { transaction, reply } => {
+                let result = journal_only(format, &mut conn, |conn| {
+                    crate::authority_journal::cancel_transaction(conn, transaction)
+                });
+                let _ = reply.send(result);
+            }
+            Request::DesiredRow { key, reply } => {
+                let result = journal_only(format, &mut conn, |conn| {
+                    crate::authority_journal::desired_row(conn, &key)
+                });
+                let _ = reply.send(result);
+            }
+            Request::DesiredRows { selector, reply } => {
+                let result = journal_only(format, &mut conn, |conn| {
+                    crate::authority_journal::desired_rows(conn, &selector)
+                });
+                let _ = reply.send(result);
+            }
+            Request::ZoneSequence { zone, reply } => {
+                let result = journal_only(format, &mut conn, |conn| {
+                    crate::authority_journal::zone_sequence(conn, &zone)
+                });
+                let _ = reply.send(result);
+            }
+            Request::AcceptedCursor { zone, reply } => {
+                let result = journal_only(format, &mut conn, |conn| {
+                    crate::authority_journal::accepted_cursor(conn, &zone)
+                });
+                let _ = reply.send(result);
+            }
+            Request::ZoneRecovery { zone, reply } => {
+                let result = journal_only(format, &mut conn, |conn| {
+                    crate::authority_journal::zone_recovery(conn, &zone)
+                });
+                let _ = reply.send(result);
+            }
+            Request::StoreIncarnation { reply } => {
+                let result = journal_only(format, &mut conn, |conn| {
+                    crate::authority_journal::store_incarnation(conn)
+                });
                 let _ = reply.send(result);
             }
         }
@@ -279,9 +541,10 @@ fn writer_loop(mut conn: Connection, requests: Receiver<Request>) {
 fn ensure_transactional(
     conn: &mut Connection,
     row: StoredDesiredResource,
+    format: StoreFormat,
 ) -> Result<EnsureOutcome, SpecStoreError> {
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    let outcome = ensure_transactional_inner(&tx, row)?;
+    let outcome = ensure_transactional_inner(&tx, row, format)?;
     tx.commit()?;
     Ok(outcome)
 }
@@ -295,6 +558,7 @@ type ExistingRow = (u64, bool, Vec<u8>, Vec<u8>, Option<Vec<u8>>, String);
 fn ensure_transactional_inner(
     tx: &rusqlite::Transaction<'_>,
     row: StoredDesiredResource,
+    format: StoreFormat,
 ) -> Result<EnsureOutcome, SpecStoreError> {
     // Every column the row's readers observe is compared, not only the spec:
     // a `metadata`-only ensure (the authored envelope the display status and
@@ -354,7 +618,8 @@ fn ensure_transactional_inner(
         && existing_owner == incoming_owner
         && existing_provenance == row.provenance.as_str()
     {
-        let stored = load_row(tx, &row.key)?.expect("row present within its own transaction");
+        let stored =
+            load_row(tx, &row.key, format)?.expect("row present within its own transaction");
         return Ok(EnsureOutcome::Unchanged(stored));
     }
     if !spec_changed {
@@ -386,7 +651,8 @@ fn ensure_transactional_inner(
                 generation_after: Some(generation as i64),
             },
         )?;
-        let stored = load_row(tx, &row.key)?.expect("row present within its own transaction");
+        let stored =
+            load_row(tx, &row.key, format)?.expect("row present within its own transaction");
         return Ok(EnsureOutcome::Updated(stored));
     }
     let next = generation + 1;
@@ -417,7 +683,7 @@ fn ensure_transactional_inner(
             generation_after: Some(next as i64),
         },
     )?;
-    let stored = load_row(tx, &row.key)?.expect("row present within its own transaction");
+    let stored = load_row(tx, &row.key, format)?.expect("row present within its own transaction");
     Ok(EnsureOutcome::Updated(stored))
 }
 
@@ -491,17 +757,20 @@ fn begin_immediate(conn: &mut Connection) -> Result<(), SpecStoreError> {
 /// subject, the row provenance, the optional resource key, the operation, and
 /// the generation transition the operation recorded. Grouped so the SQL write
 /// below stays under clippy's argument ceiling.
-struct AuditWrite<'a> {
-    ts: i64,
-    subject: &'a str,
-    provenance: &'a str,
-    key: Option<&'a ResourceKey>,
-    operation: &'a str,
-    generation_before: Option<i64>,
-    generation_after: Option<i64>,
+pub(crate) struct AuditWrite<'a> {
+    pub(crate) ts: i64,
+    pub(crate) subject: &'a str,
+    pub(crate) provenance: &'a str,
+    pub(crate) key: Option<&'a ResourceKey>,
+    pub(crate) operation: &'a str,
+    pub(crate) generation_before: Option<i64>,
+    pub(crate) generation_after: Option<i64>,
 }
 
-fn insert_audit(conn: &Connection, entry: AuditWrite<'_>) -> Result<(), SpecStoreError> {
+pub(crate) fn insert_audit(
+    conn: &Connection,
+    entry: AuditWrite<'_>,
+) -> Result<(), SpecStoreError> {
     conn.execute(
         "INSERT INTO audit_log (ts, subject, provenance, resource_zone, resource_type, \
          resource_name, operation, generation_before, generation_after, detail) \
@@ -521,7 +790,7 @@ fn insert_audit(conn: &Connection, entry: AuditWrite<'_>) -> Result<(), SpecStor
     Ok(())
 }
 
-fn now() -> i64 {
+pub(crate) fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -571,49 +840,108 @@ fn insert_new(
     })
 }
 
-fn row_from(r: &rusqlite::Row<'_>) -> Result<StoredDesiredResource, SpecStoreError> {
-    let zone: String = r.get(0)?;
-    let type_name: String = r.get(1)?;
-    let name: String = r.get(2)?;
+/// One desired row read as plain SQLite types.
+///
+/// Reading the columns and decoding them are separate steps so a decode
+/// failure keeps the store's own typed error instead of being flattened into
+/// the one error slot `rusqlite` offers a row closure.
+pub(crate) type DesiredRowTuple = (
+    String,
+    String,
+    String,
+    Vec<u8>,
+    i64,
+    Option<Vec<u8>>,
+    String,
+    i64,
+    Vec<u8>,
+    Vec<u8>,
+    i64,
+    Option<i64>,
+);
+
+/// Read one desired row in [`ROW_COLUMNS`] order plus the trailing revision
+/// column the projection names.
+pub(crate) fn desired_row_tuple(r: &rusqlite::Row<'_>) -> rusqlite::Result<DesiredRowTuple> {
+    Ok((
+        r.get(0)?,
+        r.get(1)?,
+        r.get(2)?,
+        r.get(3)?,
+        r.get(4)?,
+        r.get(5)?,
+        r.get(6)?,
+        r.get(7)?,
+        r.get(8)?,
+        r.get(9)?,
+        r.get(10)?,
+        r.get(11)?,
+    ))
+}
+
+/// Decode one [`DesiredRowTuple`], leaving the revision column raw.
+///
+/// The revision stays raw here: decoding it is the authority-journal
+/// format's business, and it refuses a column that is not a usable counter
+/// rather than coercing it.
+pub(crate) fn decode_desired_row(
+    values: DesiredRowTuple,
+) -> Result<(StoredDesiredResource, Option<i64>), SpecStoreError> {
+    let (
+        zone,
+        type_name,
+        name,
+        uid,
+        generation,
+        owner_uid,
+        provenance,
+        deleting,
+        spec,
+        metadata,
+        created_at,
+        revision,
+    ): DesiredRowTuple = values;
     let corrupt = || SpecStoreError::CorruptRow {
         zone: zone.clone(),
         type_name: type_name.clone(),
         name: name.clone(),
     };
-    let uid: [u8; 16] = r
-        .get::<_, Vec<u8>>(3)?
-        .try_into()
-        .map_err(|_| corrupt())?;
-    let owner_uid: Option<[u8; 16]> = r
-        .get::<_, Option<Vec<u8>>>(5)?
-        .map(|v| v.try_into().map_err(|_| corrupt()))
+    let uid: [u8; 16] = uid.try_into().map_err(|_| corrupt())?;
+    let owner_uid: Option<[u8; 16]> = owner_uid
+        .map(|value| value.try_into().map_err(|_| corrupt()))
         .transpose()?;
-    Ok(StoredDesiredResource {
+    let row = StoredDesiredResource {
         key: ResourceKey {
             zone,
             type_name,
             name,
         },
         uid,
-        generation: r.get::<_, i64>(4)? as u64,
+        generation: generation as u64,
         owner_uid,
-        provenance: r.get::<_, String>(6)?.parse().unwrap_or(ResourceProvenance::Api),
-        deleting: r.get::<_, i64>(7)? != 0,
-        spec: r.get(8)?,
-        metadata: r.get(9)?,
-        created_at: r.get(10)?,
-    })
+        provenance: provenance.parse().unwrap_or(ResourceProvenance::Api),
+        deleting: deleting != 0,
+        spec,
+        metadata,
+        created_at,
+    };
+    Ok((row, revision))
+}
+
+/// The production format's decode: the same row, without a revision.
+fn row_from(r: &rusqlite::Row<'_>) -> Result<StoredDesiredResource, SpecStoreError> {
+    decode_desired_row(desired_row_tuple(r)?).map(|(row, _)| row)
 }
 
 fn load_row(
     conn: &Connection,
     key: &ResourceKey,
+    format: StoreFormat,
 ) -> Result<Option<StoredDesiredResource>, SpecStoreError> {
-    let mut stmt = conn.prepare(
-        "SELECT zone, type, name, uid, generation, owner_uid, provenance, deleting, \
-         spec, metadata, created_at FROM resources \
-         WHERE zone = ?1 AND type = ?2 AND name = ?3",
-    )?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {} FROM resources WHERE zone = ?1 AND type = ?2 AND name = ?3",
+        row_columns(format)
+    ))?;
     let mut rows = stmt.query(params![key.zone, key.type_name, key.name])?;
     match rows.next()? {
         Some(row) => Ok(Some(row_from(row)?)),
@@ -621,8 +949,12 @@ fn load_row(
     }
 }
 
-fn get(conn: &Connection, key: &ResourceKey) -> Result<StoredDesiredResource, SpecStoreError> {
-    load_row(conn, key)?
+fn get(
+    conn: &Connection,
+    key: &ResourceKey,
+    format: StoreFormat,
+) -> Result<StoredDesiredResource, SpecStoreError> {
+    load_row(conn, key, format)?
         .ok_or_else(|| SpecStoreError::NotFound {
             zone: key.zone.clone(),
             type_name: key.type_name.clone(),
@@ -630,17 +962,23 @@ fn get(conn: &Connection, key: &ResourceKey) -> Result<StoredDesiredResource, Sp
         })
 }
 
-fn list(conn: &Connection, selector: &SpecSelector) -> Result<Vec<StoredDesiredResource>, SpecStoreError> {
-    let sql = "SELECT zone, type, name, uid, generation, owner_uid, provenance, deleting, \
-         spec, metadata, created_at FROM resources \
+fn list(
+    conn: &Connection,
+    selector: &SpecSelector,
+    format: StoreFormat,
+) -> Result<Vec<StoredDesiredResource>, SpecStoreError> {
+    let sql = format!(
+        "SELECT {} FROM resources \
          WHERE (?1 IS NULL OR zone = ?1) \
            AND (?2 IS NULL OR type = ?2) \
            AND (?3 IS NULL OR owner_uid = ?3) \
-         ORDER BY zone, type, name";
+         ORDER BY zone, type, name",
+        row_columns(format)
+    );
     let zone = selector.zone.as_deref();
     let type_name = selector.type_name.as_deref();
     let owner = selector.owner_uid.map(|u| u.to_vec());
-    let mut stmt = conn.prepare(sql)?;
+    let mut stmt = conn.prepare(&sql)?;
     let mut rows = stmt.query(params![zone, type_name, owner])?;
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
@@ -655,10 +993,11 @@ fn list(conn: &Connection, selector: &SpecSelector) -> Result<Vec<StoredDesiredR
 fn mark_deleting_transactional(
     conn: &mut Connection,
     key: &ResourceKey,
+    format: StoreFormat,
 ) -> Result<StoredDesiredResource, SpecStoreError> {
     begin_immediate(conn)?;
     let result = (|| {
-        let Some(before) = load_row(conn, key)? else {
+        let Some(before) = load_row(conn, key, format)? else {
             return Err(SpecStoreError::NotFound {
                 zone: key.zone.clone(),
                 type_name: key.type_name.clone(),
@@ -683,7 +1022,7 @@ fn mark_deleting_transactional(
                 },
             )?;
         }
-        Ok(load_row(conn, key)?.expect("row present within its own transaction"))
+        Ok(load_row(conn, key, format)?.expect("row present within its own transaction"))
     })();
     match result {
         Ok(row) => {
@@ -699,10 +1038,14 @@ fn mark_deleting_transactional(
 
 /// Remove a row after cleanup completed (R10: the deleting mark, not this
 /// call, gates cleanup). Mutation + audit commit in one IMMEDIATE transaction.
-fn remove_after_cleanup(conn: &mut Connection, key: &ResourceKey) -> Result<(), SpecStoreError> {
+fn remove_after_cleanup(
+    conn: &mut Connection,
+    key: &ResourceKey,
+    format: StoreFormat,
+) -> Result<(), SpecStoreError> {
     begin_immediate(conn)?;
     let result = (|| {
-        let Some(existing) = load_row(conn, key)? else {
+        let Some(existing) = load_row(conn, key, format)? else {
             return Err(SpecStoreError::NotFound {
                 zone: key.zone.clone(),
                 type_name: key.type_name.clone(),
@@ -777,6 +1120,7 @@ fn history(conn: &Connection, limit: usize) -> Result<Vec<AuditRecord>, SpecStor
 /// pending requests. Callers needing multi-task access wrap this in `Arc`.
 pub struct SpecStore {
     path: PathBuf,
+    format: StoreFormat,
     sender: Option<SyncSender<Request>>,
     join: Option<std::thread::JoinHandle<()>>,
 }
@@ -792,16 +1136,49 @@ impl SpecStore {
     /// [`Self::open`] with an explicit writer-queue bound. The production
     /// bound is 256; tests shrink it to inject queue-full backpressure.
     fn open_with_bound(path: impl Into<PathBuf>, bound: usize) -> Result<Self, SpecStoreError> {
+        Self::open_formatted(path, bound, StoreFormat::DesiredRows)
+    }
+
+    /// Open (creating when absent) an authority-journal store: the format
+    /// that persists a per-row desired revision, a per-Zone desired sequence,
+    /// durable publication transactions, their outbox, and the
+    /// accepted-publication cursor (KTD5-KTD6).
+    ///
+    /// Creating it applies [`crate::schema::apply_authority_journal`], which
+    /// refuses an existing production-format database instead of converting
+    /// it: the clean break starts from a fresh store.
+    pub fn open_authority_journal(path: impl Into<PathBuf>) -> Result<Self, SpecStoreError> {
+        Self::open_formatted(path, 256, StoreFormat::AuthorityJournal)
+    }
+
+    fn open_formatted(
+        path: impl Into<PathBuf>,
+        bound: usize,
+        format: StoreFormat,
+    ) -> Result<Self, SpecStoreError> {
         let path = path.into();
         let mut conn = open_connection(&path)?;
-        crate::schema::migrate(&mut conn).map_err(|err| SpecStoreError::Migration(err.to_string()))?;
+        match format {
+            StoreFormat::DesiredRows => {
+                crate::schema::migrate(&mut conn)
+                    .map_err(|err| SpecStoreError::Migration(err.to_string()))?;
+            }
+            StoreFormat::AuthorityJournal => {
+                crate::schema::apply_authority_journal(&mut conn)?;
+            }
+        }
         tighten_file_modes(&path);
         let (sender, receiver) = sync_channel::<Request>(bound);
         let join = std::thread::Builder::new()
             .name("spec-store-writer".into())
-            .spawn(move || writer_loop(conn, receiver))
+            .spawn(move || writer_loop(conn, format, receiver))
             .map_err(|err| SpecStoreError::Io(std::io::Error::other(err.to_string())))?;
-        Ok(Self { path, sender: Some(sender), join: Some(join) })
+        Ok(Self { path, format, sender: Some(sender), join: Some(join) })
+    }
+
+    /// The format this store was opened with.
+    pub fn format(&self) -> StoreFormat {
+        self.format
     }
 
     /// The database file path this store opened.
@@ -851,6 +1228,121 @@ impl SpecStore {
     /// by [`Self::open`]); idempotent.
     pub async fn migrate(&self) -> Result<(), SpecStoreError> {
         self.call(|reply| Request::Migrate { reply }).await.map(|_| ())
+    }
+
+    // -----------------------------------------------------------------
+    // Authority-journal protocol (KTD5-KTD6)
+    //
+    // Every call below commits before it returns, and every one of them is a
+    // complete transaction: the caller's broker I/O happens strictly between
+    // calls, so no open SQLite transaction, store lock, or source-reservation
+    // lock can cross the transport wait.
+    // -----------------------------------------------------------------
+
+    /// The store generation this database is. A commit or acknowledgment
+    /// naming a different incarnation names a different store, so ordinary
+    /// acceptance can never install one.
+    pub async fn store_incarnation(&self) -> Result<StoreIncarnation, SpecStoreError> {
+        self.call(|reply| Request::StoreIncarnation { reply }).await
+    }
+
+    /// The Zone's last committed desired sequence, or
+    /// [`ZoneDesiredSequence::INITIAL`] when the Zone has committed none.
+    pub async fn zone_sequence(
+        &self,
+        zone: &str,
+    ) -> Result<ZoneDesiredSequence, SpecStoreError> {
+        let zone = zone.to_owned();
+        self.call(|reply| Request::ZoneSequence { zone, reply }).await
+    }
+
+    /// One committed desired row with the revision it committed at.
+    ///
+    /// Runtime status has no surface here and cannot appear in the answer:
+    /// the store persists the desired envelope only.
+    pub async fn desired_row(&self, key: ResourceKey) -> Result<DesiredRow, SpecStoreError> {
+        self.call(|reply| Request::DesiredRow { key, reply }).await
+    }
+
+    /// Every committed desired row the selector matches, with revisions.
+    pub async fn desired_rows(
+        &self,
+        selector: SpecSelector,
+    ) -> Result<Vec<DesiredRow>, SpecStoreError> {
+        self.call(|reply| Request::DesiredRows { selector, reply }).await
+    }
+
+    /// Stage one desired mutation and reserve its Zone sequence.
+    ///
+    /// The candidate is persisted here, before any broker I/O, and the
+    /// mutation is refused while another transaction for the Zone is
+    /// outstanding: authority mutations queue behind the pending transaction
+    /// rather than overtaking its fence.
+    pub async fn stage_mutation(
+        &self,
+        mutation: DesiredMutation,
+    ) -> Result<StagedMutation, SpecStoreError> {
+        self.call(|reply| Request::StageMutation { mutation, reply }).await
+    }
+
+    /// Record the broker's prepared transaction identity for a staged
+    /// candidate, which is the point at which the Zone's new-effect
+    /// admission is durably frozen.
+    pub async fn record_prepared(
+        &self,
+        transaction: TransactionId,
+        prepared: &str,
+    ) -> Result<PublicationTransaction, SpecStoreError> {
+        let prepared = prepared.to_owned();
+        self.call(|reply| Request::RecordPrepared { transaction, prepared, reply }).await
+    }
+
+    /// Commit the staged candidate: desired rows, per-row revisions, the
+    /// audit record, the outbox entry, and the Zone sequence in one
+    /// transaction.
+    ///
+    /// Replaying a committed transaction returns the recorded publication
+    /// instead of applying the mutation a second time.
+    pub async fn commit_mutation(
+        &self,
+        transaction: TransactionId,
+    ) -> Result<CommitOutcome, SpecStoreError> {
+        self.call(|reply| Request::CommitMutation { transaction, reply }).await
+    }
+
+    /// Record the broker's accepted revision: settle the transaction, drop
+    /// its outbox entry, and move the accepted cursor. A repeated
+    /// acknowledgment of the same facts returns the recorded cursor.
+    pub async fn acknowledge(
+        &self,
+        accepted: AcceptedPublication,
+    ) -> Result<AcceptedCursor, SpecStoreError> {
+        self.call(|reply| Request::Acknowledge { accepted, reply }).await
+    }
+
+    /// Abandon a staged or prepared transaction that committed no desired
+    /// row. Cancelling after the desired commit is refused.
+    pub async fn cancel_transaction(
+        &self,
+        transaction: TransactionId,
+    ) -> Result<PublicationTransaction, SpecStoreError> {
+        self.call(|reply| Request::CancelTransaction { transaction, reply }).await
+    }
+
+    /// The Zone's last accepted revision, if the broker has accepted one.
+    pub async fn accepted_cursor(
+        &self,
+        zone: &str,
+    ) -> Result<Option<AcceptedCursor>, SpecStoreError> {
+        let zone = zone.to_owned();
+        self.call(|reply| Request::AcceptedCursor { zone, reply }).await
+    }
+
+    /// Everything one Zone owes after a restart, with the explicit recovery
+    /// decision for each outstanding transaction.
+    pub async fn zone_recovery(&self, zone: &str) -> Result<ZoneRecovery, SpecStoreError> {
+        let zone = zone.to_owned();
+        self.call(|reply| Request::ZoneRecovery { zone, reply }).await
     }
 
     async fn call<R, F>(&self, make: F) -> Result<R, SpecStoreError>

@@ -27,6 +27,10 @@ pub mod watch;
 /// Durable desired-spec store (SQLite, single writer).
 pub mod schema;
 pub mod spec_store;
+/// Durable desired revisions, the publication outbox, and the recovery table
+/// for staged, prepared, and committed-but-unacknowledged transactions (U5,
+/// KTD5-KTD6).
+pub mod authority_journal;
 /// Resource identity and ownership-edge types.
 pub mod identity;
 /// Runtime error taxonomy shared by actors, drivers, and the store.
@@ -48,6 +52,17 @@ pub use crate::resource::{
 // Lookup classification (issue #511): the canonical classified row-read
 // result every driver and effect maps onto.
 pub use crate::context::{LookupPlane, RowLookup};
+
+// Authority journal (U5, KTD5-KTD6): the durable identity a desired
+// authority change carries, and the explicit recovery decision for each
+// outstanding publication transaction.
+pub use crate::authority_journal::{
+    AcceptedCursor, AcceptedPublication, CommitOutcome, CommittedPublication, DesiredMutation,
+    DesiredRow, OutboxEntry, PublicationState, PublicationTransaction, StagedMutation,
+    TransactionRecovery, ZoneRecovery,
+};
+pub use crate::identity::TransactionId;
+pub use crate::schema::{AUTHORITY_JOURNAL_USER_VERSION, StoreFormat};
 
 // Target layer (U13): the Host/Guest directory, the generation-bound guest
 // handle it mints, and the Guest-side target runtime behind the

@@ -20,7 +20,19 @@ d2b_rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
     ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+d2b_rust_test(
+    name = "authority_journal",
+    srcs = ["tests/authority_journal.rs"],
+    compile_data = ["Cargo.toml"],
+    deps = [
+        ":d2b_resource_runtime",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    visibility = ["//visibility:public"],
 )
 
 d2b_rust_test(
@@ -30,6 +42,7 @@ d2b_rust_test(
     data = ["//:docs/reference/resource-runtime-failure-kinds.md"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

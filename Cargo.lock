@@ -2065,6 +2065,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "d2b-contracts",
+ "d2b-contracts-resource",
  "parking_lot",
  "ractor",
  "rusqlite",
