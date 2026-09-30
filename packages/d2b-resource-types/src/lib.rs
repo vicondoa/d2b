@@ -26,7 +26,7 @@ mod startup;
 
 pub use allowed_sources::AllowedSources;
 pub use child_creation::{ChildCreation, ChildCustody};
-pub use descriptor::{CONVERTED_TYPE_VERBS, DriverDescriptor};
+pub use descriptor::{CONVERTED_TYPE_VERBS, DriverDescriptor, ProviderImplementationBindings};
 // The registration assertion drives the registry through a real plane open,
 // so it is test-only: this crate's own tests reach it through `cfg(test)`,
 // consumers through the `test-support` feature their test targets enable.

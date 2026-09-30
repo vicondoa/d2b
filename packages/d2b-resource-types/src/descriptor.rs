@@ -38,6 +38,7 @@ pub const CONVERTED_TYPE_VERBS: &[&str] = &[
 /// The descriptor carries declarations only: the driver implementation, the
 /// spec decoder, and the operation handlers stay in the declaring per-type
 /// crate.
+#[derive(Clone)]
 pub struct DriverDescriptor {
     /// The one resource type this descriptor declares.
     pub resource_type: WellKnownType,
@@ -113,5 +114,73 @@ impl DriverRegistration for DriverDescriptor {
 
     fn factory(&self) -> Arc<dyn ResourceDriverFactory> {
         Arc::clone(&self.factory)
+    }
+}
+
+/// The local constructor and function bindings a provider declaration
+/// realizes (KTD1).
+///
+/// The declaration's serializable half owns the identities; this half holds
+/// the Rust values behind them - the spec decoders, driver factories,
+/// operation handlers, and service declarations that serve those identities.
+/// Nothing here is serializable and nothing here adds an identity the
+/// declaration does not already own: a provider that binds an extra
+/// descriptor, or that declares a method with no handler, is refused by
+/// `d2b_provider_toolkit::declaration::provider::ProviderDeclaration::validate`
+/// rather than served from a second registration.
+#[derive(Clone, Copy)]
+pub struct ProviderImplementationBindings {
+    /// The driver descriptors, one per declared resource type.
+    pub drivers: &'static [DriverDescriptor],
+}
+
+impl ProviderImplementationBindings {
+    /// Bind one provider's driver descriptors.
+    pub const fn new(drivers: &'static [DriverDescriptor]) -> Self {
+        Self { drivers }
+    }
+
+    /// The bound driver descriptors.
+    pub const fn drivers(&self) -> &'static [DriverDescriptor] {
+        self.drivers
+    }
+
+    /// The descriptor serving the exact resource type name, when bound.
+    pub fn driver_for(&self, resource_type: &str) -> Option<&'static DriverDescriptor> {
+        self.drivers
+            .iter()
+            .find(|descriptor| descriptor.resource_type.to_resource_type_name().as_str() == resource_type)
+    }
+
+    /// Every bound operation handler, in descriptor order.
+    pub fn operations(&self) -> impl Iterator<Item = &'static OperationDef> {
+        self.drivers
+            .iter()
+            .flat_map(|descriptor| descriptor.operations.iter())
+    }
+
+    /// Every bound service declaration, in descriptor order.
+    pub fn services(&self) -> impl Iterator<Item = &'static ServiceDecl> {
+        self.drivers
+            .iter()
+            .flat_map(|descriptor| descriptor.services.iter())
+    }
+
+    /// Every bound child creation, in descriptor order.
+    pub fn creations(&self) -> impl Iterator<Item = &'static ChildCreation> {
+        self.drivers
+            .iter()
+            .flat_map(|descriptor| descriptor.creations.iter())
+    }
+}
+
+impl core::fmt::Debug for ProviderImplementationBindings {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ProviderImplementationBindings")
+            .field("driver_count", &self.drivers.len())
+            .field("operation_count", &self.operations().count())
+            .field("service_count", &self.services().count())
+            .field("creation_count", &self.creations().count())
+            .finish_non_exhaustive()
     }
 }

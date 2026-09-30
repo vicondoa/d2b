@@ -69,6 +69,19 @@ d2b_rust_binary(
 )
 
 d2b_rust_test(
+    name = "provider_declaration",
+    srcs = ["tests/provider_declaration.rs"],
+    compile_data = ["Cargo.toml"],
+    deps = [
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        ":d2b_provider_toolkit",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        "//packages/d2b-resource-types:d2b_resource_types",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
     name = "conformance",
     srcs = ["tests/conformance.rs"],
     compile_data = ["Cargo.toml"],

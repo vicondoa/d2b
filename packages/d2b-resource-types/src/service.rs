@@ -129,6 +129,20 @@ impl ServiceMethod {
     }
 }
 
+impl ServiceMethod {
+    /// The committed operation row this method serves, when it serves one.
+    pub const fn operation(&self) -> Option<&'static str> {
+        self.operation
+    }
+
+    /// Whether this method serves the operation named `operation`.
+    ///
+    /// The comparison is exact, which is the envelope's own resolution rule.
+    pub fn serves_operation(&self, operation: &str) -> bool {
+        self.operation == Some(operation)
+    }
+}
+
 /// One service a provider serves.
 ///
 /// The declaration is the service metadata source the session layer and the
@@ -164,5 +178,22 @@ impl ServiceDecl {
     /// The declared method of one name, when the service answers it.
     pub fn method(&self, method: &str) -> Option<&ServiceMethod> {
         self.methods.iter().find(|declared| declared.name == method)
+    }
+}
+
+impl ServiceDecl {
+    /// The declared methods that stand behind a committed operation row.
+    pub fn operation_serving_methods(&self) -> impl Iterator<Item = &ServiceMethod> {
+        self.methods
+            .iter()
+            .filter(|method| method.operation.is_some())
+    }
+
+    /// Whether any declared method stands behind the operation named
+    /// `operation`.
+    pub fn serves_operation(&self, operation: &str) -> bool {
+        self.methods
+            .iter()
+            .any(|method| method.serves_operation(operation))
     }
 }

@@ -35,6 +35,26 @@ pub struct OperationDef {
     pub handler: &'static dyn OperationHandler,
 }
 
+impl OperationDef {
+    /// The committed operation row's own name.
+    ///
+    /// The operation reference is the row's identity, so this is the spelling
+    /// a declared method's service facet resolves to without restating it.
+    pub fn operation_name(&self) -> &str {
+        self.operation_ref.name().as_str()
+    }
+
+    /// Whether this handler serves the operation named `operation`.
+    ///
+    /// This is the envelope's own resolution rule - the operation reference's
+    /// name against the operation a service method names, compared exactly -
+    /// so a method the envelope would not dispatch is not one a declaration
+    /// can claim as implemented.
+    pub fn serves_named_operation(&self, operation: &str) -> bool {
+        self.operation_ref.name().as_str() == operation
+    }
+}
+
 /// The handler of one broker operation.
 ///
 /// Implementations live in the declaring per-type crate; the registry holds

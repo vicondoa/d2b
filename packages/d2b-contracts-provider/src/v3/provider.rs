@@ -36,9 +36,10 @@ use super::semantic_services::{
 };
 use d2b_contracts::wire_deserialize;
 use d2b_contracts_resource::v3::{
-    ArtifactId, ResourceRef, ResourceTypeName, SchemaFingerprint,
+    ArtifactId, OperationImplementation, ResourceRef, ResourceTypeName, SchemaFingerprint,
     execution_policy::{
-        BoundedToken, ExecutionDomain, PrimitiveSpecError, redacted_debug, string_schema,
+        BoundedText, BoundedToken, ExecutionDomain, PrimitiveSpecError, redacted_debug,
+        string_schema,
     },
     resource::ResourceEnvelope,
     resource_schema::{CanonicalJsonObject, ExtensionSchemaId, PlacementAnchor, SchemaVersion},
@@ -172,6 +173,31 @@ pub enum ProviderContractError {
     TargetCapabilityMissing,
     /// A target profile does not support a signed required EffectPort class.
     EffectClassUnsupported,
+    /// A declared method needs a presentation the component cannot realize.
+    ///
+    /// The closed presentation facet is the only source of the capability:
+    /// no role name, seccomp label, or serving-worker role substitutes for
+    /// one the implementation does not have.
+    PresentationUnsupported,
+    /// The declared setup restrictions do not match the declared
+    /// presentation, so the declaration promises namespace setup it does not
+    /// perform.
+    SetupRestrictionIncompatible,
+    /// The declared placement names a target the component's role or signed
+    /// target set cannot take.
+    PlacementUnsupported,
+    /// A method, service, or implementation exists on only one half of the
+    /// declaration.
+    DeclarationHalfMismatch,
+    /// A required resource capability names a ResourceType the declaration
+    /// does not bind, so nothing can admit it.
+    RequiredCapabilityUnbound,
+    /// The bound ResourceType's signed capability matrix does not support a
+    /// required capability.
+    RequiredCapabilityUnsupported,
+    /// A mutable `Provider` row selected an artifact no verified deployment
+    /// admitted, so no implementation identity can be resolved for it.
+    ArtifactSelectionUnverified,
 }
 
 impl core::fmt::Display for ProviderContractError {
@@ -233,6 +259,13 @@ impl ProviderContractError {
             Self::RuntimeArtifactMissing => "runtime-artifact-missing",
             Self::TargetCapabilityMissing => "target-capability-missing",
             Self::EffectClassUnsupported => "effect-class-unsupported",
+            Self::PresentationUnsupported => "presentation-unsupported",
+            Self::SetupRestrictionIncompatible => "setup-restriction-incompatible",
+            Self::PlacementUnsupported => "placement-unsupported",
+            Self::DeclarationHalfMismatch => "provider-declaration-half-mismatch",
+            Self::RequiredCapabilityUnbound => "required-capability-unbound",
+            Self::RequiredCapabilityUnsupported => "required-capability-unsupported",
+            Self::ArtifactSelectionUnverified => "artifact-selection-unverified",
         }
     }
 }
@@ -2782,6 +2815,856 @@ impl SpecifiedProviderMethod {
             Self::ObserveTransport => "observeTransport",
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// The provider declaration source (KTD1, KTD11)
+// ---------------------------------------------------------------------------
+//
+// A provider used to author its implementation three times: a signed
+// manifest for code identity and configuration, a Rust descriptor for the
+// types it serves, and a service declaration for the methods it answers.
+// [`ProviderDeclarationSpec`] is the one serializable source those three
+// views are derived from. It carries identities and semantics only: a spec
+// decoder, a driver factory, an operation handler, and a service handler
+// table are Rust values that live in the binding half
+// (`d2b_resource_types::ProviderImplementationBindings`) and never appear
+// here, so a signed projection of a spec cannot contain a handler, a
+// pointer, a store path, or a key.
+//
+// Nothing in this section is a second copy of a manifest field. The
+// per-component code identity, configuration digest, target artifacts, and
+// dependency aliases stay in the [`ComponentDescriptor`] each
+// [`DeclaredComponent`] owns; the presentation capability, the setup
+// restrictions, the placement, the child-creation license, and the required
+// resource capabilities are the facets a manifest does not carry yet.
+
+/// Maximum declared services on one component.
+pub const MAX_DECLARED_COMPONENT_SERVICES: usize = 16;
+/// Maximum declared child creations on one component.
+pub const MAX_DECLARED_COMPONENT_CHILDREN: usize = 16;
+/// Maximum required resource capabilities on one declaration.
+pub const MAX_DECLARED_RESOURCE_CAPABILITIES: usize = MAX_CAPABILITY_MATRIX_ENTRIES;
+
+/// The closed presentation capability one declared implementation realizes.
+///
+/// `KTD11` splits consumer presentation into two mechanisms that are not
+/// interchangeable. Pathname-mounted presentation is realized by a private
+/// mount tree prepared before the consumer's requested user namespace and
+/// final credentials. A namespace-first service instead realizes the
+/// admitted source inside its own verified service sandbox and keeps ADR
+/// 0021's zero-host-capability launch; it never claims a Process mount it
+/// did not apply.
+///
+/// A component declares what it can realize and a method declares what it
+/// needs. The facet is a property of what the implementation does, so a role
+/// name, a seccomp label, or a serving-worker role is not a way to supply a
+/// missing capability: there is no field here for one to arrive in.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum PresentationCapability {
+    /// The implementation presents no source to a consumer.
+    None,
+    /// Pathname-mounted consumer presentation from a private mount tree.
+    FilesystemPresentation,
+    /// A namespace-first service source realized inside its verified sandbox.
+    NamespaceFirstServiceSource,
+}
+
+impl PresentationCapability {
+    /// Whether a declaration of `self` realizes `required`.
+    ///
+    /// The relation is closed: a declaration realizes its own mechanism and
+    /// the absent one, and nothing else. A namespace-first service does not
+    /// realize filesystem presentation, and filesystem presentation does not
+    /// stand in for a service source.
+    pub const fn realizes(self, required: Self) -> bool {
+        match required {
+            Self::None => true,
+            Self::FilesystemPresentation => matches!(self, Self::FilesystemPresentation),
+            Self::NamespaceFirstServiceSource => {
+                matches!(self, Self::NamespaceFirstServiceSource)
+            }
+        }
+    }
+}
+
+/// The closed setup restriction one declared implementation honors.
+///
+/// `KTD11` fixes which parts of namespace setup the implementation promises
+/// to perform itself, and refuses the combinations it cannot perform. The
+/// restrictions are declared rather than inferred from a role name, a
+/// profile name, or a component's position in the composition graph.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum SetupRestriction {
+    /// The consumer's private mount tree is prepared before the requested
+    /// user namespace and final credentials.
+    MountTreeBeforeUserNamespace,
+    /// The broker's steady-state mount namespace is never changed.
+    SteadyStateMountNamespace,
+    /// The launchable component is created with no host capability.
+    ZeroHostCapability,
+}
+
+impl SetupRestriction {
+    /// The restrictions a declared presentation capability requires.
+    ///
+    /// An implementation that presents no source requires nothing, so a
+    /// declaration that pairs the absent capability with a source-only
+    /// restriction is refused rather than read as a promise it does not make.
+    pub const fn required_for(presentation: PresentationCapability) -> &'static [Self] {
+        match presentation {
+            PresentationCapability::None => &[],
+            PresentationCapability::FilesystemPresentation => &[
+                Self::MountTreeBeforeUserNamespace,
+                Self::SteadyStateMountNamespace,
+            ],
+            PresentationCapability::NamespaceFirstServiceSource => &[
+                Self::SteadyStateMountNamespace,
+                Self::ZeroHostCapability,
+            ],
+        }
+    }
+}
+
+/// One method a declared component serves.
+///
+/// `template` separates the two implementation kinds R31 keeps. `None` is a
+/// method answered inside the declaring component's own process;
+/// `Some` names a trusted executable template this provider owns. Both
+/// resolve to an [`OperationImplementation`] whose provider is the declaring
+/// artifact, so a `Command` row, a host path, or an argv cannot become the
+/// code a call reaches.
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeclaredMethod {
+    name: BoundedToken,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    template: Option<BoundedToken>,
+    presentation: PresentationCapability,
+}
+
+impl DeclaredMethod {
+    /// Declare one method with its implementation kind and the presentation
+    /// it needs from its component.
+    pub const fn new(
+        name: BoundedToken,
+        template: Option<BoundedToken>,
+        presentation: PresentationCapability,
+    ) -> Self {
+        Self {
+            name,
+            template,
+            presentation,
+        }
+    }
+
+    /// The method identity, spelled in the component's own vocabulary.
+    pub const fn name(&self) -> &BoundedToken {
+        &self.name
+    }
+
+    /// The trusted executable template that answers this method, when the
+    /// method is a template rather than an in-process method.
+    pub fn template(&self) -> Option<&BoundedToken> {
+        self.template.as_ref()
+    }
+
+    /// The presentation this method needs its component to realize.
+    pub const fn presentation(&self) -> PresentationCapability {
+        self.presentation
+    }
+}
+
+/// One service a declared component serves.
+///
+/// The identity is the session layer's own service id and the method list is
+/// the subset of the component's declared methods this service answers. The
+/// declaration carries no code: the binding half holds the
+/// `d2b_resource_types::ServiceDecl` whose handler table realizes these
+/// names, and the unified declaration refuses a service or method one half
+/// declares and the other does not.
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeclaredService {
+    id: BoundedText,
+    methods: Vec<BoundedToken>,
+}
+
+impl DeclaredService {
+    /// Declare one service identity and the methods it answers.
+    pub fn new(
+        id: impl Into<String>,
+        methods: impl IntoIterator<Item = BoundedToken>,
+    ) -> Result<Self, ProviderContractError> {
+        let id = BoundedText::parse(id.into()).map_err(|_| ProviderContractError::InvalidPrimitive)?;
+        let methods: Vec<_> = methods.into_iter().collect();
+        if methods.is_empty() || methods.len() > MAX_COMPONENT_METHODS {
+            return Err(ProviderContractError::BoundExceeded);
+        }
+        let mut unique = BTreeSet::new();
+        for method in &methods {
+            if !unique.insert(method) {
+                return Err(ProviderContractError::DuplicateDeclaration);
+            }
+        }
+        Ok(Self { id, methods })
+    }
+
+    /// The service identity the session layer addresses.
+    pub const fn id(&self) -> &BoundedText {
+        &self.id
+    }
+
+    /// The declared methods this service answers.
+    pub fn methods(&self) -> &[BoundedToken] {
+        &self.methods
+    }
+}
+
+/// One child creation a declared component declares.
+///
+/// This is the license to create, not a second copy of the runtime creation
+/// order. `d2b_resource_types::ChildCreation` remains the runtime
+/// realization - child custody and ordering are composition facts, not
+/// signed contract data - and the unified declaration refuses a child one
+/// half declares and the other does not.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeclaredChild {
+    resource_type: ResourceTypeName,
+    provider: ResourceRef,
+}
+
+impl DeclaredChild {
+    /// Declare one child creation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderContractError::WrongResourceType`] unless
+    /// `provider` names a `Provider`: a child is created by a declared
+    /// provider, never by a resource row that could name arbitrary code.
+    pub fn new(
+        resource_type: ResourceTypeName,
+        provider: ResourceRef,
+    ) -> Result<Self, ProviderContractError> {
+        if provider.resource_type().as_str() != PROVIDER_RESOURCE_TYPE {
+            return Err(ProviderContractError::WrongResourceType);
+        }
+        Ok(Self {
+            resource_type,
+            provider,
+        })
+    }
+
+    /// The child ResourceType.
+    pub const fn resource_type(&self) -> &ResourceTypeName {
+        &self.resource_type
+    }
+
+    /// The declared Provider that serves the child.
+    pub const fn provider(&self) -> &ResourceRef {
+        &self.provider
+    }
+}
+
+/// One resource capability a provider's implementation requires.
+///
+/// Absence is not support: the signed capability matrix of the bound
+/// ResourceType decides, and a declaration may only require a capability of a
+/// type the same declaration binds.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RequiredResourceCapability {
+    resource_type: ResourceTypeName,
+    capability: BoundedToken,
+}
+
+impl RequiredResourceCapability {
+    /// Declare one required resource capability.
+    pub const fn new(resource_type: ResourceTypeName, capability: BoundedToken) -> Self {
+        Self {
+            resource_type,
+            capability,
+        }
+    }
+
+    /// The ResourceType whose capability is required.
+    pub const fn resource_type(&self) -> &ResourceTypeName {
+        &self.resource_type
+    }
+
+    /// The base capability name required from that ResourceType.
+    pub const fn capability(&self) -> &BoundedToken {
+        &self.capability
+    }
+}
+
+/// Where a declared component's implementation is allowed to run.
+///
+/// `targets` is the closed target set the component may be placed at and
+/// `anchor` is the contract-owned selector a controller's owned
+/// ResourceTypes resolve against. A service or worker names targets but no
+/// anchor: its methods are placed by the admitted relationship that reached
+/// them, not by a resource anchor.
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeclaredPlacement {
+    targets: BTreeSet<ControllerTargetKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    anchor: Option<PlacementAnchor>,
+}
+
+impl DeclaredPlacement {
+    /// Declare one placement.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderContractError::BoundExceeded`] for an empty target
+    /// set: a component that may run nowhere cannot be deployed.
+    pub fn new(
+        targets: impl IntoIterator<Item = ControllerTargetKind>,
+        anchor: Option<PlacementAnchor>,
+    ) -> Result<Self, ProviderContractError> {
+        let targets: BTreeSet<_> = targets.into_iter().collect();
+        if targets.is_empty() {
+            return Err(ProviderContractError::BoundExceeded);
+        }
+        Ok(Self { targets, anchor })
+    }
+
+    /// The target kinds the component may be placed at.
+    pub const fn targets(&self) -> &BTreeSet<ControllerTargetKind> {
+        &self.targets
+    }
+
+    /// The contract-owned placement anchor, for a controller's owned types.
+    pub const fn anchor(&self) -> Option<PlacementAnchor> {
+        self.anchor
+    }
+}
+
+/// One component's declared implementation surface.
+///
+/// The [`ComponentDescriptor`] is the signed code identity: the executable
+/// set, the configuration digest, the target artifacts and effect classes,
+/// the execution domains, the cardinality, and the dependency aliases. The
+/// remaining fields are the facets that descriptor does not carry: where the
+/// component may run, what presentation it can realize, which setup
+/// restrictions that presentation requires, which methods and services it
+/// publishes, and which child creations it is licensed to perform.
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeclaredComponent {
+    component: ComponentDescriptor,
+    placement: DeclaredPlacement,
+    presentation: PresentationCapability,
+    setup_restrictions: BTreeSet<SetupRestriction>,
+    methods: Vec<DeclaredMethod>,
+    services: Vec<DeclaredService>,
+    children: Vec<DeclaredChild>,
+}
+
+impl DeclaredComponent {
+    /// Declare one component after checking every single-half invariant.
+    ///
+    /// # Errors
+    ///
+    /// - [`ProviderContractError::DuplicateDeclaration`] when a method,
+    ///   service identity, or child creation is declared twice.
+    /// - [`ProviderContractError::MissingRequiredField`] when the declared
+    ///   methods are not exactly the descriptor's exported methods.
+    /// - [`ProviderContractError::BoundExceeded`] when a declared collection
+    ///   is over its bound.
+    /// - [`ProviderContractError::PresentationUnsupported`] when a method
+    ///   needs a presentation this component cannot realize.
+    /// - [`ProviderContractError::SetupRestrictionIncompatible`] when the
+    ///   setup restrictions do not match the declared presentation.
+    /// - [`ProviderContractError::PlacementUnsupported`] when the placement
+    ///   is not supported by the component's role or signed target set.
+    /// - [`ProviderContractError::PlacementAnchorMissing`] or
+    ///   [`ProviderContractError::PlacementAnchorMismatch`] when a
+    ///   controller's anchor is absent or disagrees with a registered
+    ///   ResourceType base contract.
+    #[allow(clippy::too_many_arguments, reason = "each argument is one declared R9 facet")]
+    pub fn new(
+        component: ComponentDescriptor,
+        placement: DeclaredPlacement,
+        presentation: PresentationCapability,
+        setup_restrictions: impl IntoIterator<Item = SetupRestriction>,
+        methods: Vec<DeclaredMethod>,
+        services: Vec<DeclaredService>,
+        children: impl IntoIterator<Item = DeclaredChild>,
+    ) -> Result<Self, ProviderContractError> {
+        let services: Vec<_> = services.into_iter().collect();
+        let children: Vec<_> = children.into_iter().collect();
+        if services.len() > MAX_DECLARED_COMPONENT_SERVICES
+            || children.len() > MAX_DECLARED_COMPONENT_CHILDREN
+        {
+            return Err(ProviderContractError::BoundExceeded);
+        }
+        let setup_restrictions: BTreeSet<_> = setup_restrictions.into_iter().collect();
+        for required in SetupRestriction::required_for(presentation) {
+            if !setup_restrictions.contains(required) {
+                return Err(ProviderContractError::SetupRestrictionIncompatible);
+            }
+        }
+        if presentation == PresentationCapability::None && !setup_restrictions.is_empty() {
+            return Err(ProviderContractError::SetupRestrictionIncompatible);
+        }
+
+        let mut method_names = BTreeSet::new();
+        for method in &methods {
+            if !method_names.insert(method.name()) {
+                return Err(ProviderContractError::DuplicateDeclaration);
+            }
+            if !presentation.realizes(method.presentation()) {
+                return Err(ProviderContractError::PresentationUnsupported);
+            }
+        }
+        if method_names.len() != component.exported_methods().len()
+            || !method_names
+                .iter()
+                .all(|name| component.exported_methods().contains(*name))
+        {
+            return Err(ProviderContractError::MissingRequiredField);
+        }
+
+        let mut service_ids = BTreeSet::new();
+        for service in &services {
+            if !service_ids.insert(service.id()) {
+                return Err(ProviderContractError::DuplicateDeclaration);
+            }
+            for method in service.methods() {
+                if !method_names.contains(method) {
+                    return Err(ProviderContractError::MissingRequiredField);
+                }
+            }
+        }
+
+        let mut children_seen = BTreeSet::new();
+        for child in &children {
+            if !children_seen.insert(child) {
+                return Err(ProviderContractError::DuplicateDeclaration);
+            }
+        }
+
+        validate_declared_placement(&component, &placement)?;
+        Ok(Self {
+            component,
+            placement,
+            presentation,
+            setup_restrictions,
+            methods,
+            services,
+            children,
+        })
+    }
+
+    /// The signed code identity this component declares.
+    pub const fn component(&self) -> &ComponentDescriptor {
+        &self.component
+    }
+
+    /// Where this component may be placed.
+    pub const fn placement(&self) -> &DeclaredPlacement {
+        &self.placement
+    }
+
+    /// The presentation this component can realize.
+    pub const fn presentation(&self) -> PresentationCapability {
+        self.presentation
+    }
+
+    /// The setup restrictions this component honors.
+    pub const fn setup_restrictions(&self) -> &BTreeSet<SetupRestriction> {
+        &self.setup_restrictions
+    }
+
+    /// The declared methods, in declaration order.
+    pub fn methods(&self) -> &[DeclaredMethod] {
+        &self.methods
+    }
+
+    /// The declared services.
+    pub fn services(&self) -> &[DeclaredService] {
+        &self.services
+    }
+
+    /// The declared child creations.
+    pub fn children(&self) -> &[DeclaredChild] {
+        &self.children
+    }
+
+    /// The declared method of one name, when this component answers it.
+    pub fn method(&self, name: &BoundedToken) -> Option<&DeclaredMethod> {
+        self.methods.iter().find(|method| method.name() == name)
+    }
+
+    /// The trusted implementation identity this component's method resolves
+    /// to, derived from the declared identity rather than restated by it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderContractError::MissingRequiredField`] when the
+    /// component does not answer the method.
+    pub fn implementation(
+        &self,
+        provider: ResourceRef,
+        method: &BoundedToken,
+    ) -> Result<OperationImplementation, ProviderContractError> {
+        let declared = self
+            .method(method)
+            .ok_or(ProviderContractError::MissingRequiredField)?;
+        match declared.template() {
+            Some(template) => {
+                OperationImplementation::trusted_executable_template(provider, template.clone())
+                    .map_err(|_| ProviderContractError::InvalidPrimitive)
+            }
+            None => OperationImplementation::provider_method(
+                provider,
+                self.component.component_id().clone(),
+                declared.name().clone(),
+            )
+            .map_err(|_| ProviderContractError::InvalidPrimitive),
+        }
+    }
+}
+
+impl core::fmt::Debug for DeclaredComponent {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DeclaredComponent")
+            .field("component_type", &self.component.component_type())
+            .field("placement_targets", &self.placement.targets().len())
+            .field("presentation", &self.presentation)
+            .field("method_count", &self.methods.len())
+            .field("service_count", &self.services.len())
+            .field("child_count", &self.children.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Refuse a placement the component's role or signed target set cannot take.
+fn validate_declared_placement(
+    component: &ComponentDescriptor,
+    placement: &DeclaredPlacement,
+) -> Result<(), ProviderContractError> {
+    for target in placement.targets() {
+        if component.target_capability(*target).is_none() {
+            return Err(ProviderContractError::PlacementUnsupported);
+        }
+    }
+    match component.component_type() {
+        ComponentType::Controller => {
+            let anchor = placement
+                .anchor()
+                .ok_or(ProviderContractError::PlacementAnchorMissing)?;
+            let scope = component
+                .instance_scope()
+                .ok_or(ProviderContractError::ControllerScopeMissing)?;
+            let zone_singleton = matches!(scope, ControllerInstanceScope::ZoneSingleton);
+            let declares_zone = placement
+                .targets()
+                .contains(&ControllerTargetKind::Zone);
+            if declares_zone != zone_singleton {
+                return Err(ProviderContractError::PlacementUnsupported);
+            }
+            let expected_anchor = if zone_singleton {
+                PlacementAnchor::Zone
+            } else {
+                PlacementAnchor::ExecutionRef
+            };
+            if anchor != expected_anchor {
+                return Err(ProviderContractError::PlacementAnchorMismatch);
+            }
+            for resource_type in component.exported_resource_types() {
+                if let Some(canonical) = PlacementAnchor::canonical_for(resource_type)
+                    && canonical != anchor
+                {
+                    return Err(ProviderContractError::PlacementAnchorMismatch);
+                }
+            }
+        }
+        ComponentType::Service | ComponentType::Worker => {
+            if placement.anchor().is_some() {
+                return Err(ProviderContractError::PlacementAnchorMismatch);
+            }
+            if placement
+                .targets()
+                .contains(&ControllerTargetKind::Zone)
+            {
+                return Err(ProviderContractError::PlacementUnsupported);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The serializable semantic facets one provider declares (KTD1).
+///
+/// This is the sole authoring location for the supported resource types, the
+/// methods, the code identity, the configuration, the placement, the child
+/// creation, and the required resource capabilities of one provider. The
+/// runtime descriptors, the registration views, and the operation-admission
+/// views are derived from it rather than maintained beside it, and the local
+/// constructor and function bindings that realize these identities live
+/// separately in `d2b_resource_types::ProviderImplementationBindings`.
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderDeclarationSpec {
+    artifact_id: ArtifactId,
+    provider: ResourceRef,
+    components: Vec<DeclaredComponent>,
+    required_capabilities: Vec<RequiredResourceCapability>,
+}
+
+impl ProviderDeclarationSpec {
+    /// Declare one provider after checking every single-half invariant.
+    ///
+    /// # Errors
+    ///
+    /// - [`ProviderContractError::BoundExceeded`] when there are no
+    ///   components or a declared collection is over its bound.
+    /// - [`ProviderContractError::DuplicateDeclaration`] when a component
+    ///   identity, an owned ResourceType, or a required capability is
+    ///   declared twice.
+    /// - [`ProviderContractError::MissingRequiredField`] when a required
+    ///   capability names a ResourceType this declaration does not bind.
+    pub fn new(
+        artifact_id: ArtifactId,
+        components: impl IntoIterator<Item = DeclaredComponent>,
+        required_capabilities: impl IntoIterator<Item = RequiredResourceCapability>,
+    ) -> Result<Self, ProviderContractError> {
+        let components: Vec<_> = components.into_iter().collect();
+        if components.is_empty() || components.len() > MAX_PROVIDER_COMPONENTS {
+            return Err(ProviderContractError::BoundExceeded);
+        }
+        let provider = ResourceRef::parse(&format!(
+            "{PROVIDER_RESOURCE_TYPE}/{}",
+            artifact_id.as_str()
+        ))
+        .map_err(|_| ProviderContractError::InvalidPrimitive)?;
+        let mut component_ids = BTreeSet::new();
+        let mut owned_types = BTreeSet::new();
+        let mut method_names: BTreeSet<&BoundedToken> = BTreeSet::new();
+        for component in &components {
+            if !component_ids.insert(component.component().component_id()) {
+                return Err(ProviderContractError::DuplicateDeclaration);
+            }
+            for resource_type in component.component().exported_resource_types() {
+                if !owned_types.insert(resource_type) {
+                    return Err(ProviderContractError::DuplicateDeclaration);
+                }
+            }
+            // The session layer addresses a method by its name, so that name
+            // is the method identity across the whole provider. A name two
+            // components declare would leave the binding half unable to say
+            // which implementation a call reaches.
+            for method in component.methods() {
+                if !method_names.insert(method.name()) {
+                    return Err(ProviderContractError::DuplicateDeclaration);
+                }
+            }
+        }
+        let required_capabilities: Vec<_> = required_capabilities.into_iter().collect();
+        if required_capabilities.len() > MAX_DECLARED_RESOURCE_CAPABILITIES {
+            return Err(ProviderContractError::BoundExceeded);
+        }
+        let mut required_seen = BTreeSet::new();
+        for requirement in &required_capabilities {
+            if !required_seen.insert(requirement) {
+                return Err(ProviderContractError::DuplicateDeclaration);
+            }
+            if !owned_types.contains(requirement.resource_type()) {
+                return Err(ProviderContractError::MissingRequiredField);
+            }
+        }
+        Ok(Self {
+            artifact_id,
+            provider,
+            components,
+            required_capabilities,
+        })
+    }
+
+    /// The artifact this declaration is published as.
+    pub const fn artifact_id(&self) -> &ArtifactId {
+        &self.artifact_id
+    }
+
+    /// The `Provider` resource reference this declaration owns.
+    ///
+    /// Every implementation identity this declaration derives names this
+    /// reference, so a caller cannot point a method at another provider.
+    pub const fn provider(&self) -> &ResourceRef {
+        &self.provider
+    }
+
+    /// The declared components, in declaration order.
+    pub fn components(&self) -> &[DeclaredComponent] {
+        &self.components
+    }
+
+    /// The resource capabilities this provider's implementations require.
+    pub fn required_capabilities(&self) -> &[RequiredResourceCapability] {
+        &self.required_capabilities
+    }
+
+    /// The declared components, as an ordered list a caller can normalize.
+    pub fn components_mut(&mut self) -> &mut Vec<DeclaredComponent> {
+        &mut self.components
+    }
+
+    /// The declared component of one identity, when this provider has it.
+    pub fn component(&self, component_id: &BoundedToken) -> Option<&DeclaredComponent> {
+        self.components
+            .iter()
+            .find(|component| component.component().component_id() == component_id)
+    }
+
+    /// Every ResourceType this declaration owns, across its components.
+    pub fn owned_resource_types(&self) -> BTreeSet<&ResourceTypeName> {
+        self.components
+            .iter()
+            .flat_map(|component| component.component().exported_resource_types())
+            .collect()
+    }
+
+    /// The trusted implementation identity of one declared method.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderContractError::MissingRequiredField`] when the
+    /// declaration has no such component or the component answers no such
+    /// method.
+    pub fn implementation(
+        &self,
+        component_id: &BoundedToken,
+        method: &BoundedToken,
+    ) -> Result<OperationImplementation, ProviderContractError> {
+        let component = self
+            .component(component_id)
+            .ok_or(ProviderContractError::MissingRequiredField)?;
+        component.implementation(self.provider.clone(), method)
+    }
+
+    /// The trusted implementation identity of every declared method, in
+    /// declaration order.
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`ProviderDeclarationSpec::implementation`].
+    pub fn implementations(
+        &self,
+    ) -> Result<Vec<OperationImplementation>, ProviderContractError> {
+        let mut resolved = Vec::new();
+        for component in &self.components {
+            for method in component.methods() {
+                resolved.push(
+                    component
+                        .implementation(self.provider.clone(), method.name())?,
+                );
+            }
+        }
+        Ok(resolved)
+    }
+}
+
+impl core::fmt::Debug for ProviderDeclarationSpec {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let methods: usize = self
+            .components
+            .iter()
+            .map(|component| component.methods().len())
+            .sum();
+        let services: usize = self
+            .components
+            .iter()
+            .map(|component| component.services().len())
+            .sum();
+        f.debug_struct("ProviderDeclarationSpec")
+            .field("component_count", &self.components.len())
+            .field("method_count", &methods)
+            .field("service_count", &services)
+            .field("required_capability_count", &self.required_capabilities.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// One provider artifact a verified deployment admitted.
+///
+/// An artifact enters this set from a verified package digest at deployment.
+/// A mutable `Provider` row selects one of these artifacts and can never add
+/// one, so a row naming an artifact no verified deployment provides resolves
+/// to nothing instead of to a compiled privileged handler (R12, AE14).
+#[derive(Clone, PartialEq, Eq)]
+pub struct AdmittedProviderArtifact {
+    manifest: ProviderManifest,
+}
+
+impl AdmittedProviderArtifact {
+    /// Admit one signed manifest as a deployment artifact.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderContractError::TrustNotEstablished`] when the trust
+    /// evidence does not admit, and otherwise whatever
+    /// [`ProviderManifest::validate_installation_contract`] refuses.
+    pub fn new(manifest: ProviderManifest) -> Result<Self, ProviderContractError> {
+        manifest.trust().admit()?;
+        manifest.validate_installation_contract()?;
+        Ok(Self { manifest })
+    }
+
+    /// The admitted signed manifest.
+    pub const fn manifest(&self) -> &ProviderManifest {
+        &self.manifest
+    }
+
+    /// The artifact identifier this manifest is published as.
+    pub const fn artifact_id(&self) -> &ArtifactId {
+        self.manifest.artifact_id()
+    }
+
+    /// Whether the signed manifest declares `component` exporting `method`.
+    pub fn declares_method(&self, component: &BoundedToken, method: &BoundedToken) -> bool {
+        self.manifest
+            .components()
+            .iter()
+            .find(|declared| declared.component_id() == component)
+            .is_some_and(|declared| declared.exported_methods().contains(method))
+    }
+}
+
+impl core::fmt::Debug for AdmittedProviderArtifact {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AdmittedProviderArtifact")
+            .field("manifest", &self.manifest)
+            .finish_non_exhaustive()
+    }
+}
+
+wire_deserialize!(
+    DeclaredMethod,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        name: BoundedToken,
+        #[serde(default)]
+        template: Option<BoundedToken>,
+        #[serde(default = "default_presentation_capability")]
+        presentation: PresentationCapability,
+    },
+    wire,
+    Ok(Self::new(wire.name, wire.template, wire.presentation))
+);
+
+fn default_presentation_capability() -> PresentationCapability {
+    PresentationCapability::None
 }
 
 #[cfg(test)]
