@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use tokio::time::{Duration, Instant, timeout_at};
 
 use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_provider::v3::PresentationCapability;
 
 use crate::{
     AcaControl, AcaControlContext, AcaControlError, AcaControlErrorKind, AcaControlHealth,
@@ -77,6 +78,12 @@ pub enum AcaControllerError {
     Effect(AcaControlErrorKind),
     /// Credential cleanup failed after an otherwise successful operation.
     LeaseCleanup(AcaControlErrorKind),
+    /// The admitted remote authority refused the operation.
+    ///
+    /// The control plane was not contacted: a wrong target, a wrong cloud
+    /// identity, a presentation this remote backend does not realize, and a
+    /// revoked or superseded credential all land here (R35, R42).
+    RemoteRefused,
     /// The sandbox did not become ready within the configured attempt bound.
     ReadinessExhausted,
 }
@@ -89,6 +96,7 @@ impl AcaControllerError {
             Self::AmbiguousAdoption => "aca-ambiguous-adoption",
             Self::SandboxUnavailable => "aca-sandbox-unavailable",
             Self::Effect(kind) | Self::LeaseCleanup(kind) => kind.code(),
+            Self::RemoteRefused => "aca-remote-refused",
             Self::ReadinessExhausted => "aca-readiness-exhausted",
         }
     }
@@ -194,6 +202,25 @@ pub struct AcaController<C, L> {
     readiness_attempts: u8,
     readiness_lifecycle: Option<AcaSandboxLifecycle>,
     finalization_stage: AcaFinalizationStage,
+    /// The admitted remote authority, once the graph has admitted one.
+    ///
+    /// `None` is the pre-graph entry point: the controller still drives the
+    /// control plane, but on its own binding rather than on an admitted one.
+    /// Every remote call goes through [`Self::admit_remote`] either way; with
+    /// an authority bound, a call that is not admitted makes none.
+    remote: Option<Arc<crate::AcaAdmittedRemote>>,
+    /// The cloud account, environment, and resource group this controller
+    /// addresses, compared against the authority's before any remote call.
+    ///
+    /// `None` until the composition root states which cloud account this
+    /// controller speaks for; an admitted authority with no stated target
+    /// refuses every call rather than guessing one.
+    cloud: Option<crate::AcaCloudIdentity>,
+    /// The consumer-facing presentation this controller was asked for.
+    requested_presentation: PresentationCapability,
+    /// The delete outcome the control plane last reported, kept so release
+    /// evidence is a fact rather than a guess.
+    terminal_delete: Option<crate::AcaDeleteOutcome>,
 }
 
 impl<C, L> AcaController<C, L>
@@ -213,6 +240,10 @@ where
         Self {
             binding,
             config,
+            cloud: None,
+            requested_presentation: crate::declared_presentation(),
+            remote: None,
+            terminal_delete: None,
             network_ref: None,
             sandbox_transport_alias,
             control,
@@ -227,6 +258,95 @@ where
             readiness_lifecycle: None,
             finalization_stage: AcaFinalizationStage::Observe,
         }
+    }
+
+    /// Construct a controller for one Guest binding, with the cloud account
+    /// its `Provider` configuration addresses.
+    ///
+    /// The authority compares against this value on every remote call, so it
+    /// is part of the controller's identity rather than something the effect
+    /// reads on its own.
+    pub fn with_cloud_identity(mut self, cloud_identity: crate::AcaCloudIdentity) -> Self {
+        self.cloud = Some(cloud_identity);
+        self
+    }
+
+    /// Bind the admitted remote authority this controller acts under.
+    ///
+    /// This is the converted entry point: with an authority bound, every
+    /// remote call is admitted against the accepted Guest identity, the
+    /// admitted cloud target, the admitted credential relationship, and the
+    /// declared presentation ceiling before the control plane is contacted.
+    pub fn with_admitted_authority(
+        mut self,
+        remote: Arc<crate::AcaAdmittedRemote>,
+    ) -> Self {
+        self.remote = Some(remote);
+        self
+    }
+
+    /// Request a consumer-facing presentation this Guest must realize.
+    ///
+    /// A presentation the declared ceiling does not realize is refused by
+    /// [`Self::admit_remote`] before any remote mutation, not attempted
+    /// against the control plane and discovered there.
+    pub fn with_requested_presentation(
+        mut self,
+        requested: PresentationCapability,
+    ) -> Self {
+        self.requested_presentation = requested;
+        self
+    }
+
+    /// Return the terminal evidence for this Guest, once it is released.
+    ///
+    /// `None` while the finalizer is still installed or the remote delete is
+    /// unconfirmed: "release" is a pair, and neither half alone is a release.
+    pub fn release_evidence(&self) -> Option<crate::AcaReleaseEvidence> {
+        let remote = self.remote.as_ref()?;
+        let deletion = self.terminal_delete?;
+        Some(crate::AcaReleaseEvidence::new(
+            remote.authority().reconciliation_key(),
+            self.binding.guest_uid.clone(),
+            self.binding.provider_generation,
+            deletion,
+            !self.finalizer,
+        ))
+    }
+
+    /// Admit one remote operation before the control plane is contacted.
+    ///
+    /// With no authority bound this is the pre-graph entry point and the call
+    /// proceeds on the controller's own binding; with one bound, the call is
+    /// refused unless the graph admitted it.
+    async fn admit_remote(
+        &self,
+        purpose: crate::AcaRemotePurpose,
+        operation_id: AcaOperationId,
+    ) -> Result<Option<crate::AcaRemoteGrant>, AcaControllerError> {
+        let Some(remote) = self.remote.as_ref() else {
+            return Ok(None);
+        };
+        remote
+            .admit(
+                &self.binding,
+                self.cloud.as_ref(),
+                purpose,
+                self.requested_presentation,
+                operation_id,
+            )
+            .await
+            .map(Some)
+            .map_err(|refusal| {
+                tracing::warn!(
+                    resource = %self.binding.guest_uid,
+                    provider = "runtime-azure-container-apps",
+                    purpose = purpose.code(),
+                    code = refusal.code(),
+                    "remote operation refused before the control plane was contacted"
+                );
+                AcaControllerError::RemoteRefused
+            })
     }
 
     /// Replace the wall clock used for lease expiry and operation retention.
@@ -267,10 +387,7 @@ where
         if let Some(outcome) = self.completed_outcome(&operation_id) {
             return Ok(outcome);
         }
-        let query = AcaWorkloadQuery {
-            binding: self.binding.clone(),
-            profile_id: self.config.profile().profile_id().clone(),
-        };
+        let query = self.workload_query();
         let candidates = self
             .with_lease(
                 operation_id.clone(),
@@ -318,10 +435,7 @@ where
         }
         self.phase = AcaPhase::Finalizing;
         if self.finalization_stage == AcaFinalizationStage::Observe || self.observed.is_none() {
-            let query = AcaWorkloadQuery {
-                binding: self.binding.clone(),
-                profile_id: self.config.profile().profile_id().clone(),
-            };
+            let query = self.workload_query();
             let candidates = self
                 .with_lease(
                     operation_id.clone(),
@@ -337,7 +451,7 @@ where
                 self.ensure_sandbox_generation(record)?;
             }
             if self.observed.is_none() {
-                self.finish_finalization();
+                self.finish_finalization(crate::AcaDeleteOutcome::AlreadyAbsent);
                 return Ok(());
             }
         }
@@ -349,10 +463,7 @@ where
                 )
             })
         {
-            let query = AcaWorkloadQuery {
-                binding: self.binding.clone(),
-                profile_id: self.config.profile().profile_id().clone(),
-            };
+            let query = self.workload_query();
             let candidates = self
                 .with_lease(
                     operation_id.clone(),
@@ -365,7 +476,7 @@ where
                 .await?;
             self.observed = one_candidate(candidates)?;
             let Some(record) = self.observed.as_ref() else {
-                self.finish_finalization();
+                self.finish_finalization(crate::AcaDeleteOutcome::AlreadyAbsent);
                 return Ok(());
             };
             self.ensure_sandbox_generation(record)?;
@@ -410,7 +521,7 @@ where
                     return Err(AcaControllerError::Effect(AcaControlErrorKind::Ambiguous));
                 }
                 None => {
-                    self.finish_finalization();
+                    self.finish_finalization(crate::AcaDeleteOutcome::AlreadyAbsent);
                     return Ok(());
                 }
             };
@@ -456,7 +567,7 @@ where
                     return Err(AcaControllerError::Effect(AcaControlErrorKind::Ambiguous));
                 }
                 None => {
-                    self.finish_finalization();
+                    self.finish_finalization(crate::AcaDeleteOutcome::AlreadyAbsent);
                     return Ok(());
                 }
             }
@@ -493,11 +604,10 @@ where
                     },
                 )
                 .await?;
-            match outcome {
-                crate::AcaDeleteOutcome::Deleted | crate::AcaDeleteOutcome::AlreadyAbsent => {
-                    self.finish_finalization();
-                }
-            }
+            // The confirmed outcome is recorded before the finalizer drops,
+            // so the terminal release evidence names what the control plane
+            // actually reported rather than assuming a delete (R36, AE18).
+            self.finish_finalization(outcome);
         }
         Ok(())
     }
@@ -592,6 +702,10 @@ where
         self.phase = AcaPhase::Provisioning;
         let desired_disk = AcaDesiredDiskImage {
             source: self.config.profile().disk_image().clone(),
+            name: self
+                .remote
+                .as_ref()
+                .map(|remote| remote.authority().reconciliation_key().disk_image_name().clone()),
         };
         let generation = self.binding.provider_generation;
         let image = self
@@ -623,6 +737,15 @@ where
             disk_image: image,
             network_ref: self.network_ref.clone(),
             sandbox_transport_alias: self.sandbox_transport_alias.clone(),
+            // The admitted authority's derived name is the only name this
+            // controller may create under. Deriving it once per attempt, from
+            // the accepted Guest identity rather than from the request, is what
+            // makes a retry after an ambiguous create land on the same
+            // resource instead of a second one.
+            reconciliation: self
+                .remote
+                .as_ref()
+                .map(|remote| remote.authority().reconciliation_key()),
         };
         let created = self
             .with_lease(
@@ -641,6 +764,23 @@ where
         Ok(AcaReconcileOutcome::Progressing {
             after_ms: self.config.readiness().interval_ms(),
         })
+    }
+
+    /// The workload query this controller asks the control plane with.
+    ///
+    /// It carries the admitted authority's derived cloud name, so "which
+    /// sandboxes belong to this Guest" is answered by exactly the name the
+    /// create path would use rather than by a pattern match that could
+    /// adopt a neighbour.
+    fn workload_query(&self) -> AcaWorkloadQuery {
+        AcaWorkloadQuery {
+            binding: self.binding.clone(),
+            profile_id: self.config.profile().profile_id().clone(),
+            reconciliation: self
+                .remote
+                .as_ref()
+                .map(|remote| remote.authority().reconciliation_key()),
+        }
     }
 
     async fn health(
@@ -668,6 +808,11 @@ where
         F: FnOnce(Arc<C>, AcaCredentialLease, AcaControlContext) -> Fut,
         Fut: std::future::Future<Output = Result<T, AcaControlError>>,
     {
+        // One gate for every remote call: `with_lease` is the only path to the
+        // control plane, so admitting here admits the whole provider. The
+        // admission runs before the credential lease is even requested, so a
+        // refused operation asks for no credential (R24, R35).
+        self.admit_remote(remote_purpose(purpose), operation_id.clone()).await?;
         if deadline_remaining_ms == 0 {
             tracing::warn!(
                 resource = %self.binding.guest_uid,
@@ -862,9 +1007,15 @@ where
         )
     }
 
-    fn finish_finalization(&mut self) {
+    /// Drop the finalizer and record what the control plane actually said.
+    ///
+    /// The outcome is recorded here rather than at the delete site so a Guest
+    /// that was already absent still leaves honest terminal evidence: the
+    /// cloud had nothing, and the release says exactly that.
+    fn finish_finalization(&mut self, outcome: crate::AcaDeleteOutcome) {
         self.observed = None;
         self.finalizer = false;
+        self.terminal_delete = Some(outcome);
         self.phase = AcaPhase::Finalized;
         self.finalization_stage = AcaFinalizationStage::Delete;
     }
@@ -893,6 +1044,25 @@ where
         } else {
             Err(AcaControllerError::InvalidState)
         }
+    }
+}
+
+/// The remote purpose a credential purpose runs under.
+///
+/// The two vocabularies are deliberately not merged: the credential purpose
+/// decides which lease the controller asks for, and the remote purpose
+/// decides what the admitted relationship must authorize. Health, inspection,
+/// and adoption read the control plane and never carry material; the rest
+/// mutate remote state and must hold an admitted delivery session.
+const fn remote_purpose(purpose: AcaCredentialPurpose) -> crate::AcaRemotePurpose {
+    match purpose {
+        AcaCredentialPurpose::Health
+        | AcaCredentialPurpose::Inspect
+        | AcaCredentialPurpose::Adopt => crate::AcaRemotePurpose::Inspect,
+        AcaCredentialPurpose::Ensure => crate::AcaRemotePurpose::Ensure,
+        AcaCredentialPurpose::Start => crate::AcaRemotePurpose::Start,
+        AcaCredentialPurpose::Stop => crate::AcaRemotePurpose::Stop,
+        AcaCredentialPurpose::Destroy => crate::AcaRemotePurpose::Destroy,
     }
 }
 

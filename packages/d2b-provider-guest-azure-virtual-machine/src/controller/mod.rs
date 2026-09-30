@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
+    authority::AzureVmRemotePurpose,
     bootstrap::{BootstrapPsk, BootstrapService, BootstrapServiceState},
     config::{AzureVmConfig, AzureVmGuestSettings},
     effect::AzureCredentialPort,
@@ -16,6 +17,9 @@ use crate::{
     },
     error::AzureVmError,
 };
+
+use d2b_contracts_provider::v3::PresentationCapability;
+use d2b_contracts_resource::v3::ResourceUid;
 
 const MAX_PSK_DELIVERY_ATTEMPTS: u8 = 3;
 const MAX_LRO_AGE_MS: u64 = 15 * 60 * 1_000;
@@ -109,6 +113,72 @@ pub struct AzureVmRecoveryState {
     /// Whether bootstrap expiry caused the current cleanup operation.
     #[serde(default)]
     pub bootstrap_deadline_failed: bool,
+    /// The Guest identity and cloud target this record was written under,
+    /// when the controller was running on an admitted authority.
+    #[serde(default)]
+    pub admitted_identity: Option<AdmittedRecoveryIdentity>,
+}
+
+/// The non-secret identity a recovered record is fenced on.
+///
+/// Restart recovery cannot mint access from a cached phase (R41): before an
+/// in-flight operation may be polled again, the recovered record has to name
+/// the same admitted Guest, at the same generation, in the same cloud target
+/// it was started for. A record written before the graph admitted this
+/// controller carries none of this and therefore authorizes no remote
+/// resumption at all - it is loadable, and it is not a grant.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdmittedRecoveryIdentity {
+    /// The authority Zone the Guest was reconciled in.
+    pub zone: String,
+    /// The admitted Guest uid.
+    pub guest_uid: String,
+    /// The admitted Provider generation.
+    pub provider_generation: u64,
+    /// The subscription the controller addressed.
+    pub cloud_subscription_id: String,
+    /// The resource group the controller addressed.
+    pub cloud_resource_group: String,
+}
+
+impl AdmittedRecoveryIdentity {
+    /// Borrow the authority Zone.
+    pub fn zone(&self) -> &str {
+        &self.zone
+    }
+
+    /// Borrow the admitted Guest uid.
+    pub fn guest_uid(&self) -> &str {
+        &self.guest_uid
+    }
+
+    /// Return the admitted generation.
+    pub const fn generation(&self) -> u64 {
+        self.provider_generation
+    }
+
+    /// Borrow the subscription the controller addressed.
+    pub fn subscription_id(&self) -> &str {
+        &self.cloud_subscription_id
+    }
+
+    /// Borrow the resource group the controller addressed.
+    pub fn resource_group(&self) -> &str {
+        &self.cloud_resource_group
+    }
+
+    /// Whether this identity still names the same Guest in the same cloud.
+    ///
+    /// Two fields changing at once is a replaced Guest or a reconfigured
+    /// Provider, and either one retires the recovery record's authority.
+    pub fn matches(&self, other: &Self) -> bool {
+        self.zone == other.zone
+            && self.guest_uid == other.guest_uid
+            && self.provider_generation == other.provider_generation
+            && self.cloud_subscription_id == other.cloud_subscription_id
+            && self.cloud_resource_group == other.cloud_resource_group
+    }
 }
 
 impl<'de> Deserialize<'de> for AzureVmRecoveryState {
@@ -140,6 +210,8 @@ impl<'de> Deserialize<'de> for AzureVmRecoveryState {
             child_cleanup_complete: bool,
             #[serde(default)]
             bootstrap_deadline_failed: bool,
+            #[serde(default)]
+            admitted_identity: Option<AdmittedRecoveryIdentity>,
         }
 
         #[derive(Deserialize)]
@@ -165,6 +237,9 @@ impl<'de> Deserialize<'de> for AzureVmRecoveryState {
             child_cleanup_complete: bool,
             #[serde(default)]
             bootstrap_deadline_failed: bool,
+            // The pre-admission record carries no admitted identity. It is
+            // read so sealed records stay loadable and stays absent: a record
+            // that predates the graph cannot acquire one on the way in.
         }
 
         #[derive(Deserialize)]
@@ -186,6 +261,7 @@ impl<'de> Deserialize<'de> for AzureVmRecoveryState {
                 bootstrap_extension_present: shape.bootstrap_extension_present,
                 child_cleanup_complete: shape.child_cleanup_complete,
                 bootstrap_deadline_failed: shape.bootstrap_deadline_failed,
+                admitted_identity: shape.admitted_identity,
             },
             Repr::Legacy(shape) => {
                 // The legacy pending-update member has no reader left: the
@@ -221,6 +297,9 @@ impl<'de> Deserialize<'de> for AzureVmRecoveryState {
                     bootstrap_extension_present: shape.bootstrap_extension_present,
                     child_cleanup_complete: shape.child_cleanup_complete,
                     bootstrap_deadline_failed: shape.bootstrap_deadline_failed,
+                    // A pre-admission record names no admitted Guest, and
+                    // reading it here is what keeps it that way.
+                    admitted_identity: None,
                 }
             }
         })
@@ -245,6 +324,28 @@ pub struct AzureVmController<E> {
     bootstrap_extension_present: bool,
     child_cleanup_complete: bool,
     bootstrap_deadline_failed: bool,
+    /// The admitted remote authority, once the graph has admitted one.
+    ///
+    /// `None` is the pre-graph entry point: the controller still drives ARM,
+    /// but on the identity the caller handed it rather than on an admitted
+    /// one. With an authority bound, a call that is not admitted makes none.
+    remote: Option<Arc<crate::AzureVmAdmittedRemote>>,
+    /// The subscription and resource group this controller addresses,
+    /// compared against the authority's before any ARM call.
+    ///
+    /// `None` until the composition root states which subscription this
+    /// controller speaks for; an admitted authority with no stated target
+    /// refuses every call rather than guessing one.
+    cloud: Option<crate::AzureVmCloudIdentity>,
+    /// The Guest uid and generation the controller was last reconciled for.
+    ///
+    /// Recorded from the reconcile call that owns this pass, because the ARM
+    /// token is acquired inside a call that already knows them.
+    reconciled: Option<(ResourceUid, u64)>,
+    /// The consumer-facing presentation this controller was asked for.
+    requested_presentation: PresentationCapability,
+    /// Whether the cloud has confirmed the virtual machine absent.
+    vm_absent: bool,
 }
 
 impl<E> AzureVmController<E>
@@ -280,7 +381,64 @@ where
             bootstrap_extension_present: false,
             child_cleanup_complete: false,
             bootstrap_deadline_failed: false,
+            remote: None,
+            cloud: None,
+            reconciled: None,
+            requested_presentation: crate::declared_presentation(),
+            vm_absent: false,
         })
+    }
+
+    /// Bind the admitted remote authority this controller acts under.
+    ///
+    /// This is the converted entry point: with an authority bound, every ARM
+    /// call is admitted against the accepted Guest identity, the admitted
+    /// subscription, the admitted credential relationship, and the declared
+    /// presentation ceiling before ARM is contacted.
+    pub fn with_admitted_authority(mut self, remote: Arc<crate::AzureVmAdmittedRemote>) -> Self {
+        self.remote = Some(remote);
+        self
+    }
+
+    /// State the subscription and resource group this controller addresses.
+    ///
+    /// The authority compares this against the cloud identity the accepted
+    /// graph admitted, so it is part of the controller's identity rather than
+    /// something the effect reads on its own.
+    pub fn with_cloud_identity(mut self, cloud: crate::AzureVmCloudIdentity) -> Self {
+        self.cloud = Some(cloud);
+        self
+    }
+
+    /// Request a consumer-facing presentation this Guest must realize.
+    ///
+    /// A presentation the declared ceiling does not realize is refused before
+    /// any ARM mutation, not attempted against the subscription and
+    /// discovered there.
+    pub fn with_requested_presentation(mut self, requested: PresentationCapability) -> Self {
+        self.requested_presentation = requested;
+        self
+    }
+
+    /// Return the terminal evidence for this Guest, once it is released.
+    ///
+    /// `None` while any release precondition is still open: an issued delete,
+    /// a bootstrap extension ARM has not confirmed removed, an unfinished
+    /// child cleanup, or a finalizer that is still installed.
+    pub fn release_evidence(&self) -> Option<crate::AzureVmReleaseEvidence> {
+        let remote = self.remote.as_ref()?;
+        let (guest_uid, generation) = self.reconciled.as_ref()?;
+        Some(crate::AzureVmReleaseEvidence::new(
+            remote
+                .authority()
+                .reconciliation_key(AzureVmRemotePurpose::Delete),
+            guest_uid.clone(),
+            *generation,
+            self.vm_absent,
+            !self.bootstrap_extension_present,
+            self.child_cleanup_complete,
+            !self.finalizer,
+        ))
     }
 
     /// Inject the durable bootstrap service state recovered by the gateway.
@@ -308,7 +466,43 @@ where
             bootstrap_extension_present: self.bootstrap_extension_present,
             child_cleanup_complete: self.child_cleanup_complete,
             bootstrap_deadline_failed: self.bootstrap_deadline_failed,
+            admitted_identity: self.recovery_identity(),
         }
+    }
+
+    /// The admitted identity this controller's recovery record is fenced on.
+    ///
+    /// `None` on the pre-graph entry point, which has no admitted Guest to
+    /// name. That is deliberate: a recovery record that cannot say which
+    /// admitted Guest it belongs to authorizes no remote resumption.
+    fn recovery_identity(&self) -> Option<AdmittedRecoveryIdentity> {
+        let (guest_uid, generation) = self.reconciled.as_ref()?;
+        Some(AdmittedRecoveryIdentity {
+            zone: self
+                .remote
+                .as_ref()?
+                .authority()
+                .guest()
+                .zone()
+                .as_str()
+                .to_owned(),
+            guest_uid: guest_uid.as_str().to_owned(),
+            provider_generation: *generation,
+            cloud_subscription_id: self
+                .remote
+                .as_ref()?
+                .authority()
+                .cloud()
+                .subscription_id()
+                .to_owned(),
+            cloud_resource_group: self
+                .remote
+                .as_ref()?
+                .authority()
+                .cloud()
+                .resource_group()
+                .to_owned(),
+        })
     }
 
     /// Restore non-secret state after the controller has been reconstructed.
@@ -352,6 +546,18 @@ where
         self.bootstrap_extension_present = recovery.bootstrap_extension_present;
         self.child_cleanup_complete = recovery.child_cleanup_complete;
         self.bootstrap_deadline_failed = recovery.bootstrap_deadline_failed;
+        // A recovered identity that names a different Guest, generation, or
+        // cloud target retires the record's authority: the recovered
+        // in-flight operation may not be resumed against it (R35, R41).
+        if recovery
+            .admitted_identity
+            .as_ref()
+            .is_some_and(|recovered| {
+                self.recovery_identity().is_none_or(|current| !current.matches(recovered))
+            })
+        {
+            return Err(AzureVmError::RemoteRefused);
+        }
         Ok(self)
     }
 
@@ -386,6 +592,7 @@ where
         if !self.finalizer {
             return Err(AzureVmError::InvalidConfiguration);
         }
+        self.record_reconciled(guest_uid, generation)?;
         if let Some(operation) = self
             .in_flight_operation
             .as_ref()
@@ -409,13 +616,19 @@ where
             self.phase = AzureVmPhase::Deleting;
             return self.start_pending_delete().await;
         }
-        let token = self.arm_token().await?;
+        let token = self.arm_token(AzureVmRemotePurpose::Inspect).await?;
         let (state, handle, tags) = self.effect.get_vm_state(&self.settings, &token).await?;
         match state {
             AzureVmState::Absent => {
-                let operation_id =
-                    operation_id(zone_uid, guest_uid, generation, "provision");
-                let token = self.arm_token().await?;
+                // ARM just told us the cloud holds no such machine. That is
+                // half of the release evidence and nothing more: the
+                // controller still owns the Guest until every other
+                // precondition is confirmed.
+                self.vm_absent = true;
+                let operation_id = self
+                    .arm_operation_id(AzureVmRemotePurpose::Provision)
+                    .unwrap_or_else(|| operation_id(zone_uid, guest_uid, generation, "provision"));
+                let token = self.arm_token(AzureVmRemotePurpose::Provision).await?;
                 let operation = self
                     .effect
                     .start_vm_provision(&self.settings, &operation_id, &token)
@@ -493,7 +706,7 @@ where
             self.phase = AzureVmPhase::Failed;
             return Err(AzureVmError::ArmProvisioningFailed);
         }
-        let token = self.arm_token().await?;
+        let token = self.arm_token(AzureVmRemotePurpose::Inspect).await?;
         match self.effect.poll_lro(&operation, &token).await? {
             LroStatus::InProgress { after_ms } => Ok(AzureVmReconcileOutcome::Progressing {
                 after_ms: after_ms.max(1),
@@ -532,7 +745,7 @@ where
                             self.phase = AzureVmPhase::Deleting;
                             return self.start_pending_delete().await;
                         }
-                        let token = self.arm_token().await?;
+                        let token = self.arm_token(AzureVmRemotePurpose::Inspect).await?;
                         let (state, handle, tags) =
                             self.effect.get_vm_state(&self.settings, &token).await?;
                         if state != AzureVmState::Running {
@@ -608,10 +821,14 @@ where
         if !self.finalizer {
             return Ok(AzureVmReconcileOutcome::Converged);
         }
+        self.record_reconciled(guest_uid, generation)?;
+        let admitted_delete_id = self.arm_operation_id(AzureVmRemotePurpose::Delete);
         let delete_operation_id = self
             .pending_delete_operation_id
             .get_or_insert_with(|| {
-                operation_id(zone_uid, guest_uid, generation, "delete")
+                admitted_delete_id
+                    .clone()
+                    .unwrap_or_else(|| operation_id(zone_uid, guest_uid, generation, "delete"))
             })
             .clone();
         if self.in_flight_operation.is_some() {
@@ -628,10 +845,13 @@ where
             self.phase = AzureVmPhase::Deleting;
             return self.start_extension_cleanup().await;
         }
-        let token = self.arm_token().await?;
+        let token = self.arm_token(AzureVmRemotePurpose::Inspect).await?;
         let (state, handle, tags) = self.effect.get_vm_state(&self.settings, &token).await?;
         let handle = match state {
-            AzureVmState::Absent => return self.start_child_cleanup().await,
+            AzureVmState::Absent => {
+                self.vm_absent = true;
+                return self.start_child_cleanup().await;
+            }
             AzureVmState::Running | AzureVmState::Stopped => {
                 match self.verify_owned_vm(handle, tags, "finalization") {
                     Ok((handle, _)) => handle,
@@ -656,7 +876,7 @@ where
                 return Err(AzureVmError::Transient);
             }
         };
-        let token = self.arm_token().await?;
+        let token = self.arm_token(AzureVmRemotePurpose::Delete).await?;
         let operation = self
             .effect
             .start_vm_delete(&handle, &delete_operation_id, &token)
@@ -692,7 +912,7 @@ where
             .ok_or(AzureVmError::BootstrapFailed)?;
         let mut delivery = psk.copy_for_delivery();
         let payload = PskExtensionPayload::from_secret(std::mem::take(&mut *delivery))?;
-        let token = self.arm_token().await?;
+        let token = self.arm_token(AzureVmRemotePurpose::Bootstrap).await?;
         let operation = self
             .effect
             .put_vm_extension(handle, payload, &token)
@@ -737,17 +957,20 @@ where
         if self.bootstrap_extension_present {
             return self.start_extension_cleanup().await;
         }
-        let token = self.arm_token().await?;
+        let token = self.arm_token(AzureVmRemotePurpose::Inspect).await?;
         let (state, handle, tags) = self.effect.get_vm_state(&self.settings, &token).await?;
         match state {
-            AzureVmState::Absent => self.start_child_cleanup().await,
+            AzureVmState::Absent => {
+                self.vm_absent = true;
+                self.start_child_cleanup().await
+            }
             AzureVmState::Running | AzureVmState::Stopped => {
                 let (handle, _) = self.verify_owned_vm(handle, tags, "pending-delete")?;
                 let operation_id = self
                     .pending_delete_operation_id
                     .as_deref()
                     .ok_or(AzureVmError::Ambiguous)?;
-                let token = self.arm_token().await?;
+                let token = self.arm_token(AzureVmRemotePurpose::Delete).await?;
                 let operation = self
                     .effect
                     .start_vm_delete(&handle, operation_id, &token)
@@ -776,7 +999,7 @@ where
         if self.in_flight_operation.is_some() {
             return Ok(AzureVmReconcileOutcome::Progressing { after_ms: 250 });
         }
-        let token = self.arm_token().await?;
+        let token = self.arm_token(AzureVmRemotePurpose::Bootstrap).await?;
         let operation = self
             .effect
             .delete_vm_extension(&self.settings, &token)
@@ -800,7 +1023,7 @@ where
             .pending_delete_operation_id
             .as_deref()
             .ok_or(AzureVmError::Ambiguous)?;
-        let token = self.arm_token().await?;
+        let token = self.arm_token(AzureVmRemotePurpose::Delete).await?;
         let operation = self
             .effect
             .start_child_resource_cleanup(&self.settings, operation_id, &token)
@@ -865,9 +1088,73 @@ where
         })
     }
 
-    async fn arm_token(&self) -> Result<AzureAccessToken, AzureVmError> {
+    /// Record the Guest identity this pass reconciles.
+    ///
+    /// The admitted authority's identity is authoritative: when one is bound,
+    /// a caller that names a different Guest is refused here rather than
+    /// having its own identity quietly used for the ARM token.
+    fn record_reconciled(
+        &mut self,
+        guest_uid: &str,
+        generation: u64,
+    ) -> Result<(), AzureVmError> {
+        let Some(remote) = self.remote.as_ref() else {
+            // The pre-graph entry point keeps its own identity handling: no
+            // admitted Guest exists to reconcile against, so there is nothing
+            // to record and nothing to refuse.
+            self.reconciled = None;
+            return Ok(());
+        };
+        let parsed = ResourceUid::parse(guest_uid).map_err(|_| AzureVmError::Ambiguous)?;
+        if remote.authority().guest().guest_uid() != &parsed
+            || remote.authority().guest().generation() != generation
+        {
+            tracing::warn!(
+                code = AzureVmError::RemoteRefused.code(),
+                "reconcile names a Guest this provider did not admit"
+            );
+            return Err(AzureVmError::RemoteRefused);
+        }
+        self.reconciled = Some((parsed, generation));
+        Ok(())
+    }
+
+    /// Acquire one ARM token under an admitted remote purpose.
+    ///
+    /// This is the single path to ARM: every effect call goes through it, so
+    /// admitting here admits the whole provider. With an authority bound the
+    /// admission runs before the credential port is asked at all, which is
+    /// what makes a revoked credential stop a call rather than merely fail
+    /// it (R24, R35).
+    async fn arm_token(
+        &self,
+        purpose: AzureVmRemotePurpose,
+    ) -> Result<AzureAccessToken, AzureVmError> {
+        if let Some(remote) = self.remote.as_ref() {
+            let (guest_uid, generation) = self
+                .reconciled
+                .as_ref()
+                .ok_or(AzureVmError::Ambiguous)?;
+            remote
+                .admit(
+                    guest_uid,
+                    *generation,
+                    self.cloud.as_ref(),
+                    purpose,
+                    self.requested_presentation,
+                )
+                .await
+                .map_err(|refusal| {
+                    tracing::warn!(
+                        purpose = purpose.code(),
+                        code = refusal.code(),
+                        "ARM operation refused before the control plane was contacted"
+                    );
+                    AzureVmError::RemoteRefused
+                })?;
+        }
         self.credentials
-            .acquire_token("https://management.azure.com/", 30_000)
+            .acquire_token(crate::AZURE_VM_CONTROL_AUDIENCE, 30_000)
             .await
             .inspect_err(|error| {
                 tracing::warn!(
@@ -876,7 +1163,25 @@ where
                 );
             })
     }
+
+    /// The deterministic ARM operation id for one purpose.
+    ///
+    /// With an admitted authority this is derived from the *admitted*
+    /// identity, never from the arguments a reconcile call happened to pass,
+    /// so no caller can aim a retry at a second resource. Without one it is
+    /// the pre-graph derivation, which is what the unchanged composition root
+    /// still relies on.
+    fn arm_operation_id(&self, purpose: AzureVmRemotePurpose) -> Option<String> {
+        self.remote.as_ref().map(|remote| {
+            remote
+                .authority()
+                .reconciliation_key(purpose)
+                .operation_id()
+                .to_owned()
+        })
+    }
 }
+
 
 /// Derive a stable 20-character operation identifier.
 fn operation_id(zone_uid: &str, guest_uid: &str, generation: u64, operation_class: &str) -> String {

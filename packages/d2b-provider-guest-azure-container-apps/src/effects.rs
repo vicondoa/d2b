@@ -607,6 +607,23 @@ impl AcaProviderConfig {
         &self.defaults
     }
 
+    /// The exact cloud account, environment, and resource group this
+    /// configuration addresses.
+    ///
+    /// The remote authority compares this against the cloud identity the
+    /// accepted graph admitted, so a Provider row that was reconfigured onto
+    /// another subscription or resource group cannot act on the account its
+    /// authority was admitted for.
+    pub fn cloud_identity(&self) -> crate::authority::AcaCloudIdentity {
+        crate::authority::AcaCloudIdentity::new(
+            self.tenant_id.as_str().to_owned(),
+            self.client_id.as_str().to_owned(),
+            self.subscription_id.as_str().to_owned(),
+            self.environment_id.clone(),
+            self.resource_group_id.clone(),
+        )
+    }
+
     fn validate_refs(
         gateway_execution_ref: &ResourceRef,
         control_credential_ref: &ResourceRef,
@@ -706,6 +723,13 @@ pub struct AcaWorkloadQuery {
     pub binding: AcaResourceBinding,
     /// The profile alias the sandbox must carry.
     pub profile_id: AcaProfileId,
+    /// The exact cloud name to look for, when an admitted authority derived
+    /// one.
+    ///
+    /// The find path and the create path address the same name, so a retry
+    /// after an ambiguous response finds what the first attempt intended
+    /// instead of adopting or creating a different sandbox.
+    pub reconciliation: Option<crate::authority::AcaReconciliationKey>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -713,6 +737,10 @@ pub struct AcaWorkloadQuery {
 pub struct AcaDesiredDiskImage {
     /// The image source.
     pub source: AcaDiskImageSource,
+    /// The cloud name this disk image must have, when an admitted authority
+    /// derived one. The find and create paths both address this name, so a
+    /// retry after an ambiguous response cannot materialize a second image.
+    pub name: Option<AcaConfiguredImageId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -728,6 +756,14 @@ pub struct AcaDesiredSandbox {
     pub network_ref: Option<ResourceRef>,
     /// The sandbox transport profile alias.
     pub sandbox_transport_alias: AcaProfileId,
+    /// The cloud name this sandbox must have, when an admitted authority
+    /// derived one.
+    ///
+    /// The create effect names the resource it creates from this value, and
+    /// the find path asks for the same one. A retry after an ambiguous
+    /// response therefore reconciles the resource the first attempt intended
+    /// rather than creating a second sandbox under a fresh name.
+    pub reconciliation: Option<crate::authority::AcaReconciliationKey>,
 }
 
 #[derive(Clone, PartialEq, Eq)]

@@ -17,6 +17,7 @@ await_holding_refcell_ref = "deny"
 async-trait = "0.1"
 d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-bootstrap" }
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
+d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
 serde = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 tracing = "0.1"
