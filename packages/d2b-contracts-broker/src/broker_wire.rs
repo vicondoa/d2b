@@ -19,7 +19,7 @@ use d2b_contracts_resource::v3::process::{
     CapabilityClass, EnvironmentClass, NamespaceClass, UserNamespaceSpec,
 };
 use d2b_contracts_resource::v3::{
-    ActivationRunnerInput, AdmissionStage, AuthoritySubject, DesiredDigest,
+    ActivationRunnerInput, AdmissionStage, AuthoritySubject, CanonicalJsonObject, DesiredDigest,
     DesiredRevision, IfName, RefusalReason, ResourceBundleGenerationId, ResourceGeneration,
     ResourceRef, ResourceUid, StoreIncarnation, ZoneDesiredSequence, execution_policy::ExecutionDomain,
 };
@@ -3578,68 +3578,66 @@ impl AuthorityCursor {
 /// the right to act on them.
 pub const PUBLICATION_CANDIDATE_DOMAIN_TAG: &str = "d2b:v3:publication-candidate";
 
-/// The length-prefixed canonical encoding every publication digest is taken
-/// over.
-///
-/// Both legs derive their digests through the helpers below rather than
-/// framing the bytes themselves, so the manager and the broker cannot drift
-/// apart on what "the exact committed bytes" means.
-mod canonical {
-    /// Grow one canonical byte buffer.
-    pub(super) struct Canonical(Vec<u8>);
-
-    impl Canonical {
-        pub(super) fn new() -> Self {
-            Self(Vec::new())
-        }
-
-        pub(super) fn bytes(&mut self, value: &[u8]) {
-            self.0.extend_from_slice(&(value.len() as u64).to_be_bytes());
-            self.0.extend_from_slice(value);
-        }
-
-        pub(super) fn text(&mut self, value: &str) {
-            self.bytes(value.as_bytes());
-        }
-
-        pub(super) fn finish(self) -> Vec<u8> {
-            self.0
-        }
-    }
+/// One row's contribution to a publication candidate's digest.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CandidateRowDigest {
+    resource_ref: String,
+    desired_revision: String,
+    desired_digest: String,
+    admitted: String,
 }
 
-impl AuthorityProjectionRow {
-    /// The canonical bytes this row contributes to a change's digest.
-    pub fn canonical_bytes(&self) -> Vec<u8> {
-        let mut out = canonical::Canonical::new();
-        out.text(&self.resource_ref.to_string());
-        out.text(&self.desired_revision.get().to_string());
-        out.text(self.desired_digest.as_str());
-        out.bytes(&self.admitted);
-        out.finish()
-    }
+/// The whole candidate a publication digest covers.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CandidateDigestBody {
+    domain: String,
+    rows: Vec<CandidateRowDigest>,
+    removed: Vec<String>,
+}
+
+/// The canonical bytes one publication candidate's digest is taken over.
+///
+/// A `DesiredDigest` frames canonical JSON text, so the candidate is rendered
+/// as one canonical JSON object rather than as a private binary framing: both
+/// legs derive the digest through this one function, a value that is not
+/// canonical cannot be hashed at all, and the row's admitted bytes contribute
+/// as the exact canonical text the store committed.
+fn publication_candidate_bytes(
+    rows: &[AuthorityProjectionRow],
+    removed: &[ResourceRef],
+) -> Vec<u8> {
+    let body = CandidateDigestBody {
+        domain: PUBLICATION_CANDIDATE_DOMAIN_TAG.to_owned(),
+        rows: rows
+            .iter()
+            .map(|row| CandidateRowDigest {
+                resource_ref: row.resource_ref.to_string(),
+                desired_revision: row.desired_revision.get().to_string(),
+                desired_digest: row.desired_digest.as_str().to_owned(),
+                admitted: String::from_utf8(row.admitted.to_canonical_bytes())
+                    .expect("a canonical JSON object always renders as UTF-8"),
+            })
+            .collect(),
+        removed: removed.iter().map(ResourceRef::to_string).collect(),
+    };
+    let rendered =
+        serde_json::to_vec(&body).expect("a publication candidate always serializes");
+    CanonicalJsonObject::parse(&rendered)
+        .expect("a publication candidate renders as a canonical JSON object")
+        .to_canonical_bytes()
 }
 
 /// The digest of the exact committed bytes one change installs.
 ///
-/// The rows and the retirements are both covered, in the order the message
-/// carries them, so a change that swaps two rows for each other has a
-/// different digest than either order alone.
+/// The rows and the retirements are both covered, so a change that swaps two
+/// rows for each other has a different digest than either order alone.
 pub fn publication_candidate_digest(
     rows: &[AuthorityProjectionRow],
     removed: &[ResourceRef],
 ) -> DesiredDigest {
-    let mut out = canonical::Canonical::new();
-    out.text(PUBLICATION_CANDIDATE_DOMAIN_TAG);
-    out.text(&rows.len().to_string());
-    for row in rows {
-        out.bytes(&row.canonical_bytes());
-    }
-    out.text(&removed.len().to_string());
-    for reference in removed {
-        out.text(&reference.to_string());
-    }
-    DesiredDigest::of(&out.finish())
+    DesiredDigest::of(&publication_candidate_bytes(rows, removed))
 }
 
 /// The exact bytes one snapshot document transfers.
@@ -3671,13 +3669,14 @@ pub struct AuthorityProjectionRow {
     pub desired_revision: DesiredRevision,
     /// The digest of the committed desired bytes.
     pub desired_digest: DesiredDigest,
-    /// The canonical admitted bytes of the row.
+    /// The row's canonical admitted object.
     ///
-    /// They cross as the contract's own canonical encoding rather than as a
-    /// re-spelled JSON document, so the digest the broker recomputes is taken
-    /// over the bytes the store committed and the receiving leg parses them
-    /// with the same parser the store wrote them with.
-    pub admitted: Vec<u8>,
+    /// The canonical object travels whole, so the broker stores the bytes it
+    /// accepted and re-evaluates policy against the rows it already accepted
+    /// rather than against a summary the candidate could shape. The digest
+    /// below is taken over `to_canonical_bytes()`, so the receipt side
+    /// validates the bytes as canonical instead of trusting the transport.
+    pub admitted: CanonicalJsonObject,
 }
 
 /// The full document one bounded snapshot transfers.

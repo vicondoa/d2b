@@ -36,7 +36,7 @@ use std::collections::BTreeMap;
 use d2b_contracts_resource::v3::{
     admit_binding_request, AdmissionDecision, AdmissionStage, AuthoritySubject, BindingAdmission,
     BindingAuthorization, BindingKey, BindingRefusal,
-    BindingRealizationFacet, BindingRealizationSupport, FreshnessTuple,
+    BindingRealizationFacet, BindingRealizationSupport, CanonicalJsonObject, FreshnessTuple,
     RefusalReason, RequestedRights, ResourceRef, SourceAdmission, StoreIncarnation, ZoneId,
 };
 use d2b_contracts_zone_session::v3::role::{AuthorizedRole, ROLE_RESOURCE_TYPE};
@@ -52,12 +52,12 @@ use d2b_contracts_zone_session::v3::{RoleBindingSpec, RoleResourceVerb, RoleRule
 #[derive(Debug, Clone, Copy)]
 pub struct ProjectionRow<'a> {
     reference: &'a ResourceRef,
-    admitted: &'a [u8],
+    admitted: &'a CanonicalJsonObject,
 }
 
 impl<'a> ProjectionRow<'a> {
     /// Borrow one row's reference and canonical admitted bytes.
-    pub const fn new(reference: &'a ResourceRef, admitted: &'a [u8]) -> Self {
+    pub const fn new(reference: &'a ResourceRef, admitted: &'a CanonicalJsonObject) -> Self {
         Self { reference, admitted }
     }
 
@@ -67,7 +67,7 @@ impl<'a> ProjectionRow<'a> {
     }
 
     /// The row's canonical admitted bytes.
-    pub const fn admitted(&self) -> &'a [u8] {
+    pub const fn admitted(&self) -> &'a CanonicalJsonObject {
         self.admitted
     }
 }
@@ -476,7 +476,10 @@ impl AcceptedGraph {
     ) -> Result<Self, AcceptedGraphError> {
         let mut graph = Self::new(zone, store, root_subject);
         for row in rows {
-            let bytes = row.admitted;
+            // The canonical bytes are re-derived from the decoded object
+            // rather than carried beside it, so the contract row is decoded
+            // from exactly the bytes the digest covers.
+            let bytes = row.admitted.to_canonical_bytes();
             if row.kind() == AuthorityRowKind::Role {
                 if graph.roles.contains_key(row.reference) {
                     return Err(AcceptedGraphError::DuplicateRow);

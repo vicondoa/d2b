@@ -78,7 +78,8 @@ use d2b_contracts_broker::broker_wire::{
 };
 use d2b_contracts_resource::v3::{
     AdmissionDecision, AdmissionStage, AuthoritySubject, AuthoritySubjectKind,
-    DesiredDigest, DesiredRevision, RefusalReason, ResourceRef, StoreIncarnation, ZoneId,
+    CanonicalJsonObject, DesiredDigest, DesiredRevision, RefusalReason, ResourceRef,
+    StoreIncarnation, ZoneId,
 };
 use d2b_core::resource_authority::{
     AcceptedGraph, AcceptedGraphError, AuthorityRowKind, GraphAuthority, GraphMutation,
@@ -209,7 +210,7 @@ struct AcceptedAuthorityRow {
     reference: ResourceRef,
     desired_revision: DesiredRevision,
     desired_digest: DesiredDigest,
-    admitted: Vec<u8>,
+    admitted: CanonicalJsonObject,
 }
 
 /// How far one accepted launch has got.
