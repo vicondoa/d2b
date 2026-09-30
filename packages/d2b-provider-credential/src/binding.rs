@@ -32,8 +32,8 @@
 //!   relationship outstanding so cleanup stays withheld.
 
 use d2b_contracts_provider::v3::credential::{
-    AudienceToken, CredentialMethod, DeliveryIdentity, DeliveryRouteDigest, DeliverySessionParams,
-    OperationClass,
+    AdmittedCredentialDelivery, AudienceToken, CredentialDeliveryEvidence as ObservedDeliveryEvidence,
+    CredentialMethod, DeliveryIdentity, DeliveryRouteDigest, DeliverySessionParams, OperationClass,
 };
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 use d2b_contracts_resource::v3::{
@@ -755,42 +755,75 @@ impl CredentialDeliveryAuthority {
         })
     }
 
-    /// Fail closed unless the live evidence still matches every fence.
-    fn check_fence(
-        &self,
-        evidence: &CredentialDeliveryEvidence,
-    ) -> Result<(), CredentialDeliveryRefusal> {
-        if !self.admits_new_use {
-            return Err(CredentialDeliveryRefusal::new(
+
+    /// Fail closed unless new use is still admitted.
+    fn check_admitted(&self) -> Result<(), CredentialDeliveryRefusal> {
+        if self.admits_new_use {
+            Ok(())
+        } else {
+            Err(CredentialDeliveryRefusal::new(
                 AdmissionStage::Revoke,
                 RefusalReason::UnprovenEffect,
-            ));
+            ))
         }
-        if evidence.credential_generation != self.fence.credential_generation
-            || evidence.consumer_component_generation != self.fence.consumer_component_generation
-            || evidence.provider_generation != self.fence.provider_generation
-            || evidence.rotation_generation != self.fence.rotation_generation
+    }
+
+    /// Fail closed unless the observable generations still match every fence.
+    ///
+    /// `rotation` is `None` for a caller that cannot observe the source's
+    /// credential rotation counter - a Provider-side session cannot, and the
+    /// rotation fence is the minting source's own check. Every generation it
+    /// *can* observe is compared.
+    fn check_generations(
+        &self,
+        credential: ResourceGeneration,
+        consumer: ResourceGeneration,
+        provider: ResourceGeneration,
+        rotation: Option<u64>,
+    ) -> Result<(), CredentialDeliveryRefusal> {
+        if credential != self.fence.credential_generation
+            || consumer != self.fence.consumer_component_generation
+            || provider != self.fence.provider_generation
+            || rotation.is_some_and(|value| value != self.fence.rotation_generation)
         {
             return Err(CredentialDeliveryRefusal::new(
                 AdmissionStage::Admit,
                 RefusalReason::StaleAuthority,
             ));
         }
-        if !self.admission.is_current(&evidence.dependencies) {
-            return Err(CredentialDeliveryRefusal::new(
-                AdmissionStage::Admit,
-                RefusalReason::StaleAuthority,
-            ));
-        }
-        if evidence.now_unix_ms >= self.fence.deadline_unix_ms
-            || evidence.now_unix_ms >= self.fence.expiry_unix_ms
-        {
+        Ok(())
+    }
+
+    /// Fail closed unless the delivery lifetime has not elapsed.
+    fn check_lifetime(&self, now_unix_ms: u64) -> Result<(), CredentialDeliveryRefusal> {
+        if now_unix_ms >= self.fence.deadline_unix_ms || now_unix_ms >= self.fence.expiry_unix_ms {
             return Err(CredentialDeliveryRefusal::new(
                 AdmissionStage::Drain,
                 RefusalReason::UnprovenEffect,
             ));
         }
         Ok(())
+    }
+
+    /// Fail closed unless the live evidence still matches every fence.
+    fn check_fence(
+        &self,
+        evidence: &CredentialDeliveryEvidence,
+    ) -> Result<(), CredentialDeliveryRefusal> {
+        self.check_admitted()?;
+        self.check_generations(
+            evidence.credential_generation,
+            evidence.consumer_component_generation,
+            evidence.provider_generation,
+            Some(evidence.rotation_generation),
+        )?;
+        if !self.admission.is_current(&evidence.dependencies) {
+            return Err(CredentialDeliveryRefusal::new(
+                AdmissionStage::Admit,
+                RefusalReason::StaleAuthority,
+            ));
+        }
+        self.check_lifetime(evidence.now_unix_ms)
     }
 
     /// The service method one admitted operation class dispatches.
@@ -907,5 +940,49 @@ impl CredentialBindingStatus {
             "deadlineUnixMs": self.deadline_unix_ms,
             "sequence": self.sequence,
         })
+    }
+}
+
+/// The admitted `CredentialBinding` relationship as a Credential Provider sees
+/// it (U23).
+///
+/// This is the one implementation of the family-wide delivery port, so every
+/// Credential Provider realization reaches the same admitted relationship
+/// through the same gate instead of comparing the authenticated route against
+/// its own hand-written rules. It adds no authority of its own: the audience,
+/// the granted operation classes, and the current delivery session all come
+/// from the relationship this object already holds, and the fence check is the
+/// same one the mint path runs.
+impl AdmittedCredentialDelivery for CredentialDeliveryAuthority {
+    fn audience(&self) -> &AudienceToken {
+        &self.audience
+    }
+
+    fn grants(&self, class: OperationClass) -> bool {
+        self.operations.contains(&class)
+    }
+
+    fn current_delivery(&self) -> DeliveryIdentity {
+        self.delivery_identity()
+    }
+
+    fn fence_refusal(&self, evidence: &ObservedDeliveryEvidence) -> Option<BindingRefusal> {
+        // The admitted dependency revisions and the credential rotation
+        // generation are the minting source's own evidence: a Provider-side
+        // session carries neither, so they stay the mint path's check. Every
+        // generation and every lifetime bound a Provider *can* observe is
+        // compared here through the same steps `mint` runs.
+        self.check_admitted()
+            .and_then(|()| {
+                self.check_generations(
+                    evidence.credential_generation(),
+                    evidence.consumer_component_generation(),
+                    evidence.provider_generation(),
+                    None,
+                )
+            })
+            .and_then(|()| self.check_lifetime(evidence.now_unix_ms()))
+            .err()
+            .map(|refusal| BindingRefusal::new(refusal.stage(), refusal.reason()))
     }
 }

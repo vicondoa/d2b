@@ -15,9 +15,10 @@
 //! 4. An expired delivery cannot be renewed through a stale helper leg.
 
 use d2b_contracts_provider::v3::credential::{
-    AudienceToken, CredentialAuthorization, CredentialLeaseState, CredentialMethod,
-    CredentialScope, CredentialSpec, DeliveryRouteDigest, ExpirySpec, OperationClass,
-    RevocationSpec, RotationPolicyClass, RotationSpec,
+    AudienceToken, CredentialAuthorization, CredentialDeliveryEvidence as ObservedDeliveryEvidence,
+    CredentialLeaseState, CredentialMethod, CredentialScope, CredentialSpec, DeliveryRouteDigest,
+    ExpirySpec, OperationClass, RevocationSpec, RotationPolicyClass, RotationSpec,
+    admit_credential_delivery,
 };
 use d2b_contracts_resource::v3::{
     AdmissionStage, BindingArbitration, BindingAuthorization, BindingContractError, BindingKey,
@@ -940,4 +941,100 @@ fn the_closed_request_contract_refuses_out_of_shape_delivery_bindings() {
 
     assert!(CredentialLifetime::new("900s", "600s").is_err());
     assert!(BindingSlot::parse("Not A Slot").is_err());
+}
+
+/// The contract-level evidence a Provider-side session can observe.
+fn observed_evidence() -> ObservedDeliveryEvidence {
+    ObservedDeliveryEvidence::new(generation(3), generation(7), generation(11), NOW + 1_000)
+}
+
+/// The admitted relationship is the one authority every Credential Provider
+/// realization reaches, so the shared gate admits the session this authority
+/// minted and refuses everything the relationship has moved past (U23).
+#[test]
+fn the_family_authority_drives_the_shared_admission_gate() {
+    let fixture =
+        AdmissionFixture::new(&[OperationClass::AcquireToken, OperationClass::RefreshToken], 0);
+    let mut authority = fixture.admit();
+    let observed = observed_evidence();
+    let first = authority
+        .mint(CredentialOperation::AcquireToken, &evidence())
+        .expect("first delivery");
+    let authorization =
+        CredentialAuthorization::new(CredentialMethod::AcquireToken, Some(first.clone()))
+            .expect("authorization");
+
+    assert_eq!(
+        admit_credential_delivery(
+            &authorization,
+            CredentialMethod::AcquireToken,
+            &authority,
+            &observed,
+        )
+        .expect("the minted session is the current delivery"),
+        first
+    );
+
+    // An operation the `Credential` row never granted is refused by the
+    // source's own policy, before the session comparison runs. The refresh
+    // session is well formed - it is the one a row that *does* grant refresh
+    // mints - so only the narrower relationship can refuse it.
+    let mut granting = AdmissionFixture::new(
+        &[OperationClass::AcquireToken, OperationClass::RefreshToken],
+        0,
+    )
+    .admit();
+    let acquire_only = AdmissionFixture::new(&[OperationClass::AcquireToken], 0).admit();
+    let ungranted = CredentialAuthorization::new(
+        CredentialMethod::RefreshToken,
+        Some(
+            granting
+                .mint(CredentialOperation::RefreshToken, &evidence())
+                .expect("refresh delivery"),
+        ),
+    )
+    .expect("authorization");
+    assert_eq!(
+        admit_credential_delivery(
+            &ungranted,
+            CredentialMethod::RefreshToken,
+            &acquire_only,
+            &observed,
+        )
+        .expect_err("an ungranted operation is refused")
+        .reason(),
+        d2b_contracts_resource::v3::RefusalReason::SourcePolicyRefused
+    );
+
+    // A replaced consumer component is refused by the relationship's own
+    // fence, and the refusal names the stage that fence reached.
+    let moved = ObservedDeliveryEvidence::new(generation(3), generation(8), generation(11), NOW + 1_000);
+    assert_eq!(
+        admit_credential_delivery(
+            &authorization,
+            CredentialMethod::AcquireToken,
+            &authority,
+            &moved,
+        )
+        .expect_err("a replaced consumer component is refused")
+        .code(),
+        "credential-delivery-stale-authority"
+    );
+
+    // A session the relationship has already superseded is refused at
+    // activation, so new use needs a fresh admission.
+    authority
+        .mint(CredentialOperation::AcquireToken, &evidence())
+        .expect("second delivery");
+    assert_eq!(
+        admit_credential_delivery(
+            &authorization,
+            CredentialMethod::AcquireToken,
+            &authority,
+            &observed,
+        )
+        .expect_err("a superseded session is refused")
+        .code(),
+        "credential-delivery-session-superseded"
+    );
 }

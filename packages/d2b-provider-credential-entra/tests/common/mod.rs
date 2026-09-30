@@ -4,17 +4,20 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use d2b_contracts_provider::v3::credential::{
-    AudienceToken, CredentialAuthorization, CredentialLeaseHandle, CredentialLeaseState,
-    CredentialMethod, CredentialProvider, CredentialRequest, CredentialResponse,
-    CredentialServiceError, CredentialServiceErrorCode, CredentialSessionBinding,
-    CredentialSourceVersion, DeliveryRouteDigest, DeliverySessionParams, PlacementBinding,
-    dispatch_authorized_provider,
+    AdmittedCredentialDelivery, AudienceToken, CredentialAuthorization, CredentialDeliveryEvidence,
+    CredentialLeaseHandle, CredentialLeaseState, CredentialMethod, CredentialProvider,
+    CredentialRequest, CredentialResponse, CredentialServiceError, CredentialServiceErrorCode,
+    CredentialSessionBinding, CredentialSourceVersion, DeliveryIdentity, DeliveryRouteDigest,
+    DeliverySessionParams, OperationClass, PlacementBinding, dispatch_authorized_provider,
 };
 use d2b_contracts_resource::v3::identity::{
     AuthenticatedSubjectContext, BindingDigest, EvidenceClass, Locality, ReconnectGeneration,
     ServiceName, SessionBinding, SessionPurpose, TranscriptHash, TransportBinding,
 };
-use d2b_contracts_resource::v3::{ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint};
+use d2b_contracts_resource::v3::{
+    AdmissionStage, BindingRefusal, RefusalReason, ResourceGeneration, ResourceRef, ResourceUid,
+    SchemaFingerprint,
+};
 use d2b_provider_credential_entra::{
     EntraClientError, EntraClientState, EntraConfig, EntraCredentialClient,
     EntraCredentialProvider, EntraCredentialProviderFactory, EntraFuture, EntraLeaseGrant,
@@ -212,6 +215,16 @@ pub fn subject_context_for(
     )
 }
 
+/// The consumer's authenticated subject at one exact Provider generation.
+pub fn subject_context_for_generation(provider_generation: u64) -> AuthenticatedSubjectContext {
+    subject_context_for(
+        ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap(),
+        ResourceRef::parse("Zone/work").unwrap(),
+        Locality::Local,
+    )
+    .with_provider_generation(ResourceGeneration::new(provider_generation).unwrap())
+}
+
 pub fn subject_context_with_bindings(
     subject_ref: ResourceRef,
     zone_ref: ResourceRef,
@@ -392,5 +405,146 @@ pub fn admitted() -> Admission {
     Admission {
         authenticated_consumer: ResourceRef::parse("Provider/runtime-azure-container-apps")
             .unwrap(),
+    }
+}
+
+/// One admitted `CredentialBinding` relationship, as the shared delivery port
+/// sees it.
+///
+/// The double holds what the source side commits - the audience, the granted
+/// operation classes, the generations the fence is against, and the current
+/// delivery session - and answers only from those. It never reads the session
+/// being admitted, which is what makes a widened audience or an ungranted
+/// operation fail here rather than inside the Provider.
+pub struct AdmittedRelationship {
+    audience: AudienceToken,
+    granted: Vec<OperationClass>,
+    consumer_component_generation: ResourceGeneration,
+    provider_generation: ResourceGeneration,
+    current: DeliveryIdentity,
+}
+
+impl AdmittedRelationship {
+    /// Admit the relationship the harness's own delivery session matches.
+    pub fn new(
+        request: &CredentialRequest,
+        granted: &[OperationClass],
+        audience: &str,
+        sequence: u64,
+    ) -> Self {
+        Self {
+            audience: AudienceToken::parse(audience).unwrap(),
+            granted: granted.to_vec(),
+            consumer_component_generation: ResourceGeneration::new(1).unwrap(),
+            provider_generation: ResourceGeneration::new(1).unwrap(),
+            current: DeliveryIdentity::new(
+                request.credential_ref().clone(),
+                ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+                ResourceGeneration::new(1).unwrap(),
+                ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap(),
+                ResourceGeneration::new(1).unwrap(),
+                AudienceToken::parse(audience).unwrap(),
+                OperationClass::AcquireToken,
+                sequence,
+            ),
+        }
+    }
+
+    /// The relationship's current delivery session names `class`.
+    pub fn delivering(mut self, class: OperationClass) -> Self {
+        let current = self.current.clone();
+        self.current = DeliveryIdentity::new(
+            current.credential_ref().clone(),
+            current.credential_uid().clone(),
+            current.credential_generation(),
+            current.consumer_provider_ref().clone(),
+            current.consumer_component_generation(),
+            current.audience().clone(),
+            class,
+            current.sequence(),
+        );
+        self
+    }
+
+    /// The relationship's fence is against a different Provider session.
+    pub fn for_provider_generation(mut self, generation: u64) -> Self {
+        self.provider_generation = ResourceGeneration::new(generation).unwrap();
+        self
+    }
+}
+
+impl AdmittedCredentialDelivery for AdmittedRelationship {
+    fn audience(&self) -> &AudienceToken {
+        &self.audience
+    }
+
+    fn grants(&self, class: OperationClass) -> bool {
+        self.granted.contains(&class)
+    }
+
+    fn current_delivery(&self) -> DeliveryIdentity {
+        self.current.clone()
+    }
+
+    fn fence_refusal(&self, evidence: &CredentialDeliveryEvidence) -> Option<BindingRefusal> {
+        if evidence.consumer_component_generation() != self.consumer_component_generation
+            || evidence.provider_generation() != self.provider_generation
+        {
+            return Some(BindingRefusal::new(
+                AdmissionStage::Admit,
+                RefusalReason::StaleAuthority,
+            ));
+        }
+        None
+    }
+}
+
+/// A delivery session with an exact audience, sequence, and consumer
+/// component generation.
+pub fn delivery_session(
+    request: &CredentialRequest,
+    class: OperationClass,
+    sequence: u64,
+    audience: &str,
+    component_generation: u64,
+) -> DeliverySessionParams {
+    DeliverySessionParams::new(
+        request.credential_ref().clone(),
+        ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+        ResourceGeneration::new(1).unwrap(),
+        ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap(),
+        ResourceGeneration::new(component_generation).unwrap(),
+        AudienceToken::parse(audience).unwrap(),
+        class,
+        request.requested_expiry_unix_ms(),
+        request.deadline_unix_ms(),
+        DeliveryRouteDigest::parse(format!("sha256:{}", "b".repeat(64))).unwrap(),
+        4_096,
+        sequence,
+    )
+    .unwrap()
+}
+
+/// Authorize one method with an exact delivery session and Provider session.
+#[derive(Clone)]
+pub struct SessionAdmission {
+    pub delivery: DeliverySessionParams,
+    pub provider_generation: u64,
+}
+
+impl TestAdmission for SessionAdmission {
+    fn authorize(
+        &self,
+        _method: CredentialMethod,
+        _request: &CredentialRequest,
+    ) -> Result<CredentialAuthorization, CredentialServiceError> {
+        let context = subject_context_for_generation(self.provider_generation);
+        let session = CredentialSessionBinding::new(context.clone(), EXPIRY).unwrap();
+        CredentialAuthorization::new_for_subject(
+            _method,
+            Some(self.delivery.clone()),
+            context,
+        )
+        .and_then(|authorization| authorization.with_authenticated_session(session))
     }
 }
