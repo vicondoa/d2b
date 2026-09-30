@@ -993,72 +993,72 @@
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 726,
+      "line": 745,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 750,
+      "line": 769,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 773,
+      "line": 792,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 801,
+      "line": 820,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1099,
+      "line": 1122,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1107,
+      "line": 1130,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1112,
+      "line": 1135,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1132,
+      "line": 1155,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1144,
+      "line": 1167,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1183,
+      "line": 1206,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1188,
+      "line": 1211,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1242,
+      "line": 1265,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1259,
+      "line": 1282,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1290,
+      "line": 1313,
       "reason": "test-support recorder lock"
     }
   ]
