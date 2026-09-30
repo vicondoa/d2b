@@ -84,6 +84,19 @@ d2b_rust_test(
 )
 
 d2b_rust_test(
+    name = "graph_binding",
+    srcs = [
+        "tests/graph_binding.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        ":d2b_provider_transport_azure_relay",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
     name = "listener_sender_conformance",
     srcs = [
         "tests/listener_sender_conformance.rs",
@@ -102,6 +115,7 @@ d2b_rust_test(
     compile_data = ["Cargo.toml"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         ":d2b_provider_transport_azure_relay",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )

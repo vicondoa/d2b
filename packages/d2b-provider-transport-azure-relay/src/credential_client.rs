@@ -12,6 +12,10 @@ use async_trait::async_trait;
 use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::graph_binding::{
+    AdmittedRelayDelivery, TransportAttachEvidence, TransportAttachRefusal, admit_relay_delivery,
+};
+
 /// Maximum size of one non-secret binding component.
 pub const MAX_RELAY_BINDING_COMPONENT_BYTES: usize = 256;
 
@@ -521,4 +525,189 @@ pub trait ScopedCredentialClient: Send + Sync {
         &self,
         lease: RelayCredentialLease,
     ) -> Result<(), RelayCredentialError>;
+}
+
+/// A credential read bound to one admitted graph relationship.
+///
+/// Where [`ScopedCredentialRequest`] names its authority with opaque
+/// ZoneLink/session strings, this scope carries the admitted delivery itself.
+/// The only Zone a relay credential can be read for and the only execution
+/// identity it can be read for are the ones the resource graph bound to the
+/// `CredentialBinding`, so a request cannot widen its own scope by describing
+/// it differently.
+#[derive(Clone, PartialEq, Eq)]
+pub struct GraphBoundCredentialScope {
+    zone: ZoneId,
+    delivery: AdmittedRelayDelivery,
+    execution_ref: ResourceRef,
+    deadline_ms: u32,
+}
+
+impl GraphBoundCredentialScope {
+    /// Construct a scope for one admitted delivery.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ZoneMismatch` when `zone` is not the relationship's Zone,
+    /// `ExecutionMismatch` when `execution_ref` is not the admitted
+    /// credential consumer, and `DeadlineExpired` for a zero deadline.
+    pub fn new(
+        zone: ZoneId,
+        delivery: AdmittedRelayDelivery,
+        execution_ref: ResourceRef,
+        deadline_ms: u32,
+    ) -> Result<Self, GraphBoundCredentialError> {
+        let scope = Self {
+            zone,
+            delivery,
+            execution_ref,
+            deadline_ms,
+        };
+        scope.validate()?;
+        Ok(scope)
+    }
+
+    fn validate(&self) -> Result<(), GraphBoundCredentialError> {
+        if self.deadline_ms == 0 {
+            return Err(GraphBoundCredentialError::DeadlineExpired);
+        }
+        if self.zone != *self.delivery.zone() {
+            return Err(GraphBoundCredentialError::ZoneMismatch);
+        }
+        if self.execution_ref != *self.delivery.credential_consumer_ref() {
+            return Err(GraphBoundCredentialError::ExecutionMismatch);
+        }
+        Ok(())
+    }
+
+    /// Return the Zone the delivery was admitted in.
+    pub const fn zone(&self) -> &ZoneId {
+        &self.zone
+    }
+
+    /// Borrow the admitted delivery this read is bound to.
+    pub const fn delivery(&self) -> &AdmittedRelayDelivery {
+        &self.delivery
+    }
+
+    /// Return the execution identity the credential will be held in.
+    pub const fn execution_ref(&self) -> &ResourceRef {
+        &self.execution_ref
+    }
+
+    /// Return the current bounded acquisition deadline.
+    pub const fn deadline_ms(&self) -> u32 {
+        self.deadline_ms
+    }
+
+    /// Rebind only the attempt deadline without widening scope.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DeadlineExpired` for a zero deadline. Every other scope
+    /// field is carried through unchanged, so this cannot widen a scope.
+    pub fn with_deadline(self, deadline_ms: u32) -> Result<Self, GraphBoundCredentialError> {
+        let scope = Self { deadline_ms, ..self };
+        scope.validate()?;
+        Ok(scope)
+    }
+}
+
+impl fmt::Debug for GraphBoundCredentialScope {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GraphBoundCredentialScope")
+            .field("zone", &"<redacted>")
+            .field("delivery", &self.delivery)
+            .field("execution_ref", &"<redacted>")
+            .field("deadline_ms", &self.deadline_ms)
+            .finish()
+    }
+}
+
+/// Fail-closed outcomes of a graph-bound credential read.
+///
+/// The two refusal-shaped variants carry the closed
+/// [`TransportAttachRefusal`] the gate produced. They hold no identity, no
+/// path, and no caller-supplied text, so a refusal can be reported in full.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphBoundCredentialError {
+    /// The declared Zone is not the admitted relationship's Zone.
+    ZoneMismatch,
+    /// The declared execution identity is not the admitted consumer.
+    ExecutionMismatch,
+    /// The acquisition deadline was already zero.
+    DeadlineExpired,
+    /// The graph refused the relationship, its delivery class, or the
+    /// presented evidence.
+    AttachRefused(TransportAttachRefusal),
+    /// The underlying scoped credential read failed.
+    CredentialUnavailable,
+}
+
+impl fmt::Display for GraphBoundCredentialError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::ZoneMismatch => "relay-credential-zone-mismatch",
+            Self::ExecutionMismatch => "relay-credential-execution-mismatch",
+            Self::DeadlineExpired => "relay-credential-deadline-expired",
+            Self::AttachRefused(refusal) => refusal.code(),
+            Self::CredentialUnavailable => "relay-credential-unavailable",
+        })
+    }
+}
+
+impl std::error::Error for GraphBoundCredentialError {}
+
+impl From<TransportAttachRefusal> for GraphBoundCredentialError {
+    fn from(value: TransportAttachRefusal) -> Self {
+        Self::AttachRefused(value)
+    }
+}
+
+impl From<RelayCredentialError> for GraphBoundCredentialError {
+    fn from(_value: RelayCredentialError) -> Self {
+        Self::CredentialUnavailable
+    }
+}
+
+/// Graph-bound credential-client boundary consumed by the Relay carriage.
+///
+/// This is the seam U10's `ResourceClient`/ComponentSession path implements
+/// once the graph owns delivery. It is deliberately separate from
+/// [`ScopedCredentialClient`]: that boundary still describes its scope with
+/// opaque ZoneLink/session strings, and swapping its internals for a
+/// relationship is U34's cutover, not this unit's.
+#[async_trait]
+pub trait GraphBoundCredentialClient: Send + Sync {
+    /// Read one relay credential for an already-admitted delivery.
+    ///
+    /// Implementations reach their own same-Zone resource gate here. The
+    /// crate only calls this method after the gate below admitted the
+    /// relationship, so a refused relationship never reads a credential byte.
+    async fn read_admitted_credential(
+        &self,
+        scope: &GraphBoundCredentialScope,
+        evidence: &TransportAttachEvidence,
+    ) -> Result<RelayCredentialLease, GraphBoundCredentialError>;
+
+    /// The one graph-bound credential read this crate performs.
+    ///
+    /// The whole gate runs before the read: the delivery's credential
+    /// relationship is measured against the presented evidence, its egress
+    /// endpoint relationship is measured next, the admitted audience and
+    /// operation class are checked last, and only then is the read issued.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AttachRefused` with the gate's own refusal, or whatever the
+    /// underlying read reported.
+    async fn read_credential_under_binding(
+        &self,
+        scope: &GraphBoundCredentialScope,
+        evidence: &TransportAttachEvidence,
+    ) -> Result<RelayCredentialLease, GraphBoundCredentialError> {
+        admit_relay_delivery(scope.delivery(), evidence)?;
+        self.read_admitted_credential(scope, evidence).await
+    }
 }

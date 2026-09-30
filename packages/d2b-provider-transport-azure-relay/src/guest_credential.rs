@@ -24,6 +24,10 @@ use async_trait::async_trait;
 use base64::Engine;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
+use d2b_contracts_resource::v3::{
+    BindingSlot, BoundedToken, CredentialBindingRequest, CredentialLifetime, CredentialOperation,
+    MAX_CREDENTIAL_OPERATIONS, ResourceRef,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use zeroize::{Zeroize, Zeroizing};
@@ -552,6 +556,19 @@ pub enum CredentialError {
     Crypto,
     /// Sealed envelope expired.
     Expired,
+    /// A generated transport configuration carried credential material
+    /// instead of references.
+    ConfigurationCarriesMaterial,
+    /// A generated transport configuration is not an admitted delivery.
+    ///
+    /// This is the custody boundary. A generated configuration may name the
+    /// `Host` as the execution identity that will hold the runtime, but
+    /// `BindingKind::Credential` does not admit a `Host` consumer, so
+    /// `CredentialBindingRequest::new` refuses it with
+    /// `BindingContractError::UnsupportedConsumerKind` and that refusal is
+    /// reported here. Gateway-owned credential custody never becomes a host
+    /// grant just because a document said so.
+    NotAnAdmittedDelivery,
 }
 
 impl core::fmt::Display for CredentialError {
@@ -582,6 +599,12 @@ impl core::fmt::Display for CredentialError {
                 f.write_str("gateway credential envelope cannot be unsealed")
             }
             CredentialError::Expired => f.write_str("gateway credential envelope expired"),
+            CredentialError::ConfigurationCarriesMaterial => f.write_str(
+                "generated gateway transport configuration must carry references, not material",
+            ),
+            CredentialError::NotAnAdmittedDelivery => f.write_str(
+                "generated gateway transport configuration is not an admitted credential delivery",
+            ),
         }
     }
 }
@@ -1149,5 +1172,237 @@ mod tests {
             SealingKey::load(&path, &CredentialFilePolicy::default()).unwrap_err(),
             CredentialError::BadSealKey
         );
+    }
+}
+
+/// Field names a generated transport configuration must never carry.
+///
+/// A configuration is a set of references plus the admitted delivery class.
+/// Any of these names appearing in the document - at any depth, under any
+/// spelling of case, `-`, or `_` - is refused rather than dropped, because
+/// silently discarding a key that was written into a document handed to the
+/// host would leave the document and the effective configuration disagreeing
+/// about who holds the credential.
+const CREDENTIAL_MATERIAL_FIELDS: &[&str] = &[
+    "saskey",
+    "key",
+    "token",
+    "secret",
+    "listenkey",
+    "sendkey",
+    "password",
+    "bearer",
+];
+
+fn normalize_field_name(name: &str) -> String {
+    name.chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn field_is_credential_material(name: &str) -> bool {
+    let normalized = normalize_field_name(name);
+    CREDENTIAL_MATERIAL_FIELDS.contains(&normalized.as_str())
+}
+
+/// Whether a parsed document carries credential material under any field.
+///
+/// The scan is a real one: it walks every object in the document, so a
+/// material field nested under an unexpected wrapper is found rather than
+/// missed. It is shared by the strict parser and by
+/// [`GatewayTransportConfiguration::carries_material`] so both answers come
+/// from the same definition of "material".
+fn document_carries_credential_material(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(fields) => fields.iter().any(|(name, value)| {
+            field_is_credential_material(name) || document_carries_credential_material(value)
+        }),
+        serde_json::Value::Array(values) => {
+            values.iter().any(document_carries_credential_material)
+        }
+        _ => false,
+    }
+}
+
+/// The generated-configuration document shape, exactly.
+///
+/// `deny_unknown_fields` is what makes the parse strict: an unrecognised field
+/// is a refusal, not something silently skipped.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GeneratedGatewayTransportConfiguration {
+    execution_ref: ResourceRef,
+    credential_ref: ResourceRef,
+    network_ref: ResourceRef,
+    slot: BindingSlot,
+    audience: BoundedToken,
+    operations: Vec<CredentialOperation>,
+    lifetime: CredentialLifetime,
+}
+
+/// One generated gateway transport configuration, classified.
+///
+/// This is the boundary between what a document can *say* and what the graph
+/// has *admitted*. The document names references and a delivery class; it
+/// never carries a key, and [`Self::delivery_binding`] is the only way to
+/// turn it into a `CredentialBindingRequest`, which is where a `Host`
+/// execution identity is refused.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayTransportConfiguration {
+    execution_ref: ResourceRef,
+    credential_ref: ResourceRef,
+    network_ref: ResourceRef,
+    slot: BindingSlot,
+    audience: BoundedToken,
+    operations: Vec<CredentialOperation>,
+    lifetime: CredentialLifetime,
+}
+
+impl GatewayTransportConfiguration {
+    /// Classify one generated configuration from typed references.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Malformed` unless the credential reference is a
+    /// `Credential`, the network reference is a `Network`, the execution
+    /// reference is a `Guest` or a `Host`, and the operation set is
+    /// non-empty, within bound, and free of duplicates. A `Host` execution
+    /// identity is accepted here on purpose: refusing it is
+    /// [`Self::delivery_binding`]'s job, and it is the graph contract that
+    /// refuses it.
+    pub fn new(
+        execution_ref: ResourceRef,
+        credential_ref: ResourceRef,
+        network_ref: ResourceRef,
+        slot: BindingSlot,
+        audience: BoundedToken,
+        operations: Vec<CredentialOperation>,
+        lifetime: CredentialLifetime,
+    ) -> Result<Self, CredentialError> {
+        if credential_ref.resource_type().as_str() != "Credential"
+            || network_ref.resource_type().as_str() != "Network"
+            || !matches!(
+                execution_ref.resource_type().as_str(),
+                "Guest" | "Host"
+            )
+            || operations.is_empty()
+            || operations.len() > MAX_CREDENTIAL_OPERATIONS
+        {
+            return Err(CredentialError::Malformed);
+        }
+        for (index, operation) in operations.iter().enumerate() {
+            if operations[index + 1..].contains(operation) {
+                return Err(CredentialError::Malformed);
+            }
+        }
+        Ok(Self {
+            execution_ref,
+            credential_ref,
+            network_ref,
+            slot,
+            audience,
+            operations,
+            lifetime,
+        })
+    }
+
+    /// Parse one generated configuration document, strictly.
+    ///
+    /// The document is scanned for credential material before it is
+    /// deserialized, so a configuration carrying a `sasKey`, `token`,
+    /// `listenKey`, or any other material field is refused outright rather
+    /// than parsed and dropped. The same reasoning as
+    /// [`CredentialFilePolicy`] applies one layer up: a sealed credential
+    /// must not live in `/nix/store`, and a generated transport
+    /// configuration must not carry the key at all - a document that names
+    /// the material has already lost the property that only the Gateway
+    /// Guest holds it.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConfigurationCarriesMaterial` when the document carries a
+    /// credential material field at any depth, and `Malformed` when the JSON
+    /// is not an object, carries an unknown field, omits a required field, or
+    /// fails [`Self::new`]'s classification.
+    pub fn parse_generated(bytes: &[u8]) -> Result<Self, CredentialError> {
+        let value: serde_json::Value =
+            serde_json::from_slice(bytes).map_err(|_| CredentialError::Malformed)?;
+        if document_carries_credential_material(&value) {
+            return Err(CredentialError::ConfigurationCarriesMaterial);
+        }
+        let wire: GeneratedGatewayTransportConfiguration =
+            serde_json::from_value(value).map_err(|_| CredentialError::Malformed)?;
+        Self::new(
+            wire.execution_ref,
+            wire.credential_ref,
+            wire.network_ref,
+            wire.slot,
+            wire.audience,
+            wire.operations,
+            wire.lifetime,
+        )
+    }
+
+    /// Return the execution identity the configuration names.
+    pub const fn execution_ref(&self) -> &ResourceRef {
+        &self.execution_ref
+    }
+
+    /// Return the egress Network the configuration names.
+    pub const fn network_ref(&self) -> &ResourceRef {
+        &self.network_ref
+    }
+
+    /// The admitted `CredentialBinding` this configuration realizes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `NotAnAdmittedDelivery` for a configuration the graph will
+    /// not admit. That is the R7 custody boundary in its sharpest form:
+    /// `BindingKind::Credential` does not admit a `Host` consumer, so a
+    /// configuration whose `executionRef` is `Host/...` fails here with the
+    /// contract's own `BindingContractError::UnsupportedConsumerKind`, mapped
+    /// onto `CredentialError::NotAnAdmittedDelivery`. No generated document
+    /// can hand the host a gateway-owned credential, however it was produced.
+    pub fn delivery_binding(&self) -> Result<CredentialBindingRequest, CredentialError> {
+        CredentialBindingRequest::new(
+            self.credential_ref.clone(),
+            self.execution_ref.clone(),
+            self.slot.clone(),
+            self.audience.clone(),
+            self.operations.clone(),
+            self.lifetime.clone(),
+        )
+        .map_err(|_| CredentialError::NotAnAdmittedDelivery)
+    }
+
+    /// Whether this configuration carries credential material rather than a
+    /// reference.
+    ///
+    /// The answer is derived by re-rendering this exact value and running the
+    /// same scan the strict parser runs, so it tracks what the value actually
+    /// holds rather than a constant: a field added later that smuggles
+    /// material in changes the answer. It fails closed - a value that cannot
+    /// be rendered is reported as carrying material, because that is the
+    /// direction in which no credential can escape unnoticed.
+    pub fn carries_material(&self) -> bool {
+        serde_json::to_value(self)
+            .map_or(true, |value| document_carries_credential_material(&value))
+    }
+}
+
+impl core::fmt::Debug for GatewayTransportConfiguration {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("GatewayTransportConfiguration")
+            .field("execution_ref", &"<redacted>")
+            .field("credential_ref", &"<redacted>")
+            .field("network_ref", &"<redacted>")
+            .field("slot", &"<redacted>")
+            .field("audience", &"<redacted>")
+            .field("operations", &self.operations.len())
+            .field("lifetime", &"<redacted>")
+            .finish()
     }
 }
