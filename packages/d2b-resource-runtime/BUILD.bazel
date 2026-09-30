@@ -36,6 +36,17 @@ d2b_rust_test(
 )
 
 d2b_rust_test(
+    name = "binding_drain",
+    srcs = ["tests/binding_drain.rs"],
+    compile_data = ["Cargo.toml"],
+    deps = [
+        ":d2b_resource_runtime",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    visibility = ["//visibility:public"],
+)
+
+d2b_rust_test(
     name = "d2b_resource_runtime_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_resource_runtime",

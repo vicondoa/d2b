@@ -1059,6 +1059,10 @@ impl ResourceManagerState {
         for child in children {
             let _ = Box::pin(self.remove_internal(&child_subject, &child)).await;
         }
+        // KTD10: this commit is the fence. It lands before the actor's
+        // `Delete` message below, so the driver's pre-drain hook never runs
+        // against a row that still admits new authority, and every child
+        // ensure that names this parent is refused from here on.
         match self.store.mark_deleting(key.clone()).await {
             Ok(row) => {
                 let generation = row.generation;
@@ -1123,6 +1127,20 @@ impl ResourceManagerState {
                 }
             })?),
         };
+        // KTD10: the manager marks deletion durably and blocks new authority
+        // for the row before the driver's pre-drain hook runs. A child ensure
+        // under a deleting parent is exactly the new authority that must not
+        // be granted, so it is refused here rather than creating a row the
+        // pre-drain would then have to unwind.
+        if let Some(parent_row) = parent_row.as_ref()
+            && parent_row.deleting
+        {
+            return Err(ResourceError::DeletingConflict {
+                zone: parent_row.key.zone.clone(),
+                type_name: parent_row.key.type_name.clone(),
+                name: parent_row.key.name.clone(),
+            });
+        }
         admit_source_owned_binding_shape(evidence, parent, parent_row.as_ref(), &desired)?;
         let key = ResourceKey::new(
             desired.key.zone.clone(),
@@ -1546,6 +1564,11 @@ impl Actor for ResourceManager {
                 // the owned-child graph reconstructs after restart.
                 let result = match state.rows.get(&parent).cloned() {
                     Some(parent_row) => {
+                        // KTD10: the parent's durable deleting mark is the
+                        // fence that blocks new authority before its pre-drain
+                        // runs, on this path exactly as on the authenticated
+                        // one.
+                        let fenced = parent_row.deleting;
                         let subject = MutationSubject {
                             principal: parent.to_string(),
                             origin: ResourceProvenance::Resource,
@@ -1555,29 +1578,38 @@ impl Actor for ResourceManager {
                             child.type_name.as_str().to_owned(),
                             child.name.clone(),
                         );
-                        // Ownership integrity (R8, §36 `child cannot silently
-                        // change owner`): an owned child keeps the owner its
-                        // row already committed, so a child ensure that names
-                        // a different parent is refused instead of re-parenting
-                        // the durable row under the caller.
-                        match reparent_refusal(state, &parent, parent_row.uid, &key) {
-                            Some(error) => Err(error),
-                            None => {
-                                let row = StoredDesiredResource {
-                                    uid: deterministic_uid(&key),
-                                    key,
-                                    generation: 1,
-                                    owner_uid: Some(parent_row.uid),
-                                    provenance: ResourceProvenance::Resource,
-                                    deleting: false,
-                                    spec: child.spec.clone(),
-                                    metadata: child.metadata.clone(),
-                                    created_at: 0,
-                                };
-                                state
-                                    .ensure_internal(myself, &subject, row)
-                                    .await
-                                    .map(|(outcome, _actor)| outcome)
+                        if fenced {
+                            Err(ResourceError::DeletingConflict {
+                                zone: parent_row.key.zone.clone(),
+                                type_name: parent_row.key.type_name.clone(),
+                                name: parent_row.key.name.clone(),
+                            })
+                        } else {
+                            // Ownership integrity (R8, §36 `child cannot
+                            // silently change owner`): an owned child keeps
+                            // the owner its row already committed, so a child
+                            // ensure that names a different parent is refused
+                            // instead of re-parenting the durable row under
+                            // the caller.
+                            match reparent_refusal(state, &parent, parent_row.uid, &key) {
+                                Some(error) => Err(error),
+                                None => {
+                                    let row = StoredDesiredResource {
+                                        uid: deterministic_uid(&key),
+                                        key,
+                                        generation: 1,
+                                        owner_uid: Some(parent_row.uid),
+                                        provenance: ResourceProvenance::Resource,
+                                        deleting: false,
+                                        spec: child.spec.clone(),
+                                        metadata: child.metadata.clone(),
+                                        created_at: 0,
+                                    };
+                                    state
+                                        .ensure_internal(myself, &subject, row)
+                                        .await
+                                        .map(|(outcome, _actor)| outcome)
+                                }
                             }
                         }
                     }

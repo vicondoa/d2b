@@ -116,6 +116,24 @@ pub enum ConsumeDecision {
     ForeignPrincipal,
 }
 
+/// One durable claim record read back from the owner.
+///
+/// This is the read side a claim owner (the U8 binding reservation service)
+/// rebuilds from after a restart: the outcome, the principal that took the
+/// claim, and when it was consumed. A record read back is a *claim* to prove,
+/// never proof that its effect happened - `Unknown` in particular is exactly
+/// the "pre-committed, outcome unproven" case that must reconcile or refuse
+/// (R41) instead of reminting access.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DurableClaim {
+    /// The invocation id the claim was taken under.
+    pub invocation_id: String,
+    /// The principal that took the claim.
+    pub principal: String,
+    /// Whether completion was recorded.
+    pub outcome: CellOutcome,
+}
+
 /// Why a cell operation failed.
 #[derive(Debug)]
 pub enum CellStoreError {
@@ -248,6 +266,27 @@ enum CellCommand {
         principal: String,
         payload: Arc<dyn Any + Send + Sync>,
         reply: SyncSender<Result<(), CellStoreError>>,
+    },
+    /// Read back every durable claim record of one cell, in invocation order.
+    ///
+    /// The read a claim owner performs on restart (R41). A record that is
+    /// present proves a claim was taken, not that its effect completed; the
+    /// caller reconciles or refuses from the outcome.
+    DurableClaims {
+        cell: String,
+        reply: SyncSender<Vec<DurableClaim>>,
+    },
+    /// Retire one durable claim record once its owner closed and released the
+    /// claim it represents.
+    ///
+    /// Releasing a claim has to reach the durable file, otherwise a restart
+    /// resurrects a released one-time record (U8 KTD9 close-before-release).
+    /// Only a `OneTime` record is retirable: an ephemeral record was never
+    /// durable, and a record carrying a live payload is not a claim.
+    Retire {
+        cell: String,
+        invocation_id: String,
+        reply: SyncSender<Result<bool, CellStoreError>>,
     },
     Contains {
         cell: String,
@@ -429,6 +468,49 @@ impl CellStore {
                 cell: cell.to_owned(),
                 invocation_id: invocation_id.to_owned(),
                 principal: principal.to_owned(),
+                reply: reply_tx,
+            })
+            .map_err(|_| CellStoreError::Poisoned)?;
+        reply_rx.recv().map_err(|_| CellStoreError::Poisoned)?
+    }
+
+    /// Read back every durable claim record of one cell, in invocation order.
+    ///
+    /// Fail-open read: a poisoned owner answers with an empty set rather than
+    /// inventing claims, and a claim owner treats "no records" as "prove
+    /// everything from the target", never as "everything was released".
+    pub fn durable_claims(&self, cell: &str) -> Vec<DurableClaim> {
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        if self
+            .owner
+            .commands
+            .send(CellCommand::DurableClaims {
+                cell: cell.to_owned(),
+                reply: reply_tx,
+            })
+            .is_err()
+        {
+            return Vec::new();
+        }
+        reply_rx.recv().unwrap_or_default()
+    }
+
+    /// Retire one durable one-time claim record and persist the removal.
+    ///
+    /// Returns whether a retirable record was removed. A release that finds
+    /// nothing to retire is not an error: the claim was already retired, and
+    /// release stays idempotent under retry (KTD10).
+    pub fn retire_durable(
+        &self,
+        cell: &str,
+        invocation_id: &str,
+    ) -> Result<bool, CellStoreError> {
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        self.owner
+            .commands
+            .send(CellCommand::Retire {
+                cell: cell.to_owned(),
+                invocation_id: invocation_id.to_owned(),
                 reply: reply_tx,
             })
             .map_err(|_| CellStoreError::Poisoned)?;
@@ -803,6 +885,47 @@ fn cell_handle(state: &mut CellWorkerState, command: CellCommand) -> LoopControl
             let _ = reply.send(count);
             LoopControl::Continue
         }
+        CellCommand::DurableClaims { cell, reply } => {
+            // Read-only, so it stays fail-open like the other reads.
+            let claims = state
+                .records
+                .get(&cell)
+                .map(|invocations| {
+                    invocations
+                        .iter()
+                        .filter(|(_, record)| {
+                            record.durability == CellDurability::OneTime
+                                && record.payload.is_none()
+                        })
+                        .map(|(invocation_id, record)| DurableClaim {
+                            invocation_id: invocation_id.clone(),
+                            principal: record.principal.clone(),
+                            outcome: record.outcome,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let _ = reply.send(claims);
+            LoopControl::Continue
+        }
+        CellCommand::Retire {
+            cell,
+            invocation_id,
+            reply,
+        } => {
+            let result = if state.poisoned {
+                Err(CellStoreError::Poisoned)
+            } else {
+                retire_durable_locked(
+                    &mut state.records,
+                    state.root.as_deref(),
+                    &cell,
+                    &invocation_id,
+                )
+            };
+            let _ = reply.send(result);
+            LoopControl::Continue
+        }
         CellCommand::RecordCount { reply } => {
             let _ = reply.send(state.records.values().map(|invocations| invocations.len()).sum());
             LoopControl::Continue
@@ -1154,6 +1277,40 @@ fn complete_locked(
         persist_locked(root, records)?;
     }
     Ok(())
+}
+
+/// Remove one retirable durable claim record, on the owner.
+///
+/// Retirement is the release half of the pending/effect/close/release record
+/// a claim owner drives (U8 KTD9): the record is dropped from the in-memory
+/// table and the removal is persisted in the same serialized unit, so a
+/// restart after this returns can never resurrect the claim.
+///
+/// Only a `OneTime` record with no live payload is retirable. An ephemeral
+/// record was never durable, so releasing it is a no-op that reports
+/// "nothing retired" rather than an error - the caller's release is still
+/// correct, there is simply no durable state to clear.
+fn retire_durable_locked(
+    records: &mut BTreeMap<String, BTreeMap<String, CellRecord>>,
+    root: Option<&Path>,
+    cell: &str,
+    invocation_id: &str,
+) -> Result<bool, CellStoreError> {
+    let Some(invocations) = records.get_mut(cell) else {
+        return Ok(false);
+    };
+    let retirable = invocations
+        .get(invocation_id)
+        .is_some_and(|record| record.durability == CellDurability::OneTime && record.payload.is_none());
+    if !retirable {
+        return Ok(false);
+    }
+    invocations.remove(invocation_id);
+    if invocations.is_empty() {
+        records.remove(cell);
+    }
+    persist_locked(root, records)?;
+    Ok(true)
 }
 
 /// Insert one payload record into an ephemeral cell, on the owner.

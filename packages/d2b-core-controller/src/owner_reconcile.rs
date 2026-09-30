@@ -14,6 +14,51 @@ pub const MAX_OWNER_CHILD_BATCH: usize = 128;
 const MAX_OWNER_DEPENDENCIES: usize = MAX_OWNER_CHILD_DEPENDENCIES;
 const MAX_OWNER_BATCH_CHILDREN: usize = MAX_OWNER_CHILD_BATCH;
 
+/// One stage-specific prerequisite a child declares (KTD10, R39-R40).
+///
+/// Source preparation, consumer completion, and release are separate stages
+/// rather than one "depends on" relation, because combining them is what
+/// creates a startup or teardown cycle. A binding helper that references its
+/// own parent reservation needs the parent's *source* prepared; it does not
+/// need the parent to be active, and recording that as a single undirected
+/// dependency would refuse a relationship that has no cycle at all.
+///
+/// Cycle detection runs over the activation and drain stage graphs rather
+/// than over every semantic relationship, and these edges are read off the
+/// child's own declaration - no second authored dependency list exists to
+/// drift from them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ChildDependencyStage {
+    /// The dependent needs the dependency's committed identity to exist.
+    CommittedIdentity,
+    /// The dependent needs the dependency's source side prepared.
+    SourcePrepared,
+    /// The dependent needs the dependency's consumer-side completion.
+    ConsumerCompletion,
+    /// The dependent must be released before the dependency is released.
+    Release,
+}
+
+impl ChildDependencyStage {
+    /// Every stage, in activation order.
+    pub const ALL: [Self; 4] = [
+        Self::CommittedIdentity,
+        Self::SourcePrepared,
+        Self::ConsumerCompletion,
+        Self::Release,
+    ];
+
+    /// The stable label a diagnostic renders.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CommittedIdentity => "committed-identity",
+            Self::SourcePrepared => "source-prepared",
+            Self::ConsumerCompletion => "consumer-completion",
+            Self::Release => "release",
+        }
+    }
+}
+
 /// Closed Process scheduling class used by Core-owned ordering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ProcessSchedulingClass {
@@ -119,6 +164,10 @@ pub struct DesiredChild {
     payload_digest: String,
     kind: OwnedChildKind,
     dependencies: BTreeSet<ResourceRef>,
+    /// Stage-scoped prerequisites. An edge here applies to one activation or
+    /// drain stage only, which is what keeps a helper's reference to its own
+    /// parent reservation from demanding that the parent be active.
+    stage_dependencies: BTreeMap<ChildDependencyStage, BTreeSet<ResourceRef>>,
 }
 
 impl DesiredChild {
@@ -140,6 +189,7 @@ impl DesiredChild {
             payload_digest,
             kind,
             dependencies: BTreeSet::new(),
+            stage_dependencies: BTreeMap::new(),
         })
     }
 
@@ -160,6 +210,48 @@ impl DesiredChild {
         }
         self.dependencies = dependencies;
         Ok(self)
+    }
+
+    /// Attach one stage-scoped prerequisite edge.
+    ///
+    /// The reference is bounded exactly like a stage-agnostic dependency, and
+    /// a child may not name itself: a self-referential stage edge is the
+    /// activation/drain cycle this stage graph exists to detect, and it is
+    /// refused at construction rather than at plan time.
+    pub fn with_stage_dependency(
+        mut self,
+        stage: ChildDependencyStage,
+        dependency: ResourceRef,
+    ) -> Result<Self, OwnerReconcileError> {
+        if dependency == self.target {
+            return Err(OwnerReconcileError::InvalidChild);
+        }
+        let edges = self.stage_dependencies.entry(stage).or_default();
+        if edges.len() >= MAX_OWNER_DEPENDENCIES {
+            return Err(OwnerReconcileError::InvalidChild);
+        }
+        edges.insert(dependency);
+        Ok(self)
+    }
+
+    /// The prerequisite edges that apply to one stage.
+    ///
+    /// The stage-agnostic [`Self::dependencies`] apply at every stage, so a
+    /// caller that only ever used them sees unchanged behavior. A
+    /// stage-scoped edge contributes only to its own stage.
+    pub fn dependencies_for(&self, stage: ChildDependencyStage) -> BTreeSet<ResourceRef> {
+        let mut edges = self.dependencies.clone();
+        if let Some(staged) = self.stage_dependencies.get(&stage) {
+            edges.extend(staged.iter().cloned());
+        }
+        edges
+    }
+
+    /// Every stage-scoped edge this child declares.
+    pub fn stage_dependencies(
+        &self,
+    ) -> &BTreeMap<ChildDependencyStage, BTreeSet<ResourceRef>> {
+        &self.stage_dependencies
     }
 
     /// Construct a child with its standard kind and dependency edges.
@@ -649,7 +741,7 @@ impl OwnerChildBatch {
                 return Err(OwnerReconcileError::DuplicateChild);
             }
         }
-        children = ordered_desired_children(by_ref)?;
+        children = ordered_desired_children(by_ref, ChildDependencyStage::CommittedIdentity)?;
         let refs = children
             .iter()
             .map(|child| child.target().clone())
@@ -1090,8 +1182,14 @@ impl OwnerIndex {
                 }
             }
         }
+        // The creation order is the activation stage graph: a child is created
+        // once its committed-identity prerequisites exist. A stage-scoped
+        // edge (a helper's reference to its own parent reservation) applies
+        // only at the stage that declares it, so it can never demand that the
+        // parent already be active.
         let creation_order = ordered_desired_refs(
             &desired_by_ref,
+            ChildDependencyStage::CommittedIdentity,
             self.limits.max_work_items,
             self.limits.max_depth,
         )?;
@@ -1379,8 +1477,10 @@ fn validate_batch_identities(
 
 fn ordered_desired_children(
     desired: BTreeMap<ResourceRef, DesiredChild>,
+    stage: ChildDependencyStage,
 ) -> Result<Vec<DesiredChild>, OwnerReconcileError> {
-    let order = ordered_desired_refs(&desired, MAX_OWNER_BATCH_CHILDREN, MAX_OWNER_BATCH_CHILDREN)?;
+    let order =
+        ordered_desired_refs(&desired, stage, MAX_OWNER_BATCH_CHILDREN, MAX_OWNER_BATCH_CHILDREN)?;
     order
         .into_iter()
         .map(|target| {
@@ -1394,14 +1494,34 @@ fn ordered_desired_children(
 
 fn ordered_desired_refs(
     desired: &BTreeMap<ResourceRef, DesiredChild>,
+    stage: ChildDependencyStage,
     max_items: usize,
     max_depth: usize,
 ) -> Result<Vec<ResourceRef>, OwnerReconcileError> {
     let nodes = desired
         .iter()
-        .map(|(target, child)| (target.clone(), (child.kind, child.dependencies.clone())))
+        .map(|(target, child)| {
+            (target.clone(), (child.kind, child.dependencies_for(stage)))
+        })
         .collect::<BTreeMap<_, _>>();
     topological_order(nodes, false, max_items, max_depth)
+}
+
+/// The bounded creation order of one desired child set at one stage.
+///
+/// This is the activation or drain stage graph's own order, and its
+/// [`OwnerReconcileError::DependencyCycle`] is the only cycle its cycle check
+/// reports. Two children that merely share a source reservation - a binding
+/// helper and the relationship that owns the reservation - produce no cycle
+/// here, because neither requires the other at a stage the other also
+/// requires.
+pub fn ordered_stage_refs(
+    desired: &BTreeMap<ResourceRef, DesiredChild>,
+    stage: ChildDependencyStage,
+    max_items: usize,
+    max_depth: usize,
+) -> Result<Vec<ResourceRef>, OwnerReconcileError> {
+    ordered_desired_refs(desired, stage, max_items, max_depth)
 }
 
 fn ordered_observed_refs<'a>(
@@ -1840,6 +1960,115 @@ mod tests {
 
     fn limits() -> OwnerLimits {
         OwnerLimits::new(8, 64).unwrap()
+    }
+
+    /// KTD10: a binding helper may reference its own parent reservation
+    /// without creating a dependency that requires the parent to be active.
+    #[test]
+    fn a_helper_may_reference_its_own_parent_reservation_at_one_stage_only() {
+        let relationship = ResourceRef::parse("VolumeBinding/root").unwrap();
+        let helper = ResourceRef::parse("Process/helper").unwrap();
+        let relationship_child = desired("VolumeBinding", "root", "sha256:binding");
+        let helper_child = desired("Process", "helper", "sha256:helper")
+            .with_stage_dependency(ChildDependencyStage::SourcePrepared, relationship.clone())
+            .unwrap();
+
+        // The stage edge is the helper's only prerequisite, and the release
+        // stage - the one that matters for the drain ordering - does not see
+        // it at all. A shared reservation is not a mutual dependency.
+        assert!(helper_child
+            .dependencies_for(ChildDependencyStage::Release)
+            .is_empty());
+        assert_eq!(
+            helper_child.dependencies_for(ChildDependencyStage::SourcePrepared),
+            BTreeSet::from([relationship.clone()])
+        );
+        assert_eq!(helper_child.stage_dependencies().len(), 1);
+
+        // The owner plans its activation order from the committed-identity
+        // stage, where the helper is not blocked by the relationship at all.
+        let owner = target("work", "Volume", "root", 1);
+        let mut index = OwnerIndex::new(limits());
+        index
+            .relist_with_owner_generation(
+                owner.clone(),
+                d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
+                Vec::new(),
+            )
+            .unwrap();
+        let plan = index
+            .plan(&owner, vec![relationship_child.clone(), helper_child.clone()])
+            .unwrap();
+        assert_eq!(plan.creation_order().len(), 2);
+
+        let activation = ordered_stage_refs(
+            &BTreeMap::from([
+                (relationship.clone(), relationship_child.clone()),
+                (helper.clone(), helper_child.clone()),
+            ]),
+            ChildDependencyStage::CommittedIdentity,
+            64,
+            8,
+        )
+        .unwrap();
+        assert_eq!(activation, vec![relationship.clone(), helper.clone()]);
+
+        // At the stage the helper actually declares, the relationship is
+        // created first.
+        let source_prepared = ordered_stage_refs(
+            &BTreeMap::from([
+                (relationship.clone(), relationship_child),
+                (helper.clone(), helper_child),
+            ]),
+            ChildDependencyStage::SourcePrepared,
+            64,
+            8,
+        )
+        .unwrap();
+        assert_eq!(source_prepared, vec![relationship, helper]);
+    }
+
+    /// Cycle detection runs on the stage graph, so a real mutual stage
+    /// prerequisite is refused while the same pair is fine elsewhere.
+    #[test]
+    fn only_a_real_cycle_in_one_stage_is_refused() {
+        let left = ResourceRef::parse("Process/left").unwrap();
+        let right = ResourceRef::parse("Endpoint/right").unwrap();
+        let mutual = BTreeMap::from([
+            (
+                left.clone(),
+                desired("Process", "left", "sha256:left")
+                    .with_stage_dependency(ChildDependencyStage::SourcePrepared, right.clone())
+                    .unwrap(),
+            ),
+            (
+                right.clone(),
+                desired("Endpoint", "right", "sha256:right")
+                    .with_stage_dependency(ChildDependencyStage::SourcePrepared, left.clone())
+                    .unwrap(),
+            ),
+        ]);
+        assert_eq!(
+            ordered_stage_refs(&mutual, ChildDependencyStage::SourcePrepared, 64, 8),
+            Err(OwnerReconcileError::DependencyCycle)
+        );
+        assert!(
+            ordered_stage_refs(&mutual, ChildDependencyStage::Release, 64, 8).is_ok(),
+            "the same pair is not a cycle in a stage it does not declare"
+        );
+    }
+
+    #[test]
+    fn a_stage_dependency_may_not_name_its_own_child() {
+        assert_eq!(
+            desired("Process", "helper", "sha256:helper")
+                .with_stage_dependency(
+                    ChildDependencyStage::SourcePrepared,
+                    ResourceRef::parse("Process/helper").unwrap(),
+                )
+                .err(),
+            Some(OwnerReconcileError::InvalidChild)
+        );
     }
 
     fn observed(

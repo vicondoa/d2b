@@ -41,6 +41,11 @@ pub mod audit;
 // cancellation/recovery, and BeginEffect, and owns the projection cursor,
 // prepared fences, and effect/reservation journal.
 pub mod authority_projection;
+// The broker's single owner of every source reservation (U8, KTD9): the
+// arbitrated claim per source, the attenuated realization legs a binding
+// helper runs under, and the ordered pre-drain a binding owner advances
+// before its children are finalized (KTD10).
+pub mod binding_reservations;
 pub mod catalog;
 pub mod envelope;
 pub mod fd_passing;
