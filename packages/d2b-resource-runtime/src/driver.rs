@@ -204,7 +204,14 @@ pub trait DynResourceDriver: Send + 'static {
     async fn reconcile(&mut self, ctx: &mut ResourceContext) -> Result<ReconcileOutcome, DriverFailure>;
     /// Pre-drain stage (KTD10); the actor runs it ahead of
     /// [`DynResourceDriver::finalize`] on every resource.
-    async fn pre_drain(&mut self, ctx: &mut ResourceContext) -> Result<(), DriverFailure>;
+    ///
+    /// Defaults to a no-op: a resource with no reservation, no helper, and
+    /// no outstanding use has nothing to drain, and forcing every erased
+    /// driver to write an empty override would be noise that hides the
+    /// resources that do have something to drain.
+    async fn pre_drain(&mut self, _ctx: &mut ResourceContext) -> Result<(), DriverFailure> {
+        Ok(())
+    }
     /// Drain step; the actor runs it immediately before
     /// [`DynResourceDriver::delete`] on every resource.
     async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), DriverFailure>;
