@@ -318,17 +318,21 @@ let
         ./../packages/${name}/registrations.json
       ))).provider)
     deploymentProviderCrates;
-  # The generated registration table spells a provider family by its bare id,
-  # so the framework execution providers contribute the same spelling rather
-  # than the `Provider/<name>` resource reference their rows commit under.
-  implementationId = reference: lib.removePrefix "Provider/" reference;
-  deploymentImplementations = builtins.sort builtins.compareStrings (
-    deploymentRegistrations
-    ++ [
-      (implementationId "Provider/system-minijail")
-      (implementationId "Provider/systemd")
-    ]
-  );
+  deploymentImplementations =
+    builtins.sort builtins.compareStrings deploymentRegistrations;
+
+  # The foundation's own process provider, taken from the generated Provider
+  # catalog's `fixedBootstrapProviders` rather than written here. That list is
+  # the declaration of which providers bootstrap this deployment, so the
+  # shared module never names a provider identity of its own: it reads the
+  # generated one and constructs the resource reference the foundation
+  # self-binding is committed under. `noBinaryBootstrapProvider` is the
+  # catalog's own non-binary member, so the remaining entry is the process
+  # provider whose self-binding authorizes materialization.
+  providerCatalogShape = import ./generated/provider-catalog-shape.nix;
+  foundationProcessProvider = lib.head (lib.filter
+    (name: name != providerCatalogShape.noBinaryBootstrapProvider)
+    providerCatalogShape.fixedBootstrapProviders);
   publisherRole = {
     rules = [
       {
@@ -349,10 +353,10 @@ let
       admitted = publisherRole;
     }
     {
-      reference = "RoleBinding/system-minijail-self-operation-publisher";
+      reference = "RoleBinding/${foundationProcessProvider}-self-operation-publisher";
       admitted = {
         roleRef = "Role/operation-publisher";
-        subjects = [ "Provider/system-minijail" ];
+        subjects = [ "Provider/${foundationProcessProvider}" ];
       };
     }
   ];

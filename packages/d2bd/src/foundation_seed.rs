@@ -1568,12 +1568,16 @@ impl DeploymentBootstrap {
     /// This is the daemon's and the Guest's only way to learn what it is
     /// deploying: there is no fallback document and no default graph, so a
     /// deployment that did not publish a verified graph has nothing to boot.
-    #[allow(clippy::disallowed_methods, reason = "boot reads the deployment root once")]
-    pub fn read_from_deployment_root(root: &std::path::Path) -> Result<Self, BootstrapRefusal> {
-        let path = root.join(DEPLOYMENT_BOOTSTRAP_FILE);
+    ///
+    /// The read is on the async filesystem driver rather than a blocking
+    /// `std::fs` call, because it runs on the boot path inside the resource
+    /// plane's async open, and a blocking read there would occupy a runtime
+    /// worker for the length of the deployment root's I/O.
+    pub async fn read_from_deployment_root(
+        root: &std::path::Path,
+    ) -> Result<Self, BootstrapRefusal> {
         let relative = DEPLOYMENT_BOOTSTRAP_FILE.to_owned();
-        let bytes = std::fs::read(&path)
-            .map_err(|_| BootstrapRefusal::DocumentUnreadable { path: relative.clone() })?;
+        let bytes = read_deployment_bootstrap_bytes(root).await?;
         Self::decode(&bytes, &relative)
     }
 
@@ -1651,37 +1655,30 @@ impl DeploymentBootstrap {
 /// is not in it has no compiled implementation behind it and the deployment
 /// that names it is refused. Nothing configurable adds to this set, which is
 /// what removes the separate bootstrap allowlist (R11, R12).
+///
+/// # A provider's own declaration is the only source
+///
+/// The table is generated from each provider crate's `registrations.json`,
+/// and this function reads only that table. Nothing here derives an
+/// implementation identity from a resource reference, a projection owner, a
+/// catalog, or a package name: a shared crate naming a provider-crate
+/// identifier is what the layout gate refuses, and more importantly such a
+/// push would publish an identity no declaration had registered, so the
+/// deployment that published it would be refused by the very check it was
+/// meant to satisfy. A provider that does not declare itself is not a
+/// deployment implementation, which is correct: the framework's own
+/// execution providers are bound by the foundation seed's own
+/// self-bindings, under the `Provider/<name>` resource reference their rows
+/// commit, and that binding is not an implementation publication.
 pub fn compiled_implementations() -> Vec<&'static str> {
     let mut identities: Vec<&'static str> =
         crate::resource_plane_v3::PROVIDER_REGISTRATIONS
             .iter()
             .map(|registration| registration.provider_ref)
             .collect();
-    // The framework's own execution providers are bound by the foundation
-    // declarations rather than by a family registration row, so they are
-    // named here from the same crates the seed reads their references from.
-    // Their identity is the family id the generated table uses everywhere
-    // else, not the `Provider/<name>` resource reference the seed commits
-    // its self-binding under, so both spellings cannot drift.
-    identities.push(framework_implementation_id(d2b_provider_process_minijail::PROVIDER_REF));
-    identities.push(framework_implementation_id(d2b_provider_process_systemd::PROVIDER_REF));
     identities.sort_unstable();
     identities.dedup();
     identities
-}
-
-/// The family id a `Provider/<name>` resource reference declares.
-///
-/// The generated registration table names provider families by their bare
-/// id, so the framework's own execution providers contribute the same
-/// spelling rather than the resource reference their rows are committed
-/// under. This is a fixed-length slice into a literal `Provider/` prefix, so
-/// it allocates nothing at boot.
-fn framework_implementation_id(provider_ref: &'static str) -> &'static str {
-    const PREFIX: &str = "Provider/";
-    provider_ref
-        .strip_prefix(PREFIX)
-        .expect("a framework provider reference is canonical")
 }
 
 /// Which layer of the bootstrap publication a step belongs to.
@@ -2056,6 +2053,25 @@ pub fn required_foundation_bindings(declarations: &FoundationDeclarations) -> Ve
     required.sort();
     required.dedup();
     required
+}
+
+/// Read the deployment root's verified graph bytes on the async driver.
+///
+/// Both the daemon and the Guest verify the same document, and both read it
+/// through this one function, so the two views cannot come from different
+/// bytes and neither read blocks a runtime worker.
+pub async fn read_deployment_bootstrap_bytes(
+    root: &std::path::Path,
+) -> Result<Vec<u8>, BootstrapRefusal> {
+    let path = root.join(DEPLOYMENT_BOOTSTRAP_FILE);
+    let unreadable = || BootstrapRefusal::DocumentUnreadable {
+        path: DEPLOYMENT_BOOTSTRAP_FILE.to_owned(),
+    };
+    let bytes = tokio::fs::read(&path).await.map_err(|_| unreadable())?;
+    if bytes.is_empty() || bytes.len() > MAX_DEPLOYMENT_BOOTSTRAP_BYTES {
+        return Err(unreadable());
+    }
+    Ok(bytes)
 }
 
 /// The framework-generated binding name, as a bootstrap refusal when the
@@ -3190,7 +3206,7 @@ mod deployment_bootstrap_tests {
             zone: ZoneId::parse(SYSTEM_ZONE).expect("foundation zone"),
             store_incarnation: StoreIncarnation::parse("foundation-1").expect("store"),
             state_volume: STATE_VOLUME.to_owned(),
-            implementations: vec!["system-minijail".to_owned()],
+            implementations: vec!["activation-nixos".to_owned()],
             roles: vec![BootstrapAuthorityRow {
                 reference: "Role/operation-publisher".to_owned(),
                 admitted: publisher_role(),

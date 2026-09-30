@@ -14600,11 +14600,16 @@ pub use crate::foundation_seed::{
 /// a verified graph missing one of the foundation RoleBindings all mean the
 /// daemon has no accepted root to run providers under, and it does not fall
 /// back to one that admits everything.
-fn publish_deployment_bootstrap() -> Result<PublishedDeployment, resource_runtime::ResourceRuntimeError> {
+async fn publish_deployment_bootstrap() -> Result<
+    PublishedDeployment,
+    resource_runtime::ResourceRuntimeError,
+> {
     use crate::foundation_seed::DeploymentBootstrap;
 
     let root = DeploymentBootstrap::deployment_root();
-    let bytes = read_deployment_bootstrap_bytes(&root).map_err(|error| {
+    let bytes = crate::foundation_seed::read_deployment_bootstrap_bytes(&root)
+        .await
+        .map_err(|error| {
         tracing::error!(
             error = %error,
             deployment_root = %root.display(),
@@ -14646,28 +14651,6 @@ fn publish_deployment_bootstrap() -> Result<PublishedDeployment, resource_runtim
     Ok(PublishedDeployment {
         activation: activation_family_view(&bytes)?,
     })
-}
-
-/// Read the deployment root's verified graph bytes once.
-///
-/// Both the daemon and the Activation family verify the same document; it
-/// is read once so the two views cannot come from different bytes.
-fn read_deployment_bootstrap_bytes(
-    root: &std::path::Path,
-) -> Result<Vec<u8>, crate::foundation_seed::BootstrapRefusal> {
-    let path = root.join(crate::foundation_seed::DEPLOYMENT_BOOTSTRAP_FILE);
-    #[allow(clippy::disallowed_methods, reason = "boot reads the deployment root once")]
-    let bytes = std::fs::read(&path).map_err(|_| {
-        crate::foundation_seed::BootstrapRefusal::DocumentUnreadable {
-            path: crate::foundation_seed::DEPLOYMENT_BOOTSTRAP_FILE.to_owned(),
-        }
-    })?;
-    if bytes.is_empty() || bytes.len() > crate::foundation_seed::MAX_DEPLOYMENT_BOOTSTRAP_BYTES {
-        return Err(crate::foundation_seed::BootstrapRefusal::DocumentUnreadable {
-            path: crate::foundation_seed::DEPLOYMENT_BOOTSTRAP_FILE.to_owned(),
-        });
-    }
-    Ok(bytes)
 }
 
 /// The Activation family's own view of the verified deployment graph.
@@ -14723,8 +14706,9 @@ async fn publish_guest_target_authority(
     use crate::foundation_seed::DeploymentBootstrap;
 
     let root = state_dir.join("deployment");
-    let graph =
-        DeploymentBootstrap::read_from_deployment_root(&root).map_err(|error| error.to_string())?;
+    let graph = DeploymentBootstrap::read_from_deployment_root(&root)
+        .await
+        .map_err(|error| error.to_string())?;
     let identity = runtime.identity();
     let zone = identity.zone().clone();
     if graph.zone.as_str() != zone.as_str() {
@@ -14772,7 +14756,7 @@ async fn open_resource_plane(
     // provider's controller is activated. A refusal here fails the plane
     // open outright: no provider begins effects under an unaccepted
     // bootstrap graph.
-    let published = publish_deployment_bootstrap()?;
+    let published = publish_deployment_bootstrap().await?;
     if !provider_ready {
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
