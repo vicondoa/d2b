@@ -80,14 +80,27 @@ let
   # launcher.
   activationTimeoutSeconds = 420;
   # How long a polled unit may sit not-active before the guest describes the
-  # ordering state it is sitting in, and how long after that it repeats
-  # itself. Both are well inside the launcher's own bound, which is the whole
-  # point: a report written after the launcher has stopped reading the
-  # console is not a report, and the launcher's bound is the shorter of the
-  # two. The repeat is deliberately wide, because a second copy of an
-  # unchanged ordering state is console noise rather than evidence.
+  # ordering state it is sitting in, and how long after that it says it
+  # again. A report written after the launcher has stopped reading the
+  # console is not a report, so both sit inside the launcher's own 600s,
+  # which is the outer of the two bounds the guest has to answer to and the
+  # one it has no way to shorten.
+  #
+  # The repeat is not a second copy of the same sentence. What the unit
+  # reported at 90s is the part that goes stale: whatever it is ordered
+  # against can start, or fail, in the meantime, and a later report is a
+  # later look at a boot that has not finished moving. At 90s and again
+  # every 120s, a unit that never activates is described at 90s, 210s and
+  # 330s - three looks, each of them inside the 420s guest deadline and
+  # inside the launcher's bound.
+  #
+  # The launcher reads what comes out as a span rather than a snapshot: it
+  # keeps the ordering report whole from the line the guest opened it with to
+  # the line it closed it with, which is worth nothing if the guest only ever
+  # opens one. A repeat at or beyond the guest's own deadline leaves that
+  # reader holding a single fixed account of a boot that was still changing.
   activationStallSeconds = 90;
-  activationStallRepeatSeconds = 600;
+  activationStallRepeatSeconds = 120;
 
   # Where a node declares the units its own activation is complete when. The
   # re-homed daemon node writes it; a node that never wanted the daemon host
