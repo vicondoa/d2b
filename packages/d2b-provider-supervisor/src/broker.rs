@@ -699,10 +699,10 @@ impl BundleBackedLaunchResolver {
             );
             ProcessEffectError::UnsupportedProvider
         })?;
-        let role_id = match &intent.role {
-            ProcessRole::CloudHypervisorRunner => "ch-runner",
-            _ => intent.role_id.as_str(),
-        };
+        // The alias rule is evaluated in one place, so a launch client
+        // and the broker's spawn-identity fence cannot disagree about
+        // which role id a legitimate launch carries.
+        let role_id = intent.wire_role_id();
         if intent.vm_name != launch_vm_name
             || (legacy_identity && intent.role_id != process_role_id)
         {

@@ -8798,18 +8798,14 @@ pub(crate) fn runner_role_for_process_role(
     }
 }
 
-/// The wire `role_id` one trusted runner intent fences against. The
-/// cloud-hypervisor runner keeps its daemon-side `ch-runner` alias; every
-/// other intent uses its own `role_id`.
+/// The wire `role_id` one trusted runner intent fences against.
 ///
 /// SINGLE EVALUATION POINT for the alias: spawn validation and observation
-/// both read it instead of re-listing the match.
+/// both read it instead of re-listing the match, and the launch client
+/// derives its value from the same accessor.
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn wire_role_id_for_intent(intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent) -> &str {
-    match intent.role {
-        d2b_core::processes::ProcessRole::CloudHypervisorRunner => "ch-runner",
-        _ => intent.role_id.as_str(),
-    }
+    intent.wire_role_id()
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -15803,7 +15799,12 @@ mod tests {
             },
             "runnerIdentity": {
                 "vmId": intent.vm_name,
-                "roleId": intent.role_id,
+                // The real launch client sends the wire `roleId`, which is
+                // the intent's alias for the roles that carry one. Using
+                // the raw `role_id` here built payloads no client would
+                // send, which is how a fence could disagree with its
+                // client and still pass every test.
+                "roleId": intent.wire_role_id(),
                 "resourceRef": Value::Null,
                 "resourceUid": Value::Null,
                 "zoneUid": Value::Null,
@@ -16486,6 +16487,89 @@ mod tests {
             response.detail
         );
         response.detail
+    }
+
+    /// The spawn-identity fence compares the payload's wire `roleId`
+    /// against the intent the payload names. The cloud-hypervisor runner
+    /// is the one role whose wire id is not its intent id: it travels
+    /// under the daemon-side `ch-runner` alias. A fence that compared the
+    /// raw `role_id` refused every legitimate nested-VMM launch, which is
+    /// what the host-integration lane caught.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn spawn_process_accepts_the_cloud_hypervisor_runner_under_its_wire_role_id() {
+        let _registry_guard = RegistryTestGuard::new();
+        let root = test_audit_dir("spawn-kernel-cloud-hypervisor-wire-role");
+        fs::create_dir_all(&root).expect("create test root");
+        let bundle = build_spawn_kernel_bundle(&root);
+        let _bundle_guard = install_test_kernel_bundle(&bundle);
+        let harness = SpawnKernelHarness::new(&root, &bundle.bundle_path, &root.join("runtime"));
+        let intent_id = spawn_intent_id("vm-stale", "ch-runner");
+        let payload = spawn_payload_from_intent(
+            &bundle.resolver,
+            &intent_id,
+            false,
+            vec![spawn_test_binary("true")],
+        );
+        // The alias is the whole point: pin it rather than trusting the
+        // helper, so this test fails if the fixture drifts back to the
+        // raw intent id.
+        assert_eq!(
+            payload["runnerIdentity"]["roleId"],
+            serde_json::json!("ch-runner"),
+            "the cloud-hypervisor runner travels under its wire alias"
+        );
+        // The launch must get past the identity fence. It fails later for
+        // an unrelated harness reason, so the assertion is on the refusal
+        // detail rather than on overall success.
+        // The launch does not have to succeed - a real cloud-hypervisor
+        // spawn needs a live VMM - but it must get past the identity
+        // fence. So the assertion is on the refusal detail, not on the
+        // overall outcome.
+        let response = envelope_response(
+            harness
+                .invoke("spawn-process", payload, Vec::new())
+                .expect("spawn-process dispatches"),
+        );
+        let detail = response.detail.unwrap_or_default();
+        assert!(
+            !detail.contains("spawn-launch-role-id-mismatch"),
+            "the cloud-hypervisor runner's wire role id must satisfy the \
+             spawn-identity fence, but the launch was refused for it: \
+             {detail}"
+        );
+    }
+
+    /// The counterpart: an alias that is not the intent's own is still
+    /// refused. Widening the fence to accept the cloud-hypervisor alias
+    /// must not make any other role id acceptable.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn spawn_process_still_refuses_a_role_id_the_intent_does_not_declare() {
+        let _registry_guard = RegistryTestGuard::new();
+        let root = test_audit_dir("spawn-kernel-role-id-still-fenced");
+        fs::create_dir_all(&root).expect("create test root");
+        let bundle = build_spawn_kernel_bundle(&root);
+        let _bundle_guard = install_test_kernel_bundle(&bundle);
+        let harness = SpawnKernelHarness::new(&root, &bundle.bundle_path, &root.join("runtime"));
+        let intent_id = spawn_intent_id("vm-tpm", "swtpm");
+        let mut payload = spawn_payload_from_intent(
+            &bundle.resolver,
+            &intent_id,
+            false,
+            vec![spawn_test_binary("true")],
+        );
+        // A role that is not this intent's wire id, and not the alias of
+        // any other intent: the fence must refuse it.
+        payload["runnerIdentity"]["roleId"] = serde_json::json!("ch-runner");
+        let detail = spawn_refusal_detail(&harness, payload)
+            .expect("a refused launch carries its detail");
+        assert!(
+            detail.contains("spawn-launch-role-id-mismatch"),
+            "a role id the intent does not declare is refused, got: {detail}"
+        );
     }
 
     /// Issue #619 gap 2: the argv fence reads what the worker *opens*, so a

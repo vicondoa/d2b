@@ -771,7 +771,13 @@ fn verify_spawn_identity_against_intent(
     if identity.vm_id != intent.vm_name {
         return Err("spawn-launch-vm-mismatch");
     }
-    if identity.role_id != intent.role_id {
+    // The wire `roleId` is the intent's, except where the role travels
+    // under a daemon-side alias. Comparing against `intent.role_id`
+    // directly refused the cloud-hypervisor runner, the one role whose
+    // wire id is not its intent id. The alias is evaluated by the same
+    // accessor the launch client derives its value from, so the fence
+    // and the client cannot disagree about a legitimate launch.
+    if identity.role_id != intent.wire_role_id() {
         return Err("spawn-launch-role-id-mismatch");
     }
     if crate::runtime::runner_role_for_process_role(&intent.role).as_ref() != Some(role) {
