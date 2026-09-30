@@ -18,12 +18,21 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-# Under Bazel the tree under test is the runfiles tree, and the runfiles root -
-# not the execroot and not whatever the caller happens to have exported - is
-# the only place its contents are complete. Reading the execroot instead makes
-# the answer depend on which package directories a concurrent build happened to
-# materialise, so a correct tree fails with a different package name each run.
-if [ -n "${TEST_SRCDIR:-}" ] && [ -n "${TEST_WORKSPACE:-}" ]; then
+# Which tree this guard reads decides whether its answer means anything.
+#
+# Under Bazel the runfiles tree is a MATERIALIZED snapshot: each file is copied
+# at the moment the test is staged. A package directory or a BUILD.bazel that
+# a concurrent build has not staged yet is simply absent, so the guard reports
+# a package as "absent from rust-main-packages" that is in fact listed - and it
+# names a DIFFERENT package on each run, which is the signature of an
+# incomplete tree rather than of a real membership gap.
+#
+# So: prefer the repository root the aggregate already passes to every test
+# (`make check` sets D2B_REPO_ROOT for exactly this reason), then the runfiles
+# root, then the script's own location for a standalone run.
+if [ -n "${D2B_REPO_ROOT:-}" ] && [ -f "$D2B_REPO_ROOT/bazel/checks/BUILD.bazel" ]; then
+    ROOT=$D2B_REPO_ROOT
+elif [ -n "${TEST_SRCDIR:-}" ] && [ -n "${TEST_WORKSPACE:-}" ]; then
     ROOT=${TEST_SRCDIR}/${TEST_WORKSPACE}
 else
     ROOT=${ROOT:-$(cd "$HERE/../../.." && pwd)}
