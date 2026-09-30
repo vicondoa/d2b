@@ -41,7 +41,7 @@ use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, DEFAULT_CONTEXT_DEADLINE_MS, FdKind, ForwardContext, MAX_FRAME_FDS,
     PublishTrustedContextResponse, PublishTrustedContextValues,
 };
-use d2b_contracts_resource::v3::CanonicalJsonObject;
+use d2b_contracts_resource::v3::{CanonicalJsonObject, DesiredDigest, ZoneDesiredSequence};
 use serde_json::Value;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::pin::Pin;
@@ -58,6 +58,31 @@ pub const UNKNOWN_OPERATION: &str = "unknown-operation";
 pub const UNCOMMITTED_OPERATION: &str = "uncommitted-operation";
 /// The refusal code for a caller no committed grant covers.
 pub const UNGRANTED_CALLER: &str = "ungranted-caller";
+
+/// The refusal code for a new ordinary effect a fenced Zone does not admit.
+///
+/// A prepared candidate freezes the Zone's *new-effect* admission, not the
+/// operations a relationship already owns. This is the code the envelope
+/// refuses an ordinary dispatch with while the serialized authority worker says
+/// the Zone is fenced, so the fence is visible to the invocation path instead
+/// of being a fact only the publication path knows. It is deliberately not one
+/// of the peer dispatch-failure codes: the envelope authors it, and a handler
+/// cannot reach it.
+pub const AUTHORITY_FENCED: &str = "authority-fenced";
+
+/// Whether the broker admits a new ordinary effect for `zone` right now.
+///
+/// The answer belongs to the one serialized authority worker, so this is one
+/// command and one reply rather than a second copy of the fence. A broker with
+/// no projection store holds no fence to consult and admits as it always did,
+/// which is what keeps the unchanged pre-cutover entry point working while the
+/// publication path is staged beside it.
+pub(crate) async fn ordinary_effect_admitted(zone: &str) -> bool {
+    match crate::authority_projection::authority_projection() {
+        None => true,
+        Some(projection) => !projection.status(zone).await.is_fenced(),
+    }
+}
 /// The refusal code for an operation whose payload contract is the typed wire
 /// request rather than a caller-supplied payload object.
 pub const WIRE_INHERITED_OPERATION: &str = "wire-inherited-operation";
@@ -792,6 +817,12 @@ fn mint_locked(
         controller_generation: attestation.controller_generation,
         guest_generation: attestation.guest_generation,
         initiating_identity: initiating_identity.to_owned(),
+        // The accepted-authority fields are bound by the caller from the
+        // authority projection: the trusted-context store owns generations and
+        // epochs, and the projection owns the cursor, so neither store
+        // restates the other's half.
+        accepted_sequence: ZoneDesiredSequence::INITIAL,
+        accepted_digest: DesiredDigest::of(&[]),
         deadline_ms,
     })
 }
@@ -1320,6 +1351,18 @@ impl BrokerEnvelope {
                     chain.root_invocation_id().to_owned(),
                     operation,
                     UNGRANTED_CALLER,
+                ));
+            }
+            if !ordinary_effect_admitted(zone).await {
+                // The Zone's new-effect admission is frozen for a prepared
+                // candidate, or the broker restarted and has not been
+                // reconciled. Either way this is not a stale-context or an
+                // ungranted caller: the Zone is deliberately closed to new
+                // ordinary use and says so.
+                return Err(EnvelopeRefusal::new(
+                    chain.root_invocation_id().to_owned(),
+                    operation,
+                    AUTHORITY_FENCED,
                 ));
             }
             if !Self::request_fds_admitted(row, fds) {

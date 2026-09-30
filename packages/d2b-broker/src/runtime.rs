@@ -20734,3 +20734,83 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Authority publication dispatch (U7, KTD6-KTD7)
+// ---------------------------------------------------------------------------
+
+/// Serve one authority publication message on the established origination leg.
+///
+/// The four messages KTD6-KTD7 need - a bounded snapshot, a change, a fence, and
+/// an acknowledgment - arrive as one `AuthorityPublicationEnvelope` and are
+/// answered by the one serialized authority worker. This is the broker half of
+/// the freeze / commit / publish / acknowledge order: the worker durably
+/// freezes the Zone's new-effect admission before the manager's desired
+/// transaction commits, and its `Prepared` reply is the acknowledgment the
+/// manager records before it publishes accepted visibility.
+///
+/// The store opens lazily on the first publication arrival, exactly like the
+/// trusted-context store: a state root that cannot host it must refuse
+/// publication fail-closed, not take the whole broker down, and a fresh broker
+/// process bumps the persisted epoch and fences every known Zone before it
+/// serves anything.
+///
+/// U34 wires this into the accept loop next to the typed `BrokerRequest` arms
+/// and moves the publication message family onto the committed operation
+/// catalog; until then the unchanged production entry point does not call it,
+/// and the projection store is absent, so the envelope admits exactly as it
+/// did before this unit.
+pub(crate) async fn serve_authority_publication(
+    state_dir: &std::path::Path,
+    envelope: &d2b_contracts_broker::broker_wire::AuthorityPublicationEnvelope,
+) -> Result<d2b_contracts_broker::broker_wire::AuthorityPublicationResponse, BrokerError> {
+    if crate::authority_projection::authority_projection().is_none() {
+        crate::authority_projection::init_authority_projection_async(state_dir)
+            .await
+            .map_err(|error| {
+                BrokerError::LiveHandler(format!("authority projection unavailable: {error}"))
+            })?;
+    }
+    crate::authority_projection::authority_projection()
+        .expect("the lazy init above just opened the projection")
+        .serve(envelope)
+        .await
+        .map_err(|error| match error.refusal() {
+            Some(refusal) => BrokerError::LiveHandler(format!(
+                "authority publication refused: {} at {:?} ({:?}), fenced={}",
+                refusal.code, refusal.stage, refusal.reason, refusal.fenced
+            )),
+            None => BrokerError::LiveHandler(format!("authority publication failed: {error}")),
+        })
+}
+
+/// Serve one Zone publication-session open on the established origination leg.
+///
+/// This is the one message that cannot carry a session - it is what the broker
+/// answers *with* one - so it is its own entry. The session is bound to the
+/// Zone, the store generation the broker holds, the epoch it is minting under,
+/// the authenticated initiating subject the trusted daemon admission
+/// coordinator vouched for, and the accepted cursor this broker held.
+pub(crate) async fn serve_authority_publication_open(
+    state_dir: &std::path::Path,
+    open: &d2b_contracts_broker::broker_wire::AuthorityPublicationOpen,
+) -> Result<d2b_contracts_broker::broker_wire::OpenPublicationSessionResponse, BrokerError> {
+    if crate::authority_projection::authority_projection().is_none() {
+        crate::authority_projection::init_authority_projection_async(state_dir)
+            .await
+            .map_err(|error| {
+                BrokerError::LiveHandler(format!("authority projection unavailable: {error}"))
+            })?;
+    }
+    crate::authority_projection::authority_projection()
+        .expect("the lazy init above just opened the projection")
+        .open_session(open.clone())
+        .await
+        .map_err(|error| match error.refusal() {
+            Some(refusal) => BrokerError::LiveHandler(format!(
+                "authority publication session refused: {} ({:?})",
+                refusal.code, refusal.reason
+            )),
+            None => BrokerError::LiveHandler(format!("authority publication session failed: {error}")),
+        })
+}

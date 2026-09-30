@@ -18,6 +18,13 @@ pub(crate) mod guest_target_session;
 pub(crate) mod zone_enrollment;
 pub(crate) mod foundation_seed;
 pub(crate) mod forward_rendezvous;
+/// The manager-side authority publication coordinator (U7, KTD6-KTD7).
+///
+/// Re-exported so this package's owning integration test drives the same
+/// construction production will install, rather than a test-local imitation of
+/// it. U34 wires it into the resource plane's mutation path and removes the
+/// old graph-construction entry point in the same cutover.
+pub mod authority_publication;
 pub(crate) mod effect_service_actors;
 pub(crate) mod plane_port;
 pub mod principal_allocation;
@@ -29,6 +36,7 @@ pub(crate) mod resource_plane_v3;
 /// Re-exported so this package's owning integration test drives the same
 /// construction production will install, rather than a test-local imitation of
 /// it. U34 removes this export together with the construction it names.
+pub use provider_lifecycle::AuthorityPublication;
 pub use resource_plane_v3::GraphMutationAdmission;
 
 include!("composition.rs");

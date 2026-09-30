@@ -30,7 +30,9 @@ use async_trait::async_trait;
 use d2b_contracts_broker::broker_wire::{
     BrokerRequest, BrokerResponse, PublishTrustedContextValues,
 };
-use d2b_contracts_resource::v3::{CanonicalJsonObject, ResourceRef, ZoneId};
+use d2b_contracts_resource::v3::{
+    AuthoritySubject, CanonicalJsonObject, ResourceRef, StoreIncarnation, ZoneId,
+};
 use d2bd_runtime::broker_transport::ModeBoundBrokerAdapter;
 use d2bd_runtime::target_runtime::DaemonMode;
 use d2b_provider_activation_nixos::ACTIVATION_EFFECTS_SERVICE;
@@ -548,12 +550,69 @@ impl TrustedContextPublication {
     }
 }
 
+/// The manager's authority publication coordinator, bound to the origination
+/// leg (U7, KTD6-KTD7).
+///
+/// This is the daemon's half of the freeze / commit / publish / acknowledge
+/// order. It is staged beside the existing trusted-context publication and is
+/// not yet reached by the production mutation path: the plane's unchanged entry
+/// point still constructs its old graph. U34 installs this coordinator on the
+/// new graph and removes the old construction in the same cutover, so nothing
+/// here has to be unwound by hand.
+#[derive(Debug, Clone)]
+pub struct AuthorityPublication {
+    coordinator: Arc<crate::authority_publication::AuthorityPublicationCoordinator>,
+}
+
+impl AuthorityPublication {
+    /// Bind the coordinator to one Zone's store generation, initiating subject,
+    /// and broker socket.
+    pub fn production(
+        zone: &ZoneId,
+        store_incarnation: StoreIncarnation,
+        initiating_subject: AuthoritySubject,
+        broker_socket: impl Into<PathBuf>,
+    ) -> Self {
+        let link = Arc::new(crate::authority_publication::OriginationPublicationLink::new(
+            broker_socket,
+            AUTHORITY_PUBLICATION_ROUND_TRIP,
+        ));
+        Self {
+            coordinator: Arc::new(
+                crate::authority_publication::AuthorityPublicationCoordinator::new(
+                    zone.as_str(),
+                    store_incarnation,
+                    initiating_subject,
+                    link,
+                ),
+            ),
+        }
+    }
+
+    /// The coordinator this binding owns.
+    pub fn coordinator(
+        &self,
+    ) -> Arc<crate::authority_publication::AuthorityPublicationCoordinator> {
+        Arc::clone(&self.coordinator)
+    }
+}
+
+/// The whole-exchange budget one authority publication round trip gets.
+///
+/// It is deliberately generous: the control lane's own budget is the one that
+/// decides a fence's timeout, and a transport that is merely slow must not be
+/// mistaken for a broker that has stopped answering.
+const AUTHORITY_PUBLICATION_ROUND_TRIP: Duration = Duration::from_secs(20);
+
 /// The providers one plane starts, in the order they start.
 pub(crate) struct ProviderSet {
     zone: ZoneId,
     state_root: PathBuf,
     providers: Vec<(ProviderDeclaration, Vec<DriverDescriptor>)>,
     trusted_context_publication: Option<TrustedContextPublication>,
+    /// The manager's authority publication coordinator, when this plane is bound
+    /// to one (U7, KTD6-KTD7).
+    authority_publication: Option<AuthorityPublication>,
     /// Hosting factories for the declared effect services, keyed by service
     /// identity (U8, KTD5). A declared service without a factory refuses
     /// startup: the zone cannot host what it cannot build.
@@ -569,8 +628,24 @@ impl ProviderSet {
             state_root,
             providers: Vec::new(),
             trusted_context_publication: None,
+            authority_publication: None,
             effect_service_factories: BTreeMap::new(),
         }
+    }
+
+    /// Bind this set's authority publication coordinator (U7, KTD6-KTD7).
+    ///
+    /// A set started without the binding publishes no authority at all: the
+    /// rendezvous stays fail-closed on the accepted-cursor half of every
+    /// attested call, which is the same posture a broker with no projection
+    /// takes.
+    #[allow(dead_code)] // U7 staged: the owning integration test binds it; U34 installs it on the new graph.
+    pub(crate) fn with_authority_publication(
+        mut self,
+        publication: Option<AuthorityPublication>,
+    ) -> Self {
+        self.authority_publication = publication;
+        self
     }
 
     /// Bind this set's publication over the origination leg.
@@ -654,6 +729,7 @@ impl ProviderSet {
             state_root,
             providers,
             trusted_context_publication,
+            authority_publication,
             effect_service_factories,
         } = self;
         let mut seen: BTreeMap<&'static str, ()> = BTreeMap::new();
@@ -847,7 +923,7 @@ impl ProviderSet {
             reason: error.to_string(),
         })?
         .0;
-        Ok(ProviderRuntime {
+        let runtime = ProviderRuntime {
             zone,
             port,
             providers,
@@ -856,8 +932,26 @@ impl ProviderSet {
             directory: registrations.take_directory().await,
             operations,
             trusted_context_publication,
+            authority_publication,
             effect_services,
-        })
+        };
+        if let Some(publication) = runtime.authority_publication() {
+            // The Zone publication session is established at start, so the very
+            // first authority mutation has a session bound to the cursor the
+            // broker currently accepts rather than opening one under the
+            // mutation. A plane with no coordinator bound skips this entirely,
+            // which is the unchanged pre-cutover posture: nothing publishes
+            // authority, and the rendezvous stays fail-closed on the
+            // accepted-cursor half of every attested call.
+            if let Err(error) = publication.coordinator().open_session().await {
+                tracing::warn!(
+                    zone = %runtime.zone.as_str(),
+                    %error,
+                    "authority publication session not established at provider start"
+                );
+            }
+        }
+        Ok(runtime)
     }
 }
 
@@ -873,6 +967,9 @@ pub(crate) struct ProviderRuntime {
     operations: Vec<ProviderOperations>,
     /// The origination-leg binding this set carries, when one is bound.
     trusted_context_publication: Option<TrustedContextPublication>,
+    /// The manager's authority publication coordinator, when one is bound
+    /// (U7, KTD6-KTD7).
+    authority_publication: Option<AuthorityPublication>,
     /// The zone's effect-service supervisor (U8, KTD5): one linked ractor
     /// actor per declared effect service, respawned from its durable row.
     /// The rendezvous binding resolves live bindings through this
@@ -1079,6 +1176,33 @@ impl ProviderRuntime {
                 );
             }
         }
+    }
+
+    /// Record the authority cursor the broker accepted for this Zone.
+    ///
+    /// The caller's publication coordinator drives this from the broker's
+    /// `Accepted` answer, so the rendezvous validates every forwarded effect
+    /// against broker-accepted authority rather than against the manager's own
+    /// view of its desired rows. A plane with no coordinator bound records
+    /// nothing and stays fail-closed on the accepted-cursor half.
+    #[allow(dead_code)] // U7 staged: called from the publication path U34 installs; the coordinator records the broker-accepted cursor.
+    pub(crate) async fn record_accepted_authority(&self, rendezvous: &ForwardRendezvous) {
+        let Some(publication) = &self.authority_publication else {
+            // A plane with no coordinator bound records nothing, and the
+            // rendezvous stays fail-closed on the accepted-cursor half of every
+            // attested call: there is no broker-accepted authority to serve
+            // under.
+            return;
+        };
+        let cursor = publication.coordinator().accepted().await;
+        rendezvous
+            .set_accepted_authority(self.zone.as_str(), cursor)
+            .await;
+    }
+
+    /// The coordinator this plane publishes authority through, when bound.
+    pub(crate) fn authority_publication(&self) -> Option<AuthorityPublication> {
+        self.authority_publication.clone()
     }
 
     /// Drain every provider, in the reverse of the order they started.

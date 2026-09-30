@@ -36,11 +36,109 @@ use std::collections::BTreeMap;
 use d2b_contracts_resource::v3::{
     admit_binding_request, AdmissionDecision, AdmissionStage, AuthoritySubject, BindingAdmission,
     BindingAuthorization, BindingKey, BindingRefusal,
-    BindingRealizationFacet, BindingRealizationSupport, FreshnessTuple, RefusalReason, RequestedRights,
-    ResourceRef, SourceAdmission, StoreIncarnation, ZoneId,
+    BindingRealizationFacet, BindingRealizationSupport, FreshnessTuple,
+    RefusalReason, RequestedRights, ResourceRef, SourceAdmission, StoreIncarnation, ZoneId,
 };
-use d2b_contracts_zone_session::v3::role::AuthorizedRole;
+use d2b_contracts_zone_session::v3::role::{AuthorizedRole, ROLE_RESOURCE_TYPE};
+use d2b_contracts_zone_session::v3::role_binding::ROLE_BINDING_RESOURCE_TYPE;
 use d2b_contracts_zone_session::v3::{RoleBindingSpec, RoleResourceVerb, RoleRule};
+
+/// One decoded row of the projection the broker accepted.
+///
+/// The broker stores the projection, so it holds each row's canonical admitted
+/// bytes rather than a summary the candidate could shape. This is the
+/// borrowed view of one such row: the exact reference it was accepted for,
+/// and the bytes themselves.
+#[derive(Debug, Clone, Copy)]
+pub struct ProjectionRow<'a> {
+    reference: &'a ResourceRef,
+    admitted: &'a [u8],
+}
+
+impl<'a> ProjectionRow<'a> {
+    /// Borrow one row's reference and canonical admitted bytes.
+    pub const fn new(reference: &'a ResourceRef, admitted: &'a [u8]) -> Self {
+        Self { reference, admitted }
+    }
+
+    /// The exact resource the row was accepted for.
+    pub const fn reference(&self) -> &ResourceRef {
+        self.reference
+    }
+
+    /// The row's canonical admitted bytes.
+    pub const fn admitted(&self) -> &'a [u8] {
+        self.admitted
+    }
+}
+
+/// What class of authority one projected row is.
+///
+/// The classification reads the canonical type-name constants in the contract
+/// crate that declares them, so no shared crate keeps a private copy of the
+/// names it decides on. A row outside the three classes contributes nothing to
+/// the prior graph: the graph holds the authorization facts, and the broker's
+/// own projection stores the rest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthorityRowKind {
+    /// An accepted `Role`: the rules one grant draws on.
+    Role,
+    /// An accepted `RoleBinding`: one subject's grant shape.
+    RoleBinding,
+    /// A row that is not authority this evaluator reads.
+    Other,
+}
+
+impl AuthorityRowKind {
+    /// The class one reference carries, read from its own canonical name.
+    pub fn of_reference(reference: &ResourceRef) -> Self {
+        let name = reference.resource_type().as_str();
+        if name == ROLE_RESOURCE_TYPE {
+            Self::Role
+        } else if name == ROLE_BINDING_RESOURCE_TYPE {
+            Self::RoleBinding
+        } else {
+            Self::Other
+        }
+    }
+
+    /// Whether this class is authority the prior graph reads.
+    pub const fn is_authority(self) -> bool {
+        matches!(self, Self::Role | Self::RoleBinding)
+    }
+}
+
+impl ProjectionRow<'_> {
+    /// The class this row contributes to the prior graph.
+    pub fn kind(&self) -> AuthorityRowKind {
+        AuthorityRowKind::of_reference(self.reference)
+    }
+}
+
+/// Why a stored projection cannot be read as a prior accepted graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AcceptedGraphError {
+    /// Two rows claimed the same resource reference, so which bytes this
+    /// graph holds for that reference would be a coin flip.
+    DuplicateRow,
+    /// A row of an authority resource type carried bytes that do not decode as
+    /// that resource's contract. The row is refused rather than decoded with
+    /// its authority quietly dropped.
+    UndecodableRow,
+}
+
+impl core::fmt::Display for AcceptedGraphError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::DuplicateRow => f.write_str("the projection holds two rows for one reference"),
+            Self::UndecodableRow => {
+                f.write_str("an authority row's committed bytes do not decode as its contract")
+            }
+        }
+    }
+}
+
+impl std::error::Error for AcceptedGraphError {}
 
 // ---------------------------------------------------------------------------
 // Request shape
@@ -351,6 +449,51 @@ impl AcceptedGraph {
     /// Whether this graph's deployment root is exactly `subject`.
     pub fn is_root(&self, subject: &AuthoritySubject) -> bool {
         &self.root_subject == subject
+    }
+
+    /// Read a stored projection as the prior accepted graph (KTD7).
+    ///
+    /// The broker stores the projection, so this is the one place its stored
+    /// rows become an [`AcceptedGraph`] the evaluator reads. It is additive:
+    /// it constructs the same value [`Self::with_role`] and
+    /// [`Self::with_role_binding`] construct, from bytes rather than from
+    /// already-decoded values, so a graph built here decides exactly what a
+    /// graph built by hand from the same rows decides.
+    ///
+    /// A row is classified by the resource type's own canonical constant in
+    /// the contract crate that declares it, never by a private table of type
+    /// name strings. A row of an authority resource type whose bytes do not
+    /// decode as that contract is refused rather than decoded with its
+    /// authority dropped, and two rows for one reference are refused rather
+    /// than resolved by insertion order. A row of any other type contributes
+    /// nothing here: the graph holds the authorization facts, and the broker's
+    /// own projection stores the rest.
+    pub fn from_canonical_rows<'a>(
+        zone: ZoneId,
+        store: StoreIncarnation,
+        root_subject: AuthoritySubject,
+        rows: impl IntoIterator<Item = ProjectionRow<'a>>,
+    ) -> Result<Self, AcceptedGraphError> {
+        let mut graph = Self::new(zone, store, root_subject);
+        for row in rows {
+            let bytes = row.admitted;
+            if row.kind() == AuthorityRowKind::Role {
+                if graph.roles.contains_key(row.reference) {
+                    return Err(AcceptedGraphError::DuplicateRow);
+                }
+                let role: AuthorizedRole = serde_json::from_slice(&bytes)
+                    .map_err(|_| AcceptedGraphError::UndecodableRow)?;
+                graph.roles.insert(row.reference.clone(), role);
+            } else if row.kind() == AuthorityRowKind::RoleBinding {
+                if graph.role_bindings.contains_key(row.reference) {
+                    return Err(AcceptedGraphError::DuplicateRow);
+                }
+                let binding: RoleBindingSpec = serde_json::from_slice(&bytes)
+                    .map_err(|_| AcceptedGraphError::UndecodableRow)?;
+                graph.role_bindings.insert(row.reference.clone(), binding);
+            }
+        }
+        Ok(graph)
     }
 }
 

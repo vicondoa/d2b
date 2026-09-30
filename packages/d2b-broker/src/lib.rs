@@ -36,6 +36,11 @@
 // asserts the production binary compiles clean.
 
 pub mod audit;
+// The broker's admitted authority projection (U7, KTD6-KTD7): the serialized
+// per-Zone worker that orders PrepareChange, CommitChange,
+// cancellation/recovery, and BeginEffect, and owns the projection cursor,
+// prepared fences, and effect/reservation journal.
+pub mod authority_projection;
 pub mod catalog;
 pub mod envelope;
 pub mod fd_passing;

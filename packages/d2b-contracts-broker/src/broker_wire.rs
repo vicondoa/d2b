@@ -19,8 +19,9 @@ use d2b_contracts_resource::v3::process::{
     CapabilityClass, EnvironmentClass, NamespaceClass, UserNamespaceSpec,
 };
 use d2b_contracts_resource::v3::{
-    ActivationRunnerInput, IfName, ResourceBundleGenerationId, ResourceGeneration, ResourceRef,
-    ResourceUid, execution_policy::ExecutionDomain,
+    ActivationRunnerInput, AdmissionStage, AuthoritySubject, DesiredDigest,
+    DesiredRevision, IfName, RefusalReason, ResourceBundleGenerationId, ResourceGeneration,
+    ResourceRef, ResourceUid, StoreIncarnation, ZoneDesiredSequence, execution_policy::ExecutionDomain,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -346,6 +347,17 @@ pub struct ForwardContext {
     pub guest_generation: u64,
     /// The initiating identity as the broker classified the caller.
     pub initiating_identity: String,
+    /// The Zone's last durably accepted desired sequence when the block was
+    /// minted (KTD6-KTD7).
+    ///
+    /// The block binds the call to the projection the broker admitted it
+    /// under, so a change the broker accepts afterwards fences the call: the
+    /// receiving leg compares this field against the Zone's current accepted
+    /// sequence and refuses the mismatch rather than serving a call whose
+    /// authority has already moved.
+    pub accepted_sequence: ZoneDesiredSequence,
+    /// The canonical digest committed at [`Self::accepted_sequence`].
+    pub accepted_digest: DesiredDigest,
     /// The operation's deadline budget, in milliseconds, served by the
     /// receiving leg as the per-call handler deadline.
     pub deadline_ms: u64,
@@ -3168,6 +3180,1139 @@ pub struct PollChildReapedResponse {
     pub notifications: Vec<ChildReapedNotification>,
 }
 
+// ---------------------------------------------------------------------------
+// Authority publication (U7, KTD6-KTD7)
+// ---------------------------------------------------------------------------
+//
+// KTD6 freezes, commits, publishes, and acknowledges one authority mutation at
+// a time; KTD7 gives the broker an admitted projection rather than a second
+// desired store. The four message families those two decisions need are
+// declared here, beside the origination carrier they ride: a bounded
+// snapshot, a change, a fence, and an acknowledgment.
+//
+// Two properties are structural rather than conventional.
+//
+// *Every message names the exact transaction, cursor, and digest it is about.*
+// The Zone, the store incarnation, the expected predecessor sequence and
+// digest, the committed sequence and digest, the staged transaction identity,
+// and the canonical digest travel on each message rather than being inferred
+// from arrival order, so a message that arrives out of order, twice, or for
+// another Zone is refused by its own contents instead of being applied to
+// whatever the broker happens to be holding.
+//
+// *The bounds are declared, not implied.* A snapshot is transferred in
+// bounded chunks carrying the transaction id, the ordinal, the total count,
+// and - on the final message - the digest of the whole document. One snapshot
+// is in progress per Zone, the queue and byte ceilings are explicit, and no
+// partial snapshot ever becomes active: a gap, a conflicting transaction, a
+// missing chunk, an old epoch, or a digest mismatch leaves the Zone fenced and
+// requires a full resynchronization.
+
+/// The largest payload one publication chunk may carry.
+///
+/// The chunks cross as canonical JSON on the same frame the origination leg
+/// already uses, whose ceiling is one mebibyte; this value keeps a chunk's
+/// encoded frame comfortably inside that ceiling rather than leaving the
+/// transport to discover the overflow.
+pub const MAX_PUBLICATION_CHUNK_BYTES: usize = 48 * 1024;
+
+/// The most chunks one snapshot may be split across.
+///
+/// Bounded so a publisher that never finishes cannot hold an unbounded
+/// reassembly buffer, and set above the count
+/// [`MAX_PUBLICATION_SNAPSHOT_BYTES`] needs at the chunk ceiling so a
+/// complete snapshot at the byte ceiling still fits.
+pub const MAX_PUBLICATION_CHUNKS: u32 = 2048;
+
+/// The most bytes one snapshot document may carry.
+pub const MAX_PUBLICATION_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
+
+/// The bound on admitted-but-unstarted publication commands.
+pub const MAX_PUBLICATION_QUEUE: usize = 64;
+
+/// The bound on admitted-but-unstarted control commands.
+///
+/// The control lane is the fence's way out, so it is bounded independently
+/// and stays serviceable when the ordinary lane is busy: a control action can
+/// only reduce use or recover known state, so admitting fewer of them costs
+/// nothing.
+pub const MAX_PUBLICATION_CONTROL_QUEUE: usize = 16;
+
+/// The most rows one snapshot or one change may carry.
+pub const MAX_PUBLICATION_ROWS: usize = 4096;
+
+/// A session named for a Zone other than the one the message carries.
+pub const PUBLICATION_WRONG_ZONE: &str = "publication-wrong-zone";
+/// A session, epoch, incarnation, or binding this broker never minted or no
+/// longer holds.
+pub const PUBLICATION_SESSION_INVALID: &str = "publication-session-invalid";
+/// A well-formed session presented against a Zone, incarnation, or cursor it
+/// was not bound to.
+pub const PUBLICATION_SESSION_BOUND_ELSEWHERE: &str = "publication-session-bound-elsewhere";
+/// A transaction this broker holds no prepared identity for.
+pub const PUBLICATION_UNKNOWN_TRANSACTION: &str = "publication-unknown-transaction";
+/// The same transaction identity presented with different committed bytes.
+pub const PUBLICATION_DUPLICATE_TRANSACTION: &str = "publication-duplicate-transaction";
+/// A stale predecessor, or an attempt to move the projection below the last
+/// durably accepted sequence.
+pub const PUBLICATION_STALE_PREDECESSOR: &str = "publication-stale-predecessor";
+/// A second snapshot opened while one is already in progress for the Zone.
+pub const PUBLICATION_SNAPSHOT_IN_PROGRESS: &str = "publication-snapshot-in-progress";
+/// A chunk that is not the next ordinal, or a document that ended before all
+/// its declared chunks arrived.
+pub const PUBLICATION_SNAPSHOT_INCOMPLETE: &str = "publication-snapshot-incomplete";
+/// A snapshot, chunk, or row set above its declared ceiling.
+pub const PUBLICATION_SNAPSHOT_TOO_LARGE: &str = "publication-snapshot-too-large";
+/// Committed bytes whose digest is not the digest the message declared.
+pub const PUBLICATION_DIGEST_MISMATCH: &str = "publication-digest-mismatch";
+/// A prepared fence this broker still holds.
+pub const PUBLICATION_FENCE_HELD: &str = "publication-fence-held";
+/// A pending launch the broker cannot yet prove exited or account as a
+/// pre-fence release.
+pub const PUBLICATION_EFFECT_UNPROVEN: &str = "publication-effect-unproven";
+/// A broker restart that has not been reconciled against the manager's
+/// outstanding transactions.
+pub const PUBLICATION_RECONCILIATION_REQUIRED: &str = "publication-reconciliation-required";
+/// A control action not bound to an existing transaction or effect identity.
+pub const PUBLICATION_CONTROL_NOT_BOUND: &str = "publication-control-not-bound";
+
+/// The exact staged transaction identity one publication names.
+///
+/// It is the manager's durable transaction identity in its canonical
+/// rendering: the value names which committed bytes a prepare, a commit, a
+/// cancel, and a replay are all about, and it is never a credential.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct PublicationTransactionId(String);
+
+impl core::fmt::Debug for PublicationTransactionId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("PublicationTransactionId(<transaction>)")
+    }
+}
+
+impl core::fmt::Display for PublicationTransactionId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl PublicationTransactionId {
+    /// Read a transaction identity off the wire.
+    pub fn parse(value: impl Into<String>) -> Result<Self, PublicationWireError> {
+        String::try_into(value.into())
+    }
+
+    /// The canonical transaction identity as it crosses the wire.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for PublicationTransactionId {
+    type Error = PublicationWireError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if value.is_empty() || value.len() > MAX_TRANSACTION_ID_BYTES {
+            return Err(PublicationWireError::Token);
+        }
+        if !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte) || byte == b'-')
+        {
+            return Err(PublicationWireError::Token);
+        }
+        Ok(Self(value))
+    }
+}
+
+impl From<PublicationTransactionId> for String {
+    fn from(value: PublicationTransactionId) -> Self {
+        value.0
+    }
+}
+
+impl JsonSchema for PublicationTransactionId {
+    fn schema_name() -> String {
+        "PublicationTransactionId".to_owned()
+    }
+
+    fn json_schema(_: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        let mut schema = schemars::schema::SchemaObject {
+            instance_type: Some(schemars::schema::SingleOrVec::Single(Box::new(
+                schemars::schema::InstanceType::String,
+            ))),
+            ..Default::default()
+        };
+        schema.string().min_length = Some(1);
+        schema.string().max_length = Some(MAX_TRANSACTION_ID_BYTES as u32);
+        schemars::schema::Schema::Object(schema)
+    }
+}
+
+/// The most bytes one transaction identity may carry.
+pub const MAX_TRANSACTION_ID_BYTES: usize = 64;
+
+/// The identity of one admitted effect the broker's journal accounts for.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct PublicationEffectId(String);
+
+impl core::fmt::Debug for PublicationEffectId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("PublicationEffectId(<effect>)")
+    }
+}
+
+impl core::fmt::Display for PublicationEffectId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl PublicationEffectId {
+    /// Read an effect identity off the wire.
+    pub fn parse(value: impl Into<String>) -> Result<Self, PublicationWireError> {
+        String::try_into(value.into())
+    }
+
+    /// The canonical effect identity as it crosses the wire.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for PublicationEffectId {
+    type Error = PublicationWireError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if value.is_empty() || value.len() > MAX_EFFECT_ID_BYTES {
+            return Err(PublicationWireError::Token);
+        }
+        if !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte) || byte == b'-')
+        {
+            return Err(PublicationWireError::Token);
+        }
+        Ok(Self(value))
+    }
+}
+
+impl From<PublicationEffectId> for String {
+    fn from(value: PublicationEffectId) -> Self {
+        value.0
+    }
+}
+
+impl JsonSchema for PublicationEffectId {
+    fn schema_name() -> String {
+        "PublicationEffectId".to_owned()
+    }
+
+    fn json_schema(_: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        let mut schema = schemars::schema::SchemaObject {
+            instance_type: Some(schemars::schema::SingleOrVec::Single(Box::new(
+                schemars::schema::InstanceType::String,
+            ))),
+            ..Default::default()
+        };
+        schema.string().min_length = Some(1);
+        schema.string().max_length = Some(MAX_EFFECT_ID_BYTES as u32);
+        schemars::schema::Schema::Object(schema)
+    }
+}
+
+/// The most bytes one effect identity may carry.
+pub const MAX_EFFECT_ID_BYTES: usize = 64;
+
+/// A publication value that is not in its canonical shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublicationWireError {
+    /// A bounded identity token carried characters outside its alphabet or
+    /// exceeded its ceiling.
+    Token,
+}
+
+impl core::fmt::Display for PublicationWireError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Token => f.write_str("publication identity token is not canonical"),
+        }
+    }
+}
+
+impl std::error::Error for PublicationWireError {}
+
+impl serde::de::Error for PublicationWireError {
+    fn custom<T: core::fmt::Display>(message: T) -> Self {
+        let _ = message;
+        Self::Token
+    }
+}
+
+/// A broker-minted Zone publication session.
+///
+/// The value is derived from state only the broker holds, so a provider
+/// handler can copy the bytes it observes and still cannot produce a session
+/// the broker accepts: the broker recomputes the value and compares. It is
+/// bound to one Zone, one store incarnation, one broker epoch, one
+/// authenticated initiating subject, and the accepted cursor at mint time, and
+/// every message that carries it repeats that binding so a session cannot be
+/// replayed for another Zone or another store generation.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct PublicationSession(String);
+
+impl core::fmt::Debug for PublicationSession {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("PublicationSession(<session>)")
+    }
+}
+
+impl PublicationSession {
+    /// Read a session token off the wire.
+    ///
+    /// Parsing admits a value, never a session: the token is derived from
+    /// broker-private state and the broker recomputes it and compares, so a
+    /// value a caller assembled by hand - a provider handler copying the
+    /// bytes it observed, for instance - names nothing the broker admits.
+    pub fn parse(value: impl Into<String>) -> Result<Self, PublicationWireError> {
+        let value = value.into();
+        if value.is_empty() || value.len() > MAX_SESSION_TOKEN_BYTES {
+            return Err(PublicationWireError::Token);
+        }
+        if !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        {
+            return Err(PublicationWireError::Token);
+        }
+        Ok(Self(value))
+    }
+
+    /// The canonical session token as it crosses the wire.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl JsonSchema for PublicationSession {
+    fn schema_name() -> String {
+        "PublicationSession".to_owned()
+    }
+
+    fn json_schema(_: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        let mut schema = schemars::schema::SchemaObject {
+            instance_type: Some(schemars::schema::SingleOrVec::Single(Box::new(
+                schemars::schema::InstanceType::String,
+            ))),
+            ..Default::default()
+        };
+        schema.string().min_length = Some(1);
+        schema.string().max_length = Some(MAX_SESSION_TOKEN_BYTES as u32);
+        schemars::schema::Schema::Object(schema)
+    }
+}
+
+/// The most bytes one session token may carry.
+pub const MAX_SESSION_TOKEN_BYTES: usize = 128;
+
+/// What one publication session is bound to.
+///
+/// The binding is the fence in value form: a session minted for one Zone,
+/// store incarnation, broker epoch, and authenticated initiating subject
+/// cannot drive a message about another, and it is bound to the cursor the
+/// broker held when it was minted so a manager whose own view has moved on
+/// re-establishes the session instead of publishing against a stale one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PublicationSessionBinding {
+    /// The Zone this session may publish for.
+    pub zone: String,
+    /// The store generation this session may publish about.
+    pub store_incarnation: StoreIncarnation,
+    /// The broker epoch this session was minted under.
+    pub broker_epoch: u64,
+    /// The authenticated initiating subject the trusted daemon admission
+    /// coordinator vouched for when it asked for the session.
+    pub initiating_subject: AuthoritySubject,
+    /// The projection cursor the broker held when it minted the session.
+    pub accepted: AuthorityCursor,
+}
+
+/// One point on a Zone's desired sequence, with the digest committed there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuthorityCursor {
+    /// The Zone-wide desired sequence.
+    pub sequence: ZoneDesiredSequence,
+    /// The canonical digest of the committed desired bytes at that sequence.
+    pub digest: DesiredDigest,
+}
+
+impl AuthorityCursor {
+    /// The cursor a freshly initialized Zone starts at.
+    ///
+    /// Sequence zero has no committed desired bytes behind it, so its digest
+    /// is the digest of the empty canonical byte string. It is derived
+    /// rather than spelled as a literal so it cannot drift from the framing
+    /// every other digest in the tree uses.
+    pub fn initial() -> Self {
+        Self {
+            sequence: ZoneDesiredSequence::INITIAL,
+            digest: DesiredDigest::of(&[]),
+        }
+    }
+
+    /// Whether this cursor names a sequence this broker could have accepted.
+    pub const fn is_initial(&self) -> bool {
+        self.sequence.get() == 0
+    }
+}
+
+/// The domain tag framing one publication candidate's digest.
+///
+/// The digest names the exact committed bytes a change installs. It is
+/// non-secret freshness data: it identifies which bytes were published, never
+/// the right to act on them.
+pub const PUBLICATION_CANDIDATE_DOMAIN_TAG: &str = "d2b:v3:publication-candidate";
+
+/// The length-prefixed canonical encoding every publication digest is taken
+/// over.
+///
+/// Both legs derive their digests through the helpers below rather than
+/// framing the bytes themselves, so the manager and the broker cannot drift
+/// apart on what "the exact committed bytes" means.
+mod canonical {
+    /// Grow one canonical byte buffer.
+    pub(super) struct Canonical(Vec<u8>);
+
+    impl Canonical {
+        pub(super) fn new() -> Self {
+            Self(Vec::new())
+        }
+
+        pub(super) fn bytes(&mut self, value: &[u8]) {
+            self.0.extend_from_slice(&(value.len() as u64).to_be_bytes());
+            self.0.extend_from_slice(value);
+        }
+
+        pub(super) fn text(&mut self, value: &str) {
+            self.bytes(value.as_bytes());
+        }
+
+        pub(super) fn finish(self) -> Vec<u8> {
+            self.0
+        }
+    }
+}
+
+impl AuthorityProjectionRow {
+    /// The canonical bytes this row contributes to a change's digest.
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        let mut out = canonical::Canonical::new();
+        out.text(&self.resource_ref.to_string());
+        out.text(&self.desired_revision.get().to_string());
+        out.text(self.desired_digest.as_str());
+        out.bytes(&self.admitted);
+        out.finish()
+    }
+}
+
+/// The digest of the exact committed bytes one change installs.
+///
+/// The rows and the retirements are both covered, in the order the message
+/// carries them, so a change that swaps two rows for each other has a
+/// different digest than either order alone.
+pub fn publication_candidate_digest(
+    rows: &[AuthorityProjectionRow],
+    removed: &[ResourceRef],
+) -> DesiredDigest {
+    let mut out = canonical::Canonical::new();
+    out.text(PUBLICATION_CANDIDATE_DOMAIN_TAG);
+    out.text(&rows.len().to_string());
+    for row in rows {
+        out.bytes(&row.canonical_bytes());
+    }
+    out.text(&removed.len().to_string());
+    for reference in removed {
+        out.text(&reference.to_string());
+    }
+    DesiredDigest::of(&out.finish())
+}
+
+/// The exact bytes one snapshot document transfers.
+///
+/// The document's own typed shape is the encoding, so both legs digest the
+/// same bytes the same way and a mismatch is a real difference in the
+/// published document rather than a difference in framing.
+pub fn publication_snapshot_bytes(snapshot: &AuthoritySnapshot) -> Vec<u8> {
+    serde_json::to_vec(snapshot).expect("a publication snapshot always serializes")
+}
+
+/// The digest of one snapshot document's exact bytes.
+pub fn publication_snapshot_digest(snapshot: &AuthoritySnapshot) -> DesiredDigest {
+    DesiredDigest::of(&publication_snapshot_bytes(snapshot))
+}
+
+/// What one committed authority row contributes to the broker's projection.
+///
+/// The row's admitted bytes travel whole and canonical: the broker stores the
+/// projection, so it needs the bytes it accepted, and it re-evaluates policy
+/// against the rows it already accepted rather than against a summary the
+/// candidate could shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuthorityProjectionRow {
+    /// The exact resource the row was accepted for.
+    pub resource_ref: ResourceRef,
+    /// The row's desired revision.
+    pub desired_revision: DesiredRevision,
+    /// The digest of the committed desired bytes.
+    pub desired_digest: DesiredDigest,
+    /// The canonical admitted bytes of the row.
+    ///
+    /// They cross as the contract's own canonical encoding rather than as a
+    /// re-spelled JSON document, so the digest the broker recomputes is taken
+    /// over the bytes the store committed and the receiving leg parses them
+    /// with the same parser the store wrote them with.
+    pub admitted: Vec<u8>,
+}
+
+/// The full document one bounded snapshot transfers.
+///
+/// It carries the Zone's admitted resource data and graph relationships, not
+/// runtime status: status is memory-local and is not authority. It contains
+/// no credential bytes, and the prepared transaction identity outstanding
+/// across a resynchronization travels with it so a resync cannot lose the
+/// transaction the broker already froze.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuthoritySnapshot {
+    /// The Zone the snapshot describes.
+    pub zone: String,
+    /// The store generation the snapshot was taken in.
+    pub store_incarnation: StoreIncarnation,
+    /// The sequence and digest this snapshot installs.
+    pub cursor: AuthorityCursor,
+    /// The verified deployment graph's own identity, which bootstraps the
+    /// accepted root rather than being selected by the snapshot.
+    pub root_subject: AuthoritySubject,
+    /// Every admitted row the snapshot transfers.
+    pub rows: Vec<AuthorityProjectionRow>,
+    /// The prepared transaction this broker still holds, if any. A
+    /// resynchronization carries it forward rather than clearing it.
+    pub outstanding: Option<PublicationTransactionId>,
+}
+
+/// The bounds the broker admits publication traffic under.
+///
+/// The broker declares its own ceilings instead of leaving the manager to
+/// assume them, so the two legs cannot disagree about what "bounded" means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PublicationLimits {
+    /// The largest chunk payload.
+    pub max_chunk_bytes: usize,
+    /// The most chunks one snapshot may use.
+    pub max_chunks: u32,
+    /// The most bytes one snapshot document may carry.
+    pub max_snapshot_bytes: u64,
+    /// The most rows one snapshot or change may carry.
+    pub max_rows: usize,
+    /// The bound on the ordinary publication lane.
+    pub max_queue: usize,
+    /// The bound on the control lane.
+    pub max_control_queue: usize,
+}
+
+impl Default for PublicationLimits {
+    fn default() -> Self {
+        Self {
+            max_chunk_bytes: MAX_PUBLICATION_CHUNK_BYTES,
+            max_chunks: MAX_PUBLICATION_CHUNKS,
+            max_snapshot_bytes: MAX_PUBLICATION_SNAPSHOT_BYTES,
+            max_rows: MAX_PUBLICATION_ROWS,
+            max_queue: MAX_PUBLICATION_QUEUE,
+            max_control_queue: MAX_PUBLICATION_CONTROL_QUEUE,
+        }
+    }
+}
+
+/// The open of one Zone publication session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenPublicationSessionRequest {
+    /// The Zone the publisher speaks for.
+    pub zone: String,
+    /// The store generation the publisher's desired rows live in.
+    pub store_incarnation: StoreIncarnation,
+    /// The broker epoch the publisher last observed.
+    pub broker_epoch: u64,
+    /// The authenticated initiating subject the trusted daemon admission
+    /// coordinator vouched for.
+    pub initiating_subject: AuthoritySubject,
+    /// The publisher's own view of the accepted cursor.
+    pub accepted: AuthorityCursor,
+}
+
+/// The broker's answer to one session open.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenPublicationSessionResponse {
+    /// The broker-minted session.
+    pub session: PublicationSession,
+    /// What the session is bound to.
+    pub binding: PublicationSessionBinding,
+    /// The broker's declared bounds.
+    pub limits: PublicationLimits,
+}
+
+/// Open a bounded snapshot for one Zone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BeginSnapshotRequest {
+    /// The transaction identity this snapshot belongs to.
+    pub transaction: PublicationTransactionId,
+    /// The store generation the snapshot was taken in.
+    pub store_incarnation: StoreIncarnation,
+    /// The cursor the snapshot will install.
+    pub cursor: AuthorityCursor,
+    /// How many chunks the document is split across.
+    pub total_chunks: u32,
+    /// The total bytes the document carries, checked against the ceiling
+    /// before the first chunk is accepted.
+    pub total_bytes: u64,
+}
+
+/// One bounded chunk of a snapshot document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SnapshotChunkRequest {
+    /// The transaction identity the chunk belongs to.
+    pub transaction: PublicationTransactionId,
+    /// The zero-based ordinal of this chunk.
+    pub ordinal: u32,
+    /// The total chunk count the document declared.
+    pub total_chunks: u32,
+    /// The chunk's canonical bytes.
+    pub payload: Vec<u8>,
+}
+
+/// The final chunk's companion: the digest of the whole document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EndSnapshotRequest {
+    /// The transaction identity the document belongs to.
+    pub transaction: PublicationTransactionId,
+    /// The total chunk count the document declared.
+    pub total_chunks: u32,
+    /// The digest of the exact bytes all chunks contributed.
+    pub digest: DesiredDigest,
+}
+
+/// The authority change a prepare validates against the prior accepted graph.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PrepareChangeRequest {
+    /// The exact staged transaction identity.
+    pub transaction: PublicationTransactionId,
+    /// The store generation the candidate was staged in.
+    pub store_incarnation: StoreIncarnation,
+    /// The predecessor the manager saw accepted. A change that does not name
+    /// it exactly is stale.
+    pub expected: AuthorityCursor,
+    /// The cursor this change will commit at.
+    pub committed: AuthorityCursor,
+    /// The digest of the exact committed bytes.
+    pub digest: DesiredDigest,
+    /// The authenticated initiating subject of the mutation.
+    pub subject: AuthoritySubject,
+    /// What the change does to each row it names.
+    pub kind: PublicationMutationKind,
+    /// The rows the change introduces or rewrites.
+    pub candidate: Vec<AuthorityProjectionRow>,
+    /// The rows the change retires.
+    pub removed: Vec<ResourceRef>,
+}
+
+/// The exact committed projection a commit installs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CommitChangeRequest {
+    /// The exact staged transaction identity.
+    pub transaction: PublicationTransactionId,
+    /// The store generation the rows were committed in.
+    pub store_incarnation: StoreIncarnation,
+    /// The predecessor the prepare validated against.
+    pub expected: AuthorityCursor,
+    /// The cursor this commit installs.
+    pub committed: AuthorityCursor,
+    /// The digest of the exact committed bytes.
+    pub digest: DesiredDigest,
+    /// The rows the commit installed.
+    pub rows: Vec<AuthorityProjectionRow>,
+    /// The rows the commit retired.
+    pub removed: Vec<ResourceRef>,
+}
+
+/// What one durable authority change does to the rows it names.
+///
+/// The wire spells the same four kinds the pure evaluator does. A change that
+/// selects an authority resource is still a create or an update on that
+/// resource type: naming a `RoleBinding` is not a different verb, so it is
+/// evaluated against the prior accepted graph like every other change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum PublicationMutationKind {
+    /// The rows did not exist.
+    Create,
+    /// The rows' committed bytes changed.
+    UpdateSpec,
+    /// Only the rows' metadata changed.
+    UpdateMetadata,
+    /// The rows are being retired.
+    Delete,
+}
+
+impl PublicationMutationKind {
+    /// Every kind, in declaration order.
+    pub const ALL: [Self; 4] =
+        [Self::Create, Self::UpdateSpec, Self::UpdateMetadata, Self::Delete];
+
+    /// Whether this kind can only reduce the authority a Zone holds.
+    ///
+    /// A delete removes grants and rows, so a commit of this kind must prove
+    /// every affected pending launch exited before it may be acknowledged. A
+    /// create or an update may add authority, so it has no such proof
+    /// obligation - but a commit that removes a row the accepted graph still
+    /// grants through is refused on the prior-state evaluation instead.
+    pub const fn is_reducing(self) -> bool {
+        matches!(self, Self::Delete)
+    }
+}
+
+/// The exact transaction a cancel or a replay is about.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CancelTransactionRequest {
+    /// The exact prepared transaction identity to release.
+    pub transaction: PublicationTransactionId,
+    /// The store generation the transaction was prepared in.
+    pub store_incarnation: StoreIncarnation,
+    /// The digest of the prepared candidate, so a cancel cannot release a
+    /// fence prepared for different bytes under the same identity.
+    pub digest: DesiredDigest,
+}
+
+/// A full resynchronization after a broker restart or a fenced transfer.
+///
+/// It carries the snapshot in bounded chunks, so it is the same message
+/// family with a declared intent: the Zone is reconciled rather than served,
+/// and the accepted lower bound and any outstanding prepared transaction
+/// survive it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResynchronizeRequest {
+    /// The transaction identity the resynchronization is carried under.
+    pub transaction: PublicationTransactionId,
+    /// The store generation the snapshot was taken in.
+    pub store_incarnation: StoreIncarnation,
+    /// The cursor the broker must not move below while reconciling.
+    pub accepted_floor: AuthorityCursor,
+    /// The cursor the snapshot installs.
+    pub cursor: AuthorityCursor,
+}
+
+/// The one control action a fence still admits.
+///
+/// The fence blocks new ordinary use, not the actions needed to end it. Each
+/// control action is bound to the existing transaction or effect identity it
+/// acts on and can only reduce use or recover known state, so it can never
+/// create a binding, a consumer-serving child privilege, or a source claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum PublicationControlKind {
+    /// Read already-owned state.
+    Observe,
+    /// Close new use of an existing relationship.
+    Revoke,
+    /// Stop an existing effect.
+    Stop,
+    /// Detach the consumer from a relationship whose helper use remains.
+    Detach,
+    /// Drain a helper leg bound to the existing reservation.
+    HelperDrain,
+    /// Release the reservation behind a relationship.
+    ReservationRelease,
+}
+
+impl PublicationControlKind {
+    /// Every kind, in declaration order.
+    pub const ALL: [Self; 6] = [
+        Self::Observe,
+        Self::Revoke,
+        Self::Stop,
+        Self::Detach,
+        Self::HelperDrain,
+        Self::ReservationRelease,
+    ];
+
+    /// The lifecycle stage this action belongs to.
+    ///
+    /// Every control kind resolves to a stage that does not admit new use,
+    /// which is the structural form of the rule: the enumeration cannot
+    /// express a control action that grants.
+    pub const fn stage(self) -> AdmissionStage {
+        match self {
+            Self::Observe => AdmissionStage::Recover,
+            Self::Revoke => AdmissionStage::Revoke,
+            Self::Stop => AdmissionStage::Drain,
+            Self::Detach => AdmissionStage::Drain,
+            Self::HelperDrain => AdmissionStage::Drain,
+            Self::ReservationRelease => AdmissionStage::Release,
+        }
+    }
+}
+
+/// One exact control action on an existing transaction or effect.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ControlActionRequest {
+    /// The transaction whose fence or prepared identity this action acts
+    /// under. An action naming a transaction this broker holds no prepared
+    /// identity for is refused rather than treated as a new request.
+    pub transaction: PublicationTransactionId,
+    /// The existing effect this action acts on, when it acts on one.
+    pub effect: Option<PublicationEffectId>,
+    /// The relationship the action reduces or recovers.
+    pub target: ResourceRef,
+    /// Which control action this is.
+    pub kind: PublicationControlKind,
+}
+
+/// One effect admission under the Zone's currently accepted projection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BeginEffectRequest {
+    /// The effect identity the broker's journal accounts for.
+    pub effect: PublicationEffectId,
+    /// The transaction whose acceptance the effect is admitted under.
+    pub transaction: PublicationTransactionId,
+    /// The exact accepted projection the effect is fenced against.
+    pub accepted: AuthorityCursor,
+    /// The authenticated initiating subject of the effect.
+    pub subject: AuthoritySubject,
+    /// The exact resource the effect acts on.
+    pub target: ResourceRef,
+}
+
+/// One child's exec-release request.
+///
+/// A launch that passed `BeginEffect` but has not completed its exec and
+/// registration handshake is pending new use, not an already-running
+/// workload. This is the gate that decides which of the two it is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReleaseEffectRequest {
+    /// The effect identity the release is for.
+    pub effect: PublicationEffectId,
+    /// The exact accepted projection the effect was admitted under.
+    pub accepted: AuthorityCursor,
+}
+
+/// One completed child outcome reported outside the authority worker's
+/// mailbox.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EffectExitRequest {
+    /// The effect identity that ended.
+    pub effect: PublicationEffectId,
+    /// The transaction the effect was admitted under.
+    pub transaction: PublicationTransactionId,
+    /// Whether the child reached exec before it ended.
+    pub reached_exec: bool,
+}
+
+/// Every publication message, over the established origination leg.
+///
+/// The family is the four messages KTD6-KTD7 need: a bounded snapshot, a
+/// change, a fence, and an acknowledgment. The envelope carries the session
+/// beside the request so a request is never served on the connection alone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", content = "payload")]
+pub enum AuthorityPublicationRequest {
+    /// Open the bounded snapshot transfer for this Zone.
+    BeginSnapshot(BeginSnapshotRequest),
+    /// One chunk of that transfer.
+    SnapshotChunk(SnapshotChunkRequest),
+    /// Close the transfer, naming the digest of the whole document.
+    EndSnapshot(EndSnapshotRequest),
+    /// Durably freeze the Zone's new-effect admission for one candidate.
+    PrepareChange(PrepareChangeRequest),
+    /// Advance the projection to one exact committed state.
+    CommitChange(CommitChangeRequest),
+    /// Release one prepared identity that committed nothing.
+    CancelTransaction(CancelTransactionRequest),
+    /// Reinstall a full snapshot without losing the accepted lower bound.
+    Resynchronize(ResynchronizeRequest),
+    /// One bounded control action on existing state.
+    ControlAction(ControlActionRequest),
+    /// Admit one effect under the currently accepted projection.
+    BeginEffect(BeginEffectRequest),
+    /// Authorize one pending launch's exec.
+    ReleaseEffect(ReleaseEffectRequest),
+    /// Report one child's completion.
+    EffectExit(EffectExitRequest),
+}
+
+impl AuthorityPublicationRequest {
+    /// The stable operation name an audit record keys on.
+    pub fn op_name(&self) -> &'static str {
+        match self {
+            Self::BeginSnapshot(_) => "AuthorityBeginSnapshot",
+            Self::SnapshotChunk(_) => "AuthoritySnapshotChunk",
+            Self::EndSnapshot(_) => "AuthorityEndSnapshot",
+            Self::PrepareChange(_) => "AuthorityPrepareChange",
+            Self::CommitChange(_) => "AuthorityCommitChange",
+            Self::CancelTransaction(_) => "AuthorityCancelTransaction",
+            Self::Resynchronize(_) => "AuthorityResynchronize",
+            Self::ControlAction(_) => "AuthorityControlAction",
+            Self::BeginEffect(_) => "AuthorityBeginEffect",
+            Self::ReleaseEffect(_) => "AuthorityReleaseEffect",
+            Self::EffectExit(_) => "AuthorityEffectExit",
+        }
+    }
+
+    /// Whether this message may be refused by a control timeout without
+    /// unfreezing the Zone.
+    ///
+    /// Every publication message may: a control lane that gave up is still a
+    /// fenced Zone, never a thawed one.
+    pub const fn keeps_the_fence_on_timeout(self_ref: &Self) -> bool {
+        let _ = self_ref;
+        true
+    }
+}
+
+/// The open of one Zone publication session, as it crosses the origination
+/// leg.
+///
+/// The open is its own exchange because it is the one message that cannot
+/// carry a session: everything after it is served only under a session the
+/// trusted daemon admission coordinator vouched for, and the broker answers
+/// this one with the session and its binding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuthorityPublicationOpen {
+    /// What the trusted daemon admission coordinator vouches for.
+    pub request: OpenPublicationSessionRequest,
+}
+
+/// One request as it crosses the origination leg.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuthorityPublicationEnvelope {
+    /// The Zone the publisher speaks for. The session is bound to it, so a
+    /// session presented for one Zone cannot drive a message about another.
+    pub zone: String,
+    /// The publication request.
+    pub request: AuthorityPublicationRequest,
+    /// The Zone publication session the trusted daemon admission coordinator
+    /// vouched for. A request with no session, or a session this broker did
+    /// not mint for the message's own Zone, is refused.
+    pub session: PublicationSession,
+}
+
+/// The broker's one answer to a publication message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", content = "payload")]
+pub enum AuthorityPublicationResponse {
+    /// The request was refused, or the Zone stays fenced.
+    Refused(PublicationRefusal),
+    /// The Zone's projection state, after any accepted step.
+    Progressed(ZoneAuthorityState),
+    /// The broker durably froze the Zone's new-effect admission and returns
+    /// the prepared transaction identity.
+    Prepared(PreparedTransaction),
+    /// The broker accepted one exact committed revision. This is the
+    /// `AuthorityAccepted` outcome, and it says nothing about revocation:
+    /// release evidence remains a separate result.
+    Accepted(AcceptedAuthority),
+    /// One outstanding use reached its declared safe state. This is the
+    /// `RevocationConverged` outcome and is deliberately a different
+    /// response from [`Self::Accepted`].
+    RevocationConverged(RevocationConvergence),
+}
+
+/// One refusal, or one state that keeps the Zone fenced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PublicationRefusal {
+    /// The closed refusal code.
+    pub code: String,
+    /// The stage that refused.
+    pub stage: AdmissionStage,
+    /// The typed reason it refused.
+    pub reason: RefusalReason,
+    /// Whether the Zone is fenced after this refusal.
+    pub fenced: bool,
+    /// The Zone's projection state, so a manager can reconcile from the
+    /// refusal itself rather than issuing another round trip.
+    pub state: ZoneAuthorityState,
+}
+
+/// What a prepared fence durably holds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PreparedTransaction {
+    /// The exact transaction identity both sides now hold.
+    pub transaction: PublicationTransactionId,
+    /// The predecessor the candidate was validated against.
+    pub expected: AuthorityCursor,
+    /// The cursor the candidate will commit at.
+    pub committed: AuthorityCursor,
+    /// The digest of the exact candidate bytes.
+    pub digest: DesiredDigest,
+    /// Whether accepting this transaction would reduce the Zone's authority,
+    /// which is what makes the pending-launch proof obligation apply.
+    pub reducing: bool,
+    /// The Zone's state with the fence held.
+    pub state: ZoneAuthorityState,
+}
+
+/// One accepted revision: the `AuthorityAccepted` outcome.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AcceptedAuthority {
+    /// The exact transaction identity that was accepted.
+    pub transaction: PublicationTransactionId,
+    /// The accepted sequence.
+    pub sequence: ZoneDesiredSequence,
+    /// The accepted digest.
+    pub digest: DesiredDigest,
+    /// Whether accepting this transaction reduced the Zone's authority.
+    pub reducing: bool,
+    /// Whether the Zone's ordinary admission is unfrozen under the new graph.
+    pub unfrozen: bool,
+    /// The Zone's state after the acceptance.
+    pub state: ZoneAuthorityState,
+}
+
+/// One outstanding use that reached its declared safe state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RevocationConvergence {
+    /// The transaction whose reducing change drove this use to its end.
+    pub transaction: PublicationTransactionId,
+    /// The effect that ended.
+    pub effect: PublicationEffectId,
+    /// The relationship whose use ended.
+    pub target: ResourceRef,
+    /// Whether the use was proved exited or accounted as a pre-fence release.
+    pub proven: bool,
+    /// The Zone's state after the convergence.
+    pub state: ZoneAuthorityState,
+}
+
+/// How one Zone's projection stands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "posture", rename_all = "kebab-case")]
+pub enum ZoneAuthorityState {
+    /// This broker holds no projection for the Zone at all.
+    ///
+    /// A Zone is not unfenced before its first publication: it has no
+    /// accepted cursor to unfence against, so a caller reading this posture
+    /// learns there is no authority here rather than learning there is
+    /// authority without a fence.
+    Unprovisioned,
+    /// Ordinary admission is open under the accepted cursor.
+    Unfenced {
+        /// The store generation the projection describes.
+        store_incarnation: StoreIncarnation,
+        /// The last durably accepted cursor.
+        accepted: AuthorityCursor,
+    },
+    /// A prepared candidate holds the Zone's new-effect admission.
+    Fenced {
+        /// The store generation the projection describes.
+        store_incarnation: StoreIncarnation,
+        /// The last durably accepted cursor, which the fence does not move.
+        accepted: AuthorityCursor,
+        /// The prepared transaction identity.
+        transaction: PublicationTransactionId,
+        /// The cursor the prepared candidate will commit at.
+        committed: AuthorityCursor,
+    },
+    /// A bounded snapshot transfer is in progress; nothing is active yet.
+    SnapshotInProgress {
+        /// The store generation the projection describes.
+        store_incarnation: StoreIncarnation,
+        /// The last durably accepted cursor.
+        accepted: AuthorityCursor,
+        /// The transaction identity the transfer belongs to.
+        transaction: PublicationTransactionId,
+        /// How many chunks have been accepted.
+        received_chunks: u32,
+        /// How many chunks the document declared.
+        total_chunks: u32,
+    },
+    /// The broker restarted and has not been reconciled; no new effect is
+    /// admitted until the manager resynchronizes the accepted state and the
+    /// outstanding transactions.
+    Reconciling {
+        /// The store generation the persisted projection describes.
+        store_incarnation: StoreIncarnation,
+        /// The last durably accepted cursor, which survives the restart.
+        accepted: AuthorityCursor,
+        /// The prepared transaction that survived the restart, if any.
+        transaction: Option<PublicationTransactionId>,
+    },
+}
+
+impl ZoneAuthorityState {
+    /// The last durably accepted cursor, whatever the posture.
+    pub const fn accepted(&self) -> Option<&AuthorityCursor> {
+        match self {
+            Self::Unprovisioned => None,
+            Self::Unfenced { accepted, .. }
+            | Self::Fenced { accepted, .. }
+            | Self::SnapshotInProgress { accepted, .. }
+            | Self::Reconciling { accepted, .. } => Some(accepted),
+        }
+    }
+
+    /// The store generation the projection describes.
+    pub const fn store_incarnation(&self) -> Option<&StoreIncarnation> {
+        match self {
+            Self::Unprovisioned => None,
+            Self::Unfenced {
+                store_incarnation, ..
+            }
+            | Self::Fenced {
+                store_incarnation, ..
+            }
+            | Self::SnapshotInProgress {
+                store_incarnation, ..
+            }
+            | Self::Reconciling {
+                store_incarnation, ..
+            } => Some(store_incarnation),
+        }
+    }
+
+    /// Whether new ordinary effect admission is blocked.
+    pub const fn is_fenced(&self) -> bool {
+        !matches!(self, Self::Unfenced { .. })
+    }
+
+    /// Whether this broker holds a projection for the Zone.
+    pub const fn is_provisioned(&self) -> bool {
+        !matches!(self, Self::Unprovisioned)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4498,6 +5643,8 @@ mod tests {
             controller_generation: 4,
             guest_generation: 7,
             initiating_identity: "daemon".to_owned(),
+            accepted_sequence: ZoneDesiredSequence::INITIAL,
+            accepted_digest: DesiredDigest::of(&[]),
             deadline_ms: DEFAULT_CONTEXT_DEADLINE_MS,
         }
     }
@@ -4529,11 +5676,20 @@ mod tests {
         assert_eq!(json["controllerGeneration"], 4);
         assert_eq!(json["guestGeneration"], 7);
         assert_eq!(json["initiatingIdentity"], "daemon");
+        assert_eq!(json["acceptedSequence"], 0);
         assert_eq!(json["deadlineMs"], DEFAULT_CONTEXT_DEADLINE_MS);
-        assert_eq!(
-            json.as_object().map(|fields| fields.len()),
-            Some(7),
-            "the context is a closed block: seven fields, nothing else"
+    }
+
+    #[test]
+    // The block is closed, and the property is enforced structurally rather
+    // than by counting fields: a mutator that adds or renames one is refused on
+    // decode instead of being decoded with its attestation quietly changed.
+    fn a_context_with_an_extra_field_is_refused() {
+        let mut json = serde_json::to_value(minted_context()).expect("serializes");
+        json["acceptedEpoch"] = serde_json::json!(99);
+        assert!(
+            serde_json::from_value::<ForwardContext>(json).is_err(),
+            "a context carrying a field this contract does not declare is refused"
         );
     }
 
