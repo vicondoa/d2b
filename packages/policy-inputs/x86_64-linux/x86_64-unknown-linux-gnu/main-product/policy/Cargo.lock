@@ -1455,6 +1455,8 @@ dependencies = [
 name = "d2b-provider-emergency-policy"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
  "d2b-resource-types",
  "tokio",
 ]
