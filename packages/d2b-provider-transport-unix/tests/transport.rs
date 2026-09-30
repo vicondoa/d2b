@@ -717,12 +717,15 @@ fn stream_carriage_cannot_inject_a_control_operation() {
     forged.extend_from_slice(format!("{handle:?}").as_bytes());
     forged.extend_from_slice(&[0x5a; 16]);
 
+    // The forged frame is written into the real peer end and read back out of
+    // the transport descriptor the portal handed the caller, so the bytes the
+    // control entry point is asked about really travelled the opened stream.
     let written = rustix::io::write(&peer, &forged).expect("write the forged control frame");
     assert_eq!(written, forged.len(), "the real stream took the whole frame");
     let mut carried = Vec::new();
     let mut chunk = [0_u8; 64];
     while carried.len() < forged.len() {
-        let read = match rustix::io::read(&peer, &mut chunk) {
+        let read = match rustix::io::read(opened.transport_fd(), &mut chunk) {
             Ok(read) => read,
             Err(rustix::io::Errno::INTR) => continue,
             Err(error) => panic!("read the carried bytes back: {error}"),
