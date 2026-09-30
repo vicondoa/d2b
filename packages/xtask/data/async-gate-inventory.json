@@ -888,7 +888,7 @@
     },
     {
       "file": "packages/d2bd/src/resource_plane_v3.rs",
-      "line": 6952,
+      "line": 6954,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
@@ -903,37 +903,37 @@
     },
     {
       "file": "packages/d2bd/src/shared_provider_effects.rs",
-      "line": 1643,
+      "line": 1714,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/shared_provider_effects.rs",
-      "line": 1691,
+      "line": 1763,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/shared_provider_effects.rs",
-      "line": 1716,
+      "line": 1788,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/shared_provider_effects.rs",
-      "line": 2147,
+      "line": 2223,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/shared_provider_effects.rs",
-      "line": 2536,
+      "line": 2613,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/shared_provider_effects.rs",
-      "line": 2569,
+      "line": 2646,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/shared_provider_effects.rs",
-      "line": 2625,
+      "line": 2702,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
