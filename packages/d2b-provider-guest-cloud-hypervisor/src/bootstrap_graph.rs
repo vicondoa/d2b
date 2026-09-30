@@ -377,7 +377,7 @@ pub enum GuestConsumerCompletion {
 /// flattened attachment lists as the source of the start gate:
 ///
 /// - the child target-support ceiling bounds what a child of this Guest may
-   /// request and contributes no member, no wait, and no access (AE31);
+///   request and contributes no member, no wait, and no access (AE31);
 /// - the Guest's own consumption is one admitted relationship per request,
 ///   each with the Guest as its consumer (AE32);
 /// - a child default shapes one named child's request and never becomes a
