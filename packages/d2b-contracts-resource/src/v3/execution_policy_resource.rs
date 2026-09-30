@@ -35,7 +35,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ResourceRef,
+    ResourceRef, ResourceTypeName,
     authority::{AdmissionStage, RefusalReason},
     execution_policy::{PrimitiveSpecError, ensure_unique, redacted_debug, require_resource_type},
     process::{CapabilityClass, NamespaceClass},
@@ -529,6 +529,32 @@ pub enum ExecutionInstanceKind {
     LongRunning,
     /// A run-to-completion `EphemeralProcess`.
     OneShot,
+}
+
+impl ExecutionInstanceKind {
+    /// The instance class one resource type names, when it names one.
+    ///
+    /// The classification reads the canonical type-name constants instead of
+    /// restating the vocabulary, for the same reason
+    /// [`crate::v3::authority::AuthoritySubjectKind::of_resource_type`] does:
+    /// a caller outside the declaring crate must not hold a private copy of
+    /// the type names it decides on. A type outside this set has no execution
+    /// instance, and the caller refuses it rather than guessing a lifetime.
+    pub fn of_resource_type(candidate: &ResourceTypeName) -> Option<Self> {
+        let name = candidate.as_str();
+        if name == crate::v3::process::PROCESS_RESOURCE_TYPE {
+            Some(Self::LongRunning)
+        } else if name == crate::v3::process::EPHEMERAL_PROCESS_RESOURCE_TYPE {
+            Some(Self::OneShot)
+        } else {
+            None
+        }
+    }
+
+    /// The instance class one reference names, when it names one.
+    pub fn of_reference(reference: &ResourceRef) -> Option<Self> {
+        Self::of_resource_type(reference.resource_type())
+    }
 }
 
 /// The limits one instance asks for.

@@ -9,7 +9,8 @@ use std::sync::Mutex;
 
 use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_contracts_resource::v3::{
-    ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid,
+    ControllerGeneration, FreshnessTuple, ResourceGeneration, ResourceRef, ResourceUid, StoreIncarnation,
+    ZoneId, ZoneRevision,
 };
 
 use crate::error::ProcessConformanceError;
@@ -313,5 +314,441 @@ pub mod fixtures {
             guest_execution_binding: true,
             readiness: ReadinessExpectation::None,
         }
+    }
+}
+
+
+/// Fixtures for the one resolved Process execution plan.
+///
+/// Every value here is built the way production builds it: an accepted graph
+/// with a real `Role`, `RoleBinding`, and source decision, a private execution
+/// table with the plan's own types, and a typed invocation composed by
+/// [`d2b_core::execution_plan::resolve_execution_plan`]. Nothing constructs a
+/// resolved plan directly, so a fixture that resolves is evidence that the
+/// real resolution path admits the request rather than evidence that a
+/// hand-built struct would.
+pub mod plan_fixtures {
+    use super::*;
+    use d2b_contracts_resource::v3::binding::{
+        BindingArbitration, BindingAuthorization, BindingKey, BindingKind,
+        BindingRealizationFacet, BindingRealizationSupport, BindingSlot, RequestedRights,
+        SourceAdmission, SourceReservation, admit_binding_request,
+    };
+    use d2b_contracts_resource::v3::process::NamespaceClass;
+    use d2b_contracts_resource::v3::execution_policy_resource::{
+        ALL_CONFINEMENT_FACETS, BackendSupport, BudgetCeiling, BudgetRequest, ConfinementFacet,
+        ExecutionInstance, ExecutionInstanceKind, ExecutionPolicySpec, ExecutionRequirements,
+        PolicyCapabilities, PolicyIdentity, PolicyNamespaces, PolicyRoot,
+        PolicySeccomp,
+    };
+    use d2b_contracts_resource::v3::operation::{
+        CallableOperation, OperationImplementation, PayloadProvenance,
+    };
+    use d2b_contracts_resource::v3::{
+        AuditMode, AuthoritySubject, AuthoritySubjectKind, BrokerRequirement, DesiredDigest,
+        DesiredRevision, OperationAudit, OperationAuthority, OperationBounds, OperationDomain,
+        OperationFds, OperationSurface, PayloadSchema, ResourceTypeName, SecretAccess,
+    };
+    use d2b_core::execution_plan::{
+        BindingPlanRequest, EffectPlanRequest, ExecutionPlan, PrivateBacking, PrivateExecutionTable,
+        PrivatePath, PlannedDestination, PlannedExecutable, PlannedIdentity, PlannedSource,
+        PlannedView, admit_parameters, resolve_execution_plan,
+    };
+    use d2b_core::resource_authority::{AcceptedGraph, TransportIdentity};
+
+    use super::fixtures::operation_uid;
+    use crate::plan::{BindingPreparation, PreparedBinding, ProcessResourceRequest, ProcessSubject};
+
+    /// The Zone every plan fixture resolves in.
+    pub const ZONE: &str = "pubzone";
+    /// The store generation every plan fixture resolves in.
+    pub const STORE: &str = "store-generation-1";
+    /// The exact Volume a storage fixture binds.
+    pub const SOURCE: &str = "Volume/data";
+    /// The `Operation` a Process launch is admitted under.
+    pub const OPERATION: &str = "Operation/launch-worker";
+    /// The Process Provider that owns the launch template.
+    pub const PROVIDER: &str = "Provider/process";
+    /// The stable consumer slot a Process claims.
+    pub const SLOT: &str = "root";
+    /// The `ResourceType` a Volume relationship's own row carries.
+    pub const BINDING_ROW_TYPE: &str = "VolumeBinding";
+    /// The named view a storage fixture presents.
+    pub const VIEW: &str = "root";
+    /// The source path the broker privately resolves.
+    pub const SOURCE_PATH: &str = "/var/lib/d2b/volumes/data";
+    /// The view path the broker privately resolves.
+    pub const VIEW_PATH: &str = "/var/lib/d2b/volumes/data/root";
+    /// The destination the broker privately resolves for the consumer.
+    pub const DESTINATION_PATH: &str = "/run/d2b/pubzone/worker/mnt/data";
+    /// The program the broker privately resolves for the template.
+    pub const PROGRAM: &str = "/nix/store/2r1m-worker/bin/worker";
+    /// The Volume's store-assigned identity.
+    pub const SOURCE_UID: &str = "11111111-1111-4111-8111-111111111111";
+    /// The consumer's store-assigned identity.
+    pub const CONSUMER_UID: &str = "22222222-2222-4222-8222-222222222222";
+
+    fn reference(value: &str) -> ResourceRef {
+        ResourceRef::parse(value).expect("the fixture references are canonical")
+    }
+
+    fn uid(value: &str) -> ResourceUid {
+        ResourceUid::parse(value).expect("the fixture uids are canonical")
+    }
+
+    fn token(value: &str) -> BoundedToken {
+        BoundedToken::parse(value).expect("the fixture tokens are canonical")
+    }
+
+    fn zone() -> ZoneId {
+        ZoneId::parse(ZONE).expect("the fixture Zone is canonical")
+    }
+
+    fn incarnation() -> StoreIncarnation {
+        StoreIncarnation::parse(STORE).expect("the fixture store generation is bounded")
+    }
+
+    fn slot() -> BindingSlot {
+        BindingSlot::parse(SLOT).expect("the fixture slot is a bounded token")
+    }
+
+    /// The consumer identity every fixture binds against.
+    pub fn consumer() -> ResourceRef {
+        reference("Process/worker")
+    }
+
+    /// The committed consumer identity for a row of either lifetime.
+    pub fn subject(reference_value: &str) -> ProcessSubject {
+        ProcessSubject::new(
+            reference(reference_value),
+            uid(CONSUMER_UID),
+            zone(),
+            ZoneRevision::new(1),
+        )
+        .expect("an execution instance reference")
+    }
+
+    /// The exact relationship a storage fixture claims.
+    pub fn volume_key(consumer_ref: &ResourceRef) -> BindingKey {
+        BindingKey::new(
+            zone(),
+            BindingKind::Volume,
+            reference(SOURCE),
+            uid(SOURCE_UID),
+            consumer_ref.clone(),
+            uid(CONSUMER_UID),
+            slot(),
+        )
+        .expect("a well-formed relationship key")
+    }
+
+    /// The typed claim a Process row makes for its storage.
+    pub fn volume_claim(consumer_ref: &ResourceRef) -> ProcessResourceRequest {
+        ProcessResourceRequest::new(
+            volume_key(consumer_ref),
+            RequestedRights::Observe,
+            vec![BindingRealizationFacet::FilesystemPresentation],
+            None,
+        )
+    }
+
+    /// A committed row state for one identity.
+    pub fn freshness(resource_uid: &str, revision: u64, digest: &str) -> FreshnessTuple {
+        let mut wanted = DesiredRevision::INITIAL;
+        for _ in 0..revision {
+            wanted = wanted.try_next().expect("the desired revision has room");
+        }
+        FreshnessTuple::new(
+            zone(),
+            incarnation(),
+            reference(SOURCE),
+            uid(resource_uid),
+            wanted,
+            DesiredDigest::of(digest.as_bytes()),
+        )
+    }
+
+    /// The committed state of the storage source.
+    pub fn source_freshness() -> FreshnessTuple {
+        freshness(SOURCE_UID, 1, "volume-1")
+    }
+
+    /// The committed state of the consumer row.
+    pub fn consumer_freshness() -> FreshnessTuple {
+        freshness(CONSUMER_UID, 1, "consumer-1")
+    }
+
+    /// The source's own decision over the fixture relationship.
+    pub fn source_decision(consumer_ref: &ResourceRef) -> SourceAdmission {
+        SourceAdmission::new(
+            volume_key(consumer_ref),
+            vec![RequestedRights::Observe],
+            BindingArbitration::Shared,
+        )
+        .expect("the source decision is well formed")
+    }
+
+    /// The realization support the fixture backend declares.
+    pub fn support() -> BindingRealizationSupport {
+        BindingRealizationSupport::new(vec![BindingRealizationFacet::FilesystemPresentation])
+            .expect("the realization support is unique")
+    }
+
+    /// The admission the source-side path produces for the fixture.
+    pub fn volume_admission(
+        consumer_ref: &ResourceRef,
+    ) -> d2b_contracts_resource::v3::binding::BindingAdmission {
+        admit_binding_request(
+            &volume_key(consumer_ref),
+            RequestedRights::Observe,
+            &[BindingRealizationFacet::FilesystemPresentation],
+            &BindingAuthorization::granted(),
+            &source_decision(consumer_ref),
+            &support(),
+            &[source_freshness(), consumer_freshness()],
+        )
+        .expect("an admitted relationship")
+    }
+
+    /// The source-owned reservation an admitted relationship holds.
+    pub fn volume_reservation() -> SourceReservation {
+        SourceReservation::new(zone(), uid(SOURCE_UID), token("reservation-1"))
+    }
+
+    /// The prepared evidence a storage fixture carries once its source side is
+    /// complete.
+    pub fn prepared_binding(
+        consumer_ref: &ResourceRef,
+        preparation: BindingPreparation,
+    ) -> PreparedBinding {
+        PreparedBinding::new(
+            reference(SOURCE),
+            uid(SOURCE_UID),
+            RequestedRights::Observe,
+            vec![BindingRealizationFacet::FilesystemPresentation],
+            volume_admission(consumer_ref),
+            volume_reservation(),
+            "binding-request-digest-fixture".to_owned(),
+            preparation,
+        )
+        .expect("a well-formed prepared relationship")
+    }
+
+    /// The prior accepted graph: a real `Role`, a real `RoleBinding` naming
+    /// the consumer and the binding row, and a real source decision.
+    pub fn accepted_graph(consumer_ref: &ResourceRef) -> AcceptedGraph {
+        d2b_core::test_support::AcceptedRelationship::new(
+            zone(),
+            incarnation(),
+            ResourceTypeName::parse(BINDING_ROW_TYPE)
+                .expect("the binding row type is a standard type"),
+            consumer_ref.clone(),
+            source_decision(consumer_ref),
+            support(),
+        )
+        .accepted_graph()
+    }
+
+    fn subject_of(consumer_ref: &ResourceRef) -> AuthoritySubject {
+        AuthoritySubject::named(
+            AuthoritySubjectKind::of_reference(consumer_ref)
+                .unwrap_or(AuthoritySubjectKind::Process),
+            consumer_ref.clone(),
+        )
+    }
+
+    /// The committed `Operation` contract a Process launch is admitted under.
+    pub fn operation() -> CallableOperation {
+        let payload = PayloadSchema::parse(serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": { "servingWorker": { "type": "boolean" } },
+        }))
+        .expect("the fixture payload schema validates");
+        let audit =
+            OperationAudit::new(true, AuditMode::Yes, Vec::new(), Vec::new(), token("worker"))
+                .expect("the audit facet is bounded");
+        let authority = OperationAuthority::new(
+            OperationSurface::Broker,
+            OperationDomain::Host,
+            d2b_contracts_resource::v3::execution_policy::BoundedText::parse("d2b-launcher")
+                .expect("bounded text without control characters"),
+            BrokerRequirement::Yes,
+        );
+        let fds = OperationFds::new(Vec::new(), Vec::new(), Vec::new())
+            .expect("the fd contract is bounded");
+        CallableOperation::new(
+            OperationImplementation::trusted_executable_template(
+                reference(PROVIDER),
+                token("worker"),
+            )
+            .expect("a Provider reference is a declared implementation"),
+            payload,
+            None,
+            true,
+            SecretAccess::None,
+            audit,
+            None,
+            authority,
+            fds,
+            OperationBounds::default(),
+            PayloadProvenance::Request,
+        )
+        .expect("the fixture operation contract is well formed")
+    }
+
+    /// The broker's own private execution values for the fixture.
+    pub fn private_table(consumer_ref: &ResourceRef) -> PrivateExecutionTable {
+        let source = PlannedSource::new(
+            reference(SOURCE),
+            uid(SOURCE_UID),
+            BindingKind::Volume,
+            source_freshness(),
+            PrivateBacking::Filesystem,
+            PrivatePath::parse(SOURCE_PATH).expect("an absolute private path"),
+            vec![PlannedView::new(
+                token(VIEW),
+                RequestedRights::Observe,
+                PrivatePath::parse(VIEW_PATH).expect("an absolute path"),
+            )],
+        )
+        .expect("the resolved source is well formed");
+        let identity = PlannedIdentity::new(consumer_ref.clone(), 4242, 4242, vec![], None)
+            .expect("the resolved identity is well formed");
+        let destination = PlannedDestination::new(
+            volume_key(consumer_ref).address(),
+            BindingRealizationFacet::FilesystemPresentation,
+            PrivatePath::parse(DESTINATION_PATH).expect("an absolute path"),
+            true,
+        );
+        let executable = PlannedExecutable::new(
+            OperationImplementation::trusted_executable_template(
+                reference(PROVIDER),
+                token("worker"),
+            )
+            .expect("a Provider reference is a declared implementation"),
+            token("worker"),
+            PrivatePath::parse(PROGRAM).expect("an absolute program path"),
+            vec![PROGRAM.to_owned()],
+            vec!["PATH=/usr/bin".to_owned()],
+        )
+        .expect("the trusted executable is well formed");
+        PrivateExecutionTable::empty()
+            .with_source(source)
+            .with_observed(consumer_freshness())
+            .with_identity(identity)
+            .with_destination(destination)
+            .with_executable(reference(OPERATION), executable)
+    }
+
+    /// The typed invocation the broker resolves one Process launch from.
+    pub fn plan_request(consumer_ref: &ResourceRef) -> EffectPlanRequest {
+        let callable = operation();
+        let parameters = admit_parameters(
+            &callable,
+            &d2b_contracts_resource::v3::CanonicalJsonObject::parse(
+                &serde_json::to_vec(&serde_json::json!({ "servingWorker": false }))
+                    .expect("the fixture parameters serialize"),
+            )
+            .expect("the fixture is a canonical JSON object"),
+        )
+        .expect("the fixture parameters are admitted");
+        EffectPlanRequest::new(
+            reference(OPERATION),
+            callable,
+            subject_of(consumer_ref),
+            vec![BindingPlanRequest::new(
+                volume_key(consumer_ref),
+                RequestedRights::Observe,
+                vec![BindingRealizationFacet::FilesystemPresentation],
+                None,
+            )],
+            parameters,
+            vec![source_freshness(), consumer_freshness()],
+            TransportIdentity::Broker,
+            None,
+        )
+        .expect("a well-formed plan request")
+    }
+
+    /// Resolve the broker's own execution plan for one consumer.
+    pub fn resolved_execution(consumer_ref: &ResourceRef) -> ExecutionPlan {
+        resolve_execution_plan(
+            &plan_request(consumer_ref),
+            &accepted_graph(consumer_ref),
+            &private_table(consumer_ref),
+        )
+        .expect("the broker resolves the fixture relationship")
+    }
+
+    /// The exact identity the fixture policy authorizes.
+    pub const USER: &str = "User/worker";
+
+    /// Whether the accepted graph's `RoleBinding` subject vocabulary can name
+    /// a run-to-completion consumer today.
+    ///
+    /// A one-shot consumer is a legitimate binding consumer under the binding
+    /// contracts, but the role contract's closed subject list has no entry for
+    /// it, so the broker refuses to authorize its leg. The probe reads that
+    /// closed list rather than restating it.
+    pub fn one_shot_leg_is_unbindable() -> bool {
+        !d2b_contracts_zone_session::v3::role_binding::BINDABLE_SUBJECT_TYPES
+            .iter()
+            .any(|candidate| *candidate == "EphemeralProcess")
+    }
+
+    /// A confinement policy that admits a namespace-isolated, read-only-root
+    /// worker under exactly one admitted identity.
+    pub fn policy() -> ExecutionPolicySpec {
+        ExecutionPolicySpec::new(
+            PolicyNamespaces::new(vec![NamespaceClass::User, NamespaceClass::Mount])
+                .expect("namespaces are bounded"),
+            PolicyCapabilities::new(Vec::new()).expect("capabilities are bounded"),
+            true,
+            PolicyIdentity::new(Some(reference(USER)), true)
+                .expect("the identity is well formed"),
+            PolicyRoot::new(true, true),
+            PolicySeccomp::new(None).expect("the seccomp facet is well formed"),
+            Some(0o022),
+        )
+        .expect("a well-formed policy")
+    }
+
+    /// A backend that enforces every facet the fixture policy requires.
+    pub fn backend_support() -> BackendSupport {
+        BackendSupport::new(ALL_CONFINEMENT_FACETS.to_vec())
+            .expect("a well-formed backend support set")
+    }
+
+    /// The instance request for a row of either lifetime.
+    pub fn instance(kind: ExecutionInstanceKind) -> ExecutionInstance {
+        ExecutionInstance::new(
+            kind,
+            Some(reference(USER)),
+            BudgetRequest::new(500, 1 << 30, 256, 1024).expect("a well-formed budget"),
+        )
+        .expect("a well-formed instance")
+    }
+
+    /// The provider's declared requirements.
+    pub fn requirements() -> ExecutionRequirements {
+        ExecutionRequirements::new(
+            vec![NamespaceClass::User],
+            Vec::new(),
+            true,
+            None,
+            vec![ConfinementFacet::UserNamespace, ConfinementFacet::MountNamespace],
+        )
+        .expect("a well-formed requirement set")
+    }
+
+    /// The ceiling the fixture budget sits under.
+    pub fn ceiling() -> BudgetCeiling {
+        BudgetCeiling::new(1_000, 1 << 31, 1_024, 4_096)
+    }
+
+    /// The shared identity the Process tickets already use.
+    pub fn shared_operation_uid() -> ResourceUid {
+        operation_uid()
     }
 }
