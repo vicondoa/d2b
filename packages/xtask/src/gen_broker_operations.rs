@@ -1335,6 +1335,54 @@ pub(crate) fn render_artifacts(
     ])
 }
 
+/// The operation catalog the per-crate declarations alone produce.
+///
+/// The production entry point above merges the retained committed rows
+/// document with the declarations, so it can only ever emit a superset of
+/// what any crate declared. The new graph has no merged document: this is
+/// the whole catalog, built from the declarations with no committed input at
+/// all, which is what U34 installs in place of the merged document.
+///
+/// Rows are ordered by declaring crate and then by operation, so the catalog
+/// is a pure function of the declaration set.
+#[cfg(test)]
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn declared_catalog(
+    repo_root: &Path,
+) -> Result<Catalog, Box<dyn std::error::Error>> {
+    let declarations = load_declarations(repo_root)?;
+    let mut rows = Vec::new();
+    for (crate_name, declared) in &declarations {
+        for row in declared {
+            let row = row.clone().into_row();
+            let source = format!("{PACKAGES_DIR}/{crate_name}/{DECLARATION_FILE}");
+            validate_row(&row, &source)?;
+            rows.push(row);
+        }
+    }
+    rows.sort_by(|left, right| {
+        left.declaring_provider
+            .cmp(&right.declaring_provider)
+            .then_with(|| left.operation.cmp(&right.operation))
+    });
+    validate_row_ids(&rows, "packages/d2b-provider-*/operations.json")?;
+    Ok(Catalog { version: 1, rows })
+}
+
+/// Render the declaration-only operation catalog as the committed rows
+/// document's byte shape.
+///
+/// The new-graph build closure (U33) stages this as the replacement
+/// projection for the merged rows document. The rendering is the same
+/// function the production path uses, so U34 installs bytes the existing
+/// drift gate already knows how to compare.
+#[cfg(test)]
+pub(crate) fn render_declared_catalog(
+    repo_root: &Path,
+) -> Result<String, Box<dyn std::error::Error>> {
+    Ok(render_catalog_json(&declared_catalog(repo_root)?))
+}
+
 /// Write every view of the merged broker operation rows.
 pub fn gen_broker_operations(
     repo_root: &Path,

@@ -339,6 +339,64 @@ fn render_artifacts(
     ])
 }
 
+/// Render the generated converted-resource-type authority from the
+/// declarations alone.
+///
+/// The new-graph build closure (U33) stages its replacement projection
+/// through this entry point, so the staged bytes are the same render the
+/// `--fix` path installs. Only the Rust authority artifact is returned: the
+/// Nix views beside it are rendered from committed orderings and the
+/// principal allocation, which the new graph does not read. The
+/// declaration-internal gates run here; the source-parity gate stays a
+/// separate cross-check the new-graph closure runs over the composition.
+#[cfg(test)]
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+pub(crate) fn render_declarations_only(repo_root: &Path) -> Result<String, String> {
+    let loaded = load_declarations(repo_root)?;
+    let registry = AuthorityRegistry {
+        declarations: loaded.types,
+        descriptors: BTreeMap::new(),
+        roles: loaded.roles,
+        sources: BTreeMap::new(),
+    };
+    let errors = declaration_internal_errors(&registry);
+    if !errors.is_empty() {
+        return Err(format!(
+            "resource-type-authority declaration violations:\n- {}",
+            errors.join("\n- ")
+        ));
+    }
+    render(&registry)
+}
+
+/// The declaration-internal violations: a type two crates declare, a role
+/// two crates declare, and a malformed owning `Provider/<name>` reference.
+/// These are properties of the declarations alone, so a declaration-only
+/// render refuses them without consulting a crate's compiled sources.
+#[cfg(test)]
+fn declaration_internal_errors(registry: &AuthorityRegistry) -> Vec<String> {
+    let mut errors = Vec::new();
+    let mut declared_by: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (crate_name, types) in &registry.declarations {
+        for type_name in types {
+            declared_by
+                .entry(type_name.as_str())
+                .or_default()
+                .push(crate_name.as_str());
+        }
+    }
+    for (type_name, crates) in &declared_by {
+        if crates.len() > 1 {
+            errors.push(format!(
+                "type-declared-twice: {type_name} is declared by both {}and {}",
+                crates[0], crates[1]
+            ));
+        }
+    }
+    errors.extend(role_parity_errors(registry));
+    errors
+}
+
 /// The declared standard (unqualified) ResourceTypes in committed order, with
 /// a declared standard type absent from the committed order appended after it
 /// in sorted order. A qualified type (`<namespace>.d2bus.org.<Name>`) carries

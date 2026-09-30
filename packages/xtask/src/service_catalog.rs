@@ -67,6 +67,26 @@ pub(crate) fn render_declaration_service_catalog(plan: &PrivatePlanProjection) -
 /// The parsed per-crate catalog inputs, crate name -> declaration.
 type CatalogRegistry = BTreeMap<String, DeclarationFile>;
 
+/// Render the service-to-provider catalog from the declarations alone.
+///
+/// The new-graph build closure (U33) stages its replacement projection
+/// through this entry point. The declaration sanity gate runs first, so a
+/// staged catalog can never carry a service two crates claim or a provider
+/// ref its crate name does not imply, and nothing here reads a crate source.
+#[cfg(test)]
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+pub(crate) fn render_declarations_only(repo_root: &Path) -> Result<String, String> {
+    let registry = load(repo_root)?;
+    let errors = declaration_errors(&registry);
+    if !errors.is_empty() {
+        return Err(format!(
+            "service-catalog declaration violations:\n- {}",
+            errors.join("\n- ")
+        ));
+    }
+    render(&registry)
+}
+
 /// Run the catalog's gates: declaration sanity, drift, and regeneration
 /// idempotence. Wired into the layout check after the crate-layout check.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]

@@ -50,6 +50,8 @@ mod gen_broker_operations;
 mod gen_layer_catalogs;
 mod inventory;
 mod nix_inventories;
+#[cfg(test)]
+mod new_graph_closure;
 mod production_closure;
 mod blocking_census;
 mod operation_row_authority;

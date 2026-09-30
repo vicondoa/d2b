@@ -594,21 +594,31 @@ d2b_rust_test(
 
 d2b_rust_test(
     name = "resource_operator_activation",
-    srcs = [
-        "tests/resource_operator_activation.rs",
-        "tests/zone_provider_acceptance.rs",
-    ],
+    srcs = ["tests/resource_operator_activation.rs"],
     compile_data = ["Cargo.toml"],
     crate_root = "tests/resource_operator_activation.rs",
     visibility = ["//visibility:public"],
     deps = [
         ":d2bd_lib_test_support",
-        "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+# The Zone provider acceptance file is its own integration binary, not a
+# second source of `resource_operator_activation`: listing it in that
+# target's `srcs` left it uncompiled, because the target has one crate root,
+# so a break here reached `make check` green while `cargo test` failed.
+d2b_rust_test(
+    name = "zone_provider_acceptance",
+    srcs = ["tests/zone_provider_acceptance.rs"],
+    compile_data = ["Cargo.toml"],
+    crate_root = "tests/zone_provider_acceptance.rs",
+    visibility = ["//visibility:public"],
+    deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        "//packages/d2b-core-controller:d2b_core_controller_test_support",
         "//packages/d2b-provider-device-tpm:d2b_provider_device_tpm_test_support",
         "//packages/d2b-provider-display-wayland:d2b_provider_display_wayland_test_support",
         "//packages/d2b-provider-network-local:d2b_provider_network_local_test_support",
