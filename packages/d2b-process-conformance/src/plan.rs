@@ -1644,12 +1644,10 @@ mod tests {
 
         // The one-shot instance is classified through the same
         // contract-crate constants and its policy admission is the same
-        // function, but the accepted graph's `RoleBinding` subject vocabulary
-        // has no `EphemeralProcess` entry, so the broker refuses to resolve
-        // one-shot consumer legs today. That refusal is the shared
-        // contract's, not this plan's: the same request under a bindable
-        // consumer is admitted, which is what proves the Process plan path
-        // itself is lifetime-neutral.
+        // function. The `RoleBinding` subject vocabulary names both
+        // lifetimes, so a one-shot consumer's leg is authorized by the same
+        // contract that authorizes a long-running one. The Process plan path
+        // is lifetime-neutral in policy, in preparation, and in binding.
         let one_shot_subject = fixtures::subject("EphemeralProcess/flush");
         assert_eq!(one_shot_subject.kind(), ExecutionInstanceKind::OneShot);
         let one_shot_request = ProcessPlanRequest::new(
@@ -1677,7 +1675,7 @@ mod tests {
                 .kind(),
             ExecutionInstanceKind::OneShot
         );
-        assert!(fixtures::one_shot_leg_is_unbindable());
+        assert!(fixtures::one_shot_leg_is_bindable());
     }
 
     /// AE20: a relationship whose source side is still being established

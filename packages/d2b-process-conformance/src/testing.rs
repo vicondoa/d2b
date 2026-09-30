@@ -685,14 +685,15 @@ pub mod plan_fixtures {
     pub const USER: &str = "User/worker";
 
     /// Whether the accepted graph's `RoleBinding` subject vocabulary can name
-    /// a run-to-completion consumer today.
+    /// a run-to-completion consumer.
     ///
-    /// A one-shot consumer is a legitimate binding consumer under the binding
-    /// contracts, but the role contract's closed subject list has no entry for
-    /// it, so the broker refuses to authorize its leg. The probe reads that
+    /// Both Process lifetimes are the same converted resource type and already
+    /// share one preparation path and one policy path, so the closed subject
+    /// list names both and a one-shot consumer's leg is authorized by the same
+    /// contract that authorizes a long-running one. The probe reads that
     /// closed list rather than restating it.
-    pub fn one_shot_leg_is_unbindable() -> bool {
-        !d2b_contracts_zone_session::v3::role_binding::BINDABLE_SUBJECT_TYPES
+    pub fn one_shot_leg_is_bindable() -> bool {
+        d2b_contracts_zone_session::v3::role_binding::BINDABLE_SUBJECT_TYPES
             .contains(&"EphemeralProcess")
     }
 

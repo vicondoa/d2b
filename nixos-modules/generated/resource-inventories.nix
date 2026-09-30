@@ -27,6 +27,7 @@
     "Host"
     "Guest"
     "Process"
+    "EphemeralProcess"
   ];
 
   # The ResourceTypes a RoleBinding may bind relay authority on.

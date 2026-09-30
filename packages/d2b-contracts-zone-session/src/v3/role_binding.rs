@@ -25,11 +25,17 @@ pub const MAX_ROLE_BINDING_ZONE_REFS: usize = 8;
 pub const MAX_ROLE_BINDING_EXECUTION_REFS: usize = 32;
 /// The closed subject vocabulary a RoleBinding may name.
 ///
-/// This is the one declaration of the set: the Nix authoring surface and the
-/// generator that projects these rows into it both read this list instead of
-/// restating the six types.
-pub const BINDABLE_SUBJECT_TYPES: [&str; 6] =
-    ["Zone", "User", "Provider", "Host", "Guest", "Process"];
+/// This is the one declaration of the set: the Nix authoring surface, the
+/// generator that projects these rows into it, and the daemon's foundation
+/// seed all read this list instead of restating it.
+///
+/// `EphemeralProcess` is admitted alongside `Process` because both lifetimes
+/// are the same converted resource type and already share one preparation and
+/// one policy path. Naming only the long-running one would leave the binding
+/// vocabulary as a second authority that distinguishes them, which is the
+/// differential authority route this model forbids.
+pub const BINDABLE_SUBJECT_TYPES: [&str; 7] =
+    ["Zone", "User", "Provider", "Host", "Guest", "Process", "EphemeralProcess"];
 
 /// RoleBinding schema failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

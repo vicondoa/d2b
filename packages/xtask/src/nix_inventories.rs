@@ -943,7 +943,15 @@ mod tests {
     fn the_vocabularies_are_the_contract_vocabularies() {
         assert_eq!(
             subject_types(),
-            ["Zone", "User", "Provider", "Host", "Guest", "Process"]
+            [
+                "Zone",
+                "User",
+                "Provider",
+                "Host",
+                "Guest",
+                "Process",
+                "EphemeralProcess",
+            ]
         );
         assert_eq!(
             resource_verbs(),

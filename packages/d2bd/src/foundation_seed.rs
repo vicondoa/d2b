@@ -66,8 +66,14 @@ pub const SYSTEM_HOMED_TYPES: &[&str] = &["Command", "Operation", "SeccompProfil
 /// Maximum bytes of one seeded resource name.
 pub const MAX_SEED_NAME_BYTES: usize = 63;
 /// The subject types a RoleBinding may grant, resolved by the session layer.
+///
+/// This mirrors the closed vocabulary declared by the contract, which is the
+/// one declaration of the set. `Group` is the single entry this list carries
+/// beyond it: the volume principal projection accepts a `Group` subject, so
+/// the seed must accept what that projection can write. Reconciling that one
+/// entry against the contract is outstanding cutover work.
 pub const BINDABLE_SUBJECT_TYPES: &[&str] = &[
-    "Zone", "User", "Provider", "Host", "Guest", "Process", "Group",
+    "Zone", "User", "Provider", "Host", "Guest", "Process", "EphemeralProcess", "Group",
 ];
 /// The resource types an execution selector may name.
 pub const EXECUTION_SUBJECT_TYPES: &[&str] = &["Host", "Guest", "EphemeralProcess"];
