@@ -74,7 +74,7 @@ pub const MAX_SEED_NAME_BYTES: usize = 63;
 /// slice makes that class of divergence impossible rather than merely fixed
 /// once.
 pub const BINDABLE_SUBJECT_TYPES: &[&str] =
-    d2b_contracts_zone_session::v3::BINDABLE_SUBJECT_TYPES[..];
+    &d2b_contracts_zone_session::v3::BINDABLE_SUBJECT_TYPES[..];
 /// The resource types an execution selector may name.
 pub const EXECUTION_SUBJECT_TYPES: &[&str] = &["Host", "Guest", "EphemeralProcess"];
 /// The default metadata envelope every seeded row carries.
