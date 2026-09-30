@@ -388,7 +388,7 @@ impl AdmittedPipeWireHostController {
             return HostEnforcementResult::Failed;
         };
         debug_assert!(
-            AUDIO_DECLARED_METHODS.iter().any(|declared| *declared == method),
+            AUDIO_DECLARED_METHODS.contains(&method),
             "the applied method comes from the family's declared vocabulary"
         );
         let pinned = match self.pinning(channel) {

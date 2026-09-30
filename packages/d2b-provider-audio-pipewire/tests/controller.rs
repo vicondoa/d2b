@@ -686,7 +686,7 @@ mod admitted {
                 "zone-a",
                 d2b_provider_audio_pipewire::AudioLeaseId::new(1),
                 &plan,
-                &[admitted.clone()],
+                std::slice::from_ref(&admitted),
             )
             .expect("the admitted pass reconciles");
         assert_eq!(
