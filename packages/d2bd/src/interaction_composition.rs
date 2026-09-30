@@ -6218,7 +6218,27 @@ where
     // spawned, so it does not need to be Send.
     Fut: Future<Output = Result<T, WorkerEffectError>> + 'static,
 {
-    let permit = EFFECT_ADMISSION
+    run_effect_gated(&EFFECT_ADMISSION, operation)
+}
+
+/// The admission-gated body of [`run_effect`], with the seat budget passed
+/// in rather than read from the process-global [`EFFECT_ADMISSION`]. Every
+/// daemon caller shares that one cap, so a test that saturated it would be
+/// racing every other effect in the binary for a slot rather than testing
+/// the cap; a test that owns its gate exercises the same refusal path
+/// deterministically.
+fn run_effect_gated<T, F, Fut>(
+    admission: &d2bd_runtime::concurrency::ConnSemaphore,
+    operation: F,
+) -> Result<T, WorkerEffectError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Fut + Send + 'static,
+    // The future is driven on the calling thread by `block_on` below, never
+    // spawned, so it does not need to be Send.
+    Fut: Future<Output = Result<T, WorkerEffectError>> + 'static,
+{
+    let permit = admission
         .try_acquire()
         .ok_or(WorkerEffectError::WorkerUnavailable)?;
     // The permit is held for the whole effect, so the cap counts calls that
@@ -8453,24 +8473,26 @@ mod tests {
     /// A provider effect past the admission cap is refused instead of being
     /// handed another thread, and a released slot is usable again.
     ///
-    /// `run_effect` drives the effect on the ambient daemon runtime (U13),
-    /// so the released-slot call needs a runtime context.
+    /// The daemon's [`EFFECT_ADMISSION`] cap is process-global, so this
+    /// saturates a gate it owns: a test that filled the shared one would be
+    /// racing every other effect in the binary for a slot rather than
+    /// testing the cap. `run_effect_gated` drives the effect on the ambient
+    /// daemon runtime (U13), so the released-slot call needs a runtime
+    /// context.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn effects_past_the_admission_cap_are_refused() {
+        let admission = d2bd_runtime::concurrency::ConnSemaphore::new(MAX_INFLIGHT_EFFECTS);
         let held: Vec<_> = (0..MAX_INFLIGHT_EFFECTS)
-            .map(|_| {
-                EFFECT_ADMISSION
-                    .try_acquire()
-                    .expect("a slot inside the cap")
-            })
+            .map(|_| admission.try_acquire().expect("a slot inside the cap"))
             .collect();
         assert_eq!(
-            run_effect(|| async { Ok::<(), WorkerEffectError>(()) }).expect_err("past the cap"),
+            run_effect_gated(&admission, || async { Ok::<(), WorkerEffectError>(()) })
+                .expect_err("past the cap"),
             WorkerEffectError::WorkerUnavailable
         );
         drop(held);
-        run_effect(|| async { Ok::<(), WorkerEffectError>(()) })
+        run_effect_gated(&admission, || async { Ok::<(), WorkerEffectError>(()) })
             .expect("a released slot admits the next effect");
     }
 
