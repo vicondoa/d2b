@@ -86,6 +86,14 @@ impl WellKnownType {
     pub const OPERATION: Self = Self("Operation");
     /// A committed seccomp posture a role references.
     pub const SECCOMP_PROFILE: Self = Self("SeccompProfile");
+    /// A reusable confinement policy an execution instance selects.
+    ///
+    /// The name is in the vocabulary because the per-type driver crate
+    /// declares its descriptor by it. It is deliberately not in
+    /// [`ALL`]: that list is the projection of the generated converted-type
+    /// authority, and registering the type there is the cutover unit's
+    /// change, not a second edit here.
+    pub const EXECUTION_POLICY: Self = Self("ExecutionPolicy");
 
     /// Every well-known type, in the order of the converted-type authority
     /// list: [`V3_CONVERTED_RESOURCE_TYPES`] is the single declaration the

@@ -708,6 +708,20 @@ d2b_rust_test(
 )
 
 d2b_rust_test(
+    name = "policy_resource_authority",
+    srcs = ["tests/policy_resource_authority.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-core:d2b_core",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
     name = "mode_separation",
     srcs = ["tests/mode_separation.rs"],
     compile_data = ["Cargo.toml"],

@@ -7,15 +7,23 @@
 //! driver of `d2b_resource_runtime::metadata`, so this crate cannot diverge
 //! from its siblings on it.
 //!
-//! `SeccompProfile` declares the device-node binds and the posture a role
-//! references. The type is declared here and its rows materialize in the
-//! policy-rows unit.
+//! `SeccompProfile` is a syscall filter and nothing else. The canonical spec
+//! in `d2b-contracts-resource` has exactly one field, the filter, and its
+//! wire mirror denies unknown fields, so a committed row that still carries a
+//! namespace set, a cgroup set, a device-node bind, or a mount does not
+//! decode into this type at all: confinement is an `ExecutionPolicy`'s
+//! business, and access is admitted through the typed binding relationships.
+//!
+//! `seccomp_profile` still holds the pre-cutover posture row the foundation
+//! seed publishes for the system zone. That shape has no successor in the
+//! canonical contract; the cutover deletes it together with the seed's use of
+//! it.
 
 #![deny(missing_docs)]
 
 mod driver;
 
-/// The Seccomp Profile ResourceType spec and status shapes owned by this crate.
+/// The pre-cutover posture row shape the foundation seed still publishes.
 mod seccomp_profile;
 
 pub use driver::seccomp_profile_descriptor;

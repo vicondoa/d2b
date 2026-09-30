@@ -1,4 +1,12 @@
 //! Revision-bound positive authorization decision cache.
+//!
+//! A cached decision is an optimization over a decision the shared evaluator
+//! already made, never a decision of its own. The cache therefore holds
+//! positives only, and a hit is served only when the exact authority the
+//! decision was made from is still current: the same policy revisions, and -
+//! through [`AcceptedRoleEvidence`] - the same accepted `Role` row, byte for
+//! byte. A denial is never converted into an allow, and an entry whose
+//! authority no longer matches is a miss rather than a stale allow.
 
 use std::{
     collections::BTreeMap,
@@ -6,9 +14,46 @@ use std::{
 };
 
 use d2b_contracts_resource::v3::{
-    ConfigurationGeneration, ResourceRef, ResourceUid, ZoneRevision,
+    CanonicalJsonObject, ConfigurationGeneration, DesiredDigest, ResourceRef, ResourceUid,
+    ZoneRevision,
     execution_policy::redacted_debug,
 };
+
+/// The exact accepted `Role` row one positive decision was made from.
+///
+/// The graph is the authority: a decision is made for the `Role` and
+/// `RoleBinding` rows the broker had already accepted, and it is valid only
+/// while those exact rows are still the ones. The evidence is the accepted
+/// row's own canonical digest under the contract's domain tag, so editing one
+/// rule in that row changes it, and a decision made from the earlier row
+/// stops being served.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AcceptedRoleEvidence {
+    role_ref: ResourceRef,
+    admitted_digest: DesiredDigest,
+}
+
+impl AcceptedRoleEvidence {
+    /// Derive the evidence from the exact bytes the broker accepted.
+    pub fn of_admitted_row(role_ref: ResourceRef, admitted: &CanonicalJsonObject) -> Self {
+        Self {
+            role_ref,
+            admitted_digest: DesiredDigest::of(&admitted.to_canonical_bytes()),
+        }
+    }
+
+    /// The accepted `Role` row this evidence names.
+    pub const fn role_ref(&self) -> &ResourceRef {
+        &self.role_ref
+    }
+
+    /// The framed digest of the accepted row's bytes.
+    pub const fn admitted_digest(&self) -> &DesiredDigest {
+        &self.admitted_digest
+    }
+}
+
+redacted_debug!(AcceptedRoleEvidence);
 
 /// Policy revisions that make one positive decision valid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -48,10 +93,13 @@ impl AuthorizationCacheKey {
 
 redacted_debug!(AuthorizationCacheKey);
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 struct PositiveEntry {
     revisions: PolicyRevisionSet,
     expires_at_tick: u64,
+    /// The accepted `Role` row the decision was made from, when the entry was
+    /// recorded through the graph-bound surface.
+    role: Option<AcceptedRoleEvidence>,
 }
 
 /// A bounded positive-only cache. Denial state is never converted into an allow.
@@ -110,6 +158,32 @@ impl PositiveDecisionCache {
             .is_some_and(|entry| entry.revisions == revisions)
     }
 
+    /// Whether a non-expired entry recorded from the graph's current `Role`
+    /// row is present.
+    ///
+    /// This is the surface the cutover authorizer uses. It differs from
+    /// [`Self::contains`] in one respect: an entry recorded without accepted
+    /// role evidence, or recorded from a different `Role` row, is a miss. A
+    /// cache can therefore only ever make a decision faster while the exact
+    /// authority that produced it is still the authority.
+    pub fn contains_for_role(
+        &self,
+        key: &AuthorizationCacheKey,
+        revisions: PolicyRevisionSet,
+        role: &AcceptedRoleEvidence,
+        now_tick: u64,
+    ) -> bool {
+        let mut entries = self.lock_entries();
+        entries.retain(|_, entry| entry.expires_at_tick > now_tick);
+        entries.get(key).is_some_and(|entry| {
+            entry.revisions == revisions
+                && entry
+                    .role
+                    .as_ref()
+                    .is_some_and(|recorded| recorded == role)
+        })
+    }
+
     /// Insert one positive decision, evicting expired entries and refusing
     /// insertions past the bound. An already-expired entry is never stored.
     pub fn insert_allow(
@@ -132,6 +206,39 @@ impl PositiveDecisionCache {
             PositiveEntry {
                 revisions,
                 expires_at_tick,
+                role: None,
+            },
+        );
+    }
+
+    /// Insert one positive decision bound to the accepted `Role` row it was
+    /// made from.
+    ///
+    /// The entry is stored under the same bound, expiry, and positive-only
+    /// rules as [`Self::insert_allow`]; the accepted role evidence is what
+    /// makes a later hit conditional on that row still being current.
+    pub fn insert_allow_for_role(
+        &self,
+        key: AuthorizationCacheKey,
+        revisions: PolicyRevisionSet,
+        role: AcceptedRoleEvidence,
+        expires_at_tick: u64,
+        now_tick: u64,
+    ) {
+        if self.max_entries == 0 || expires_at_tick <= now_tick {
+            return;
+        }
+        let mut entries = self.lock_entries();
+        entries.retain(|_, entry| entry.expires_at_tick > now_tick);
+        if entries.len() >= self.max_entries && !entries.contains_key(&key) {
+            return;
+        }
+        entries.insert(
+            key,
+            PositiveEntry {
+                revisions,
+                expires_at_tick,
+                role: Some(role),
             },
         );
     }
@@ -270,5 +377,80 @@ mod tests {
         let cache = PositiveDecisionCache::new(0);
         cache.insert_allow(key(1), revisions(1), 100, 1);
         assert!(!cache.contains(&key(1), revisions(1), 50));
+    }
+
+    /// One accepted `Role` row, in the bytes the graph holds for it.
+    fn admitted_role(rules: &str) -> CanonicalJsonObject {
+        CanonicalJsonObject::parse(
+            format!(r#"{{"operationRefs":[],"rules":[{rules}]}}"#).as_bytes(),
+        )
+        .expect("the admitted row is a canonical object")
+    }
+
+    fn role_ref() -> ResourceRef {
+        ResourceRef::parse("Role/volume-operator").expect("canonical reference")
+    }
+
+    /// A decision recorded from the accepted `Role` row is served only while
+    /// that exact row is still the one in the graph: editing one rule in the
+    /// row changes its admitted digest, and the earlier decision stops being
+    /// served rather than outliving the authority that produced it.
+    #[test]
+    fn a_graph_bound_decision_stops_being_served_when_the_accepted_role_row_changes() {
+        let original = admitted_role(r#"{"resourceTypes":["Volume"]}"#);
+        let narrowed = admitted_role(r#"{"resourceTypes":["VolumeBinding"]}"#);
+        let cache = PositiveDecisionCache::new(4);
+        let evidence = AcceptedRoleEvidence::of_admitted_row(role_ref(), &original);
+        cache.insert_allow_for_role(key(1), revisions(1), evidence.clone(), 100, 1);
+
+        assert!(cache.contains_for_role(&key(1), revisions(1), &evidence, 50));
+        let rederived = AcceptedRoleEvidence::of_admitted_row(role_ref(), &narrowed);
+        assert_ne!(
+            rederived,
+            evidence,
+            "a different accepted row is not the row the decision was made from"
+        );
+        assert!(
+            !cache.contains_for_role(&key(1), revisions(1), &rederived, 50),
+            "a decision made from the earlier row is not served for the edited one"
+        );
+    }
+
+    /// An entry recorded without accepted role evidence is never served
+    /// through the graph-bound surface, so a pre-cutover caller cannot leave
+    /// behind an entry the cutover authorizer would treat as current.
+    #[test]
+    fn an_entry_without_accepted_role_evidence_is_never_served_to_the_graph_bound_reader() {
+        let original = admitted_role(r#"{"resourceTypes":["Volume"]}"#);
+        let evidence = AcceptedRoleEvidence::of_admitted_row(role_ref(), &original);
+        let cache = PositiveDecisionCache::new(4);
+        cache.insert_allow(key(1), revisions(1), 100, 1);
+        assert!(cache.contains(&key(1), revisions(1), 50));
+        assert!(
+            !cache.contains_for_role(&key(1), revisions(1), &evidence, 50),
+            "the graph-bound reader demands the accepted role evidence"
+        );
+    }
+
+    /// The same bound, expiry, and positive-only rules apply to the
+    /// graph-bound surface: a role-bound entry past the ceiling is refused,
+    /// and an already-expired one is never stored.
+    #[test]
+    fn the_graph_bound_surface_keeps_the_bound_and_the_expiry() {
+        let original = admitted_role(r#"{"resourceTypes":["Volume"]}"#);
+        let evidence = AcceptedRoleEvidence::of_admitted_row(role_ref(), &original);
+        let cache = PositiveDecisionCache::new(1);
+        cache.insert_allow_for_role(key(1), revisions(1), evidence.clone(), 100, 1);
+        cache.insert_allow_for_role(key(2), revisions(1), evidence.clone(), 100, 50);
+        assert!(
+            !cache.contains_for_role(&key(2), revisions(1), &evidence, 60),
+            "a new key past the ceiling is refused"
+        );
+        assert!(cache.contains_for_role(&key(1), revisions(1), &evidence, 99));
+        assert!(!cache.contains_for_role(&key(1), revisions(1), &evidence, 100));
+
+        let expiring = PositiveDecisionCache::new(2);
+        expiring.insert_allow_for_role(key(3), revisions(1), evidence.clone(), 5, 5);
+        assert!(!expiring.contains_for_role(&key(3), revisions(1), &evidence, 6));
     }
 }

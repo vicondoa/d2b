@@ -9021,6 +9021,8 @@ const COMMITTED_SCOPE: &[CommittedScopeEntry] = &[
         reason: "the plan's provider crate class; a family or per-type provider crate" },
     CommittedScopeEntry { crate_name: "d2b-provider-seccomp-profile", class: CommittedScopeClass::Provider,
         reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-execution-policy", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
 ];
 const COMMITTED_SCOPE_ARTIFACT_ROOTS: &[&str] = &["docs/reference", "packages/policy-inputs"];
 

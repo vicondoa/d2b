@@ -7,16 +7,23 @@
 //! driver of `d2b_resource_runtime::metadata`, so this crate cannot diverge
 //! from its siblings on it.
 //!
-//! `Operation` is a broker operation row: it declares the payload schema, the
-//! authority profile, the audit facet, and the handler reference the generic
-//! envelope dispatches. The type is declared here and its rows materialize in
-//! the policy-rows unit.
+//! `Operation` is the single externally callable contract: its payload and
+//! result schemas, the authority, audit, descriptor-carriage, and bounds
+//! facets, and the trusted implementation that answers it. Every one of those
+//! facets is the canonical contract in `d2b-contracts-resource`, and this
+//! module re-exports them rather than restating them.
+//!
+//! What it still holds locally is the pre-cutover row a committed `Command`
+//! materializes, carrying an `ownerRef` and an inherited wire discriminant.
+//! The canonical contract has no such row, so it has no successor; the cutover
+//! deletes it together with the foundation seed's materialization.
 
 #![deny(missing_docs)]
 
 mod driver;
 
-/// The Operation ResourceType spec and status shapes owned by this crate.
+/// The canonical `Operation` contract, re-exported, and the one retired row
+/// shape that still has a caller.
 pub mod operation;
 
 pub use driver::operation_descriptor;
