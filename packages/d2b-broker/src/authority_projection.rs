@@ -381,7 +381,7 @@ impl AuthorityProjectionError {
     /// A store that could not answer is not a thaw: a durable failure leaves
     /// the Zone exactly as fenced as it was.
     pub fn is_fenced(&self) -> bool {
-        self.refusal().map_or(true, |refusal| refusal.fenced)
+        self.refusal().is_none_or(|refusal| refusal.fenced)
     }
 
     fn io(detail: String) -> Self {

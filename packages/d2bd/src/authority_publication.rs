@@ -226,7 +226,7 @@ impl OriginationPublicationLink {
 
     /// The socket this link dials.
     pub fn socket_path(&self) -> &Path {
-        &self.socket_path.as_path()
+        self.socket_path.as_path()
     }
 }
 
