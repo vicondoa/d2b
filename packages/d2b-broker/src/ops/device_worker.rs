@@ -445,6 +445,58 @@ pub(crate) fn state_volume_leaf_for_launch(
     Ok(leaf)
 }
 
+/// The slug a launch whose claimed runtime-socket binding disagrees with the
+/// trusted posture - the launched row's own, or, for a launch that names no
+/// row to pin, the bundle-resolved role's - is refused by.
+pub(crate) const SOCKET_BINDING_ROW_MISMATCH: &str =
+    "device-worker-socket-binding-row-mismatch";
+
+/// Whether one *launched row* binds its socket under the broker runtime
+/// root's per-Guest directory, decided by the row the verified Zone resource
+/// bundle declares rather than by the flag a launch payload carries.
+///
+/// The closed [`binds_runtime_socket`] table - the one the trusted runner
+/// intents are minted from - turns the row's declared (Provider, template)
+/// pair into the worker role, and the binding follows that role. A row the
+/// bundle declares no Device worker for binds nothing: there is no
+/// [`GuestRuntimeDirPosture`] its socket directory could be postured with,
+/// and creating `<runtime_root>/vms/<guest>` for it would hand a sibling
+/// worker's principal the directory its own socket lives in.
+fn binds_runtime_socket_for_row(
+    resolver: &BundleResolver,
+    scope: &DeviceWorkerScope,
+    row_ref: &ResourceRef,
+) -> bool {
+    declared_worker_role(resolver, scope, row_ref)
+        .map(|role| binds_runtime_socket(&role))
+        .unwrap_or(false)
+}
+
+/// Whether one pinned Device-worker launch binds a socket under the
+/// per-Guest runtime directory, cross-checked against the flag the launch
+/// claims over the wire.
+///
+/// The flag reaches the broker as payload and is what decides whether the
+/// broker creates, postures and opens `<runtime_root>/vms/<guest>` and sets
+/// `u:<plan.uid>:rwx` on it - a grant the payload could otherwise claim on a
+/// row whose trusted posture grants nothing, and one that lets the claiming
+/// principal unlink a sibling worker's socket in the same directory. The
+/// launched row is the fact and the claim is only a check, so a disagreement
+/// is refused by [`SOCKET_BINDING_ROW_MISMATCH`] rather than repaired, in the
+/// same shape as [`state_volume_leaf_for_launch`].
+pub(crate) fn runtime_socket_binding_for_launch(
+    resolver: &BundleResolver,
+    scope: &DeviceWorkerScope,
+    row_ref: &ResourceRef,
+    claimed: bool,
+) -> Result<bool, &'static str> {
+    let binds = binds_runtime_socket_for_row(resolver, scope, row_ref);
+    if claimed != binds {
+        return Err(SOCKET_BINDING_ROW_MISMATCH);
+    }
+    Ok(binds)
+}
+
 /// The Device-worker role the verified Zone resource bundle declares for one
 /// pinned launch row, or `None` when it declares no Device worker there.
 ///
@@ -1704,6 +1756,74 @@ mod tests {
                 &ResourceRef::parse("Process/undeclared-tpm0").expect("row ref"),
             ),
             StateVolumeLeaf::MustExist
+        );
+    }
+
+    /// Whether a launch binds a socket under the per-Guest runtime
+    /// directory is the launched row's own fact, on the same terms as its
+    /// state-directory presence policy. A payload that claims the binding on
+    /// a row the bundle grants none to would otherwise have the broker
+    /// create, posture and open `<runtime_root>/vms/<guest>` and set
+    /// `u:<plan.uid>:rwx` on it - which is exactly the entry a worker needs
+    /// to unlink a sibling worker's socket in the same directory.
+    #[test]
+    fn the_runtime_socket_binding_comes_from_the_launched_row() {
+        let (resolver, row_ref, zone_uid, device_uid) = fixture();
+        let owner = ResourceRef::parse("Device/tpm0").expect("owner ref");
+        let pinned = resolve_launch_scope(
+            &resolver,
+            &row_ref,
+            &zone_uid,
+            Some(&owner),
+            Some(&device_uid),
+        )
+        .expect("the pin resolves");
+
+        assert_eq!(
+            runtime_socket_binding_for_launch(&resolver, &pinned, &row_ref, true),
+            Ok(true),
+            "the long-lived TPM worker row does bind `tpm.sock` in the \
+             per-Guest tree, so a launch that tells the truth is admitted"
+        );
+        assert_eq!(
+            runtime_socket_binding_for_launch(&resolver, &pinned, &row_ref, false),
+            Err(SOCKET_BINDING_ROW_MISMATCH),
+            "withholding the binding a row does have is the same disagreement \
+             in the other direction, and is refused rather than repaired"
+        );
+
+        // The one-shot row binds its control socket inside the Device's own
+        // state Volume, so it claims no per-Guest directory.
+        let flush = ResourceRef::parse("EphemeralProcess/swtpm-flush-tpm0").expect("row ref");
+        let flush_pinned = resolve_launch_scope(
+            &resolver,
+            &flush,
+            &zone_uid,
+            Some(&owner),
+            Some(&device_uid),
+        )
+        .expect("the one-shot row pins to the same Device");
+        assert_eq!(
+            runtime_socket_binding_for_launch(&resolver, &flush_pinned, &flush, false),
+            Ok(false)
+        );
+        assert_eq!(
+            runtime_socket_binding_for_launch(&resolver, &flush_pinned, &flush, true),
+            Err(SOCKET_BINDING_ROW_MISMATCH),
+            "claiming the per-Guest directory on a row that binds its socket \
+             inside the state Volume is refused by name"
+        );
+
+        // A row the bundle declares no Device-worker template for binds
+        // nothing, rather than borrowing the sibling row's posture.
+        let undeclared = ResourceRef::parse("Process/undeclared-tpm0").expect("row ref");
+        assert_eq!(
+            runtime_socket_binding_for_launch(&resolver, &pinned, &undeclared, false),
+            Ok(false)
+        );
+        assert_eq!(
+            runtime_socket_binding_for_launch(&resolver, &pinned, &undeclared, true),
+            Err(SOCKET_BINDING_ROW_MISMATCH)
         );
     }
 

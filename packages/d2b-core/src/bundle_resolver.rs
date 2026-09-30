@@ -509,6 +509,21 @@ pub struct UserNamespaceSpec {
 }
 
 impl ResolvedRunnerIntent {
+    /// The `roleId` this intent travels under on the broker wire.
+    ///
+    /// The cloud-hypervisor runner keeps its daemon-side `ch-runner` alias;
+    /// every other intent travels under its own `role_id`. This is the one
+    /// evaluation point for the alias: the launch client derives the value
+    /// it sends from here, and the broker's spawn-identity fence compares
+    /// against here. Deriving it independently on each side is what let a
+    /// fence and its client disagree about a legitimate launch.
+    pub fn wire_role_id(&self) -> &str {
+        match self.role {
+            ProcessRole::CloudHypervisorRunner => "ch-runner",
+            _ => self.role_id.as_str(),
+        }
+    }
+
     /// Convert one trusted process-DAG node into the broker runner intent shape.
     ///
     /// Non-runner/readiness-only roles and runner roles without a safe current or
@@ -6431,6 +6446,83 @@ fn manifest_parse_reason(error: &serde_json::Error) -> &'static str {
         serde_json::error::Category::Syntax
         | serde_json::error::Category::Eof
         | serde_json::error::Category::Io => "parse-failed",
+    }
+}
+
+#[cfg(test)]
+mod wire_role_id_tests {
+    use super::*;
+
+    /// Builds a resolved intent for one runner row whose bundle node id is
+    /// `node_id`, which is what the real cloud-hypervisor node carries -
+    /// it is not the `ch-runner` alias.
+    fn intent_with(role_wire: &str, node_id: &str) -> ResolvedRunnerIntent {
+        let node: ProcessNode = serde_json::from_value(serde_json::json!({
+            "id": node_id,
+            "role": role_wire,
+            "executionRef": "Host/host-system",
+            "binaryPath": "/bin/true",
+            "argv": ["/bin/true"],
+            "readiness": [],
+            "profile": {
+                "profileId": "w1-test",
+                "uid": 60200,
+                "gid": 60200,
+                "adr_carve_out": null,
+                "caps": [],
+                "namespaces": {
+                    "mount": true,
+                    "pid": true,
+                    "net": true,
+                    "ipc": true,
+                    "uts": true,
+                    "user": false
+                },
+                "seccompPolicyRef": null,
+                "mountPolicy": {
+                    "readOnlyPaths": ["/nix/store"],
+                    "writablePaths": [],
+                    "nixStoreReadOnly": true,
+                    "hideDeviceNodesByDefault": true,
+                    "deviceBinds": [],
+                    "bindMounts": []
+                },
+                "cgroupPlacement": {
+                    "subtree": "d2b.slice/test",
+                    "controllers": ["pids"],
+                    "delegated": false
+                }
+            },
+        }))
+        .expect("the runner node deserializes");
+        ResolvedRunnerIntent::from_process_node("test", &node).expect("a runner row resolves")
+    }
+
+    /// The cloud-hypervisor runner is the one role whose wire id is not
+    /// its intent id. The host-integration lane caught a spawn fence
+    /// comparing the raw `role_id` and refusing every legitimate
+    /// nested-VMM launch, because the real bundle names that node
+    /// something other than the alias.
+    #[test]
+    fn the_cloud_hypervisor_runner_travels_under_its_alias() {
+        let intent = intent_with("cloud-hypervisor-runner", "cloud-hypervisor-runner");
+        assert_ne!(intent.role_id, "ch-runner", "the node id is not the alias");
+        assert_eq!(intent.wire_role_id(), "ch-runner");
+    }
+
+    /// Every other role travels under its own id, so widening the alias
+    /// must not rename anything else.
+    #[test]
+    fn every_other_role_travels_under_its_own_id() {
+        for (role, node_id) in [
+            ("swtpm", "swtpm"),
+            ("virtiofsd", "virtiofsd"),
+            ("audio", "audio"),
+            ("video", "video"),
+        ] {
+            let intent = intent_with(role, node_id);
+            assert_eq!(intent.wire_role_id(), node_id);
+        }
     }
 }
 

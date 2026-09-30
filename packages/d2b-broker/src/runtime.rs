@@ -1265,9 +1265,11 @@ pub(crate) fn try_load_resolver(bundle_path: &Path) -> BundleSlot {
 /// Load the bundle resolver for one kernel invocation. Production uses
 /// the production verify policy (`root:d2bd`, mode 0640); under
 /// `cfg(test)` the test policy accepts the invoking principal so a
-/// per-test temp bundle loads. The kernel needs a resolver only for the
-/// USBIP backend device-bind extension; every other invocation stays
-/// bundle-free.
+/// per-test temp bundle loads. Every `spawn-process` kernel needs a
+/// resolver - the trust-boundary fences compare the launch plan against
+/// the bundle's own runner intent, so a spawn with no trusted row to
+/// compare against is refused - and the two Device-owned derivations and
+/// the USBIP backend extension read the same one.
 #[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) fn load_kernel_resolver(bundle_path: &Path) -> BundleSlot {
     #[cfg(test)]
@@ -7369,6 +7371,11 @@ static TEST_USBIP_LOCK_ROOT: OnceLock<PathBuf> = OnceLock::new();
 /// the whole test: without it, a second test running concurrently would
 /// replace the bundle mid-test. It restores the previous value on drop, so
 /// a bundle never leaks into the test that runs next.
+///
+/// Every path that installs into the slot - this guard and the spawn
+/// tests' `install_test_kernel_bundle` - holds that same lock, so the two
+/// families of tests serialize against each other and not merely within
+/// themselves.
 #[cfg(test)]
 static TEST_KERNEL_BUNDLE_RESOLVER: std::sync::RwLock<Option<std::sync::Arc<BundleResolver>>> =
     std::sync::RwLock::new(None);
@@ -8763,7 +8770,7 @@ async fn build_usbip_explicit_firewall_decision(
         .map_err(|err| BrokerError::LiveHandler(err.to_string()))
 }
 
-fn runner_role_for_process_role(
+pub(crate) fn runner_role_for_process_role(
     role: &d2b_core::processes::ProcessRole,
 ) -> Option<d2b_contracts_broker::broker_wire::RunnerRole> {
     use d2b_contracts_broker::broker_wire::RunnerRole;
@@ -8791,18 +8798,14 @@ fn runner_role_for_process_role(
     }
 }
 
-/// The wire `role_id` one trusted runner intent fences against. The
-/// cloud-hypervisor runner keeps its daemon-side `ch-runner` alias; every
-/// other intent uses its own `role_id`.
+/// The wire `role_id` one trusted runner intent fences against.
 ///
 /// SINGLE EVALUATION POINT for the alias: spawn validation and observation
-/// both read it instead of re-listing the match.
+/// both read it instead of re-listing the match, and the launch client
+/// derives its value from the same accessor.
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn wire_role_id_for_intent(intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent) -> &str {
-    match intent.role {
-        d2b_core::processes::ProcessRole::CloudHypervisorRunner => "ch-runner",
-        _ => intent.role_id.as_str(),
-    }
+    intent.wire_role_id()
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -9381,7 +9384,7 @@ fn runtime_scope_segment(scope: [u8; 32]) -> String {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn private_cgroup_placement(
+pub(crate) fn private_cgroup_placement(
     placement: &d2b_core::sandbox_profile::CgroupPlacement,
     vm_name: &str,
     runtime_scope: Option<[u8; 32]>,
@@ -12652,6 +12655,7 @@ mod tests {
         /// kernel test that exercises the grant serves its view out of here.
         store_root: PathBuf,
         resolver: Arc<BundleResolver>,
+        artifacts: TestBundleArtifacts,
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
@@ -12943,10 +12947,10 @@ mod tests {
         write_json_file(&storage_path, &test_storage_contract(&store_root));
 
         let mut resolver = BundleResolver::from_artifacts_with_zone_resource_bundles(
-            bundle,
-            host,
-            processes,
-            manifest,
+            bundle.clone(),
+            host.clone(),
+            processes.clone(),
+            manifest.clone(),
             BTreeMap::new(),
         );
         // The in-memory constructor does not read the storage artifact off
@@ -12961,6 +12965,61 @@ mod tests {
             processes_path,
             store_root,
             resolver,
+            artifacts: TestBundleArtifacts {
+                bundle,
+                host,
+                processes,
+                manifest,
+            },
+        }
+    }
+
+    /// The artifacts one [`TestBundle`] was resolved from, kept so a test
+    /// that needs its own declared runner rows re-resolves over a
+    /// replacement process DAG instead of forking the bundle writer.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[derive(Clone)]
+    struct TestBundleArtifacts {
+        bundle: d2b_core::bundle::Bundle,
+        host: d2b_core::host::HostJson,
+        processes: d2b_core::processes::ProcessesJson,
+        manifest: d2b_core::manifest_v04::ManifestV04,
+    }
+
+    /// The default test bundle re-resolved over a caller-supplied process DAG:
+    /// the same host, manifest and storage artifacts, declaring exactly the
+    /// runner rows the calling test drives.
+    ///
+    /// The re-resolve carries the same storage contract
+    /// [`build_test_bundle`] attaches, over the same store root. Dropping it
+    /// here would not merely lose the declared storage roots the ACL grants
+    /// are bounded against: an absent contract also resolves no
+    /// device-worker volume grants, so every launch this bundle drives would
+    /// be refused for a reason that has nothing to do with the test.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn build_test_bundle_over_processes(
+        root: &Path,
+        processes: d2b_core::processes::ProcessesJson,
+    ) -> TestBundle {
+        let base = build_test_bundle(root);
+        let artifacts = base.artifacts;
+        write_json_file(&base.processes_path, &processes);
+        let mut resolver = BundleResolver::from_artifacts_with_zone_resource_bundles(
+            artifacts.bundle.clone(),
+            artifacts.host.clone(),
+            processes.clone(),
+            artifacts.manifest.clone(),
+            BTreeMap::new(),
+        );
+        resolver.set_storage(test_storage_contract(&base.store_root));
+        let resolver = Arc::new(resolver);
+        TestBundle {
+            resolver,
+            artifacts: TestBundleArtifacts {
+                processes,
+                ..artifacts
+            },
+            ..base
         }
     }
 
@@ -15692,101 +15751,338 @@ mod tests {
         panic!("no {name} binary found for the spawn kernel test");
     }
 
-    /// The minimal unprivileged spawn-process payload one kernel test
-    /// drives: no namespaces, no cgroup leaf, no device binds, and the
-    /// current principal (a real clone3 spawn succeeds without broker
-    /// credentials only in that shape).
-    fn spawn_payload(
-        argv: Vec<String>,
-        role: &str,
-        serving_worker: bool,
-        vm_id: &str,
-        role_id: &str,
-        bundle_runner_intent_ref: &str,
-    ) -> serde_json::Value {
-        spawn_payload_with_preflight(argv, role, serving_worker, vm_id, role_id, bundle_runner_intent_ref, Vec::new())
+    /// The trusted runner-intent reference a legacy process-DAG row is
+    /// minted under (`bundle_resolver::intent_id_legacy_runner`), which is
+    /// the spelling every `processes.json`-declared row resolves to.
+    fn spawn_intent_id(vm_id: &str, role_id: &str) -> String {
+        format!("runner:vm:{vm_id}:role:{role_id}")
     }
 
-    /// The same minimal spawn payload plus a user namespace mapping the
-    /// child's in-ns root to the current principal. A plain (no-namespace)
-    /// child that runs as an unprivileged principal calls `setgroups` and
-    /// fails with EPERM before `execve`; inside a user namespace the
-    /// broker skips that step, so the kernel-spawned child is genuinely
-    /// alive and the test can exercise liveness against a running runner.
-    fn spawn_payload_with_user_namespace(
-        argv: Vec<String>,
-        role: &str,
+    /// A well-formed spawn-process payload for one intent the bundle
+    /// declares: every host credential - binary, uid, gid, groups,
+    /// capabilities, namespaces, seccomp class, mount policy, umask, root
+    /// carve-out, the user-namespace mapping and the Device-worker socket
+    /// binding - is copied from the resolved intent exactly as the daemon's
+    /// launch arm copies it, and only `argv` is the test's own.
+    ///
+    /// This is the shape the trust-boundary fences admit. A test that wants
+    /// to see a fence refuse mutates exactly the one field under test, so a
+    /// refusal it observes is that field's and not the fixture's.
+    fn spawn_payload_from_intent(
+        resolver: &BundleResolver,
+        intent_id: &str,
         serving_worker: bool,
-        vm_id: &str,
-        role_id: &str,
-        bundle_runner_intent_ref: &str,
+        argv: Vec<String>,
     ) -> serde_json::Value {
-        let mut payload = spawn_payload_with_preflight(
-            argv,
-            role,
-            serving_worker,
-            vm_id,
-            role_id,
-            bundle_runner_intent_ref,
-            Vec::new(),
-        );
-        payload["namespaces"]["user"] = serde_json::json!(true);
-        payload["userNamespace"] = serde_json::json!({
-            "hostUidForZero": nix::unistd::Uid::current().as_raw(),
-            "hostGidForZero": Gid::current().as_raw(),
+        let intent = resolver
+            .find_runner_intent(intent_id)
+            .unwrap_or_else(|| panic!("{intent_id} resolves in the test bundle"));
+        let mut payload = serde_json::json!({
+            "binaryPath": intent.binary_path.display().to_string(),
+            "argv": argv,
+            "preflightSocketPaths": Vec::<String>::new(),
+            "uid": intent.uid,
+            "gid": intent.gid,
+            "supplementaryGroups": intent.supplementary_groups,
+            "env": intent.env,
+            "capabilities": intent.capabilities,
+            "namespaces": intent.namespaces,
+            "mountPolicy": intent.mount_policy,
+            "cgroupPlacement": intent.cgroup_placement,
+            "rootCarveOut": intent.root_carve_out,
+            "skipBinaryExistsCheck": false,
+            "role": runner_role_for_process_role(&intent.role),
+            "servingWorker": serving_worker,
+            "deviceWorker": {
+                "scope": Value::Null,
+                "bindsRuntimeSocket": crate::ops::device_worker::binds_runtime_socket(&intent.role),
+            },
+            "runnerIdentity": {
+                "vmId": intent.vm_name,
+                // The real launch client sends the wire `roleId`, which is
+                // the intent's alias for the roles that carry one. Using
+                // the raw `role_id` here built payloads no client would
+                // send, which is how a fence could disagree with its
+                // client and still pass every test.
+                "roleId": intent.wire_role_id(),
+                "resourceRef": Value::Null,
+                "resourceUid": Value::Null,
+                "zoneUid": Value::Null,
+                "generation": Value::Null,
+                "runtimeScope": Value::Null,
+                "ownerRef": Value::Null,
+                "providerRef": Value::Null,
+                "providerIdentity": Value::Null,
+                "templateIdentity": Value::Null,
+                "bundleRunnerIntentRef": intent.intent_id,
+                "guestExecution": Value::Null,
+            },
         });
+        // The absent optionals ride as absent keys, the shape the payload
+        // parsers accept: an explicit JSON null is a different thing to
+        // `optional_seccomp_ref` and `optional_umask` and is refused.
+        let object = payload.as_object_mut().expect("an object payload");
+        if let Some(policy_ref) = &intent.seccomp_policy_ref {
+            object.insert("seccompPolicyRef".to_owned(), policy_ref.clone().into());
+        }
+        if let Some(umask) = intent.umask {
+            object.insert("umask".to_owned(), umask.into());
+        }
+        if let Some(spec) = intent.user_namespace {
+            object.insert(
+                "userNamespace".to_owned(),
+                serde_json::json!({
+                    "hostUidForZero": spec.host_uid_for_zero,
+                    "hostGidForZero": spec.host_gid_for_zero,
+                }),
+            );
+        }
         payload
     }
 
-    fn spawn_payload_with_preflight(
-        argv: Vec<String>,
-        role: &str,
-        serving_worker: bool,
-        vm_id: &str,
-        role_id: &str,
-        bundle_runner_intent_ref: &str,
-        preflight_socket_paths: Vec<String>,
-    ) -> serde_json::Value {
-        serde_json::json!({
-            "binaryPath": argv[0],
-            "argv": argv,
-            "preflightSocketPaths": preflight_socket_paths,
-            "uid": nix::unistd::Uid::current().as_raw(),
-            "gid": Gid::current().as_raw(),
-            "supplementaryGroups": [],
-            "env": [],
-            "capabilities": [],
-            "namespaces": {
-                "mount": false, "pid": false, "net": false, "ipc": false, "uts": false, "user": false,
-            },
-            "mountPolicy": {
-                "readOnlyPaths": [],
-                "writablePaths": [],
-                "nixStoreReadOnly": false,
-                "hideDeviceNodesByDefault": false,
-                "deviceBinds": [],
-            },
-            "cgroupPlacement": { "subtree": "", "controllers": [], "delegated": false },
-            "rootCarveOut": false,
-            "skipBinaryExistsCheck": false,
-            "role": role,
-            "servingWorker": serving_worker,
-            "runnerIdentity": {
-                "vmId": vm_id,
-                "roleId": role_id,
-                "resourceRef": null,
-                "resourceUid": null,
-                "zoneUid": null,
-                "generation": null,
-                "runtimeScope": null,
-                "ownerRef": null,
-                "providerRef": null,
-                "providerIdentity": null,
-                "templateIdentity": null,
-                "bundleRunnerIntentRef": bundle_runner_intent_ref,
-                "guestExecution": null,
-            },
-        })
+    /// The process DAG the spawn-process kernel tests resolve their
+    /// payloads against: one row per behavior under test, each declaring
+    /// the test's own principal and the minimal mount policy a real
+    /// unprivileged clone3 spawn needs (no namespaces the broker cannot
+    /// apply without root, no read-only or device policy the kernel would
+    /// have to materialize).
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn spawn_kernel_processes() -> d2b_core::processes::ProcessesJson {
+        use d2b_core::sandbox_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
+        use d2b_core::processes::{
+            NodeId, ProcessNode, ProcessRole, ProcessesJson, RoleUserNamespace, VmProcessDag,
+            VmProcessInvariants,
+        };
+        use d2b_core::test_support::RoleProfileBuilder;
+
+        let principal = nix::unistd::Uid::current().as_raw();
+        let principal_gid = Gid::current().as_raw();
+        let binary = spawn_test_binary("true");
+        let minimal_mount_policy = MountPolicy {
+            read_only_paths: Vec::new(),
+            writable_paths: Vec::new(),
+            nix_store_read_only: false,
+            hide_device_nodes_by_default: false,
+            device_binds: Vec::new(),
+            bind_mounts: Vec::new(),
+        };
+        let no_namespaces = NamespaceSet {
+            mount: false,
+            pid: false,
+            net: false,
+            ipc: false,
+            uts: false,
+            user: false,
+        };
+        let invariants = VmProcessInvariants {
+            swtpm_pre_start_flush: true,
+            per_vm_audit_pipeline: true,
+            usbip_gating: true,
+            tpm_ownership_migration_without_running_vm_mutation: true,
+        };
+        let dag = |vm: &str, node: ProcessNode| VmProcessDag {
+            workload_identity: None,
+            vm: vm.to_owned(),
+            nodes: vec![node],
+            edges: Vec::new(),
+            invariants: invariants.clone(),
+        };
+        let node = |id: &str, role: ProcessRole, profile| ProcessNode {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
+            id: NodeId(id.to_owned()),
+            role,
+            unit: None,
+            binary_path: Some(binary.clone()),
+            argv: vec![binary.clone()],
+            env: Vec::new(),
+            profile,
+            readiness: Vec::new(),
+            plan_ops: Vec::new(),
+            network_interfaces: Vec::new(),
+        };
+        ProcessesJson {
+            schema_version: "v2".to_owned(),
+            vms: vec![
+                // The duplicate-runner guard's fixture: a user-namespace row,
+                // so the first child is genuinely alive when the second
+                // spawn is checked.
+                dag(
+                    "vm-a",
+                    node(
+                        "ch-runner",
+                        ProcessRole::CloudHypervisorRunner,
+                        RoleProfileBuilder::new()
+                            .with_profile_id("profile-vm-a-ch")
+                            .with_cgroup_placement(CgroupPlacement {
+                                subtree: String::new(),
+                                controllers: Vec::new(),
+                                delegated: false,
+                            })
+                            .with_uid(principal)
+                            .with_gid(principal_gid)
+                            .with_mount_policy(minimal_mount_policy.clone())
+                            .with_namespaces(NamespaceSet {
+                                user: true,
+                                ..no_namespaces.clone()
+                            })
+                            .with_user_namespace(Some(RoleUserNamespace {
+                                host_uid_for_zero: principal,
+                                host_gid_for_zero: principal_gid,
+                            }))
+                            .build(),
+                    ),
+                ),
+                // The serving-worker ACL grant's fixture: a plain row, so the
+                // spawn needs no user namespace.
+                dag(
+                    "vm-a",
+                    node(
+                        "virtiofsd-worker",
+                        ProcessRole::Virtiofsd,
+                        RoleProfileBuilder::new()
+                            .with_profile_id("profile-vm-a-virtiofsd")
+                            .with_cgroup_placement(CgroupPlacement {
+                                subtree: String::new(),
+                                controllers: Vec::new(),
+                                delegated: false,
+                            })
+                            .with_uid(principal)
+                            .with_gid(principal_gid)
+                            .with_mount_policy(minimal_mount_policy.clone())
+                            .with_namespaces(no_namespaces.clone())
+                            .build(),
+                    ),
+                ),
+                // The stale-socket preflight's fixture.
+                dag(
+                    "vm-stale",
+                    node(
+                        "ch-runner",
+                        ProcessRole::CloudHypervisorRunner,
+                        RoleProfileBuilder::new()
+                            .with_profile_id("profile-vm-stale-ch")
+                            .with_cgroup_placement(CgroupPlacement {
+                                subtree: String::new(),
+                                controllers: Vec::new(),
+                                delegated: false,
+                            })
+                            .with_uid(principal)
+                            .with_gid(principal_gid)
+                            .with_mount_policy(minimal_mount_policy.clone())
+                            .with_namespaces(no_namespaces.clone())
+                            .build(),
+                    ),
+                ),
+                // The USBIP backend device-bind extension's fixture.
+                dag(
+                    "sys-work-usbipd",
+                    node(
+                        "backend",
+                        ProcessRole::Usbip,
+                        RoleProfileBuilder::new()
+                            .with_profile_id("profile-usbip-backend")
+                            .with_cgroup_placement(CgroupPlacement {
+                                subtree: String::new(),
+                                controllers: Vec::new(),
+                                delegated: false,
+                            })
+                            .with_uid(principal)
+                            .with_gid(principal_gid)
+                            .with_mount_policy(minimal_mount_policy.clone())
+                            .with_namespaces(no_namespaces.clone())
+                            .build(),
+                    ),
+                ),
+                // The `binaryPath` fence's fixture: a TPM worker's trusted
+                // row, so a payload that names another executable (and the
+                // Endorsement-Key path in its argv) is refused by name.
+                dag(
+                    "vm-tpm",
+                    node(
+                        "swtpm",
+                        ProcessRole::Swtpm,
+                        RoleProfileBuilder::new()
+                            .with_profile_id("profile-vm-tpm-swtpm")
+                            .with_cgroup_placement(CgroupPlacement {
+                                subtree: String::new(),
+                                controllers: Vec::new(),
+                                delegated: false,
+                            })
+                            .with_uid(principal)
+                            .with_gid(principal_gid)
+                            .with_seccomp_policy_ref(Some("w1-swtpm"))
+                            .with_mount_policy(minimal_mount_policy.clone())
+                            .with_namespaces(NamespaceSet {
+                                user: true,
+                                ..no_namespaces.clone()
+                            })
+                            .with_user_namespace(Some(RoleUserNamespace {
+                                host_uid_for_zero: principal,
+                                host_gid_for_zero: principal_gid,
+                            }))
+                            .build(),
+                    ),
+                ),
+                // The mount-posture fence's fixture: a row that runs as host
+                // root with the device mask on, which is the only plan whose
+                // dropped secret masks are the whole of its protection.
+                dag(
+                    "vm-tpm",
+                    node(
+                        "swtpm-root",
+                        ProcessRole::SwtpmPreStartFlush,
+                        RoleProfileBuilder::new()
+                            .with_profile_id("profile-vm-tpm-swtpm-root")
+                            .with_cgroup_placement(CgroupPlacement {
+                                subtree: String::new(),
+                                controllers: Vec::new(),
+                                delegated: false,
+                            })
+                            .with_uid(0)
+                            .with_gid(0)
+                            .with_adr_carve_out(Some("tpm state reprovisioning"))
+                            .with_seccomp_policy_ref(Some("w1-swtpm"))
+                            .with_mount_policy(MountPolicy {
+                                hide_device_nodes_by_default: true,
+                                ..minimal_mount_policy
+                            })
+                            .with_namespaces(NamespaceSet {
+                                user: true,
+                                pid: true,
+                                ..no_namespaces
+                            })
+                            .with_user_namespace(Some(RoleUserNamespace {
+                                host_uid_for_zero: 0,
+                                host_gid_for_zero: 0,
+                            }))
+                            .build(),
+                    ),
+                ),
+            ],
+        }
+    }
+
+    /// The default test bundle re-resolved over [`spawn_kernel_processes`],
+    /// so the spawn-process kernel tests have a bundle whose runner intents
+    /// name their own payloads.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn build_spawn_kernel_bundle(root: &Path) -> TestBundle {
+        build_test_bundle_over_processes(root, spawn_kernel_processes())
+    }
+
+    /// Install `bundle`'s resolver as the kernel's per-test bundle override,
+    /// so `load_kernel_resolver` answers with it for the duration of the
+    /// guard. Scoped to the guard rather than to the process: the override
+    /// used to be a `OnceLock` a single test set, which left every sibling
+    /// spawn test's bundle answer dependent on test order. The returned
+    /// guard holds the process-wide bundle lock and restores the previous
+    /// resolver on drop, so these tests serialize against every other test
+    /// that installs a bundle, not only against each other.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn install_test_kernel_bundle(bundle: &TestBundle) -> TestKernelBundleResolver {
+        TestKernelBundleResolver::install(bundle.resolver.clone())
     }
 
     /// Drop one kernel-spawned runner's runner-id-keyed registrations and
@@ -15799,11 +16095,14 @@ mod tests {
 
     /// Serializes every test that mutates the process-global broker
     /// registries (runner metadata, pidfds, reap buffer, controller
-    /// bootstrap). These are production statics shared across the binary,
-    /// so tests that write them must never run concurrently: one test's
-    /// registration would be clobbered by another test's cleanup. The
-    /// guard also clears the registries on entry and exit, so each test
-    /// sees a clean, isolated snapshot and leaves none behind.
+    /// bootstrap) or the test-only kernel bundle override. These are
+    /// production statics shared across the binary, so tests that write
+    /// them must never run concurrently: one test's registration would be
+    /// clobbered by another test's cleanup, and one test's bundle would be
+    /// resolved against another test's runner intents. The guard also
+    /// clears the registries and drops the bundle override on entry and
+    /// exit, so each test sees a clean, isolated snapshot and leaves none
+    /// behind.
     struct RegistryTestGuard {
         _lock: MutexGuard<'static, ()>,
     }
@@ -15816,6 +16115,7 @@ mod tests {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             clear_registry_state();
+            clear_test_kernel_bundle();
             Self { _lock: lock }
         }
     }
@@ -15823,7 +16123,17 @@ mod tests {
     impl Drop for RegistryTestGuard {
         fn drop(&mut self) {
             clear_registry_state();
+            clear_test_kernel_bundle();
         }
+    }
+
+    /// Drop the test-only kernel bundle override, so the next kernel
+    /// invocation falls back to its own on-disk bundle path.
+    fn clear_test_kernel_bundle() {
+        TEST_KERNEL_BUNDLE_RESOLVER
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
     }
 
     /// Clear every process-global broker registry so no state leaks
@@ -15848,8 +16158,8 @@ mod tests {
         let _registry_guard = RegistryTestGuard::new();
         let root = test_audit_dir("spawn-kernel-usbip-binds");
         fs::create_dir_all(&root).expect("create test root");
-        let bundle = build_test_bundle(&root);
-        let _bundle_guard = TestKernelBundleResolver::install(bundle.resolver.clone());
+        let bundle = build_spawn_kernel_bundle(&root);
+        let _bundle_guard = install_test_kernel_bundle(&bundle);
         // The fake USB sysfs device the bundle's locked busid names
         // (vendor 1050, product 0407, bus 1, dev 7): the derived device
         // node is /dev/bus/usb/001/007.
@@ -15873,13 +16183,11 @@ mod tests {
             harness
                 .invoke(
                     "spawn-process",
-                    spawn_payload(
-                        vec![spawn_test_binary("true")],
-                        "usbip",
+                    spawn_payload_from_intent(
+                        &bundle.resolver,
+                        &spawn_intent_id("sys-work-usbipd", "backend"),
                         false,
-                        "sys-work-usbipd",
-                        "backend",
-                        "runner:sys-work-usbipd:backend",
+                        vec![spawn_test_binary("true")],
                     ),
                     Vec::new(),
                 )
@@ -15954,8 +16262,8 @@ mod tests {
             .expect("chmod runtime root");
         fs::set_permissions(&socket_dir, fs::Permissions::from_mode(0o700))
             .expect("chmod socket dir");
-        let bundle = build_test_bundle(&root);
-        let _bundle_guard = TestKernelBundleResolver::install(bundle.resolver.clone());
+        let bundle = build_spawn_kernel_bundle(&root);
+        let _bundle_guard = install_test_kernel_bundle(&bundle);
         // The served view lives under the storage root the bundle declares,
         // which is what the ACL grant proves the launch argv against.
         let shared = bundle.store_root.join("view");
@@ -15967,7 +16275,10 @@ mod tests {
             harness
                 .invoke(
                     "spawn-process",
-                    spawn_payload(
+                    spawn_payload_from_intent(
+                        &bundle.resolver,
+                        &spawn_intent_id("vm-a", "virtiofsd-worker"),
+                        true,
                         vec![
                             spawn_test_binary("true"),
                             format!(
@@ -15976,11 +16287,6 @@ mod tests {
                             ),
                             format!("--shared-dir={}", shared.display()),
                         ],
-                        "provider-controller",
-                        true,
-                        "vm-a",
-                        "virtiofsd-worker",
-                        "runner:vm-a:virtiofsd-worker",
                     ),
                     Vec::new(),
                 )
@@ -16030,30 +16336,23 @@ mod tests {
             "the dropped listener leaves a stale socket file"
         );
 
-        let harness = SpawnKernelHarness::new(
-            &root,
-            &root.join("unused-bundle.json"),
-            &root.join("runtime"),
+        let bundle = build_spawn_kernel_bundle(&root);
+        let _bundle_guard = install_test_kernel_bundle(&bundle);
+        let harness = SpawnKernelHarness::new(&root, &bundle.bundle_path, &root.join("runtime"));
+        let mut payload = spawn_payload_from_intent(
+            &bundle.resolver,
+            &spawn_intent_id("vm-stale", "ch-runner"),
+            false,
+            vec![
+                spawn_test_binary("true"),
+                "--api-socket".to_owned(),
+                stale.display().to_string(),
+            ],
         );
+        payload["preflightSocketPaths"] = serde_json::json!([stale.display().to_string()]);
         let response = envelope_response(
             harness
-                .invoke(
-                    "spawn-process",
-                    spawn_payload_with_preflight(
-                        vec![
-                            spawn_test_binary("true"),
-                            "--api-socket".to_owned(),
-                            stale.display().to_string(),
-                        ],
-                        "cloud-hypervisor",
-                        false,
-                        "vm-stale",
-                        "ch-runner",
-                        "runner:vm-stale:ch-runner",
-                        vec![stale.display().to_string()],
-                    ),
-                    Vec::new(),
-                )
+                .invoke("spawn-process", payload, Vec::new())
                 .expect("cloud-hypervisor spawn dispatches"),
         );
         assert_eq!(
@@ -16084,29 +16383,28 @@ mod tests {
         let _registry_guard = RegistryTestGuard::new();
         let root = test_audit_dir("spawn-kernel-duplicate-guard");
         fs::create_dir_all(&root).expect("create test root");
-        let harness = SpawnKernelHarness::new(
-            &root,
-            &root.join("unused-bundle.json"),
-            &root.join("runtime"),
-        );
+        let bundle = build_spawn_kernel_bundle(&root);
+        let _bundle_guard = install_test_kernel_bundle(&bundle);
+        let harness = SpawnKernelHarness::new(&root, &bundle.bundle_path, &root.join("runtime"));
         // The first child must be GENUINELY alive when the second spawn is
         // checked, because the contract under test is that a duplicate of a
         // live registration is refused. A plain (no-namespace) kernel spawn
         // running as an unprivileged principal dies in `setgroups` before
         // exec (CHILD_EXIT_SETGROUPS) and would funnel into the stale-
-        // registration reclaim path instead, so the fixture spawns it in a
-        // user namespace where the broker skips that step.
+        // registration reclaim path instead, so the fixture declares a
+        // user-namespace row and spawns it where the broker skips that step.
+        // Both payloads carry that same trusted mapping, so the second is
+        // refused by the duplicate guard and not by the plan fence.
+        let duplicate_intent = spawn_intent_id("vm-a", "ch-runner");
         let first = envelope_response(
             harness
                 .invoke(
                     "spawn-process",
-                    spawn_payload_with_user_namespace(
-                        vec![spawn_test_binary("sleep"), "30".to_owned()],
-                        "cloud-hypervisor",
+                    spawn_payload_from_intent(
+                        &bundle.resolver,
+                        &duplicate_intent,
                         false,
-                        "vm-a",
-                        "ch-runner",
-                        "runner:vm-a:ch-runner",
+                        vec![spawn_test_binary("sleep"), "30".to_owned()],
                     ),
                     Vec::new(),
                 )
@@ -16131,13 +16429,11 @@ mod tests {
             harness
                 .invoke(
                     "spawn-process",
-                    spawn_payload(
-                        vec![spawn_test_binary("true")],
-                        "cloud-hypervisor",
+                    spawn_payload_from_intent(
+                        &bundle.resolver,
+                        &duplicate_intent,
                         false,
-                        "vm-a",
-                        "ch-runner",
-                        "runner:vm-a:ch-runner",
+                        vec![spawn_test_binary("true")],
                     ),
                     Vec::new(),
                 )
@@ -16170,6 +16466,345 @@ mod tests {
         );
         let _ = nix::sys::wait::waitpid(nix::unistd::Pid::from_raw(pid), None);
         cleanup_spawn_test_runner("vm-a:ch-runner");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The refusal slug one spawn-process launch is expected to carry, or
+    /// `None` when it was not refused at all.
+    fn spawn_refusal_detail(
+        harness: &SpawnKernelHarness,
+        payload: serde_json::Value,
+    ) -> Option<String> {
+        let response = envelope_response(
+            harness
+                .invoke("spawn-process", payload, Vec::new())
+                .expect("spawn-process dispatches"),
+        );
+        assert_eq!(
+            response.refusal.as_deref(),
+            Some(crate::envelope::HANDLER_REFUSED),
+            "the launch must be refused by the trust boundary: {:?}",
+            response.detail
+        );
+        response.detail
+    }
+
+    /// The spawn-identity fence compares the payload's wire `roleId`
+    /// against the intent the payload names. The cloud-hypervisor runner
+    /// is the one role whose wire id is not its intent id: it travels
+    /// under the daemon-side `ch-runner` alias. A fence that compared the
+    /// raw `role_id` refused every legitimate nested-VMM launch, which is
+    /// what the host-integration lane caught.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn spawn_process_accepts_the_cloud_hypervisor_runner_under_its_wire_role_id() {
+        let _registry_guard = RegistryTestGuard::new();
+        let root = test_audit_dir("spawn-kernel-cloud-hypervisor-wire-role");
+        fs::create_dir_all(&root).expect("create test root");
+        let bundle = build_spawn_kernel_bundle(&root);
+        let _bundle_guard = install_test_kernel_bundle(&bundle);
+        let harness = SpawnKernelHarness::new(&root, &bundle.bundle_path, &root.join("runtime"));
+        let intent_id = spawn_intent_id("vm-stale", "ch-runner");
+        let payload = spawn_payload_from_intent(
+            &bundle.resolver,
+            &intent_id,
+            false,
+            vec![spawn_test_binary("true")],
+        );
+        // The alias is the whole point: pin it rather than trusting the
+        // helper, so this test fails if the fixture drifts back to the
+        // raw intent id.
+        assert_eq!(
+            payload["runnerIdentity"]["roleId"],
+            serde_json::json!("ch-runner"),
+            "the cloud-hypervisor runner travels under its wire alias"
+        );
+        // The launch must get past the identity fence. It fails later for
+        // an unrelated harness reason, so the assertion is on the refusal
+        // detail rather than on overall success.
+        // The launch does not have to succeed - a real cloud-hypervisor
+        // spawn needs a live VMM - but it must get past the identity
+        // fence. So the assertion is on the refusal detail, not on the
+        // overall outcome.
+        let response = envelope_response(
+            harness
+                .invoke("spawn-process", payload, Vec::new())
+                .expect("spawn-process dispatches"),
+        );
+        let detail = response.detail.unwrap_or_default();
+        assert!(
+            !detail.contains("spawn-launch-role-id-mismatch"),
+            "the cloud-hypervisor runner's wire role id must satisfy the \
+             spawn-identity fence, but the launch was refused for it: \
+             {detail}"
+        );
+    }
+
+    /// The counterpart: an alias that is not the intent's own is still
+    /// refused. Widening the fence to accept the cloud-hypervisor alias
+    /// must not make any other role id acceptable.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn spawn_process_still_refuses_a_role_id_the_intent_does_not_declare() {
+        let _registry_guard = RegistryTestGuard::new();
+        let root = test_audit_dir("spawn-kernel-role-id-still-fenced");
+        fs::create_dir_all(&root).expect("create test root");
+        let bundle = build_spawn_kernel_bundle(&root);
+        let _bundle_guard = install_test_kernel_bundle(&bundle);
+        let harness = SpawnKernelHarness::new(&root, &bundle.bundle_path, &root.join("runtime"));
+        let intent_id = spawn_intent_id("vm-tpm", "swtpm");
+        let mut payload = spawn_payload_from_intent(
+            &bundle.resolver,
+            &intent_id,
+            false,
+            vec![spawn_test_binary("true")],
+        );
+        // A role that is not this intent's wire id, and not the alias of
+        // any other intent: the fence must refuse it.
+        payload["runnerIdentity"]["roleId"] = serde_json::json!("ch-runner");
+        let detail = spawn_refusal_detail(&harness, payload)
+            .expect("a refused launch carries its detail");
+        assert!(
+            detail.contains("spawn-launch-role-id-mismatch"),
+            "a role id the intent does not declare is refused, got: {detail}"
+        );
+    }
+
+    /// Issue #619 gap 2: the argv fence reads what the worker *opens*, so a
+    /// payload that names a trusted state path in `argv` and a different
+    /// executable in `binaryPath` walks straight through it - the worker
+    /// then runs as `cat` with the TPM worker's own uid and dumps the
+    /// Endorsement Key to its stdout. `binaryPath` becomes `argv[0]`, so the
+    /// kernel has to compare it against the bundle's own executable for the
+    /// intent the payload names, and refuse the launch.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn spawn_process_refuses_a_binary_path_that_is_not_the_bundle_intent_binary() {
+        let _registry_guard = RegistryTestGuard::new();
+        let root = test_audit_dir("spawn-kernel-binary-path-fence");
+        fs::create_dir_all(&root).expect("create test root");
+        let bundle = build_spawn_kernel_bundle(&root);
+        let _bundle_guard = install_test_kernel_bundle(&bundle);
+        let harness = SpawnKernelHarness::new(&root, &bundle.bundle_path, &root.join("runtime"));
+        let intent_id = spawn_intent_id("vm-tpm", "swtpm");
+        let endorsement_key = root.join("device-tpm0-tpm-state/tpm2-00.permall");
+        // The exploit: a well-formed TPM worker payload - trusted uid, the
+        // `w1-swtpm` seccomp class, the trusted state path in `argv` - whose
+        // `binaryPath` names a different executable entirely.
+        let mut payload = spawn_payload_from_intent(
+            &bundle.resolver,
+            &intent_id,
+            false,
+            vec![
+                spawn_test_binary("cat"),
+                endorsement_key.display().to_string(),
+            ],
+        );
+        payload["binaryPath"] = serde_json::json!(spawn_test_binary("cat"));
+        let detail = spawn_refusal_detail(&harness, payload)
+            .expect("a refused launch carries its detail");
+        assert!(
+            detail.contains("spawn-plan-binary-path-mismatch"),
+            "the launch must be refused for the executable, not for anything \
+             else in the payload: {detail}"
+        );
+        assert!(
+            !runner_pidfds().contains_key("vm-tpm:swtpm"),
+            "a refused launch must never register a runner"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Issue #619 gap 1: `hostUidForZero` used to be read verbatim, so a
+    /// payload setting it to `0` made the broker write `0 0 1` into the
+    /// child's `uid_map` - in-namespace root IS host root - with the
+    /// payload's own capability list raised on top. The plan layer's uid-0
+    /// guard tests `input.uid`, which a user-namespace launch forces to `0`
+    /// anyway, so it never saw this field.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn spawn_process_refuses_a_user_namespace_that_maps_root_onto_host_root() {
+        let _registry_guard = RegistryTestGuard::new();
+        let root = test_audit_dir("spawn-kernel-user-ns-root");
+        fs::create_dir_all(&root).expect("create test root");
+        let bundle = build_spawn_kernel_bundle(&root);
+        let _bundle_guard = install_test_kernel_bundle(&bundle);
+        let harness = SpawnKernelHarness::new(&root, &bundle.bundle_path, &root.join("runtime"));
+        let mut payload = spawn_payload_from_intent(
+            &bundle.resolver,
+            &spawn_intent_id("vm-tpm", "swtpm"),
+            false,
+            vec![spawn_test_binary("true")],
+        );
+        payload["userNamespace"] = serde_json::json!({
+            "hostUidForZero": 0,
+            "hostGidForZero": 0,
+        });
+        let detail = spawn_refusal_detail(&harness, payload)
+            .expect("a refused launch carries its detail");
+        assert!(
+            detail.contains("spawn-plan-user-namespace-mapping-mismatch"),
+            "a mapping the bundle never declared must be refused as a \
+             disagreement before it is ever written into uid_map: {detail}"
+        );
+        assert!(
+            !runner_pidfds().contains_key("vm-tpm:swtpm"),
+            "a refused launch must never register a runner"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Issue #619 gap 3: the user-namespace path skips the whole mount
+    /// block, so a plan asking for the root secret masks would run with
+    /// `/etc`, `/root` and `/var` unmasked and say nothing. That is refused.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn spawn_process_refuses_a_user_namespace_that_drops_the_root_secret_masks() {
+        let _registry_guard = RegistryTestGuard::new();
+        let root = test_audit_dir("spawn-kernel-user-ns-secret-masks");
+        fs::create_dir_all(&root).expect("create test root");
+        let bundle = build_spawn_kernel_bundle(&root);
+        let _bundle_guard = install_test_kernel_bundle(&bundle);
+        let harness = SpawnKernelHarness::new(&root, &bundle.bundle_path, &root.join("runtime"));
+        // A bundle row that runs as host root with the device mask on: the
+        // one combination whose dropped masks are the only protection. The
+        // plan itself is well formed - it matches its own intent exactly -
+        // so the refusal it observes is the dropped masks and nothing else.
+        let mut payload = spawn_payload_from_intent(
+            &bundle.resolver,
+            &spawn_intent_id("vm-tpm", "swtpm-root"),
+            false,
+            vec![spawn_test_binary("true")],
+        );
+        payload["deviceWorker"]["bindsRuntimeSocket"] = serde_json::json!(false);
+        let detail = spawn_refusal_detail(&harness, payload)
+            .expect("a refused launch carries its detail");
+        assert!(
+            detail.contains("spawn-plan-user-namespace-drops-root-secret-masks"),
+            "a user-namespace launch must not silently lose the root secret \
+             masks: {detail}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The plan fence proves the launch matches SOME row of the verified
+    /// bundle. The row is chosen by the payload, so a launch that matches
+    /// row B while naming itself row A would obtain row B's uid, capabilities
+    /// and grants under row A's name. The row the payload names, the row it
+    /// claims to be launching, the wire role it dispatches as and the cgroup
+    /// subtree it lands in all have to be the same row.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn spawn_process_refuses_a_launch_that_borrows_another_bundle_row() {
+        let _registry_guard = RegistryTestGuard::new();
+        let root = test_audit_dir("spawn-kernel-row-substitution");
+        fs::create_dir_all(&root).expect("create test root");
+        let bundle = build_spawn_kernel_bundle(&root);
+        let _bundle_guard = install_test_kernel_bundle(&bundle);
+        let harness = SpawnKernelHarness::new(&root, &bundle.bundle_path, &root.join("runtime"));
+        // A plan built for the TPM worker row, launched under the
+        // cloud-hypervisor row's name: every credential field matches a
+        // verified row, and none of them matches the row being claimed.
+        let mut payload = spawn_payload_from_intent(
+            &bundle.resolver,
+            &spawn_intent_id("vm-tpm", "swtpm"),
+            false,
+            vec![spawn_test_binary("true")],
+        );
+        payload["runnerIdentity"]["vmId"] = serde_json::json!("vm-stale");
+        payload["runnerIdentity"]["roleId"] = serde_json::json!("ch-runner");
+        payload["role"] = serde_json::json!("cloud-hypervisor");
+        let detail = spawn_refusal_detail(&harness, payload)
+            .expect("a refused launch carries its detail");
+        assert!(
+            detail.contains("spawn-launch-vm-mismatch"),
+            "a plan that borrows another bundle row must be refused by name: \
+             {detail}"
+        );
+        assert!(
+            !runner_pidfds().contains_key("vm-tpm:swtpm"),
+            "a refused launch must never register a runner"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The broker creates the cgroup subtree the plan names and enables
+    /// controllers on its ancestors, so a payload-chosen subtree could place
+    /// its child in another VM's slice. Only the bundle's own placement and
+    /// the private one the daemon derives from it are admitted.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn spawn_process_refuses_a_cgroup_subtree_the_bundle_does_not_declare() {
+        let _registry_guard = RegistryTestGuard::new();
+        let root = test_audit_dir("spawn-kernel-cgroup-subtree");
+        fs::create_dir_all(&root).expect("create test root");
+        let bundle = build_spawn_kernel_bundle(&root);
+        let _bundle_guard = install_test_kernel_bundle(&bundle);
+        let harness = SpawnKernelHarness::new(&root, &bundle.bundle_path, &root.join("runtime"));
+        let mut payload = spawn_payload_from_intent(
+            &bundle.resolver,
+            &spawn_intent_id("vm-stale", "ch-runner"),
+            false,
+            vec![spawn_test_binary("true")],
+        );
+        payload["cgroupPlacement"]["subtree"] =
+            serde_json::json!("d2b.slice/victim-vm/ch-runner");
+        let detail = spawn_refusal_detail(&harness, payload)
+            .expect("a refused launch carries its detail");
+        assert!(
+            detail.contains("spawn-launch-cgroup-subtree-mismatch"),
+            "a subtree the bundle never declared must be refused: {detail}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Issue #619 gap 4: `bindsRuntimeSocket` used to be read straight from
+    /// the payload, so a launch could claim the per-Guest runtime directory
+    /// on a row whose trusted posture grants nothing - and with it the
+    /// `u:<plan.uid>:rwx` entry that lets it unlink a sibling worker's
+    /// socket. The closed table is the authority; the payload is a check.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn spawn_process_refuses_a_runtime_socket_binding_the_bundle_role_grants_no() {
+        let _registry_guard = RegistryTestGuard::new();
+        let root = test_audit_dir("spawn-kernel-socket-binding");
+        fs::create_dir_all(&root).expect("create test root");
+        let runtime_root = root.join("run");
+        fs::create_dir_all(runtime_root.join("vms").join("guest")).expect("create runtime tree");
+        let bundle = build_spawn_kernel_bundle(&root);
+        let _bundle_guard = install_test_kernel_bundle(&bundle);
+        let harness = SpawnKernelHarness::new(&root, &bundle.bundle_path, &runtime_root);
+        let mut payload = spawn_payload_from_intent(
+            &bundle.resolver,
+            &spawn_intent_id("vm-stale", "ch-runner"),
+            false,
+            vec![spawn_test_binary("true")],
+        );
+        // The cloud-hypervisor row is not a Device worker, so the closed
+        // table grants it no runtime socket directory at all.
+        payload["deviceWorker"] = serde_json::json!({
+            "scope": Value::Null,
+            "bindsRuntimeSocket": true,
+        });
+        let detail = spawn_refusal_detail(&harness, payload)
+            .expect("a refused launch carries its detail");
+        assert!(
+            detail.contains("device-worker-socket-binding-row-mismatch"),
+            "the claimed binding must be refused against the bundle's own \
+             role: {detail}"
+        );
+        assert!(
+            !runtime_root.join("vms").join("guest").join("api.sock").exists(),
+            "a refused launch must not create a socket in the per-Guest tree"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
