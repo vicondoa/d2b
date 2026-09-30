@@ -929,6 +929,14 @@ pub fn launch_posture(
             host_gid_for_zero: namespace.inner_gid,
         }),
         umask: template.umask,
+        // KTD11: the presentation facet is the trusted implementation
+        // contract's, not this function's. Until the template row carries it
+        // (U12/U15), the launch keeps the pre-graph posture and this plan
+        // carries no admitted destinations for U11's private mount tree to
+        // prepare. `launch_posture` still refuses a facet no resolved
+        // destination applies, so nothing is skipped either way.
+        presentation: None,
+        admitted_presentation: None,
     })
 }
 
@@ -2197,6 +2205,8 @@ fn parse_plan(payload: &CanonicalJsonObject) -> Result<SpawnRunnerPlanInput, Dis
             .unwrap_or(false),
         user_namespace: optional_user_namespace(payload)?,
         umask: optional_umask(payload)?,
+        presentation: None,
+        admitted_presentation: None,
     })
 }
 

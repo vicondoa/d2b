@@ -68,8 +68,11 @@ pub(crate) mod modprobe;
 // Security-key hidraw open op: resolves stable selector → opens
 // hidraw fd for `d2bd`'s long-lived CTAPHID relay session.
 pub(crate) mod security_key;
-// Broker SpawnRunner preflight + spawn helper.
-pub(crate) mod spawn_runner;
+// Broker SpawnRunner preflight + spawn helper, and the effective Volume
+// presentation (U11, KTD11) it resolves.
+// Public arm: `tests/volume_presentation.rs` imports it from outside the
+// crate, for the same reason the arms above are public.
+pub mod spawn_runner;
 // Broker reconcile executors (nft / sysctl / hosts / ip route) with
 // FakeReconcileExecutor for unit tests + the SystemReconcileExecutor
 // for production shellouts.

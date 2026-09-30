@@ -480,6 +480,8 @@ mod tests {
             },
             user_namespace: None,
             umask: None,
+            presentation: None,
+            admitted_presentation: None,
         }
     }
 
@@ -856,6 +858,8 @@ mod trusted_identity_tests {
             },
             user_namespace: None,
             umask: None,
+            presentation: None,
+            admitted_presentation: None,
         }
     }
 

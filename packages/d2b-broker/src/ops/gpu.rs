@@ -444,6 +444,8 @@ mod tests {
                 host_gid_for_zero: 1000,
             }),
             umask: None,
+            presentation: None,
+            admitted_presentation: None,
         }
     }
 

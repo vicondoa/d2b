@@ -26,6 +26,27 @@ use std::path::{Path, PathBuf};
 
 use d2b_core::sandbox_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
 
+/// The realization facet and refusal vocabulary of an admitted presentation.
+///
+/// Both live here, beside the launch plan they shape, because the fence and
+/// the plan are the same decision: a mount the declared realization cannot
+/// place is refused in [`preflight`], which runs before any descriptor is
+/// opened and before any child exists.
+mod presentation {
+    pub use crate::sys::pidfd_sys::{PresentationBindSpec, PresentationRealization};
+    pub use d2b_contracts_resource::v3::{BindingRealizationFacet, RequestedRights};
+    pub use d2b_core::execution_plan::{ExecutionPlan, PlannedDestination, PrivateBacking};
+
+    /// The one facet a filesystem presentation realizes.
+    pub const FILESYSTEM_PRESENTATION: BindingRealizationFacet =
+        BindingRealizationFacet::FilesystemPresentation;
+}
+
+pub use presentation::{
+    BindingRealizationFacet, PresentationBindSpec, PresentationRealization, RequestedRights,
+};
+use presentation::{ExecutionPlan, PlannedDestination, PrivateBacking};
+
 /// Validated launch plan. Produced by [`preflight`] from a
 /// bundle-resolved row; consumed by `clone3_pidfd_or_fork_fallback`.
 #[derive(Clone)]
@@ -50,6 +71,16 @@ pub struct SpawnRunnerPlan {
     /// File-creation mask the broker installs in the spawned child
     /// before execve. See `SandboxProfile::umask`.
     pub umask: Option<u32>,
+    /// How this launch's presentation is realized (KTD11).
+    ///
+    /// `None` is the pre-graph posture U34 retires: the role's own verified
+    /// service sandbox realizes its source and the broker applies no mount of
+    /// its own. The facet comes from the trusted implementation contract,
+    /// never from a role name, a seccomp label, or a family switch.
+    pub presentation: Option<PresentationRealization>,
+    /// The admitted destinations prepared for this launch, resolved from an
+    /// exact execution plan by [`realize_presentation`].
+    pub admitted_presentation: Option<AdmittedPresentation>,
 }
 
 impl fmt::Debug for SpawnRunnerPlan {
@@ -105,6 +136,17 @@ pub enum SpawnRunnerError {
         index: usize,
         entry: String,
     },
+    /// An admitted presentation was handed to a realization that prepares no
+    /// private mount tree. The requested mount is refused rather than skipped
+    /// (KTD11).
+    PresentationRequiresFilesystemRealization,
+    /// An admitted presentation named a relative private execution root, so
+    /// its destinations could not be kept out of the host root.
+    PresentationRequiresPrivateExecutionRoot,
+    /// The launch's argv names a host path the admitted presentation does not
+    /// grant. A worker reaches the source through its destination or through a
+    /// declared inherited descriptor.
+    PresentationArgvNamesHostSource,
 }
 
 impl std::fmt::Display for SpawnRunnerError {
@@ -129,6 +171,19 @@ impl std::fmt::Display for SpawnRunnerError {
             Self::InvalidEnvEntry { index, entry } => {
                 write!(f, "env[{index}] {entry:?} is not KEY=VALUE")
             }
+            Self::PresentationRequiresFilesystemRealization => f.write_str(
+                "an admitted presentation requires the filesystem-presentation realization, \
+                 which prepares a private mount tree; this realization cannot place the \
+                 requested mount",
+            ),
+            Self::PresentationRequiresPrivateExecutionRoot => f.write_str(
+                "an admitted presentation requires an absolute private execution root so \
+                 its destinations are prepared inside the runner's own mount tree",
+            ),
+            Self::PresentationArgvNamesHostSource => f.write_str(
+                "launch argv names a host source path directly; a worker must address the \
+                 admitted destination or a declared inherited descriptor",
+            ),
         }
     }
 }
@@ -163,6 +218,12 @@ pub struct SpawnRunnerPlanInput {
     pub user_namespace: Option<UserNamespaceSpec>,
     /// Optional umask installed before execve.
     pub umask: Option<u32>,
+    /// How this launch's presentation is realized (KTD11). See
+    /// [`SpawnRunnerPlan::presentation`]; `None` is the pre-graph posture.
+    pub presentation: Option<PresentationRealization>,
+    /// The admitted destinations prepared for this launch. See
+    /// [`SpawnRunnerPlan::admitted_presentation`].
+    pub admitted_presentation: Option<AdmittedPresentation>,
 }
 
 impl fmt::Debug for SpawnRunnerPlanInput {
@@ -223,6 +284,25 @@ pub fn preflight(input: &SpawnRunnerPlanInput) -> Result<SpawnRunnerPlan, SpawnR
             path: input.binary_path.display().to_string(),
         });
     }
+    // KTD11: an admitted presentation is a request the declared realization
+    // has to honor. Every check here is pure and runs before any descriptor
+    // is opened and before any child exists, so a launch refused for a mount
+    // it cannot realize leaves no mount, no prepared destination, and no
+    // child behind it. There is no branch below that reports such a launch
+    // as ready.
+    if let Some(presentation) = input.admitted_presentation.as_ref() {
+        if !presentation.binds.is_empty()
+            && input.presentation != Some(PresentationRealization::FilesystemPresentation)
+        {
+            return Err(SpawnRunnerError::PresentationRequiresFilesystemRealization);
+        }
+        if !presentation.binds.is_empty() && !presentation.private_execution_root.is_absolute() {
+            return Err(SpawnRunnerError::PresentationRequiresPrivateExecutionRoot);
+        }
+        if fence_presentation_argv(&input.argv, presentation).is_err() {
+            return Err(SpawnRunnerError::PresentationArgvNamesHostSource);
+        }
+    }
     Ok(SpawnRunnerPlan {
         binary_path: input.binary_path.clone(),
         argv: input.argv.clone(),
@@ -237,6 +317,8 @@ pub fn preflight(input: &SpawnRunnerPlanInput) -> Result<SpawnRunnerPlan, SpawnR
         cgroup_placement: input.cgroup_placement.clone(),
         user_namespace: input.user_namespace,
         umask: input.umask,
+        presentation: input.presentation,
+        admitted_presentation: input.admitted_presentation.clone(),
     })
 }
 
@@ -269,6 +351,291 @@ pub fn build_cstring_vectors(
 fn path_to_cstring(path: &Path) -> Result<CString, NulError> {
     use std::os::unix::ffi::OsStrExt;
     CString::new(path.as_os_str().as_bytes())
+}
+
+// ---------------------------------------------------------------------------
+// Effective Volume presentation (U11, KTD11)
+// ---------------------------------------------------------------------------
+
+/// The private execution root and the admitted binds prepared inside it.
+///
+/// The root is a directory the broker already owns; the child mounts a fresh
+/// `tmpfs` on it inside its own mount namespace, so every destination
+/// directory and every byte written through a presentation exists only there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdmittedPresentation {
+    pub private_execution_root: PathBuf,
+    pub binds: Vec<PresentationBindSpec>,
+}
+
+/// Why one presentation was refused.
+///
+/// Every variant is a refusal, not a downgrade. The closed set is what makes
+/// "unsupported presentation combinations refuse" checkable rather than a
+/// claim: no variant means "do less than was asked".
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PresentationRefusal {
+    /// The declaration is a namespace-first service source and the plan
+    /// nonetheless carries a filesystem-presentation destination. ADR 0021's
+    /// sandbox realizes a source, not a consumer destination, so this request
+    /// cannot be honored and the launch is refused.
+    ServiceSourceCannotPresentFilesystem { destination: PathBuf },
+    /// A destination carries a presentation facet this realization does not
+    /// implement.
+    UnsupportedPresentationFacet {
+        destination: PathBuf,
+        facet: &'static str,
+    },
+    /// A filesystem presentation's source resolved to something that is not a
+    /// filesystem backing. A device node, a socket, or a fabric is not
+    /// bindable as a source tree, and approximating it would present
+    /// something the graph never admitted.
+    SourceBackingIsNotFilesystem { source: PathBuf },
+    /// A destination lies outside the launch's private execution root, so it
+    /// would be prepared in the host root and be visible to every process on
+    /// the host.
+    DestinationOutsidePrivateRoot { destination: PathBuf },
+    /// The destination is writable but the admitted view's rights carry no
+    /// mutating right. The broker refuses rather than presenting something
+    /// the graph admitted read rights to.
+    ReadWriteViewWithoutWriteRight { destination: PathBuf },
+    /// The launch's argv names a host path the admitted presentation does not
+    /// grant. A worker reaches the source through its destination or through a
+    /// declared inherited descriptor.
+    ArgvNamesHostSource { path: PathBuf },
+}
+
+impl std::fmt::Display for PresentationRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ServiceSourceCannotPresentFilesystem { destination } => write!(
+                f,
+                "namespace-first service source cannot present a filesystem mount at {}: \
+                 the service realizes its admitted source inside its own verified sandbox, \
+                 so the requested presentation is refused rather than skipped",
+                destination.display()
+            ),
+            Self::UnsupportedPresentationFacet {
+                destination,
+                facet,
+            } => write!(
+                f,
+                "presentation {facet} at {} is not a facet this realization supports",
+                destination.display()
+            ),
+            Self::SourceBackingIsNotFilesystem { source } => write!(
+                f,
+                "presentation source {} is not a filesystem backing",
+                source.display()
+            ),
+            Self::DestinationOutsidePrivateRoot { destination } => write!(
+                f,
+                "presentation destination {} is outside the launch's private execution root",
+                destination.display()
+            ),
+            Self::ReadWriteViewWithoutWriteRight { destination } => write!(
+                f,
+                "presentation destination {} is writable but the admitted view carries no \
+                 mutating right",
+                destination.display()
+            ),
+            Self::ArgvNamesHostSource { path } => write!(
+                f,
+                "launch argv names the host source path {} directly; a worker reaches the \
+                 source through its destination or a declared inherited descriptor",
+                path.display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PresentationRefusal {}
+
+/// The facets a filesystem presentation may NOT carry.
+///
+/// A destination declaring anything other than
+/// [`BindingRealizationFacet::FilesystemPresentation`] is refused by name,
+/// with the contract's own kebab-case token, so an audit record names the same
+/// facet the declaration did.
+const fn forbidden_facet_token(facet: BindingRealizationFacet) -> Option<&'static str> {
+    match facet {
+        BindingRealizationFacet::FilesystemPresentation => None,
+        BindingRealizationFacet::ConsumerDeviceSlot => Some("consumer-device-slot"),
+        BindingRealizationFacet::DeviceAttachment => Some("device-attachment"),
+        BindingRealizationFacet::NamespaceInterface => Some("namespace-interface"),
+        BindingRealizationFacet::SharedFabric => Some("shared-fabric"),
+        BindingRealizationFacet::EndpointDescriptor => Some("endpoint-descriptor"),
+        BindingRealizationFacet::EndpointPathname => Some("endpoint-pathname"),
+        BindingRealizationFacet::CredentialDelivery => Some("credential-delivery"),
+    }
+}
+
+/// Whether one destination's admitted rights let its presentation be writable.
+///
+/// `Observe` and `Consume` are read-only uses; `Mutate`, `Share`, and
+/// `Exclusive` each claim a writer, so any of them admits a writable mount.
+const fn rights_admit_write(rights: RequestedRights) -> bool {
+    matches!(
+        rights,
+        RequestedRights::Mutate | RequestedRights::Share | RequestedRights::Exclusive
+    )
+}
+
+/// Resolve one destination against the plan's exact sources.
+///
+/// # Errors
+///
+/// Refuses a destination carrying a facet this realization does not
+/// implement, a destination outside the private execution root, a plan with
+/// no filesystem-backed source, and a writable destination whose admitted
+/// view carries no mutating right.
+fn resolve_destination(
+    plan: &ExecutionPlan,
+    destination: &PlannedDestination,
+    private_execution_root: &Path,
+    read_only: bool,
+) -> Result<PresentationBindSpec, PresentationRefusal> {
+    let destination_path = destination.path().as_path();
+    if let Some(facet) = forbidden_facet_token(destination.presentation()) {
+        return Err(PresentationRefusal::UnsupportedPresentationFacet {
+            destination: destination_path.to_path_buf(),
+            facet,
+        });
+    }
+    let relative = destination_path
+        .strip_prefix(private_execution_root)
+        .map_err(|_| PresentationRefusal::DestinationOutsidePrivateRoot {
+            destination: destination_path.to_path_buf(),
+        })?;
+    if relative.as_os_str().is_empty() {
+        return Err(PresentationRefusal::DestinationOutsidePrivateRoot {
+            destination: destination_path.to_path_buf(),
+        });
+    }
+    let source = plan
+        .sources()
+        .iter()
+        .find(|source| source.backing() == PrivateBacking::Filesystem)
+        .ok_or_else(|| PresentationRefusal::SourceBackingIsNotFilesystem {
+            source: destination_path.to_path_buf(),
+        })?;
+    if !read_only
+        && source
+            .views()
+            .first()
+            .is_some_and(|view| !rights_admit_write(view.rights()))
+    {
+        return Err(PresentationRefusal::ReadWriteViewWithoutWriteRight {
+            destination: destination_path.to_path_buf(),
+        });
+    }
+    Ok(PresentationBindSpec {
+        source: source.backing_path().as_path().to_path_buf(),
+        destination: destination_path.to_path_buf(),
+        read_only,
+    })
+}
+
+/// Turn one admitted plan into the presentation the broker will prepare.
+///
+/// `read_only` is the access the relationship itself admitted. It is never
+/// inferred from the launch: a read-only binding mounts read-only, and write
+/// access is confined to the admitted view, which is the only subtree the
+/// bind exposes.
+///
+/// # Errors
+///
+/// Refuses the whole launch when the declaration cannot realize what the plan
+/// asks for. A namespace-first service source handed a
+/// filesystem-presentation destination is the load-bearing case (AE6): the
+/// service realizes its admitted source inside its own verified sandbox, and
+/// skipping the mount the consumer asked for is not an answer.
+pub fn realize_presentation(
+    plan: &ExecutionPlan,
+    realization: PresentationRealization,
+    private_execution_root: &Path,
+    read_only: bool,
+) -> Result<AdmittedPresentation, PresentationRefusal> {
+    let destinations = plan.destinations();
+    if realization == PresentationRealization::NamespaceFirstServiceSource {
+        if let Some(destination) = destinations
+            .iter()
+            .find(|destination| destination.presentation() == presentation::FILESYSTEM_PRESENTATION)
+        {
+            return Err(PresentationRefusal::ServiceSourceCannotPresentFilesystem {
+                destination: destination.path().as_path().to_path_buf(),
+            });
+        }
+        // ADR 0021's zero-host-capability launch: the broker prepares no
+        // private execution root, no destination, and no mount on this leg.
+        return Ok(AdmittedPresentation {
+            private_execution_root: PathBuf::new(),
+            binds: Vec::new(),
+        });
+    }
+    if !private_execution_root.is_absolute() {
+        return Err(PresentationRefusal::DestinationOutsidePrivateRoot {
+            destination: private_execution_root.to_path_buf(),
+        });
+    }
+    let mut binds = Vec::with_capacity(destinations.len());
+    for destination in destinations {
+        binds.push(resolve_destination(
+            plan,
+            destination,
+            private_execution_root,
+            read_only,
+        )?);
+    }
+    Ok(AdmittedPresentation {
+        private_execution_root: private_execution_root.to_path_buf(),
+        binds,
+    })
+}
+
+/// Refuse a launch whose argv reaches the source by naming its host path.
+///
+/// The fence reads only the path-valued flags a worker uses to open what it
+/// was given, so a shell script or a flag that merely contains a path is
+/// untouched. What it catches is the spelling the graph does not grant: a
+/// worker that would open a host path itself instead of reading the
+/// destination the broker prepared for it.
+///
+/// Only the admitted DESTINATION is accepted, never the admitted source. The
+/// source is what the graph grants a VIEW of; naming it would hand the worker
+/// the whole backing tree the view was taken from, and would re-open the host
+/// path the private execution root exists to hide. A declared inherited
+/// descriptor (`/proc/self/fd/N`) names no host path and is untouched.
+pub fn fence_presentation_argv(
+    argv: &[String],
+    presentation: &AdmittedPresentation,
+) -> Result<(), PresentationRefusal> {
+    if presentation.binds.is_empty() {
+        return Ok(());
+    }
+    for argument in argv {
+        let Some(value) = argument
+            .strip_prefix("--shared-dir=")
+            .or_else(|| argument.strip_prefix("--source="))
+            .or_else(|| argument.strip_prefix("--dir="))
+        else {
+            continue;
+        };
+        let named = Path::new(value);
+        if presentation
+            .binds
+            .iter()
+            .any(|bind| bind.destination.as_path() == named)
+        {
+            continue;
+        }
+        if named.is_absolute() {
+            return Err(PresentationRefusal::ArgvNamesHostSource {
+                path: named.to_path_buf(),
+            });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -326,6 +693,8 @@ mod tests {
             skip_binary_exists_check: true,
             user_namespace: None,
             umask: None,
+            presentation: None,
+            admitted_presentation: None,
         }
     }
 

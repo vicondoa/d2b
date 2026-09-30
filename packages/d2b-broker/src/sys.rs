@@ -2161,6 +2161,49 @@ pub mod pidfd_sys {
         }
     }
 
+    /// How one admitted presentation is realized for a runner (KTD11).
+    ///
+    /// The facet is a property of what the trusted implementation contract
+    /// declares, never of a role name, a seccomp label, or a family switch.
+    /// The two variants are disjoint mechanisms: a namespace-first service
+    /// does not stand in for pathname-mounted presentation, and
+    /// pathname-mounted presentation does not stand in for a service source.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum PresentationRealization {
+        /// A private mount tree carrying the exact named view at the
+        /// destination, prepared before the requested user namespace and the
+        /// final credentials.
+        FilesystemPresentation,
+        /// ADR 0021's user-namespace-first launch with zero host
+        /// capability, where the admitted source is realized inside the
+        /// service's own verified sandbox. The broker applies no mount of
+        /// its own on this leg.
+        NamespaceFirstServiceSource,
+    }
+
+    impl PresentationRealization {
+        /// Whether the broker prepares a private mount tree for this leg.
+        pub const fn uses_private_mount_tree(self) -> bool {
+            matches!(self, Self::FilesystemPresentation)
+        }
+    }
+
+    /// One admitted source bound at its admitted destination (KTD11).
+    ///
+    /// Both halves are broker-resolved private values from an exact
+    /// execution plan. `source` is opened by [`prepare_presentation_binds`]
+    /// through an anchored, whole-path `RESOLVE_NO_SYMLINKS` traversal, so a
+    /// symlink anywhere in the path refuses the launch - not only one in the
+    /// final component, which is all `O_NOFOLLOW` would have covered.
+    /// `destination` always lies inside the runner's private execution root,
+    /// never a host path the launch could reach before it is prepared.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct PresentationBindSpec {
+        pub source: std::path::PathBuf,
+        pub destination: std::path::PathBuf,
+        pub read_only: bool,
+    }
+
     pub struct RunnerIsolationSpec {
         pub capabilities: Vec<String>,
         pub namespaces: NamespaceSet,
@@ -2209,6 +2252,32 @@ pub mod pidfd_sys {
         /// runner. The broker creates the pipe and writes these validated
         /// bytes only after the child has been spawned.
         pub activation_stdin: Option<Vec<u8>>,
+        /// How one admitted presentation is realized for this runner
+        /// (KTD11).
+        ///
+        /// `None` is the pre-graph posture the broker still launches today:
+        /// ADR 0021's user-namespace-first spawn in which the role's own
+        /// verified service sandbox realizes its source and the broker
+        /// applies no mount of its own. U34 deletes `None` once every
+        /// production launch declares its facet; until then a `None` launch
+        /// keeps the historical behaviour, and this unit's guarantees do not
+        /// claim otherwise.
+        pub presentation: Option<PresentationRealization>,
+        /// The private execution root every admitted destination is prepared
+        /// inside (KTD11).
+        ///
+        /// The child mounts a fresh `tmpfs` here, inside its own private
+        /// mount namespace with propagation disabled, and creates each
+        /// destination directory on that tmpfs before binding its source.
+        /// The broker's steady-state mount namespace is never changed, and
+        /// nothing a presentation writes lands in the host root.
+        pub private_execution_root: Option<std::path::PathBuf>,
+        /// The admitted sources bound at their admitted destinations.
+        ///
+        /// Populated only from an exact resolved plan
+        /// (`d2b_core::execution_plan`), never from a caller-supplied mount
+        /// policy.
+        pub presentation_binds: Vec<PresentationBindSpec>,
     }
 
     /// Well-known fd number for the pre-opened render node.
@@ -2584,12 +2653,138 @@ pub mod pidfd_sys {
             .collect()
     }
 
-    fn clone3_namespace_flags(namespaces: &NamespaceSet) -> u64 {
+    /// One admitted source, opened to a descriptor the child bind-mounts from.
+    ///
+    /// The mount source is the `/proc/self/fd/<n>` path of the descriptor
+    /// opened below, not the textual path: the bind therefore pins the exact
+    /// inode the broker resolved instead of re-resolving the name inside the
+    /// child's mount namespace, where the launch already controls what a name
+    /// resolves to.
+    struct PreparedPresentationBind {
+        source: CString,
+        destination: CString,
+        readonly: bool,
+    }
+
+    /// Open each admitted presentation source and validate its destination
+    /// (KTD11).
+    ///
+    /// The source is opened `O_RDONLY|O_DIRECTORY|O_CLOEXEC` with
+    /// `RESOLVE_NO_SYMLINKS`, so DAC is checked as the broker and the whole
+    /// path - not only its final component - must contain no symlink. The
+    /// `openat2(2)` contract distinguishes that whole-path resolution from
+    /// `O_NOFOLLOW`, which constrains only the last component; substituting
+    /// the latter here would let an admitted `Volume` be re-pointed through
+    /// an intermediate symlink and present a different tree than the one the
+    /// graph admitted.
+    ///
+    /// The destination must be strictly inside the private execution root.
+    /// A destination outside it is refused rather than prepared in the host
+    /// root, where the bind would be visible to every process on the host.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    fn prepare_presentation_binds(
+        root: Option<&std::path::Path>,
+        binds: &[PresentationBindSpec],
+    ) -> io::Result<(Vec<OwnedFd>, Vec<PreparedPresentationBind>)> {
+        let mut fds = Vec::with_capacity(binds.len());
+        let mut prepared = Vec::with_capacity(binds.len());
+        for spec in binds {
+            let source_path = &spec.source;
+            if !source_path.is_absolute() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "presentation source {} is not absolute",
+                        source_path.display()
+                    ),
+                ));
+            }
+            let root = root.ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "presentation-requires-private-root: an admitted destination was \
+                     resolved without a private execution root to prepare it in",
+                )
+            })?;
+            let relative = spec
+                .destination
+                .strip_prefix(root)
+                .map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!(
+                            "presentation destination {} is outside the private execution \
+                             root {}",
+                            spec.destination.display(),
+                            root.display()
+                        ),
+                    )
+                })?;
+            if relative.as_os_str().is_empty() || relative.is_absolute() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "presentation destination {} is not a path inside the private \
+                         execution root",
+                        spec.destination.display()
+                    ),
+                ));
+            }
+            let fd = rustix::fs::openat2(
+                rustix::fs::CWD,
+                source_path,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+                rustix::fs::ResolveFlags::NO_SYMLINKS,
+            )
+            .map_err(|err| {
+                io::Error::new(
+                    err.kind(),
+                    format!(
+                        "presentation source {} is not an anchored symlink-free directory: {}",
+                        source_path.display(),
+                        std::io::Error::from_raw_os_error(err.raw_os_error())
+                    ),
+                )
+            })?;
+            let source = CString::new(format!("/proc/self/fd/{}", fd.as_raw_fd()))
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "procfd has NUL"))?;
+            let destination = CString::new(spec.destination.as_os_str().as_encoded_bytes())
+                .map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "presentation destination contains NUL",
+                    )
+                })?;
+            fds.push(fd);
+            prepared.push(PreparedPresentationBind {
+                source,
+                destination,
+                readonly: spec.read_only,
+            });
+        }
+        Ok((fds, prepared))
+    }
+
+
+    /// The `clone3(2)` clone flags for one runner.
+    ///
+    /// `CLONE_NEWUSER` is omitted when the private mount tree has to be
+    /// prepared first (KTD11). A child created inside a user namespace has
+    /// already had its credentials replaced before it executes a single
+    /// instruction, so the mounts it inherited belong to the parent user
+    /// namespace's tree and the child's `CAP_SYS_ADMIN` does not reach them.
+    /// Deferring the user namespace to the child - after the private tree
+    /// exists, before the parent's map write - is what makes a requested
+    /// mount effective rather than skipped.
+    fn clone3_namespace_flags(namespaces: &NamespaceSet, defer_user_namespace: bool) -> u64 {
         let mut flags = 0u64;
         if namespaces.pid {
             flags |= libc::CLONE_NEWPID as u64;
         }
-        if namespaces.user {
+        if namespaces.user && !defer_user_namespace {
             flags |= libc::CLONE_NEWUSER as u64;
         }
         flags
@@ -2749,6 +2944,93 @@ pub mod pidfd_sys {
                     // SAFETY: errno is read only immediately after a failed libc call.
                     let errno = unsafe { *libc::__errno_location() };
                     return Err((errno, action.path.as_bytes().to_vec()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Mount the private execution root the runner's admitted destinations
+    /// are prepared inside (KTD11).
+    ///
+    /// The root is a fresh `tmpfs` on a directory the broker already owns, so
+    /// every directory a presentation creates and every byte it writes lands
+    /// on that tmpfs and never in the host root, while the mount itself lives
+    /// only in this child's already-private mount tree.
+    #[allow(unsafe_code)]
+    fn apply_private_execution_root(root: &CString) -> Result<(), (libc::c_int, Vec<u8>)> {
+        let tmpfs = c"tmpfs".as_ptr();
+        let options = c"mode=0755".as_ptr() as *const libc::c_void;
+        // SAFETY: `tmpfs`, `root`, and `options` are valid NUL-terminated
+        // strings; the mount result is checked before use.
+        if unsafe {
+            libc::mount(
+                tmpfs,
+                root.as_ptr(),
+                tmpfs,
+                0,
+                options,
+            ) < 0
+        } {
+            // SAFETY: errno is read only immediately after a failed libc call.
+            let errno = unsafe { *libc::__errno_location() };
+            return Err((errno, root.as_bytes().to_vec()));
+        }
+        Ok(())
+    }
+
+    /// Bind each admitted source at its admitted destination (KTD11).
+    ///
+    /// The destination directory is created first - inside the private
+    /// execution root, so the creation itself never touches the host root -
+    /// and the source is the broker-opened descriptor's `/proc/self/fd`
+    /// path, which pins the resolved inode. A read-only presentation is then
+    /// remounted read-only, so a write from inside the runner fails at the
+    /// mount rather than at whatever DAC happens to say. Any failure returns
+    /// the errno and the path so the child reports which admitted mount it
+    /// could not realize; the caller terminates setup rather than continuing
+    /// to `execve`.
+    #[allow(unsafe_code)]
+    fn apply_presentation_binds(
+        binds: &[PreparedPresentationBind],
+    ) -> Result<(), (libc::c_int, Vec<u8>)> {
+        for bind in binds {
+            if let Err(errno) = prepare_device_bind_parent_dirs(&bind.destination) {
+                return Err((errno, bind.destination.as_bytes().to_vec()));
+            }
+            // SAFETY: both paths are valid NUL-terminated strings; the mount
+            // result is checked before use.
+            if unsafe {
+                libc::mount(
+                    bind.source.as_ptr(),
+                    bind.destination.as_ptr(),
+                    std::ptr::null(),
+                    (libc::MS_BIND | libc::MS_REC) as libc::c_ulong,
+                    std::ptr::null(),
+                )
+            } < 0
+            {
+                // SAFETY: errno is read only immediately after a failed libc call.
+                let errno = unsafe { *libc::__errno_location() };
+                return Err((errno, bind.destination.as_bytes().to_vec()));
+            }
+            if bind.readonly {
+                // SAFETY: `destination` is a valid NUL-terminated path; the
+                // mount result is checked before use.
+                if unsafe {
+                    libc::mount(
+                        std::ptr::null(),
+                        bind.destination.as_ptr(),
+                        std::ptr::null(),
+                        (libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY | libc::MS_REC)
+                            as libc::c_ulong,
+                        std::ptr::null(),
+                    )
+                } < 0
+                {
+                    // SAFETY: errno is read only immediately after a failed libc call.
+                    let errno = unsafe { *libc::__errno_location() };
+                    return Err((errno, bind.destination.as_bytes().to_vec()));
                 }
             }
         }
@@ -3127,9 +3409,79 @@ pub mod pidfd_sys {
             .map(|group| group as libc::gid_t)
             .collect();
         let capability_numbers = parse_capabilities(&isolation.capabilities)?;
-        let mount_required =
-            isolation.namespaces.mount || mount_policy_requires_namespace(&isolation.mount_policy);
-        let mask_dev = device_mask_required(&isolation.mount_policy, &isolation.namespaces);
+
+        // KTD11: the declared realization decides whether the broker prepares
+        // a private mount tree, and a requested mount is either prepared or
+        // refused - never reported as prepared and skipped.
+        //
+        // - `FilesystemPresentation` always applies the requested mounts,
+        //   including when a user namespace is requested: the mount tree is
+        //   prepared first (see `defer_user_namespace` below).
+        // - `NamespaceFirstServiceSource` keeps ADR 0021's
+        //   user-namespace-first launch with zero host capability and
+        //   realizes its admitted source inside its own verified service
+        //   sandbox, so the broker applies no mount of its own. A launch that
+        //   still asks for one is refused here rather than silently served.
+        // - `None` is the pre-graph posture U34 retires. It keeps the
+        //   historical behaviour exactly, including the historical skip, and
+        //   this unit makes no claim about it.
+        let presentation = isolation.presentation;
+        let in_ns_credentials = user_ns_spec.is_some();
+        let applies_mount_actions = match presentation {
+            Some(PresentationRealization::FilesystemPresentation) => true,
+            Some(PresentationRealization::NamespaceFirstServiceSource) => false,
+            None => !in_ns_credentials,
+        };
+        let presentation_binds = isolation.presentation_binds;
+        if presentation == Some(PresentationRealization::NamespaceFirstServiceSource)
+            && (isolation.namespaces.mount
+                || mount_policy_requires_namespace(&isolation.mount_policy)
+                || !presentation_binds.is_empty())
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "presentation-requires-mount-realization: a namespace-first service source \
+                 realizes its admitted source inside its own verified service sandbox and \
+                 cannot realize a Process filesystem mount; the requested mount is refused \
+                 rather than skipped",
+            ));
+        }
+        if !applies_mount_actions && !presentation_binds.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "presentation-requires-private-mount-tree: this realization does not prepare \
+                 a private mount tree and cannot place a filesystem presentation destination",
+            ));
+        }
+        let private_execution_root_path = isolation.private_execution_root;
+        let private_execution_root = private_execution_root_path
+            .as_deref()
+            .map(|root| {
+                if !root.is_absolute() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!(
+                            "private execution root {} is not absolute",
+                            root.display()
+                        ),
+                    ));
+                }
+                CString::new(root.as_os_str().as_encoded_bytes()).map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "private execution root contains NUL",
+                    )
+                })
+            })
+            .transpose()?;
+        let (presentation_bind_fds, prepared_presentation_binds) =
+            prepare_presentation_binds(private_execution_root_path.as_deref(), &presentation_binds)?;
+
+        let mount_required = applies_mount_actions
+            && (isolation.namespaces.mount
+                || mount_policy_requires_namespace(&isolation.mount_policy));
+        let mask_dev =
+            mount_required && device_mask_required(&isolation.mount_policy, &isolation.namespaces);
         let mount_actions = if mount_required {
             prepare_mount_actions(&isolation.mount_policy)?
         } else {
@@ -3140,9 +3492,31 @@ pub mod pidfd_sys {
         } else {
             (Vec::new(), Vec::new())
         };
-        let root_mask_actions = prepare_root_mask_actions(uid, &isolation.mount_policy)?;
-        let unshare_flags = unshare_namespace_flags(&isolation.namespaces, mount_required);
-        let extra_clone_flags = clone3_namespace_flags(&isolation.namespaces);
+        let root_mask_actions = if mount_required {
+            prepare_root_mask_actions(uid, &isolation.mount_policy)?
+        } else {
+            Vec::new()
+        };
+        // KTD11: the requested user namespace is deferred to the child when a
+        // private mount tree has to be prepared first. `clone3(CLONE_NEWUSER)`
+        // replaces the child's credentials before it runs its first
+        // instruction, and CAP_SYS_ADMIN inside the new user namespace is not
+        // CAP_SYS_ADMIN over the mount tree it inherited. Deferring the user
+        // namespace to the child - after the private tree exists, before the
+        // parent's map write - is what makes the requested mounts effective
+        // instead of skipped, and it still yields the admitted identity.
+        let defer_user_namespace = in_ns_credentials && applies_mount_actions;
+        let extra_clone_flags =
+            clone3_namespace_flags(&isolation.namespaces, defer_user_namespace);
+        // The unshare still creates the mount namespace whenever a mount
+        // policy asked for one, exactly as before: the pre-graph path relies
+        // on `CLONE_NEWNS` to get its own tree even when it then skips the
+        // actions inside it.
+        let mount_namespace_requested = isolation.namespaces.mount
+            || mount_policy_requires_namespace(&isolation.mount_policy)
+            || !prepared_presentation_binds.is_empty();
+        let unshare_flags =
+            unshare_namespace_flags(&isolation.namespaces, mount_namespace_requested);
         let argv_ptrs = &argv_ptrs_storage;
         let env_ptrs = &env_ptrs_storage;
         let supplementary_groups = &supplementary_groups_storage;
@@ -3150,6 +3524,8 @@ pub mod pidfd_sys {
         let mount_actions = &mount_actions;
         let prepared_device_binds = &prepared_device_binds;
         let root_mask_actions = &root_mask_actions;
+        let prepared_presentation_binds = &prepared_presentation_binds;
+        let private_execution_root = &private_execution_root;
         let seccomp_program = isolation.seccomp_program;
         let cgroup_dir_fd = isolation.cgroup_dir_fd;
         let cgroup_procs_fd = isolation.cgroup_procs_fd;
@@ -3190,6 +3566,12 @@ pub mod pidfd_sys {
         let _pre_opened_device_fds_owner = isolation.pre_opened_device_fds;
         let _overlap_safe_pre_opened_fds_owner = overlap_safe_pre_opened_fds;
         let _device_bind_fds_owner = device_bind_fds;
+        // The admitted presentation sources stay open in the broker parent
+        // until the clone returns, so the child's bind resolves the exact
+        // descriptor the parent validated. Parent and child have independent
+        // fd tables after fork; the child never closes them by hand because
+        // every one is CLOEXEC and dies with `execve`.
+        let _presentation_bind_fds_owner = presentation_bind_fds;
 
         // When a user NS is requested, create a sync pipe so the child
         // can block until the parent has written uid_map/gid_map/setgroups.
@@ -3200,6 +3582,24 @@ pub mod pidfd_sys {
         } else {
             None
         };
+        // KTD11: when the user namespace is deferred to the child, the parent
+        // cannot write `/proc/<pid>/uid_map` until the child has actually
+        // created the namespace. This second pipe is the other half of the
+        // same bounded handshake: the child signals "the namespace exists"
+        // after its mount tree is prepared, and only then does the parent
+        // write the maps and release the child through the sync pipe. The
+        // signal is bounded by the child's own progress - it either
+        // unshares, or `_exit`s, which closes its write end and delivers EOF.
+        let (user_ns_ready_read, user_ns_ready_write_owner) = if defer_user_namespace {
+            let pipe = make_sync_pipe()?;
+            (Some(pipe.read_fd), Some(pipe.write_fd))
+        } else {
+            (None, None)
+        };
+        let user_ns_ready_write_fd = user_ns_ready_write_owner
+            .as_ref()
+            .map(|fd| fd.as_raw_fd())
+            .unwrap_or(-1);
         // Capture BOTH pipe fds in the child closure. Without this, the
         // child inherits both ends of the pipe (CLOEXEC only fires on
         // execve, not at clone), so the parent's death never delivers EOF
@@ -3245,7 +3645,7 @@ pub mod pidfd_sys {
         // identity (used by ACLs and audit), but the in-NS
         // credential is always 0 when the broker pre-establishes
         // the namespace.
-        let in_ns_credentials = user_ns_spec.is_some();
+        // `in_ns_credentials` was bound above, next to the realization gate.
         let target_uid: libc::uid_t = if in_ns_credentials { 0 } else { uid };
         let target_gid: libc::gid_t = if in_ns_credentials { 0 } else { gid };
 
@@ -3286,24 +3686,19 @@ pub mod pidfd_sys {
                     // read-end-already-at-stdin case.
                     libc::fcntl(libc::STDIN_FILENO, libc::F_SETFD, 0);
                 }
-                // If we're in a user NS, FIRST close the inherited write end
-                // of the sync pipe so the parent's death is observable as EOF.
-                // THEN block on the read end until the parent has written
-                // uid_map/setgroups=deny/gid_map and signaled.
-                if user_ns_sync_read_fd >= 0 {
-                    if user_ns_sync_write_fd >= 0 {
-                        libc::close(user_ns_sync_write_fd);
-                    }
-                    let mut buf = [0u8; 1];
-                    let n = libc::read(user_ns_sync_read_fd, buf.as_mut_ptr() as *mut _, 1);
-                    if n != 1 {
-                        let m = b"DEBUG: sync read returned non-1\n";
-                        libc::write(2, m.as_ptr() as *const _, m.len());
-                        libc::_exit(CHILD_EXIT_USER_NS_SYNC);
-                    }
-                    libc::close(user_ns_sync_read_fd);
-                    let m = b"DEBUG: sync passed\n";
-                    libc::write(2, m.as_ptr() as *const _, m.len());
+                // The user-namespace handshake is deliberately NOT completed
+                // here any more. KTD11 requires the private mount tree to be
+                // prepared BEFORE the requested user namespace, so the child's
+                // blocking wait moves below the mount stage. What stays here
+                // is closing the inherited write end of the sync pipe, which
+                // is what makes the parent's death observable as EOF instead of
+                // wedging the child forever.
+                //
+                // `defer_user_namespace` also makes the child signal the
+                // parent that its user namespace exists, through the second
+                // half of the same bounded handshake, before it waits.
+                if user_ns_sync_write_fd >= 0 {
+                    libc::close(user_ns_sync_write_fd);
                 }
                 if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0 {
                     let m = b"DEBUG: prctl NO_NEW_PRIVS failed\n";
@@ -3318,7 +3713,7 @@ pub mod pidfd_sys {
                     libc::write(2, m.as_ptr() as *const _, m.len());
                     libc::_exit(CHILD_EXIT_UNSHARE);
                 }
-                if mount_required {
+                if mount_namespace_requested {
                     if libc::mount(
                         std::ptr::null(),
                         c"/".as_ptr(),
@@ -3336,19 +3731,14 @@ pub mod pidfd_sys {
                         libc::write(2, b"\n".as_ptr() as *const _, 1);
                         libc::_exit(CHILD_EXIT_MOUNT);
                     }
-                    // When in_ns_credentials (broker-pre-NS spawn per ADR 0021),
-                    // SKIP apply_mount_actions.
-                    // The user-NS already provides isolation (each NS has its
-                    // own mount tree clone from clone3). Bind-mounting paths
-                    // onto themselves WOULD FAIL with EPERM for any path that
-                    // belongs to a mount inherited from the parent NS - Linux
-                    // locks inherited mounts inside user-NS so they can't be
-                    // mutated. virtiofsd's --sandbox=chroot does its own
-                    // pivot_root inside the user-NS post-exec, which works
-                    // because the new NS-root has CAP_SYS_ADMIN. The old
-                    // (non-user-NS) bind-mount semantics from the minijail
-                    // model are unnecessary for the broker-pre-NS path.
-                    if !in_ns_credentials {
+                    // KTD11: a mount the mount policy asked for is prepared or
+                    // the setup terminates. There is no longer a "skip and
+                    // still report success" branch on a path that declares one:
+                    // `applies_mount_actions` is false only for a leg whose
+                    // declared realization realizes no broker mount at all
+                    // (ADR 0021's namespace-first service source) or for the
+                    // pre-graph posture U34 retires.
+                    if mount_required {
                         match apply_mount_actions_debug(mount_actions) {
                             Ok(()) => {}
                             Err((errno, path_bytes)) => {
@@ -3424,6 +3814,75 @@ pub mod pidfd_sys {
                             }
                         }
                     }
+                    // The admitted presentation destinations are prepared
+                    // inside a fresh tmpfs on the private execution root, so
+                    // neither the destination directories nor anything a
+                    // worker writes there exists in the host root, and no
+                    // mount propagates out of this child's tree.
+                    if !prepared_presentation_binds.is_empty() {
+                        let Some(root) = private_execution_root.as_ref() else {
+                            libc::_exit(CHILD_EXIT_MOUNT);
+                        };
+                        if let Err((errno, path_bytes)) = apply_private_execution_root(root) {
+                            let m = b"DEBUG: private execution root failed errno=";
+                            libc::write(2, m.as_ptr() as *const _, m.len());
+                            let mut buf = [0u8; 16];
+                            let len = format_errno(errno, &mut buf);
+                            libc::write(2, buf.as_ptr() as *const _, len);
+                            let m2 = b" path=";
+                            libc::write(2, m2.as_ptr() as *const _, m2.len());
+                            libc::write(2, path_bytes.as_ptr() as *const _, path_bytes.len());
+                            libc::write(2, b"\n".as_ptr() as *const _, 1);
+                            libc::_exit(CHILD_EXIT_MOUNT);
+                        }
+                        if let Err((errno, path_bytes)) =
+                            apply_presentation_binds(prepared_presentation_binds)
+                        {
+                            let m = b"DEBUG: presentation bind failed errno=";
+                            libc::write(2, m.as_ptr() as *const _, m.len());
+                            let mut buf = [0u8; 16];
+                            let len = format_errno(errno, &mut buf);
+                            libc::write(2, buf.as_ptr() as *const _, len);
+                            let m2 = b" path=";
+                            libc::write(2, m2.as_ptr() as *const _, m2.len());
+                            libc::write(2, path_bytes.as_ptr() as *const _, path_bytes.len());
+                            libc::write(2, b"\n".as_ptr() as *const _, 1);
+                            libc::_exit(CHILD_EXIT_MOUNT);
+                        }
+                    }
+                }
+                // KTD11: the requested user namespace is created only now,
+                // after the private mount tree exists and before the identity
+                // mapping. The child signals the parent that the namespace
+                // now exists through the second half of the bounded
+                // handshake, so the parent's uid_map/gid_map writes land on a
+                // namespace that is really there, and then blocks for the
+                // release byte. This sits outside the mount block on purpose:
+                // a leg with nothing to mount still has to get its identity.
+                if defer_user_namespace {
+                    if libc::unshare(libc::CLONE_NEWUSER) < 0 {
+                        let m = b"DEBUG: deferred unshare CLONE_NEWUSER failed\n";
+                        libc::write(2, m.as_ptr() as *const _, m.len());
+                        libc::_exit(CHILD_EXIT_UNSHARE);
+                    }
+                    let ready = [0u8; 1];
+                    if libc::write(user_ns_ready_write_fd, ready.as_ptr() as *const _, 1) != 1 {
+                        let m = b"DEBUG: user-ns ready signal failed\n";
+                        libc::write(2, m.as_ptr() as *const _, m.len());
+                        libc::_exit(CHILD_EXIT_USER_NS_SYNC);
+                    }
+                }
+                if user_ns_sync_read_fd >= 0 {
+                    let mut buf = [0u8; 1];
+                    let n = libc::read(user_ns_sync_read_fd, buf.as_mut_ptr() as *mut _, 1);
+                    if n != 1 {
+                        let m = b"DEBUG: sync read returned non-1\n";
+                        libc::write(2, m.as_ptr() as *const _, m.len());
+                        libc::_exit(CHILD_EXIT_USER_NS_SYNC);
+                    }
+                    libc::close(user_ns_sync_read_fd);
+                    let m = b"DEBUG: sync passed\n";
+                    libc::write(2, m.as_ptr() as *const _, m.len());
                 }
                 if let Some(limit) = memlock_limit_bytes {
                     let rlim = libc::rlimit {
@@ -3545,10 +4004,42 @@ pub mod pidfd_sys {
         // attach that the parent must perform with host credentials. Both
         // complete BEFORE the sync pipe write that unblocks the child.
         // Sequencing per `man 7 user_namespaces`: cgroup.procs fallback
-        // attach → uid_map → setgroups=deny → gid_map → sync byte. The
-        // child has already closed its inherited write_fd, so if the
-        // parent dies BEFORE this point the child gets EOF on read and
-        // exits CHILD_EXIT_USER_NS_SYNC=74.
+        // attach → (KTD11) wait for the child's own `unshare(CLONE_NEWUSER)`
+        // when the user namespace was deferred → uid_map → setgroups=deny →
+        // gid_map → sync byte. The child has already closed its inherited
+        // write_fd, so if the parent dies BEFORE this point the child gets
+        // EOF on read and exits CHILD_EXIT_USER_NS_SYNC=74.
+        // The parent's copy of the write end goes away as soon as the child
+        // exists, so a child that dies during setup produces EOF here instead
+        // of wedging the broker on a byte that will never arrive.
+        drop(user_ns_ready_write_owner);
+        if defer_user_namespace {
+            // The wait is bounded by the child's own progress: the child
+            // writes this byte immediately after its user namespace exists, or
+            // `_exit`s - which closes its write end here and turns the read
+            // into EOF. A child that could not prepare its mount tree
+            // therefore ends this launch before any map is written, and is
+            // reaped below rather than left Prepared.
+            let Some(ready) = user_ns_ready_read.as_ref() else {
+                drop(user_ns_sync);
+                let _ = reap_spawn_runner_error_child(outcome.pid);
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "deferred user namespace handshake has no ready pipe",
+                ));
+            };
+            let mut byte = [0u8; 1];
+            if rustix::io::read(ready, &mut byte).unwrap_or(0) != 1 {
+                let _ = pidfd_send_signal(outcome.pidfd.as_fd(), libc::SIGKILL);
+                drop(user_ns_sync);
+                let _ = reap_spawn_runner_error_child(outcome.pid);
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "runner did not report a prepared user namespace; its mount tree was \
+                     not established",
+                ));
+            }
+        }
         if let (Some(sync), Some(spec)) = (user_ns_sync, user_ns_spec) {
             if let Err(err) = write_user_namespace_maps(outcome.pid, spec).map_err(|err| {
                 // Preserve the underlying io::Error as the source so
@@ -3816,6 +4307,9 @@ mod tests {
             pre_opened_device_fds: Vec::new(),
             memlock_limit_bytes: None,
             activation_stdin: None,
+            presentation: None,
+            private_execution_root: None,
+            presentation_binds: Vec::new(),
         };
 
         let error = clone3_spawn_runner(
@@ -3976,6 +4470,9 @@ mod tests {
             pre_opened_device_fds: Vec::new(),
             memlock_limit_bytes: None,
             activation_stdin: None,
+            presentation: None,
+            private_execution_root: None,
+            presentation_binds: Vec::new(),
         }
     }
 
@@ -4214,134 +4711,5 @@ mod tests {
         assert_eq!(metadata.mode() & 0o777, 0o600);
         assert_eq!(metadata.uid(), uid);
         assert_eq!(metadata.gid(), gid);
-    }
-
-    /// Hermetic unit test asserting that `apply_mount_actions` is NOT
-    /// called when `in_ns_credentials = true` (broker-pre-NS spawn per
-    /// ADR 0021).
-    ///
-    /// Strategy - exit-code oracle: spawn a no-op binary (`true`) with
-    /// `user_namespace = Some(...)` (which sets `in_ns_credentials =
-    /// true`) and a mount policy that produces a non-empty
-    /// `mount_actions` list (`nix_store_read_only = true` →
-    /// `["/nix/store"]`):
-    ///
-    /// - With the guard (`if !in_ns_credentials`) in place:
-    ///   `apply_mount_actions` is skipped; the child execs `true` and
-    ///   exits 0.
-    /// - Without the guard: `apply_mount_actions_debug` would attempt
-    ///   `mount("/nix/store", "/nix/store", NULL, MS_BIND|MS_REC)`
-    ///   inside the user-NS where inherited mounts are locked by the
-    ///   kernel (CAP_SYS_ADMIN in the child user-NS is not sufficient
-    ///   to mutate mounts owned by the parent user-NS); the call
-    ///   returns EPERM and the child exits `CHILD_EXIT_MOUNT` (64).
-    ///
-    /// Skips cleanly on hosts with `kernel.unprivileged_userns_clone=0`
-    /// (clone3 returns EPERM before any child runs).
-    #[test]
-    fn apply_mount_actions_skipped_in_user_ns() {
-        use nix::sys::wait::{WaitStatus, waitpid};
-        use nix::unistd::Pid;
-
-        // /bin/true is absent on NixOS; probe common locations.
-        let true_path = [
-            "/bin/true",
-            "/usr/bin/true",
-            "/run/current-system/sw/bin/true",
-        ]
-        .iter()
-        .find(|p| std::path::Path::new(p).exists())
-        .copied()
-        .expect("could not find `true` binary in any candidate location");
-
-        let current_uid = nix::unistd::Uid::current().as_raw();
-        let current_gid = nix::unistd::Gid::current().as_raw();
-
-        let iso = RunnerIsolationSpec {
-            capabilities: vec![],
-            namespaces: NamespaceSet {
-                mount: false,
-                pid: false,
-                net: false,
-                ipc: false,
-                uts: false,
-                user: true,
-            },
-            seccomp_program: None,
-            // nix_store_read_only = true triggers
-            // mount_policy_requires_namespace → mount_required = true
-            // → prepare_mount_actions → [PreparedMountAction { path:
-            // "/nix/store", readonly: true }].  This guarantees a
-            // non-empty mount_actions slice reaches the guard.
-            mount_policy: MountPolicy {
-                read_only_paths: vec![],
-                writable_paths: vec![],
-                nix_store_read_only: true,
-                hide_device_nodes_by_default: false,
-                device_binds: vec![],
-                bind_mounts: vec![],
-            },
-            cgroup_dir_fd: None,
-            cgroup_procs_fd: None,
-            user_namespace: Some(UserNamespaceSpec {
-                host_uid_for_zero: current_uid,
-                host_gid_for_zero: current_gid,
-            }),
-            umask: None,
-            pre_opened_device_fds: Vec::new(),
-            memlock_limit_bytes: None,
-            activation_stdin: None,
-        };
-
-        let bin = CString::new(true_path).unwrap();
-        let argv0 = bin.clone();
-        // supplementary_groups MUST be empty: the parent writes
-        // setgroups=deny during uid_map setup, so any call to
-        // setgroups(2) in the child would return EPERM.
-        let outcome = match clone3_spawn_runner(
-            bin,
-            vec![argv0], // argv[0] = binary path; coreutils multi-call needs it
-            vec![],
-            current_uid,
-            current_gid,
-            vec![],
-            iso,
-        ) {
-            Ok(o) => o,
-            Err(e) if e.raw_os_error() == Some(nix::libc::EPERM) => {
-                // kernel.unprivileged_userns_clone=0: user namespaces
-                // not available on this host - skip rather than fail.
-                println!(
-                    "SKIP: unprivileged user NS not available \
-                     (kernel.unprivileged_userns_clone=0)"
-                );
-                return;
-            }
-            Err(e) => panic!("clone3_spawn_runner failed unexpectedly: {e}"),
-        };
-
-        // Reap the child and capture its wait status.
-        let wait_status = waitpid(Pid::from_raw(outcome.pid), None).expect("waitpid failed");
-        const CHILD_EXIT_UNSHARE_IN_CHILD: nix::libc::c_int = 62;
-        if matches!(
-            wait_status,
-            WaitStatus::Exited(_, code) if code == CHILD_EXIT_UNSHARE_IN_CHILD
-        ) {
-            println!("SKIP: unprivileged user NS not available inside child");
-            return;
-        }
-
-        // CHILD_EXIT_MOUNT = 64 would mean apply_mount_actions ran and
-        // got EPERM on the locked /nix/store bind-mount - i.e., the
-        // `if !in_ns_credentials` guard is absent.
-        assert_eq!(
-            wait_status,
-            WaitStatus::Exited(Pid::from_raw(outcome.pid), 0),
-            "child did not exit 0 (expected /bin/true to succeed); \
-             WaitStatus::Exited(_, 64) (CHILD_EXIT_MOUNT) would indicate \
-             the user-namespace mount guard `if !in_ns_credentials` is missing and \
-             apply_mount_actions was invoked inside the user-NS \
-             (EPERM on locked inherited mount)"
-        );
     }
 }
