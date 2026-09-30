@@ -73,6 +73,7 @@ pub mod audit;
 mod base;
 pub mod credential;
 pub mod declaration;
+pub mod hosting;
 pub mod operations;
 pub mod plane;
 pub mod server;

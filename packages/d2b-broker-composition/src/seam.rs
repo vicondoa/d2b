@@ -104,6 +104,22 @@ pub enum RoutingRefusal {
         /// The row's declaring provider.
         declaring_provider: &'static str,
     },
+    /// Two declarations claim one committed operation.
+    DuplicateOperation {
+        /// The claimed operation.
+        operation: &'static str,
+        /// The declaring crate of the first claim.
+        first: &'static str,
+        /// The declaring crate of the second claim.
+        second: &'static str,
+    },
+    /// One handler implementation is bound to two operations.
+    DuplicateHandler {
+        /// The operation the handler was first bound to.
+        first: &'static str,
+        /// The operation the handler is claimed for a second time.
+        second: &'static str,
+    },
     /// The dependency-surface audit rejected the handler crate.
     SurfaceViolation {
         /// The rejected handler crate.
@@ -136,6 +152,14 @@ impl fmt::Display for RoutingRefusal {
                 formatter,
                 "operation {operation} is declared by {declaring_provider}, not by handler crate {source_crate}"
             ),
+            Self::DuplicateOperation { operation, first, second } => write!(
+                formatter,
+                "operation {operation} is claimed by both {first} and {second}; one committed operation has one declared implementation"
+            ),
+            Self::DuplicateHandler { first, second } => write!(
+                formatter,
+                "one handler implementation is bound to both {first} and {second}; a shared dispatcher cannot stand in for two declared implementations"
+            ),
             Self::SurfaceViolation {
                 source_crate,
                 violations,
@@ -151,8 +175,14 @@ impl fmt::Display for RoutingRefusal {
 /// Register declared handlers, applying the mechanical routing rule.
 ///
 /// Every declaration is checked before any handler is admitted: a refused
-/// declaration refuses the whole registration (fail-closed), and the
-/// returned table is bound to the caller's budget only via the default
+/// declaration refuses the whole registration (fail-closed), and so does a
+/// duplicate. One committed operation has one declared implementation, and
+/// one handler implementation answers one operation: a second declaration
+/// claiming either is a shared dispatcher standing in for a declared
+/// implementation, and it is refused here rather than overwriting the first
+/// silently in the table.
+///
+/// The returned table is bound to the caller's budget only via the default
 /// carrier deadline - the row's deadline tier supersedes it at dispatch.
 pub fn register_declared_handlers(
     declarations: &[HandlerDeclaration<'_>],
@@ -160,11 +190,42 @@ pub fn register_declared_handlers(
     for declaration in declarations {
         admit(declaration)?;
     }
+    refuse_duplicate_mappings(declarations)?;
     let mut table = HandlerTable::new();
     for declaration in declarations {
         table = table.with(declaration.row.operation.as_str(), declaration.handler);
     }
     Ok(table)
+}
+
+/// Refuse a committed operation two declarations claim, or one handler
+/// implementation two declarations bind.
+fn refuse_duplicate_mappings(
+    declarations: &[HandlerDeclaration<'_>],
+) -> Result<(), RoutingRefusal> {
+    let mut owners: Vec<(&'static str, &'static str)> = Vec::with_capacity(declarations.len());
+    let mut bound: Vec<(usize, &'static str)> = Vec::with_capacity(declarations.len());
+    for (index, declaration) in declarations.iter().enumerate() {
+        let operation = declaration.row.operation.as_str();
+        if let Some((_, first)) = owners.iter().find(|(claimed, _)| *claimed == operation) {
+            return Err(RoutingRefusal::DuplicateOperation {
+                operation,
+                first,
+                second: declaration.source_crate,
+            });
+        }
+        owners.push((operation, declaration.source_crate));
+        if let Some((_, first)) = bound.iter().find(|(claimed, _)| {
+            std::ptr::fn_addr_eq(declarations[*claimed].handler, declaration.handler)
+        }) {
+            return Err(RoutingRefusal::DuplicateHandler {
+                first,
+                second: operation,
+            });
+        }
+        bound.push((index, operation));
+    }
+    Ok(())
 }
 
 /// Register handlers for production: every row must be the committed
@@ -710,12 +771,22 @@ mod tests {
         assert!(verify_startup_routing(&[FIXTURE_OPERATION]).is_err());
     }
 
+    /// A second, distinct pure handler for the two-handler scenarios below.
+    fn second_fixture_handler<'a>(invocation: &'a DirectInvocation<'a>) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            Ok(DispatchOutcome {
+                result: invocation.payload.clone(),
+                fds: Vec::new(),
+            })
+        })
+    }
+
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    async fn two_admitted_fixture_handlers_both_answer() {
+    async fn two_distinct_declared_handlers_both_answer() {
         // Fail-closed registration admits every declared handler and
-        // refuses none of them silently: two pure fixture declarations
-        // both answer through .call().
+        // refuses none of them silently: two pure fixture declarations, each
+        // with its own declared implementation, both answer through .call().
         let mut second_row = PURE_FIXTURE_ROW;
         second_row.operation = BrokerOperationName::ExportBrokerAudit;
         second_row.audit_join = None;
@@ -723,7 +794,7 @@ mod tests {
             fixture_declaration(),
             HandlerDeclaration {
                 row: &second_row,
-                handler: d2b_broker_fixture_handlers::echo,
+                handler: second_fixture_handler,
                 source_crate: FIXTURE_PROVIDER,
                 pure_claim: PureTransformClaim::for_operation("ExportBrokerAudit"),
             },
@@ -753,5 +824,59 @@ mod tests {
             .await
             .expect("the second admitted handler answers");
         assert_ne!(first.invocation_id, second.invocation_id);
+        assert_eq!(
+            serde_json::to_value(&second.outcome.result).expect("canonical result value"),
+            json!({ "echo": "two" })
+        );
+    }
+
+    #[test]
+    fn one_handler_bound_to_two_operations_is_refused_before_hosting() {
+        // One handler implementation standing in for two declared
+        // implementations is the shared dispatcher the derived lookup
+        // removes, so it is refused while the table is built.
+        let mut second_row = PURE_FIXTURE_ROW;
+        second_row.operation = BrokerOperationName::ExportBrokerAudit;
+        second_row.audit_join = None;
+        let declarations = [
+            fixture_declaration(),
+            HandlerDeclaration {
+                row: &second_row,
+                handler: d2b_broker_fixture_handlers::echo,
+                source_crate: FIXTURE_PROVIDER,
+                pure_claim: PureTransformClaim::for_operation("ExportBrokerAudit"),
+            },
+        ];
+        assert_eq!(
+            register_declared_handlers(&declarations).expect_err("the shared handler is refused"),
+            RoutingRefusal::DuplicateHandler {
+                first: FIXTURE_OPERATION,
+                second: "ExportBrokerAudit",
+            }
+        );
+    }
+
+    #[test]
+    fn two_declarations_claiming_one_operation_are_refused_before_hosting() {
+        let mut copy = PURE_FIXTURE_ROW;
+        copy.declaring_provider = Some("another-fixture-crate");
+        let declarations = [
+            fixture_declaration(),
+            HandlerDeclaration {
+                row: &copy,
+                handler: second_fixture_handler,
+                source_crate: "another-fixture-crate",
+                pure_claim: PureTransformClaim::for_operation(FIXTURE_OPERATION),
+            },
+        ];
+        assert_eq!(
+            register_declared_handlers(&declarations)
+                .expect_err("the second claim on one operation is refused"),
+            RoutingRefusal::DuplicateOperation {
+                operation: FIXTURE_OPERATION,
+                first: FIXTURE_PROVIDER,
+                second: "another-fixture-crate",
+            }
+        );
     }
 }

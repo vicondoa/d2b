@@ -677,6 +677,23 @@ d2b_rust_test(
 )
 
 d2b_rust_test(
+    name = "generated_provider_hosting",
+    srcs = ["tests/generated_provider_hosting.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2bd_lib",
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        "//packages/d2b-resource-types:d2b_resource_types",
+        "@crates//:async-trait",
+        "@crates//:tokio",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
     name = "mode_separation",
     srcs = ["tests/mode_separation.rs"],
     compile_data = ["Cargo.toml"],

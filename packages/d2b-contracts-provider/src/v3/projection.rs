@@ -590,6 +590,11 @@ impl OperationGraphRow {
         &self.component_id
     }
 
+    /// The canonical `Provider/...` reference that owns this method.
+    pub fn provider_ref(&self) -> &str {
+        &self.provider_ref
+    }
+
     /// The trusted implementation identity the declaration derives.
     pub const fn implementation(&self) -> &OperationImplementation {
         &self.implementation
