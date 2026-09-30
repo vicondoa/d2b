@@ -719,7 +719,7 @@ mod tests {
         rows: Mutex<Vec<StoredDesiredResource>>,
         log: Mutex<Vec<String>>,
         watch_targets: Mutex<Vec<ResourceKey>>,
-        status: std::sync::Mutex<ResourceStatus>,
+        status: Mutex<ResourceStatus>,
     }
 
     impl RecordingManager {
@@ -729,7 +729,7 @@ mod tests {
                 rows: Mutex::new(Vec::new()),
                 log: Mutex::new(Vec::new()),
                 watch_targets: Mutex::new(Vec::new()),
-                status: std::sync::Mutex::new(status),
+                status: Mutex::new(status),
             })
         }
 
@@ -834,7 +834,7 @@ mod tests {
             // The ingest fence reads the named Service's own observed
             // classification, so the double serves the status it was seeded
             // with rather than no observed state at all.
-            let status = self.status.lock().expect("unpoisoned").clone();
+            let status = self.status.lock().await.clone();
             let row = self.rows.lock().await.iter().find(|row| row.key == *key).cloned();
             Ok(row.map(|row| d2b_resource_runtime::manager::ResourceView {
                 key: row.key.clone(),
