@@ -53,7 +53,7 @@ pub(crate) fn render_declaration_service_catalog(plan: &PrivatePlanProjection) -
     out.push_str("// @generated\n");
     out.push_str("// Provenance: derived from the provider declaration (KTD1/U4). A\n");
     out.push_str("// generated artifact is an output, not a second source.\n");
-    out.push_str("\n");
+    out.push('\n');
     for row in plan.services() {
         out.push_str(&format!(
             "    {:?} => Some({:?}),\n",

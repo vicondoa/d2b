@@ -310,21 +310,23 @@ fn web_request(slot: &str, access: AttachmentAccess, destination: &str) -> Consu
 
 /// Every rendered artifact lands in one directory the test target owns.
 ///
-/// The Bazel target points this at its own runfiles directory; a plain
-/// `cargo test` run gets a fresh temporary tree. Either way the projection
-/// writes outside the source tree, so a generation action can never overwrite
-/// a committed generated artifact.
+/// Under Bazel the render lands in the test sandbox's scratch directory; a
+/// plain `cargo test` run gets a fresh temporary tree. Either way the
+/// projection writes outside the source tree, so a generation action can
+/// never overwrite a committed generated artifact.
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn output_dir() -> PathBuf {
-    let base = std::env::var_os("D2B_PROJECTION_OUTPUT_DIR").map_or_else(
-        || {
-            std::env::temp_dir().join(format!(
-                "d2b-provider-graph-projection-{}",
-                std::process::id()
-            ))
-        },
-        PathBuf::from,
-    );
+    let base = std::env::var_os("TEST_TMPDIR")
+        .or_else(|| std::env::var_os("CARGO_TARGET_TMPDIR"))
+        .map_or_else(
+            || {
+                std::env::temp_dir().join(format!(
+                    "d2b-provider-graph-projection-{}",
+                    std::process::id()
+                ))
+            },
+            |scratch| PathBuf::from(scratch).join("provider-graph-projection"),
+        );
     fs::create_dir_all(&base).expect("isolated projection output directory");
     base
 }

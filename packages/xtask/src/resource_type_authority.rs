@@ -1231,7 +1231,7 @@ mod tests {
         );
         let index = render_declaration_manifest_index(&plan);
         assert!(index.contains("\"provider-volume-virtiofs\""));
-        assert!(index.contains("namespace-first-service-source") == false);
+        assert!(!index.contains("namespace-first-service-source"));
         // The index is derived, so it is byte-stable for one declaration.
         assert_eq!(index, render_declaration_manifest_index(&plan));
     }

@@ -82,14 +82,13 @@ d2b_rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-# The declaration-derived graph projection (KTD1/U4). The target declares the
-# isolated output directory the test renders its generated artifacts into, so a
-# generation action can never write beside a committed generated file.
+# The declaration-derived graph projection (KTD1/U4). The target renders its
+# generated artifacts into the sandbox scratch directory, so a generation
+# action can never write beside a committed generated file.
 d2b_rust_test(
     name = "provider_graph_projection",
     srcs = ["tests/provider_graph_projection.rs"],
     compile_data = ["Cargo.toml"],
-    env = {"D2B_PROJECTION_OUTPUT_DIR": "$(rootpath :provider_graph_projection)"},
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
