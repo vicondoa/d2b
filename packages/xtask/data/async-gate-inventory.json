@@ -673,22 +673,22 @@
     },
     {
       "file": "packages/d2b-resource-runtime/src/context.rs",
-      "line": 916,
+      "line": 940,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-resource-runtime/src/context.rs",
-      "line": 1185,
+      "line": 1209,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-resource-runtime/src/context.rs",
-      "line": 1213,
+      "line": 1237,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-resource-runtime/src/context.rs",
-      "line": 1222,
+      "line": 1246,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
@@ -803,7 +803,7 @@
     },
     {
       "file": "packages/d2bd/src/resource_plane_v3.rs",
-      "line": 6823,
+      "line": 6946,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {

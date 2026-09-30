@@ -221,15 +221,7 @@ pub fn source_controller_kind(source_type: &str) -> Option<AuthoritySubjectKind>
 /// `ZoneLink`) has no class in the authority contract, so the authenticated
 /// path refuses it rather than inventing a classification for it.
 pub fn authority_subject_kind(resource_ref: &ResourceRef) -> Option<AuthoritySubjectKind> {
-    match resource_ref.resource_type().as_str() {
-        "User" => Some(AuthoritySubjectKind::User),
-        "Process" => Some(AuthoritySubjectKind::Process),
-        "EphemeralProcess" => Some(AuthoritySubjectKind::EphemeralProcess),
-        "Host" => Some(AuthoritySubjectKind::Host),
-        "Guest" => Some(AuthoritySubjectKind::Guest),
-        "Provider" => Some(AuthoritySubjectKind::Provider),
-        _ => None,
-    }
+    AuthoritySubjectKind::of_reference(resource_ref)
 }
 
 // ---------------------------------------------------------------------------

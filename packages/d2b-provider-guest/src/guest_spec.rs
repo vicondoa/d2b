@@ -23,7 +23,11 @@ use d2b_contracts_resource::v3::{
 };
 
 /// The canonical ResourceType name for this module.
-pub const GUEST_RESOURCE_TYPE: &str = "Guest";
+///
+/// The name itself is declared once, in the authority contract that
+/// classifies a `Guest` reference as an authority subject; this re-export
+/// keeps the owning crate's historical spelling.
+pub use d2b_contracts_resource::v3::authority::GUEST_RESOURCE_TYPE;
 
 /// The Guest ResourceType base spec.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]

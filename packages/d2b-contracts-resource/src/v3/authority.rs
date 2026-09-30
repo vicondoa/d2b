@@ -21,7 +21,7 @@ use super::{
     execution_policy::{
         BoundedToken, PrimitiveSpecError, parsed_deserialize, redacted_debug, string_schema,
     },
-    identity::{ResourceUid, ZoneId},
+    identity::{ResourceTypeName, ResourceUid, ZoneId},
     resource_schema::{framed_canonical_digest, is_canonical_digest},
 };
 use d2b_contracts::wire_deserialize;
@@ -323,6 +323,46 @@ pub enum AuthoritySubjectKind {
     Bootstrap,
     /// Explicit local operator authority for a one-shot ownership action.
     Operator,
+}
+
+/// The canonical `Guest` ResourceType name.
+///
+/// The authority contract classifies a `Guest` reference as a subject, so
+/// the name it compares against belongs here rather than only in the crate
+/// that declares the type's base spec.
+pub const GUEST_RESOURCE_TYPE: &str = "Guest";
+
+impl AuthoritySubjectKind {
+    /// The subject class one resource type carries, when it has one.
+    ///
+    /// The classification reads the canonical type-name constants instead of
+    /// restating the vocabulary, so no shared crate holds a private copy of
+    /// the type names it decides on. A type outside this set - a `Zone`
+    /// self-resource, a group, a link - has no admitted subject, and the
+    /// caller refuses it rather than classifying it as something it is not.
+    pub fn of_resource_type(candidate: &ResourceTypeName) -> Option<Self> {
+        let name = candidate.as_str();
+        if name == super::host::HOST_RESOURCE_TYPE {
+            Some(Self::Host)
+        } else if name == super::process::PROCESS_RESOURCE_TYPE {
+            Some(Self::Process)
+        } else if name == super::process::EPHEMERAL_PROCESS_RESOURCE_TYPE {
+            Some(Self::EphemeralProcess)
+        } else if name == super::user::USER_RESOURCE_TYPE {
+            Some(Self::User)
+        } else if name == GUEST_RESOURCE_TYPE {
+            Some(Self::Guest)
+        } else if name == super::operation::PROVIDER_RESOURCE_TYPE {
+            Some(Self::Provider)
+        } else {
+            None
+        }
+    }
+
+    /// The subject class one reference carries, when it has one.
+    pub fn of_reference(reference: &ResourceRef) -> Option<Self> {
+        Self::of_resource_type(reference.resource_type())
+    }
 }
 
 /// The subject an authority decision is made for.
