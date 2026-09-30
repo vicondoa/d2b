@@ -1036,6 +1036,7 @@ name = "d2b-process-conformance"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
  "d2b-core",
  "serde",
  "serde_json",
