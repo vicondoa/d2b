@@ -530,6 +530,7 @@ pub struct DeliveryIdentity {
 
 impl DeliveryIdentity {
     /// Construct one identity from its exact authority-bearing fields.
+    #[allow(clippy::too_many_arguments, reason = "one field per fence input")]
     pub const fn new(
         credential_ref: ResourceRef,
         credential_uid: ResourceUid,

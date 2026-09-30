@@ -45,7 +45,7 @@ use d2b_contracts_resource::v3::{
     BoundedText, BoundedToken, OperationImplementation, ResourceRef, ResourceTypeName,
 };
 use d2b_resource_types::{
-    ChildCreation, OperationDef, ProviderImplementationBindings, ServiceDecl, ServiceMethod,
+    ChildCreation, OperationDef, ProviderImplementationBindings, ServiceDecl,
 };
 use thiserror::Error;
 
@@ -183,14 +183,20 @@ impl BoundTables<'_> {
     /// implementation.
     fn answers(&self, name: &str) -> bool {
         self.services.iter().any(|service| {
-            service
-                .method(name)
-                .and_then(ServiceMethod::operation)
-                .map_or(true, |operation| {
-                    self.operations
-                        .iter()
-                        .any(|handler| handler.serves_named_operation(operation))
-                })
+            // A method the service does not declare has no implementation at
+            // all. That is a different fact from a declared method that names
+            // no operation row, and conflating the two would let a
+            // declaration claim any method name by omission.
+            let Some(method) = service.method(name) else {
+                return false;
+            };
+            match method.operation() {
+                None => true,
+                Some(operation) => self
+                    .operations
+                    .iter()
+                    .any(|handler| handler.serves_named_operation(operation)),
+            }
         })
     }
 }

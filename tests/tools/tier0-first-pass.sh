@@ -84,7 +84,8 @@ scan_dashes() {
     while IFS= read -r -d '' file; do
       files+=("${file#"$root"/}")
     done < <(find "$root" -type f -not -path '*/.git/*' -not -path '*/target/*' \
-      -not -path '*/_tmp/*' -not -path '*/local-spawn-runner.*' -print0)
+      -not -path '*/_tmp/*' -not -path '_tmp/*' \
+      -not -path '*/local-spawn-runner.*' -print0)
   fi
 
   [ "${#files[@]}" -gt 0 ] || fail "source-hygiene scan found no files"
