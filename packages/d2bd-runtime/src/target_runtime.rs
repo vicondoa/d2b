@@ -3289,3 +3289,159 @@ mod tests {
         assert_eq!(first.controller_role_ref(), second.controller_role_ref());
     }
 }
+
+// ---------------------------------------------------------------------------
+// Target-local authority tests (U31)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod target_authority_tests {
+    use super::*;
+    use d2b_contracts_resource::v3::StoreIncarnation;
+
+    fn guest() -> ProviderDeployment {
+        ProviderDeployment::new(DaemonMode::Guest, AdmissionLimits::guest_default())
+            .expect("guest deployment")
+    }
+
+    fn host() -> ProviderDeployment {
+        ProviderDeployment::new(DaemonMode::Host, AdmissionLimits::host_default())
+            .expect("host deployment")
+    }
+
+    fn zone() -> ZoneId {
+        ZoneId::parse("sys-guest").expect("zone")
+    }
+
+    fn store() -> StoreIncarnation {
+        StoreIncarnation::parse("store-1").expect("store")
+    }
+
+    /// A Guest obtains only target-local authority: its own Zone, its own
+    /// bindings, and none of the host's authority-bearing surfaces.
+    #[test]
+    fn a_guest_publishes_only_its_own_target_local_authority() {
+        let deployment = guest();
+        assert!(
+            !deployment.has_target_authority(),
+            "a Guest with no published authority has none to serve under"
+        );
+        let authority = TargetAuthority::target_local(
+            zone(),
+            store(),
+            vec!["RoleBinding/guest-controller".to_owned()],
+        );
+        deployment
+            .publish_target_authority(authority.clone())
+            .expect("a target-local publication is accepted");
+        let published = deployment
+            .target_authority()
+            .expect("state available")
+            .expect("published");
+        assert_eq!(published, authority);
+        assert_eq!(published.zone, zone());
+        assert!(!published.credential_custody);
+        let surfaces = published.surfaces;
+        assert!(
+            !surfaces.local_zone_store
+                && !surfaces.public_operator_socket
+                && !surfaces.realm_credentials
+                && !surfaces.host_controller_authority,
+            "a target-local publication grants no host surface"
+        );
+    }
+
+    /// A Guest is refused host policy: a publication claiming the host's
+    /// operator socket or controller authority is refused, not narrowed, and
+    /// the deployment keeps serving nothing.
+    #[test]
+    fn a_guest_refuses_a_publication_that_claims_host_authority() {
+        let deployment = guest();
+        let mut authority = TargetAuthority::target_local(zone(), store(), Vec::new());
+        authority.surfaces.host_controller_authority = true;
+        assert_eq!(
+            deployment.publish_target_authority(authority),
+            Err(DeploymentError::AuthoritySurfaceRefused(
+                "host_controller_authority"
+            )),
+            "a Guest is refused host controller authority rather than granted a share of it"
+        );
+        assert!(
+            !deployment.has_target_authority(),
+            "a refused publication leaves the target with no authority at all"
+        );
+        let mut operator = TargetAuthority::target_local(zone(), store(), Vec::new());
+        operator.surfaces.public_operator_socket = true;
+        assert_eq!(
+            deployment.publish_target_authority(operator),
+            Err(DeploymentError::AuthoritySurfaceRefused(
+                "public_operator_socket"
+            )),
+        );
+    }
+
+    /// Credential custody stays with the host; a target that claims it is
+    /// refused rather than being handed the material.
+    #[test]
+    fn a_target_that_claims_credential_custody_is_refused() {
+        let deployment = guest();
+        let mut authority = TargetAuthority::target_local(zone(), store(), Vec::new());
+        authority.credential_custody = true;
+        assert_eq!(
+            deployment.publish_target_authority(authority),
+            Err(DeploymentError::AuthorityCredentialCustodyRefused),
+            "a target never takes custody of a credential"
+        );
+        assert!(!deployment.has_target_authority());
+    }
+
+    /// The published authority is the deployment identity the target serves
+    /// under, so it cannot be re-pointed at another one behind the rows
+    /// already admitted under it.
+    #[test]
+    fn a_second_authority_publication_is_refused() {
+        let deployment = guest();
+        deployment
+            .publish_target_authority(TargetAuthority::target_local(zone(), store(), Vec::new()))
+            .expect("first publication");
+        assert_eq!(
+            deployment.publish_target_authority(TargetAuthority::target_local(
+                zone(),
+                StoreIncarnation::parse("store-2").expect("store"),
+                Vec::new()
+            )),
+            Err(DeploymentError::AuthorityAlreadyPublished),
+            "the target-local store does not silently change deployment identity"
+        );
+        assert_eq!(
+            deployment
+                .target_authority()
+                .expect("state available")
+                .expect("published")
+                .store_incarnation,
+            store(),
+        );
+    }
+
+    /// The host deployment keeps its own surfaces; the publication is bounded
+    /// by the mode rather than by a hand-written per-mode table.
+    #[test]
+    fn the_host_deployment_keeps_its_own_surfaces() {
+        let deployment = host();
+        let mut authority = TargetAuthority::target_local(zone(), store(), Vec::new());
+        authority.surfaces = DaemonMode::Host.surfaces();
+        deployment
+            .publish_target_authority(authority)
+            .expect("the host's own surfaces are within its mode");
+        assert!(deployment.has_target_authority());
+        // `realm_credentials` is no surface of either mode, so even the host
+        // cannot be granted it through a publication.
+        let mut overreach = TargetAuthority::target_local(zone(), store(), Vec::new());
+        overreach.surfaces = DaemonMode::Host.surfaces();
+        overreach.surfaces.realm_credentials = true;
+        assert_eq!(
+            host().publish_target_authority(overreach),
+            Err(DeploymentError::AuthoritySurfaceRefused("realm_credentials")),
+        );
+    }
+}

@@ -131,6 +131,11 @@ in
       # investigating a broker live-handler failure.
       environment = {
         RUST_LOG = lib.mkDefault "info";
+        # U31: the broker bootstraps from the same verified deployment root
+        # the daemon publishes into, so both halves of the trust root read
+        # one document. The broker never binds this path itself; it adopts
+        # the socket systemd owns.
+        D2B_DEPLOYMENT_ROOT = "${cfg.site.stateDir}";
         # Point at host tools (NixOS has no /usr/sbin/nft default).
         D2B_BROKER_NFT_BINARY = "${pkgs.nftables}/bin/nft";
         # iproute2 binary lives in /bin not /sbin on NixOS.

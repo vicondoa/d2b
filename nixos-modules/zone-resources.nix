@@ -317,7 +317,6 @@ let
       }
     ];
     operationRefs = [ ];
-    commandRefs = [ ];
   };
   foundationAuthorityRows = [
     {
@@ -356,6 +355,19 @@ let
     builtins.toJSON (resourcesBundle.canonical deploymentBootstrapDocument);
 in
 {
+  options.d2b._bundle.deploymentBootstrap = lib.mkOption {
+    type = lib.types.attrsOf lib.types.anything;
+    default = { };
+    internal = true;
+    visible = false;
+    description = ''
+      Internal verified deployment graph metadata. The daemon publishes the
+      document at the deployment root before it starts any provider and
+      refuses a document it cannot verify; this option only carries the
+      already-rendered bytes from the bundle compiler to the installer.
+    '';
+  };
+
   config = {
     # Keep only the old eval data for compatibility. Its legacy path and
     # install metadata are deliberately not exposed to the bundle aggregator.

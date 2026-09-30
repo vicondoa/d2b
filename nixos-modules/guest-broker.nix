@@ -30,6 +30,10 @@ let
   };
   brokerSocket = "/run/d2b/guest-broker.sock";
   brokerState = "/var/lib/d2b/guest-broker";
+  # U31: the Guest broker's own deployment root. It is separate from the
+  # Host's: a Guest bootstraps from the graph published for its target, so
+  # it never reads the Host's authority.
+  brokerDeploymentRoot = "${brokerState}/deployment";
   brokerAudit = "/var/lib/d2b/guest-audit";
   brokerBundle = config.d2b.guestBroker.bundlePath;
   brokerUid = config.users.users.d2bd.uid or 997;
@@ -57,6 +61,7 @@ in
   systemd.tmpfiles.rules = [
     "d /run/d2b 0750 root d2bd -"
     "d ${brokerState} 0700 root d2bd -"
+    "d ${brokerDeploymentRoot} 0750 root d2bd -"
     "d ${brokerAudit} 0750 root d2bd -"
   ];
 
@@ -88,6 +93,8 @@ in
     ];
     environment = {
       RUST_LOG = lib.mkDefault "info";
+      # U31: the Guest's own deployment root, never the Host's.
+      D2B_DEPLOYMENT_ROOT = brokerDeploymentRoot;
     };
     serviceConfig = {
       Type = "notify";

@@ -511,3 +511,123 @@ fn signed_activation_verifier_binds_verification_to_the_exact_runner_request() {
         Err(d2b_provider_activation_nixos::ActivationVerificationError::InvalidEvidence)
     );
 }
+
+// ---------------------------------------------------------------------------
+// The verified deployment graph (U31)
+// ---------------------------------------------------------------------------
+
+/// The implementation identities a build compiles, as the generated
+/// registration table spells them.
+const COMPILED: &[&str] = &["activation-nixos", "system-minijail", "volume-local"];
+
+/// Render a deployment graph document the way the publisher writes it, with
+/// the self-hash computed over the canonical bytes of everything else.
+fn deployment_document(
+    schema_version: &str,
+    implementations: &[&str],
+    tamper: bool,
+) -> Vec<u8> {
+    use d2b_contracts_resource::v3::{canonical_json_bytes, framed_canonical_digest};
+    use d2b_provider_activation_nixos::{DEPLOYMENT_GRAPH_DIGEST_DOMAIN, DEPLOYMENT_GRAPH_SCHEMA};
+
+    let mut document = serde_json::Map::new();
+    document.insert(
+        "schemaVersion".to_owned(),
+        serde_json::Value::String(if schema_version.is_empty() {
+            DEPLOYMENT_GRAPH_SCHEMA.to_owned()
+        } else {
+            schema_version.to_owned()
+        }),
+    );
+    document.insert(
+        "implementations".to_owned(),
+        serde_json::Value::Array(
+            implementations
+                .iter()
+                .map(|value| serde_json::Value::String((*value).to_owned()))
+                .collect(),
+        ),
+    );
+    // A field this family never reads, so the digest demonstrably covers the
+    // whole document rather than only the family's own view of it.
+    document.insert(
+        "stateVolume".to_owned(),
+        serde_json::Value::String("Volume/d2b-state".to_owned()),
+    );
+    // The publisher hashes the document it is about to write, which has no
+    // digest field yet.
+    let bytes =
+        canonical_json_bytes(&serde_json::Value::Object(document.clone())).expect("canonical bytes");
+    let digest = framed_canonical_digest(DEPLOYMENT_GRAPH_DIGEST_DOMAIN, &bytes);
+    if tamper {
+        // Edit a field the family does not read, after the hash was taken.
+        document.insert(
+            "stateVolume".to_owned(),
+            serde_json::Value::String("Volume/someone-elses-state".to_owned()),
+        );
+    }
+    document.insert(
+        "graphDigest".to_owned(),
+        serde_json::Value::String(digest),
+    );
+    serde_json::to_vec(&serde_json::Value::Object(document)).expect("render document")
+}
+
+fn accept(bytes: &[u8]) -> Result<d2b_provider_activation_nixos::AcceptedDeploymentGraph, d2b_provider_activation_nixos::ActivationVerificationError> {
+    ActivationController::new().accept_deployment_graph(bytes, COMPILED)
+}
+
+#[test]
+fn a_verified_deployment_graph_binds_the_compiled_implementations() {
+    let graph = accept(&deployment_document("", &["activation-nixos"], false))
+        .expect("a self-consistent document verifies");
+    assert!(graph.publishes("activation-nixos"));
+    assert!(
+        !graph.publishes("audio-pipewire"),
+        "a family that was not published is not bound"
+    );
+}
+
+#[test]
+fn a_tampered_deployment_graph_is_refused() {
+    assert_eq!(
+        accept(&deployment_document("", &["activation-nixos"], true)),
+        Err(
+            d2b_provider_activation_nixos::ActivationVerificationError::DeploymentGraphDigestMismatch
+        ),
+        "a document edited after verification refuses, even where the edit is outside this family's view"
+    );
+}
+
+#[test]
+fn an_old_deployment_artifact_is_refused() {
+    assert_eq!(
+        accept(&deployment_document("d2b-deployment-bootstrap/0", &["activation-nixos"], false)),
+        Err(
+            d2b_provider_activation_nixos::ActivationVerificationError::DeploymentGraphSchemaUnsupported
+        ),
+        "another contract version is refused even when its bytes are self-consistent"
+    );
+}
+
+#[test]
+fn an_unknown_implementation_is_refused() {
+    assert_eq!(
+        accept(&deployment_document("", &["provider-from-another-release"], false)),
+        Err(
+            d2b_provider_activation_nixos::ActivationVerificationError::UnknownDeploymentImplementation
+        ),
+        "an implementation no compiled declaration binds is refused with no allowlist to extend"
+    );
+}
+
+#[test]
+fn an_absent_deployment_graph_is_refused() {
+    assert_eq!(
+        accept(b""),
+        Err(
+            d2b_provider_activation_nixos::ActivationVerificationError::DeploymentGraphUnreadable
+        ),
+        "no document means no accepted deployment, and the family plans no runner"
+    );
+}

@@ -34,7 +34,7 @@ use d2b_contracts_broker::broker_wire::{
 };
 use d2b_provider_command::command::{ CommandSpec };
 use d2b_provider_operation::operation::{ OperationSpec };
-use d2b_contracts_resource::v3::{CanonicalJsonObject, DesiredDigest};
+use d2b_contracts_resource::v3::{CanonicalJsonObject, CanonicalJsonValue, DesiredDigest};
 use d2b_core::resource_authority::ProjectionRow;
 use d2b_provider_seccomp_profile::{ SECCOMP_PROFILE_RESOURCE_TYPE, SeccompProfileSpec };
 use d2b_contracts_zone_session::v3::{RoleBindingSpec, RoleResourceVerb, RoleSpec};
@@ -1506,12 +1506,7 @@ impl DeploymentBootstrap {
                 observed: self.zone.as_str().to_owned(),
             });
         }
-        let mut without_digest = self.clone();
-        without_digest.graph_digest = String::new();
-        let bytes = canonical_json_bytes(&without_digest)
-            .map_err(|_| BootstrapRefusal::DigestMismatch {
-                claimed: self.graph_digest.clone(),
-            })?;
+        let bytes = Self::canonical_bytes_without_digest(self)?;
         let observed = d2b_contracts_resource::v3::framed_canonical_digest(
             DEPLOYMENT_BOOTSTRAP_DIGEST_DOMAIN,
             &bytes,
@@ -1522,6 +1517,40 @@ impl DeploymentBootstrap {
             });
         }
         Ok(())
+    }
+
+    /// The canonical bytes the self-hash covers: this document with its own
+    /// `graphDigest` field removed.
+    ///
+    /// The publisher hashes the document it is about to write, which has no
+    /// digest field yet, so verification removes the field rather than
+    /// blanking it. Clearing it instead would hash a different byte string
+    /// from the one the publisher hashed, and the daemon and the Activation
+    /// family would disagree about the same document.
+    fn canonical_bytes_without_digest(
+        graph: &DeploymentBootstrap,
+    ) -> Result<Vec<u8>, BootstrapRefusal> {
+        let rendered = serde_json::to_vec(graph).map_err(|_| {
+            BootstrapRefusal::DocumentUnreadable {
+                path: DEPLOYMENT_BOOTSTRAP_FILE.to_owned(),
+            }
+        })?;
+        let mut document = CanonicalJsonValue::parse(&rendered).map_err(|_| {
+            BootstrapRefusal::DocumentUnreadable {
+                path: DEPLOYMENT_BOOTSTRAP_FILE.to_owned(),
+            }
+        })?;
+        let CanonicalJsonValue::Object(fields) = &mut document else {
+            return Err(BootstrapRefusal::DocumentUnreadable {
+                path: DEPLOYMENT_BOOTSTRAP_FILE.to_owned(),
+            });
+        };
+        if fields.remove("graphDigest").is_none() {
+            return Err(BootstrapRefusal::DocumentUnreadable {
+                path: DEPLOYMENT_BOOTSTRAP_FILE.to_owned(),
+            });
+        }
+        Ok(document.to_canonical_bytes())
     }
 
     /// The deployment root this graph publishes.
@@ -1631,11 +1660,28 @@ pub fn compiled_implementations() -> Vec<&'static str> {
     // The framework's own execution providers are bound by the foundation
     // declarations rather than by a family registration row, so they are
     // named here from the same crates the seed reads their references from.
-    identities.push(d2b_provider_process_minijail::PROVIDER_REF);
-    identities.push(d2b_provider_process_systemd::PROVIDER_REF);
+    // Their identity is the family id the generated table uses everywhere
+    // else, not the `Provider/<name>` resource reference the seed commits
+    // its self-binding under, so both spellings cannot drift.
+    identities.push(framework_implementation_id(d2b_provider_process_minijail::PROVIDER_REF));
+    identities.push(framework_implementation_id(d2b_provider_process_systemd::PROVIDER_REF));
     identities.sort_unstable();
     identities.dedup();
     identities
+}
+
+/// The family id a `Provider/<name>` resource reference declares.
+///
+/// The generated registration table names provider families by their bare
+/// id, so the framework's own execution providers contribute the same
+/// spelling rather than the resource reference their rows are committed
+/// under. This is a fixed-length slice into a literal `Provider/` prefix, so
+/// it allocates nothing at boot.
+fn framework_implementation_id(provider_ref: &'static str) -> &'static str {
+    const PREFIX: &str = "Provider/";
+    provider_ref
+        .strip_prefix(PREFIX)
+        .expect("a framework provider reference is canonical")
 }
 
 /// Which layer of the bootstrap publication a step belongs to.
@@ -3097,6 +3143,404 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
             foundation.admit(&subject, &request("zone-a")),
             AdmissionDecision::Allow,
             "the foundation plane is the one that commits it"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Verified deployment bootstrap tests (U31)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod deployment_bootstrap_tests {
+    use super::*;
+    use d2b_contracts_broker::broker_wire::AuthorityCursor;
+    use d2b_contracts_resource::v3::{AuthoritySubject, AuthoritySubjectKind};
+
+    const STATE_VOLUME: &str = "Volume/d2b-state";
+
+    /// The publisher Role the fixed foundations declare.
+    fn publisher_role() -> serde_json::Value {
+        serde_json::json!({
+            "rules": [{
+                "resourceTypes": ["Operation"],
+                "verbs": ["create"],
+                "subresources": [],
+                "resourceNames": [],
+                "zones": [],
+                "executionRefs": [],
+                "sessionVerbs": []
+            }],
+            "operationRefs": [],
+        })
+    }
+
+    /// The Process provider's self-binding.
+    fn publisher_binding() -> serde_json::Value {
+        serde_json::json!({
+            "roleRef": "Role/operation-publisher",
+            "subjects": ["Provider/system-minijail"],
+        })
+    }
+
+    /// A complete, internally consistent verified deployment graph.
+    fn graph() -> DeploymentBootstrap {
+        let mut graph = DeploymentBootstrap {
+            schema_version: DEPLOYMENT_BOOTSTRAP_SCHEMA.to_owned(),
+            zone: ZoneId::parse(SYSTEM_ZONE).expect("foundation zone"),
+            store_incarnation: StoreIncarnation::parse("foundation-1").expect("store"),
+            state_volume: STATE_VOLUME.to_owned(),
+            implementations: vec!["system-minijail".to_owned()],
+            roles: vec![BootstrapAuthorityRow {
+                reference: "Role/operation-publisher".to_owned(),
+                admitted: publisher_role(),
+            }],
+            role_bindings: vec![BootstrapAuthorityRow {
+                reference: "RoleBinding/system-minijail-self-operation-publisher".to_owned(),
+                admitted: publisher_binding(),
+            }],
+            graph_digest: String::new(),
+        };
+        graph.graph_digest = seal(&graph);
+        graph
+    }
+
+    /// Hash a document exactly as the deployment's publisher does.
+    fn seal(graph: &DeploymentBootstrap) -> String {
+        let bytes = DeploymentBootstrap::canonical_bytes_without_digest(graph)
+            .expect("canonical bytes without the digest field");
+        d2b_contracts_resource::v3::framed_canonical_digest(
+            DEPLOYMENT_BOOTSTRAP_DIGEST_DOMAIN,
+            &bytes,
+        )
+    }
+
+    /// Render a document the way the Nix publisher writes it.
+    fn render(graph: &DeploymentBootstrap) -> Vec<u8> {
+        serde_json::to_vec(graph).expect("render graph")
+    }
+
+    fn reference(value: &str) -> ResourceRef {
+        ResourceRef::parse(value).expect("canonical reference")
+    }
+
+    // -- Scenario 2: three distinct startup refusals ------------------------
+
+    /// A graph whose authority rows were edited after verification is refused
+    /// with a digest mismatch, and the mismatch is distinguishable from the
+    /// other two refusals.
+    #[test]
+    fn a_tampered_deployment_graph_refuses_startup() {
+        let mut tampered = graph();
+        // Widen the publisher role after the digest was taken: the row now
+        // grants every Operation verb rather than only `create`.
+        tampered.roles[0].admitted["rules"][0]["verbs"] =
+            serde_json::json!(["get", "list", "create", "delete"]);
+        assert_eq!(
+            tampered.verify(),
+            Err(BootstrapRefusal::DigestMismatch {
+                claimed: tampered.graph_digest.clone(),
+            }),
+            "an edited row must fail closed before any provider is published"
+        );
+    }
+
+    /// A document carrying another contract version is refused, and refused
+    /// differently from a tampered one: the bytes may be perfectly
+    /// self-consistent and the deployment still refuses.
+    #[test]
+    fn an_old_artifact_refuses_startup() {
+        let mut old = graph();
+        old.schema_version = "d2b-deployment-bootstrap/0".to_owned();
+        old.graph_digest = seal(&old);
+        assert_eq!(
+            old.verify(),
+            Err(BootstrapRefusal::SchemaUnsupported {
+                observed: "d2b-deployment-bootstrap/0".to_owned(),
+            }),
+            "another contract version is refused even when the digest matches"
+        );
+    }
+
+    /// A document naming an implementation this build does not compile is
+    /// refused even though its bytes verify, which is the whole point of
+    /// binding the generated declarations instead of an allowlist.
+    #[test]
+    fn an_unknown_implementation_refuses_startup() {
+        let mut unknown = graph();
+        unknown.implementations.push("provider-from-another-release".to_owned());
+        unknown.graph_digest = seal(&unknown);
+        assert_eq!(
+            unknown.publish(&core_declarations()).err(),
+            Some(BootstrapRefusal::UnknownImplementation {
+                implementation: "provider-from-another-release".to_owned(),
+            }),
+            "an implementation no compiled declaration binds must refuse"
+        );
+    }
+
+    // -- Scenario 5: no silent permissive fallback --------------------------
+
+    /// A verified graph missing the foundation RoleBinding refuses startup
+    /// instead of producing an admission. The permissive path is shown to be
+    /// unreachable, not merely unused: the same Create mutation the
+    /// foundations need is Refused against the incomplete graph even from the
+    /// deployment root, and Admitted against the complete one.
+    #[test]
+    fn a_graph_missing_a_foundation_binding_refuses_instead_of_admitting_everything() {
+        let mut incomplete = graph();
+        incomplete.role_bindings.clear();
+        incomplete.graph_digest = seal(&incomplete);
+        let declarations = core_declarations();
+        assert_eq!(
+            incomplete.publish(&declarations).err(),
+            Some(BootstrapRefusal::MissingFoundationBinding {
+                reference: "RoleBinding/system-minijail-self-operation-publisher".to_owned(),
+            }),
+            "startup refuses rather than falling back to a permissive admission"
+        );
+        // The permissive alternative is genuinely unreachable: the same
+        // mutation is refused against the incomplete graph and admitted
+        // against the complete one.
+        let target = reference("Operation/process-run-virtiofsd-worker");
+        // The subject is the Process provider itself, not the deployment
+        // root: the deployment root bootstraps the graph and is admitted
+        // without a grant by design, so only a provider subject shows
+        // whether the graph's own RoleBindings carry the authority.
+        let provider = AuthoritySubject::named(
+            AuthoritySubjectKind::Provider,
+            reference("Provider/system-minijail"),
+        );
+        let evidence = MutationSubjectEvidence::new(provider, TransportIdentity::Daemon);
+        let decide = |accepted: &AcceptedGraph| {
+            GraphAuthority::admit_mutation(
+                &GraphMutation::new(
+                    accepted.zone().clone(),
+                    evidence.clone(),
+                    MutationKind::Create,
+                    target.clone(),
+                ),
+                accepted,
+            )
+        };
+        assert!(
+            matches!(
+                decide(&incomplete.accepted_graph().expect("decoded graph")),
+                GraphAdmissionDecision::Refused { .. }
+            ),
+            "an incomplete graph grants nothing, so no AllowAll-equivalent answer exists"
+        );
+        assert!(
+            matches!(
+                decide(&graph().accepted_graph().expect("decoded graph")),
+                GraphAdmissionDecision::Admitted
+            ),
+            "the complete verified graph admits the same mutation"
+        );
+    }
+
+    // -- Scenario 1: ordering and the state-Volume cycle --------------------
+
+    /// Empty fresh state publishes every fixed foundation before any declared
+    /// provider, and the deployment's own state Volume is one of them, so no
+    /// provider waits on a row only a provider could create.
+    #[test]
+    fn fresh_state_publishes_the_foundations_before_the_declared_providers() {
+        let published = graph().publish(&core_declarations()).expect("publishes");
+        let plan = published.plan();
+        let state_volume = plan
+            .position(STATE_VOLUME)
+            .expect("the deployment's state Volume is published");
+        let foundations = plan.layer(PublicationLayer::Foundations);
+        assert!(
+            foundations.iter().all(|step| step.layer == PublicationLayer::Foundations),
+            "the foundation layer holds only foundation steps"
+        );
+        let first_provider = plan
+            .steps()
+            .iter()
+            .position(|step| step.layer == PublicationLayer::DeclaredProviders)
+            .expect("at least one declared provider step");
+        assert!(
+            state_volume < first_provider,
+            "the state Volume publishes before any declared provider, so no provider waits on it"
+        );
+        // Every provider step names the state Volume it reads.
+        for step in plan.layer(PublicationLayer::DeclaredProviders) {
+            assert!(
+                step.requires.iter().any(|requirement| requirement == STATE_VOLUME),
+                "{} reads the deployment's state Volume",
+                step.reference
+            );
+        }
+        assert!(
+            plan.verify().is_ok(),
+            "an ordered plan whose requirements all point backwards cannot contain a cycle"
+        );
+        plan.verify().expect("the published plan is orderable");
+    }
+
+    /// The cycle check is real, not decorative: a plan in which a provider
+    /// publishes before the state Volume it requires is refused, naming the
+    /// exact step and requirement that close the cycle.
+    #[test]
+    fn a_state_volume_cycle_is_refused_by_name() {
+        let steps = vec![
+            PublicationStep::step(
+                PublicationLayer::DeclaredProviders,
+                "volume-local",
+                vec![STATE_VOLUME.to_owned()],
+            ),
+            PublicationStep::foundation(STATE_VOLUME),
+        ];
+        assert_eq!(
+            PublicationPlan::new(steps),
+            Err(BootstrapRefusal::PublicationCycle {
+                step: "volume-local".to_owned(),
+                requirement: STATE_VOLUME.to_owned(),
+            }),
+            "a provider that needs a row published after it is refused, not retried"
+        );
+    }
+
+    /// A requirement the plan never publishes at all is a different refusal
+    /// from a cycle, so an operator can tell an unresolvable reference from an
+    /// unorderable one.
+    #[test]
+    fn an_unresolvable_requirement_is_refused_separately_from_a_cycle() {
+        let steps = vec![PublicationStep::step(
+            PublicationLayer::Foundations,
+            "Role/orphan",
+            vec!["Volume/absent".to_owned()],
+        )];
+        assert_eq!(
+            PublicationPlan::new(steps),
+            Err(BootstrapRefusal::UnresolvedRequirement {
+                step: "Role/orphan".to_owned(),
+                requirement: "Volume/absent".to_owned(),
+            }),
+        );
+    }
+
+    // -- Scenario 2 (decode): the bytes on disk are the authority -----------
+
+    /// The document the daemon reads is bounded and self-verifying: an absent
+    /// or empty file is a refusal, and the rendered bytes verify.
+    #[test]
+    fn the_deployment_root_document_round_trips_through_its_own_digest() {
+        let graph = graph();
+        let decoded =
+            DeploymentBootstrap::decode(&render(&graph), DEPLOYMENT_BOOTSTRAP_FILE)
+                .expect("a self-consistent document verifies");
+        assert_eq!(decoded, graph);
+        assert_eq!(
+            DeploymentBootstrap::decode(b"", DEPLOYMENT_BOOTSTRAP_FILE),
+            Err(BootstrapRefusal::DocumentUnreadable {
+                path: DEPLOYMENT_BOOTSTRAP_FILE.to_owned(),
+            }),
+            "an absent document leaves the daemon with no accepted root"
+        );
+    }
+
+    // -- Scenario 4: a running broker switches accepted deployment identity --
+
+    /// A broker that already holds an accepted identity takes a new one
+    /// through freeze, commit, publish, acknowledge - and every forbidden
+    /// transition is refused rather than ordered around.
+    #[test]
+    fn a_running_broker_switches_accepted_deployment_identity_through_the_frozen_protocol() {
+        let initial = DeploymentIdentity::initial(
+            ZoneId::parse(SYSTEM_ZONE).expect("zone"),
+            StoreIncarnation::parse("foundation-1").expect("store"),
+        );
+        let published = graph().publish(&core_declarations()).expect("publishes");
+        let prior = published.accepted().clone();
+        let mut switch = DeploymentIdentitySwitch::open(initial.clone());
+
+        // A new identity over the same Zone and incarnation, at a strictly
+        // higher sequence.
+        let next = published.identity(
+            AuthorityCursor {
+                sequence: AuthorityCursor::initial()
+                    .sequence
+                    .try_next()
+                    .expect("the sequence advances"),
+                digest: DesiredDigest::of(b"deployment-update"),
+            },
+            DesiredDigest::of(b"deployment-update"),
+        );
+        let rows = vec![reference("Role/operation-publisher")];
+        switch
+            .begin(next.clone(), &rows, &prior)
+            .expect("the candidate rows are admitted against the prior accepted graph");
+        assert_eq!(switch.stage(), PublicationStage::Prepare);
+        // Publishing before the freeze is refused: the Zone is not frozen, so
+        // a new identity could not be ordered against concurrent use.
+        assert_eq!(
+            switch.commit(),
+            Err(SwitchRefusal::OutOfOrder {
+                stage: PublicationStage::Prepare,
+                action: "commit",
+            }),
+            "a running broker does not skip the freeze"
+        );
+        switch.freeze().expect("freeze");
+        assert_eq!(switch.stage(), PublicationStage::Commit);
+        // A second switch while one is in flight is refused.
+        assert_eq!(
+            switch.begin(next.clone(), &rows, &prior),
+            Err(SwitchRefusal::Busy),
+            "the broker serializes one authority switch at a time"
+        );
+        switch.commit().expect("commit");
+        switch.publish().expect("publish");
+        assert_eq!(switch.stage(), PublicationStage::Acknowledge);
+        let acknowledged = switch.acknowledge().expect("acknowledge");
+        assert_eq!(acknowledged, next, "the acknowledged identity becomes accepted");
+        assert_eq!(switch.accepted(), &next);
+        assert_eq!(switch.stage(), PublicationStage::Idle);
+    }
+
+    /// The identity rules are refusals, not clamps: a different store
+    /// incarnation needs an explicit reset, and a cursor below the accepted
+    /// sequence never reaches publication.
+    #[test]
+    fn a_refused_identity_switch_leaves_the_accepted_identity_in_place() {
+        let initial = DeploymentIdentity::initial(
+            ZoneId::parse(SYSTEM_ZONE).expect("zone"),
+            StoreIncarnation::parse("foundation-1").expect("store"),
+        );
+        let prior = graph().accepted_graph().expect("decoded graph");
+        let mut switch = DeploymentIdentitySwitch::open(initial.clone());
+
+        let mut other_store = initial.clone();
+        other_store.store_incarnation = StoreIncarnation::parse("foundation-2").expect("store");
+        assert_eq!(
+            switch.begin(other_store, &[], &prior),
+            Err(SwitchRefusal::IncarnationMismatch {
+                accepted: "foundation-1".to_owned(),
+                observed: "foundation-2".to_owned(),
+            }),
+            "a store incarnation is an identity, not an ordered counter"
+        );
+        assert_eq!(switch.accepted(), &initial, "a refused switch changes nothing");
+
+        // A candidate at the accepted sequence but a different digest
+        // contradicts what the broker already accepted, so it never reaches
+        // publication.
+        let mut contradictory = initial.clone();
+        contradictory.snapshot_digest = DesiredDigest::of(b"another-deployment");
+        switch.begin(contradictory, &[], &prior).expect("begin");
+        switch.freeze().expect("freeze");
+        assert_eq!(
+            switch.commit(),
+            Err(SwitchRefusal::DigestContradiction { sequence: 0 }),
+            "a candidate contradicting the accepted digest at its own sequence is refused"
+        );
+        assert_eq!(
+            switch.accepted(),
+            &initial,
+            "the accepted identity is untouched by the refused switch"
         );
     }
 }
