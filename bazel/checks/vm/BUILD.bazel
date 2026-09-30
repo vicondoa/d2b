@@ -250,6 +250,15 @@ lane_test(
 # into the main package suite - so the targets that lint and exercise it are
 # named here instead, and the crate is still covered by the repository's
 # Rust gates.
+
+# This suite is a development entry point for a KVM-capable host, not a CI
+# gate, and nothing in its KVM-bearing half is referenced by one on purpose.
+# `:guest_boot_*` and `:host_integration_lane_run` boot real guests, so they
+# need `/dev/kvm`, which the hosted PR runners do not provide; the per-check
+# targets inherit that. Only the hermetic half reaches CI: the `layer1`
+# suite in `//bazel/checks` registers the three harness targets above by
+# label, so the harness still lints and runs on every PR. Read the missing
+# half as a decision about KVM, not as an oversight.
 test_suite(
     name = "host_integration_lane",
     tests = [
