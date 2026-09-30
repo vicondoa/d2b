@@ -20,8 +20,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use d2b_contracts_resource::v3::{
-    AdmissionStage, AuthoritySubject, AuthoritySubjectKind, PayloadSchema, RefusalReason,
-    ResourceRef, StoreIncarnation, ZoneId, canonical_json_bytes,
+    AdmissionStage, AuthoritySubject, AuthoritySubjectKind, ExecutionPolicySpec, PayloadSchema,
+    RefusalReason, ResourceRef, StoreIncarnation, ZoneId, canonical_json_bytes,
+    execution_policy_resource::EXECUTION_POLICY_RESOURCE_TYPE,
 };
 use d2b_contracts_resource::v3::AdmissionDecision as GraphAdmissionDecision;
 use d2b_core::resource_authority::{
@@ -55,7 +56,7 @@ pub const SYSTEM_ZONE: &str = d2b_contracts::identity::SYSTEM_ZONE_NAME;
 /// The zone-control vocabulary (Zone, ZoneLink, Provider, Role, RoleBinding,
 /// Quota, EmergencyPolicy) still travels in each zone's compiled bundle and
 /// joins this set type by type as its rows move onto the seed.
-pub const SYSTEM_HOMED_TYPES: &[&str] = &["Command", "Operation", "SeccompProfile"];
+pub const SYSTEM_HOMED_TYPES: &[&str] = &["Command", "Operation", "SeccompProfile", "ExecutionPolicy"];
 /// Maximum bytes of one seeded resource name.
 pub const MAX_SEED_NAME_BYTES: usize = 63;
 /// The subject types a RoleBinding may grant, resolved by the session layer.
@@ -144,6 +145,22 @@ pub struct SeedProfile {
 }
 
 
+/// One declared ExecutionPolicy row.
+///
+/// An `ExecutionPolicy` row states reusable confinement: the isolation
+/// classes an execution instance must run behind, the capability ceiling,
+/// the restrictions it may not weaken, the identity it may resolve to, and
+/// the syscall filter it must load. It grants no storage, device, network,
+/// endpoint, or credential access, so a policy the seed commits carries no
+/// attachment authority of its own.
+#[derive(Debug, Clone)]
+pub struct SeedPolicy {
+    /// Zone-local policy name.
+    pub name: String,
+    /// The declared confinement.
+    pub spec: ExecutionPolicySpec,
+}
+
 /// One declared Command row.
 #[derive(Debug, Clone)]
 pub struct SeedCommand {
@@ -169,6 +186,8 @@ pub struct FoundationDeclarations {
     pub providers: Vec<SeedProvider>,
     /// Declared posture rows.
     pub profiles: Vec<SeedProfile>,
+    /// Declared reusable-confinement rows.
+    pub policies: Vec<SeedPolicy>,
     /// Declared roles.
     pub roles: Vec<SeedRole>,
     /// Declared launch shapes.
@@ -220,6 +239,11 @@ pub fn core_declarations() -> FoundationDeclarations {
             }],
         }],
         profiles: Vec::new(),
+        // No core confinement is declared yet. The vocabulary grows by
+        // declaration from the family that owns the posture it converts,
+        // never by a table here; the field is the path those families
+        // declare through.
+        policies: Vec::new(),
         roles: vec![SeedRole {
             name: "operation-publisher".to_owned(),
             spec: role,
@@ -300,6 +324,19 @@ impl FoundationSeed {
                 SECCOMP_PROFILE_RESOURCE_TYPE,
                 &profile.name,
                 encode(&profile.spec)?,
+            )?;
+            committed.insert_row(&row.key, row.spec.clone());
+            rows.push(row);
+        }
+        // 2b. Reusable confinement. A policy selects a `SeccompProfile` and
+        // optionally a `User`, so it is collected after the posture rows and
+        // before the roles that may select it; the reference check below
+        // then resolves both over the committed set as a whole.
+        for policy in &self.declarations.policies {
+            let row = PendingRow::new(
+                EXECUTION_POLICY_RESOURCE_TYPE,
+                &policy.name,
+                encode(&policy.spec)?,
             )?;
             committed.insert_row(&row.key, row.spec.clone());
             rows.push(row);
@@ -586,6 +623,19 @@ impl FoundationSeed {
         materialized: &[(String, MaterializedOperation)],
         rows: &[PendingRow],
     ) -> Result<(), SeedError> {
+        // A policy's references resolve over the same committed set as every
+        // other seeded row, so a policy selecting a profile or an identity
+        // the seed does not commit is refused before the first write rather
+        // than landing as a row whose selection can never resolve.
+        for policy in &self.declarations.policies {
+            let row = format!("{}/{}", EXECUTION_POLICY_RESOURCE_TYPE, policy.name);
+            if let Some(profile) = policy.spec.seccomp().profile_ref() {
+                require_committed(committed, &row, "seccomp.profileRef", profile)?;
+            }
+            if let Some(identity) = policy.spec.identity().user_ref() {
+                require_committed(committed, &row, "identity.userRef", identity)?;
+            }
+        }
         for role in &self.declarations.roles {
             let row = role_ref(&role.name);
             for rule in role.spec.rules() {
@@ -1197,7 +1247,9 @@ mod tests {
     use super::*;
     use d2b_provider_command::command::{ CommandArgvSlot, CommandExec, CommandIntent };
 use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, SeccompDeviceAccess, SeccompNamespaces };
-    use d2b_contracts_resource::v3::{BoundedText, BoundedToken};
+    use d2b_contracts_resource::v3::{BoundedText, BoundedToken, CapabilityClass, NamespaceClass, PolicyCapabilities, PolicyIdentity, PolicyNamespaces, PolicyRoot, PolicySeccomp};
+    use d2b_resource_runtime::manager::AdmissionOp;
+    use d2b_resource_runtime::spec_store::ResourceProvenance;
     use serde_json::json;
 
     struct Fixture {
@@ -1384,6 +1436,31 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
         }
     }
 
+    /// The declared reusable confinement: the isolation classes an instance
+    /// must run behind, a capability ceiling, the restrictions it may not
+    /// weaken, the syscall filter it must load, and a umask. It selects the
+    /// seeded posture row and names no attachment of its own.
+    fn policy() -> SeedPolicy {
+        SeedPolicy {
+            name: "worker".to_owned(),
+            spec: ExecutionPolicySpec::new(
+                PolicyNamespaces::new(vec![NamespaceClass::User, NamespaceClass::Mount])
+                    .expect("namespace set"),
+                PolicyCapabilities::new(vec![CapabilityClass::NetworkBind])
+                    .expect("capability ceiling"),
+                true,
+                PolicyIdentity::new(None, false).expect("identity rules"),
+                PolicyRoot::new(true, true),
+                PolicySeccomp::new(Some(
+                    ResourceRef::parse("SeccompProfile/worker").expect("profile ref"),
+                ))
+                .expect("syscall filter selection"),
+                Some(0o077),
+            )
+            .expect("policy spec"),
+        }
+    }
+
 
     fn provider() -> SeedProvider {
         SeedProvider {
@@ -1404,6 +1481,7 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
         FoundationDeclarations {
             providers: vec![provider()],
             profiles: vec![profile()],
+            policies: vec![policy()],
             roles: vec![publisher_role(&commands), worker_role()],
             commands,
             operator_bindings: Vec::new(),
@@ -1440,6 +1518,7 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
             vec![
                 "Zone/system",
                 "SeccompProfile/worker",
+                "ExecutionPolicy/worker",
                 "Role/operation-publisher",
                 "Role/worker",
                 "Command/virtiofsd-worker",
@@ -1508,7 +1587,11 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
         let fixture = make_fixture();
         let commands = vec![command("virtiofsd-worker", "Role/operation-publisher")];
         let mut declarations = make_declarations(commands.clone(), true);
+        // This case is about the Role's own posture reference, so the
+        // ExecutionPolicy row that selects the same profile is dropped too;
+        // its own unresolved-selection refusal is covered separately.
         declarations.profiles.clear();
+        declarations.policies.clear();
         let error = run(&fixture, declarations)
             .await
             .expect_err("unresolved seccomp reference");
@@ -1717,5 +1800,148 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
                 ..
             }
         ));
+    }
+
+    /// A seeded `ExecutionPolicy` row is committed through the same admitted
+    /// path as every other foundation row, not waved through: the row's
+    /// bytes land, and the one mutation that wrote it is the one the
+    /// evaluator admits - under the verified deployment root, and under
+    /// nothing else.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn a_seeded_execution_policy_row_is_admitted_not_bypassed() {
+        let fixture = make_fixture();
+        let report = run(
+            &fixture,
+            make_declarations(vec![command("virtiofsd-worker", "Role/operation-publisher")], true),
+        )
+        .await
+        .expect("seed runs");
+        assert!(
+            report.committed.contains(&"ExecutionPolicy/worker".to_owned()),
+            "the policy row is committed through the seed: {:?}",
+            report.committed
+        );
+        // The committed bytes are the contract's own row, not a copy.
+        let spec = row_spec(&fixture.store, "ExecutionPolicy/worker")
+            .await
+            .expect("policy row");
+        let policy: ExecutionPolicySpec =
+            serde_json::from_slice(&spec).expect("committed policy decodes as the contract");
+        assert!(policy.no_new_privileges());
+        assert_eq!(policy.umask(), Some(0o077));
+        assert_eq!(
+            policy.seccomp().profile_ref().map(ResourceRef::to_canonical_string),
+            Some("SeccompProfile/worker".to_owned()),
+            "the policy selects the seeded posture row"
+        );
+
+        // The write is a decision, not a bypass: the identical mutation the
+        // seed made is admitted against the verified deployment graph by its
+        // root, and refused for any other subject, including another
+        // unresourced bootstrap identity. That is what makes the commit
+        // "admitted" rather than "allowed because the seed wrote it".
+        let accepted = verified_deployment_graph().expect("verified deployment graph");
+        let target = ResourceRef::parse("ExecutionPolicy/worker").expect("policy reference");
+        let request = |subject: AuthoritySubject| {
+            GraphMutation::new(
+                accepted.zone().clone(),
+                MutationSubjectEvidence::new(subject, TransportIdentity::Daemon),
+                MutationKind::Create,
+                target.clone(),
+            )
+        };
+        assert_eq!(
+            GraphAuthority::admit_mutation(
+                &request(AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap)),
+                &accepted
+            ),
+            GraphAdmissionDecision::Admitted,
+            "the verified deployment root is admitted"
+        );
+        assert_eq!(
+            GraphAuthority::admit_mutation(
+                &request(AuthoritySubject::unresourced(AuthoritySubjectKind::Operator)),
+                &accepted
+            ),
+            GraphAdmissionDecision::refuse(
+                AdmissionStage::Authorize,
+                RefusalReason::IdentityNotAuthorized
+            ),
+            "a privileged transport is never a subject, and no other identity is admitted"
+        );
+    }
+
+    /// Declare-then-validate holds for the new type: a policy selecting a
+    /// `SeccompProfile` the seed does not commit is refused before the first
+    /// write, and nothing lands in the store.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn an_unresolved_execution_policy_selection_is_refused_before_any_write() {
+        let fixture = make_fixture();
+        let mut declarations = make_declarations(
+            vec![command("virtiofsd-worker", "Role/operation-publisher")],
+            true,
+        );
+        declarations.policies[0].spec = ExecutionPolicySpec::new(
+            PolicyNamespaces::new(vec![NamespaceClass::User]).expect("namespace set"),
+            PolicyCapabilities::new(Vec::new()).expect("capability ceiling"),
+            true,
+            PolicyIdentity::new(None, false).expect("identity rules"),
+            PolicyRoot::new(true, false),
+            PolicySeccomp::new(Some(
+                ResourceRef::parse("SeccompProfile/absent").expect("profile ref"),
+            ))
+            .expect("syscall filter selection"),
+            None,
+        )
+        .expect("policy spec");
+        let error = run(&fixture, declarations)
+            .await
+            .expect_err("an unresolved policy selection");
+        assert_eq!(
+            error,
+            SeedError::UnresolvedRef {
+                row: "ExecutionPolicy/worker".to_owned(),
+                field: "seccomp.profileRef",
+                missing: "SeccompProfile/absent".to_owned(),
+            }
+        );
+        assert!(
+            row_spec(&fixture.store, "ExecutionPolicy/worker")
+                .await
+                .is_none(),
+            "a refused seed leaves the store exactly as it was"
+        );
+    }
+
+    /// The policy row is system-homed like every other row the foundation
+    /// seed commits, so a zone-local plane refuses to write one and the
+    /// manager read path falls back to the system zone for it.
+    #[test]
+    fn an_execution_policy_row_is_system_homed() {
+        assert!(SYSTEM_HOMED_TYPES.contains(&EXECUTION_POLICY_RESOURCE_TYPE));
+        let zone_local = SystemZoneWriteFence::new(false);
+        let foundation = SystemZoneWriteFence::new(true);
+        let subject = MutationSubject {
+            principal: "User/alice".to_owned(),
+            origin: ResourceProvenance::Api,
+        };
+        let request = |zone: &str| MutationRequest {
+            key: ResourceKey::new(zone, EXECUTION_POLICY_RESOURCE_TYPE, "worker"),
+            op: AdmissionOp::Ensure,
+            spec: Vec::new(),
+            metadata: Vec::new(),
+        };
+        let refused = zone_local.admit(&subject, &request("zone-a"));
+        assert!(
+            matches!(&refused, AdmissionDecision::Deny(reason) if reason.contains("wrong plane")),
+            "a zone-local plane refuses a system-homed policy row: {refused:?}"
+        );
+        assert_eq!(
+            foundation.admit(&subject, &request("zone-a")),
+            AdmissionDecision::Allow,
+            "the foundation plane is the one that commits it"
+        );
     }
 }

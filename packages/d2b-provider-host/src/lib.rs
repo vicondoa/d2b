@@ -43,7 +43,7 @@ mod probe;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
-pub use declaration::{HOST_ARTIFACT_ID, host_bindings, host_declaration};
+pub use declaration::host_bindings;
 pub use driver::host_descriptor;
 pub use effects_service::{HOST_EFFECTS_SERVICE, HostEffectsServiceFactory};
 pub use facets::{HostEffectFacets, MinijailPlatformGateSource};

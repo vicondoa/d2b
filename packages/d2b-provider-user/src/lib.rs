@@ -40,7 +40,7 @@ mod probe;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
-pub use declaration::{USER_ARTIFACT_ID, user_bindings, user_declaration};
+pub use declaration::user_bindings;
 pub use driver::user_descriptor;
 pub use effects_service::{USER_EFFECTS_SERVICE, UserEffectsServiceFactory};
 pub use facets::UserEffectFacets;
