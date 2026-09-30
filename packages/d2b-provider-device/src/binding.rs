@@ -810,6 +810,95 @@ impl DeviceHelperLeg {
     }
 }
 
+/// The source's real leg satisfies the USBIP family's read-only view.
+///
+/// The family declares its own `BoundDeviceLeg` because a family cannot
+/// depend on this crate - that is a hard package cycle, which cargo rejects
+/// even as a dev-dependency. Writing the implementation here instead lets the
+/// family hold the graph's own leg rather than a copy of it, so the graph's
+/// authority is what the family verifies and no second leg type exists to
+/// drift from it.
+impl d2b_provider_device_usbip::BoundDeviceLeg for DeviceHelperLeg {
+    fn parent_key(&self) -> &BindingKey {
+        &self.parent_key
+    }
+
+    fn reservation(&self) -> &SourceReservation {
+        &self.reservation
+    }
+
+    fn helper_ref(&self) -> &ResourceRef {
+        &self.helper_ref
+    }
+
+    fn helper_uid(&self) -> &ResourceUid {
+        &self.helper_uid
+    }
+
+    fn function(&self) -> &DeviceFunction {
+        &self.function
+    }
+
+    fn authority_key(&self) -> &DeviceAuthorityKey {
+        &self.authority_key
+    }
+
+    fn operations(&self) -> &[DeviceEffectOperation] {
+        &self.operations
+    }
+
+    fn epoch(&self) -> &StoreIncarnation {
+        &self.epoch
+    }
+
+    fn holds_claim(&self) -> bool {
+        false
+    }
+}
+
+/// The source's real leg satisfies the security-key family's read-only view.
+///
+/// See the USBIP implementation above: each family declares its own view to
+/// avoid the package cycle, and this is the single place the source's leg
+/// satisfies both of them.
+impl d2b_provider_device_security_key::BoundDeviceLeg for DeviceHelperLeg {
+    fn parent_key(&self) -> &BindingKey {
+        &self.parent_key
+    }
+
+    fn reservation(&self) -> &SourceReservation {
+        &self.reservation
+    }
+
+    fn helper_ref(&self) -> &ResourceRef {
+        &self.helper_ref
+    }
+
+    fn helper_uid(&self) -> &ResourceUid {
+        &self.helper_uid
+    }
+
+    fn function(&self) -> &DeviceFunction {
+        &self.function
+    }
+
+    fn authority_key(&self) -> &DeviceAuthorityKey {
+        &self.authority_key
+    }
+
+    fn operations(&self) -> &[DeviceEffectOperation] {
+        &self.operations
+    }
+
+    fn epoch(&self) -> &StoreIncarnation {
+        &self.epoch
+    }
+
+    fn holds_claim(&self) -> bool {
+        false
+    }
+}
+
 impl core::fmt::Debug for DeviceHelperLeg {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter

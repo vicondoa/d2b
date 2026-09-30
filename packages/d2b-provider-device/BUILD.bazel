@@ -89,6 +89,8 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-provider-device:d2b_provider_device",
+        "//packages/d2b-provider-device-security-key:d2b_provider_device_security_key",
+        "//packages/d2b-provider-device-usbip:d2b_provider_device_usbip",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

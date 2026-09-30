@@ -258,6 +258,33 @@ fn an_exclusive_parent_claim_supports_its_bounded_helper() {
         "a leg may not drive an operation its parent never admitted"
     );
 
+    // Each family owns a read-only `BoundDeviceLeg` view because depending on
+    // this crate would be a package cycle, so the two implementations in
+    // `binding` are the only place the source's real leg satisfies them. Prove
+    // each view reads THIS leg rather than a copy, and that neither family can
+    // see a device claim through it: a helper that could look like a competing
+    // allocation is exactly what AE27 forbids.
+    assert_eq!(d2b_provider_device_usbip::BoundDeviceLeg::parent_key(&leg), leg.parent_key());
+    assert_eq!(d2b_provider_device_security_key::BoundDeviceLeg::parent_key(&leg), leg.parent_key());
+    assert_eq!(d2b_provider_device_usbip::BoundDeviceLeg::reservation(&leg), leg.reservation());
+    assert_eq!(d2b_provider_device_security_key::BoundDeviceLeg::reservation(&leg), leg.reservation());
+    assert_eq!(d2b_provider_device_usbip::BoundDeviceLeg::helper_ref(&leg), leg.helper_ref());
+    assert_eq!(d2b_provider_device_security_key::BoundDeviceLeg::helper_ref(&leg), leg.helper_ref());
+    assert_eq!(d2b_provider_device_usbip::BoundDeviceLeg::helper_uid(&leg), leg.helper_uid());
+    assert_eq!(d2b_provider_device_security_key::BoundDeviceLeg::helper_uid(&leg), leg.helper_uid());
+    assert_eq!(d2b_provider_device_usbip::BoundDeviceLeg::function(&leg), leg.function());
+    assert_eq!(d2b_provider_device_security_key::BoundDeviceLeg::function(&leg), leg.function());
+    assert_eq!(d2b_provider_device_usbip::BoundDeviceLeg::authority_key(&leg), leg.authority_key());
+    assert_eq!(d2b_provider_device_security_key::BoundDeviceLeg::authority_key(&leg), leg.authority_key());
+    assert_eq!(d2b_provider_device_usbip::BoundDeviceLeg::operations(&leg), leg.operations());
+    assert_eq!(d2b_provider_device_security_key::BoundDeviceLeg::operations(&leg), leg.operations());
+    assert_eq!(d2b_provider_device_usbip::BoundDeviceLeg::epoch(&leg), leg.epoch());
+    assert_eq!(d2b_provider_device_security_key::BoundDeviceLeg::epoch(&leg), leg.epoch());
+    assert!(
+        !d2b_provider_device_usbip::BoundDeviceLeg::holds_claim(&leg) && !d2b_provider_device_security_key::BoundDeviceLeg::holds_claim(&leg),
+        "neither family may observe a helper leg as a claim of its own"
+    );
+
     // The competing consumer is refused at the reservation stage: the parent's
     // exclusive claim is live.
     let held = [LiveDeviceBinding::new(parent.clone(), BindingLifecycleState::Active)];
