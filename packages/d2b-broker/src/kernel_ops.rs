@@ -36,7 +36,9 @@ use d2b_core::execution_plan::{ExecutionPlan, PlannedDestination};
 use d2b_core::sandbox_profile::{BindMount, CgroupPlacement, MountPolicy, NamespaceSet, WritablePath};
 
 use crate::envelope::{DirectInvocation, DispatchFailure, DispatchOutcome, HandlerTable};
-use crate::ops::spawn_runner::{SpawnRunnerPlanInput, UserNamespaceSpec};
+use crate::ops::spawn_runner::{
+    PresentationRealization, SpawnRunnerPlanInput, UserNamespaceSpec, realize_presentation,
+};
 use crate::ops::state_dir::{DirKind, PrepareDirRequest};
 
 /// The committed broker-generic kernel rows this table serves.
@@ -776,6 +778,12 @@ pub struct TrustedLaunchTemplate {
     pub root_carve_out: bool,
     /// The file-creation mask the role installs before exec.
     pub umask: Option<u32>,
+    /// The presentation realization the trusted implementation declares.
+    ///
+    /// This is the provider's declared capability, not a role-row field: the
+    /// broker must not infer how a launch presents its admitted sources from
+    /// the role that happens to request it.
+    pub presentation: PresentationRealization,
 }
 
 /// Why one admitted plan could not be resolved into a launch posture.
@@ -791,6 +799,10 @@ pub enum LaunchRefusal {
     PresentationUnsupported,
     /// A resolved destination has no source behind it.
     SourceUnproven,
+    /// The declared presentation realization cannot realize what the plan's
+    /// destinations ask for, so the launch would silently skip a mount the
+    /// effect depends on.
+    PresentationRefused,
 }
 
 impl LaunchRefusal {
@@ -801,6 +813,7 @@ impl LaunchRefusal {
             Self::IdentityUnproven => "launch-identity-unproven",
             Self::PresentationUnsupported => "launch-presentation-unsupported",
             Self::SourceUnproven => "launch-source-unproven",
+            Self::PresentationRefused => "launch-presentation-refused",
         }
     }
 }
@@ -814,6 +827,9 @@ impl core::fmt::Display for LaunchRefusal {
                 "the plan names a presentation its resolved destinations do not realize"
             }
             Self::SourceUnproven => "a resolved destination has no source behind it",
+            Self::PresentationRefused => {
+                "the declared realization cannot present what the plan's destinations ask for"
+            }
         };
         formatter.write_str(text)
     }
@@ -868,6 +884,7 @@ fn source_backing(
 pub fn launch_posture(
     plan: &ExecutionPlan,
     template: &TrustedLaunchTemplate,
+    private_execution_root: &std::path::Path,
 ) -> Result<SpawnRunnerPlanInput, LaunchRefusal> {
     if plan.executable().template().as_str() != ADMITTED_EFFECT_SPAWN {
         return Err(LaunchRefusal::NotALaunchEffect);
@@ -909,6 +926,24 @@ pub fn launch_posture(
             });
         }
     }
+    // KTD11: the realization is the trusted implementation's DECLARED
+    // capability, so the broker realizes it from the plan's own destinations
+    // instead of leaving the launch on a pre-graph posture that prepares
+    // nothing. Each destination's admitted access is enforced inside
+    // `realize_presentation`; passing "all read-only" only switches that
+    // enforcement on when the plan really is entirely read-only.
+    let all_read_only = plan
+        .destinations()
+        .iter()
+        .all(PlannedDestination::read_only);
+    let admitted_presentation = realize_presentation(
+        plan,
+        template.presentation,
+        private_execution_root,
+        all_read_only,
+    )
+    .map_err(|_| LaunchRefusal::PresentationRefused)?;
+    let presentation = template.presentation;
 
     Ok(SpawnRunnerPlanInput {
         binary_path: plan.executable().program().as_path().to_path_buf(),
@@ -929,14 +964,8 @@ pub fn launch_posture(
             host_gid_for_zero: namespace.inner_gid,
         }),
         umask: template.umask,
-        // KTD11: the presentation facet is the trusted implementation
-        // contract's, not this function's. Until the template row carries it
-        // (U12/U15), the launch keeps the pre-graph posture and this plan
-        // carries no admitted destinations for U11's private mount tree to
-        // prepare. `launch_posture` still refuses a facet no resolved
-        // destination applies, so nothing is skipped either way.
-        presentation: None,
-        admitted_presentation: None,
+        presentation,
+        admitted_presentation,
     })
 }
 
@@ -2205,8 +2234,11 @@ fn parse_plan(payload: &CanonicalJsonObject) -> Result<SpawnRunnerPlanInput, Dis
             .unwrap_or(false),
         user_namespace: optional_user_namespace(payload)?,
         umask: optional_umask(payload)?,
-        presentation: None,
-        admitted_presentation: None,
+        presentation: crate::ops::spawn_runner::PresentationRealization::NamespaceFirstServiceSource,
+        admitted_presentation: crate::ops::spawn_runner::AdmittedPresentation {
+            private_execution_root: std::path::PathBuf::new(),
+            binds: Vec::new(),
+        },
     })
 }
 

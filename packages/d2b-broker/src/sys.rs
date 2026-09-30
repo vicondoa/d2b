@@ -2252,17 +2252,13 @@ pub mod pidfd_sys {
         /// runner. The broker creates the pipe and writes these validated
         /// bytes only after the child has been spawned.
         pub activation_stdin: Option<Vec<u8>>,
-        /// How one admitted presentation is realized for this runner
-        /// (KTD11).
+        /// How this launch's admitted presentation is realized (KTD11).
         ///
-        /// `None` is the pre-graph posture the broker still launches today:
-        /// ADR 0021's user-namespace-first spawn in which the role's own
-        /// verified service sandbox realizes its source and the broker
-        /// applies no mount of its own. U34 deletes `None` once every
-        /// production launch declares its facet; until then a `None` launch
-        /// keeps the historical behaviour, and this unit's guarantees do not
-        /// claim otherwise.
-        pub presentation: Option<PresentationRealization>,
+        /// The facet is the trusted implementation contract's declared
+        /// capability, never a role name, a seccomp label, or a family
+        /// switch. There is no pre-graph posture: a launch always names the
+        /// realization it declares.
+        pub presentation: PresentationRealization,
         /// The private execution root every admitted destination is prepared
         /// inside (KTD11).
         ///
@@ -3422,18 +3418,14 @@ pub mod pidfd_sys {
         //   realizes its admitted source inside its own verified service
         //   sandbox, so the broker applies no mount of its own. A launch that
         //   still asks for one is refused here rather than silently served.
-        // - `None` is the pre-graph posture U34 retires. It keeps the
-        //   historical behaviour exactly, including the historical skip, and
-        //   this unit makes no claim about it.
         let presentation = isolation.presentation;
         let in_ns_credentials = user_ns_spec.is_some();
         let applies_mount_actions = match presentation {
-            Some(PresentationRealization::FilesystemPresentation) => true,
-            Some(PresentationRealization::NamespaceFirstServiceSource) => false,
-            None => !in_ns_credentials,
+            PresentationRealization::FilesystemPresentation => true,
+            PresentationRealization::NamespaceFirstServiceSource => false,
         };
         let presentation_binds = isolation.presentation_binds;
-        if presentation == Some(PresentationRealization::NamespaceFirstServiceSource)
+        if presentation == PresentationRealization::NamespaceFirstServiceSource
             && (isolation.namespaces.mount
                 || mount_policy_requires_namespace(&isolation.mount_policy)
                 || !presentation_binds.is_empty())
@@ -4307,7 +4299,12 @@ mod tests {
             pre_opened_device_fds: Vec::new(),
             memlock_limit_bytes: None,
             activation_stdin: None,
-            presentation: None,
+            // This launch prepares a private mount tree and expects its device
+            // binds to be applied, so it declares the realization that does
+            // that. A namespace-first service source would refuse the mount
+            // namespace outright and never reach the bind check.
+            presentation:
+                crate::sys::pidfd_sys::PresentationRealization::FilesystemPresentation,
             private_execution_root: None,
             presentation_binds: Vec::new(),
         };
@@ -4470,7 +4467,7 @@ mod tests {
             pre_opened_device_fds: Vec::new(),
             memlock_limit_bytes: None,
             activation_stdin: None,
-            presentation: None,
+            presentation: crate::sys::pidfd_sys::PresentationRealization::NamespaceFirstServiceSource,
             private_execution_root: None,
             presentation_binds: Vec::new(),
         }

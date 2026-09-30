@@ -4124,20 +4124,13 @@ pub async fn live_spawn_runner(
         memlock_limit_bytes,
         activation_stdin,
         // KTD11: the declared realization and the destinations admitted for
-        // this launch. `None` is the pre-graph posture the broker still
-        // launches today; U34 retires it once every production launch
-        // declares its facet from the trusted implementation contract.
+        // this launch. There is no pre-graph posture: the plan always carries
+        // the realization its trusted implementation declares, so this layer
+        // receives an admitted presentation or an explicitly empty one.
         presentation: plan.presentation,
-        private_execution_root: plan
-            .admitted_presentation
-            .as_ref()
-            .filter(|presentation| !presentation.binds.is_empty())
-            .map(|presentation| presentation.private_execution_root.clone()),
-        presentation_binds: plan
-            .admitted_presentation
-            .as_ref()
-            .map(|presentation| presentation.binds.clone())
-            .unwrap_or_default(),
+        private_execution_root: (!plan.admitted_presentation.binds.is_empty())
+            .then(|| plan.admitted_presentation.private_execution_root.clone()),
+        presentation_binds: plan.admitted_presentation.binds.clone(),
     };
 
     let outcome = crate::sys::pidfd_sys::clone3_spawn_runner(
@@ -5241,8 +5234,11 @@ mod tests {
             skip_binary_exists_check: true,
             user_namespace: None,
             umask: None,
-            presentation: None,
-            admitted_presentation: None,
+        presentation: crate::ops::spawn_runner::PresentationRealization::NamespaceFirstServiceSource,
+        admitted_presentation: crate::ops::spawn_runner::AdmittedPresentation {
+            private_execution_root: std::path::PathBuf::new(),
+            binds: Vec::new(),
+        },
         };
         let err = live_spawn_runner(
             &plan,
@@ -5276,8 +5272,11 @@ mod tests {
             cgroup_placement: test_cgroup_placement(),
             user_namespace: None,
             umask: None,
-            presentation: None,
-            admitted_presentation: None,
+        presentation: crate::ops::spawn_runner::PresentationRealization::NamespaceFirstServiceSource,
+        admitted_presentation: crate::ops::spawn_runner::AdmittedPresentation {
+            private_execution_root: std::path::PathBuf::new(),
+            binds: Vec::new(),
+        },
         }
     }
 
@@ -6930,8 +6929,11 @@ mod tests {
             skip_binary_exists_check: true,
             user_namespace: None,
             umask: None,
-            presentation: None,
-            admitted_presentation: None,
+        presentation: crate::ops::spawn_runner::PresentationRealization::NamespaceFirstServiceSource,
+        admitted_presentation: crate::ops::spawn_runner::AdmittedPresentation {
+            private_execution_root: std::path::PathBuf::new(),
+            binds: Vec::new(),
+        },
         };
         let error = live_spawn_runner(
             &plan,
@@ -7240,8 +7242,11 @@ mod tests {
             skip_binary_exists_check: false,
             user_namespace: None,
             umask: None,
-            presentation: None,
-            admitted_presentation: None,
+        presentation: crate::ops::spawn_runner::PresentationRealization::NamespaceFirstServiceSource,
+        admitted_presentation: crate::ops::spawn_runner::AdmittedPresentation {
+            private_execution_root: std::path::PathBuf::new(),
+            binds: Vec::new(),
+        },
         };
 
         let outcome = live_spawn_runner(

@@ -73,14 +73,14 @@ pub struct SpawnRunnerPlan {
     pub umask: Option<u32>,
     /// How this launch's presentation is realized (KTD11).
     ///
-    /// `None` is the pre-graph posture U34 retires: the role's own verified
-    /// service sandbox realizes its source and the broker applies no mount of
-    /// its own. The facet comes from the trusted implementation contract,
-    /// never from a role name, a seccomp label, or a family switch.
-    pub presentation: Option<PresentationRealization>,
+    /// The facet comes from the trusted implementation contract, never from a
+    /// role name, a seccomp label, or a family switch. There is no pre-graph
+    /// posture: a launch always states the realization its declared
+    /// capability names.
+    pub presentation: PresentationRealization,
     /// The admitted destinations prepared for this launch, resolved from an
     /// exact execution plan by [`realize_presentation`].
-    pub admitted_presentation: Option<AdmittedPresentation>,
+    pub admitted_presentation: AdmittedPresentation,
 }
 
 impl fmt::Debug for SpawnRunnerPlan {
@@ -219,11 +219,11 @@ pub struct SpawnRunnerPlanInput {
     /// Optional umask installed before execve.
     pub umask: Option<u32>,
     /// How this launch's presentation is realized (KTD11). See
-    /// [`SpawnRunnerPlan::presentation`]; `None` is the pre-graph posture.
-    pub presentation: Option<PresentationRealization>,
+    /// [`SpawnRunnerPlan::presentation`].
+    pub presentation: PresentationRealization,
     /// The admitted destinations prepared for this launch. See
     /// [`SpawnRunnerPlan::admitted_presentation`].
-    pub admitted_presentation: Option<AdmittedPresentation>,
+    pub admitted_presentation: AdmittedPresentation,
 }
 
 impl fmt::Debug for SpawnRunnerPlanInput {
@@ -290,18 +290,17 @@ pub fn preflight(input: &SpawnRunnerPlanInput) -> Result<SpawnRunnerPlan, SpawnR
     // it cannot realize leaves no mount, no prepared destination, and no
     // child behind it. There is no branch below that reports such a launch
     // as ready.
-    if let Some(presentation) = input.admitted_presentation.as_ref() {
-        if !presentation.binds.is_empty()
-            && input.presentation != Some(PresentationRealization::FilesystemPresentation)
-        {
-            return Err(SpawnRunnerError::PresentationRequiresFilesystemRealization);
-        }
-        if !presentation.binds.is_empty() && !presentation.private_execution_root.is_absolute() {
-            return Err(SpawnRunnerError::PresentationRequiresPrivateExecutionRoot);
-        }
-        if fence_presentation_argv(&input.argv, presentation).is_err() {
-            return Err(SpawnRunnerError::PresentationArgvNamesHostSource);
-        }
+    let presentation = &input.admitted_presentation;
+    if !presentation.binds.is_empty()
+        && input.presentation != PresentationRealization::FilesystemPresentation
+    {
+        return Err(SpawnRunnerError::PresentationRequiresFilesystemRealization);
+    }
+    if !presentation.binds.is_empty() && !presentation.private_execution_root.is_absolute() {
+        return Err(SpawnRunnerError::PresentationRequiresPrivateExecutionRoot);
+    }
+    if fence_presentation_argv(&input.argv, presentation).is_err() {
+        return Err(SpawnRunnerError::PresentationArgvNamesHostSource);
     }
     Ok(SpawnRunnerPlan {
         binary_path: input.binary_path.clone(),
@@ -693,8 +692,11 @@ mod tests {
             skip_binary_exists_check: true,
             user_namespace: None,
             umask: None,
-            presentation: None,
-            admitted_presentation: None,
+        presentation: crate::ops::spawn_runner::PresentationRealization::NamespaceFirstServiceSource,
+        admitted_presentation: crate::ops::spawn_runner::AdmittedPresentation {
+            private_execution_root: std::path::PathBuf::new(),
+            binds: Vec::new(),
+        },
         }
     }
 

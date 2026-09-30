@@ -480,8 +480,11 @@ mod tests {
             },
             user_namespace: None,
             umask: None,
-            presentation: None,
-            admitted_presentation: None,
+        presentation: crate::ops::spawn_runner::PresentationRealization::NamespaceFirstServiceSource,
+        admitted_presentation: crate::ops::spawn_runner::AdmittedPresentation {
+            private_execution_root: std::path::PathBuf::new(),
+            binds: Vec::new(),
+        },
         }
     }
 
@@ -858,8 +861,11 @@ mod trusted_identity_tests {
             },
             user_namespace: None,
             umask: None,
-            presentation: None,
-            admitted_presentation: None,
+        presentation: crate::ops::spawn_runner::PresentationRealization::NamespaceFirstServiceSource,
+        admitted_presentation: crate::ops::spawn_runner::AdmittedPresentation {
+            private_execution_root: std::path::PathBuf::new(),
+            binds: Vec::new(),
+        },
         }
     }
 
