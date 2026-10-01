@@ -2514,7 +2514,7 @@ mod tests {
         use d2b_contracts_resource::v3::volume::AttachmentAccess;
         use d2b_contracts_resource::v3::{
             BindingArbitration, BindingRealizationFacet, BindingSourceDecision, RequestedRights,
-            VolumeBindingSpec,
+            VolumeBindingSpec, volume_binding::VolumePresentation,
         };
 
         let decision = BindingSourceDecision::new(
@@ -2528,7 +2528,8 @@ mod tests {
             reference(GUEST),
             "root",
             AttachmentAccess::ReadWrite,
-            "/var/lib/d2b/volumes/data",
+            VolumePresentation::filesystem("/mnt/data").expect("a consumer destination"),
+            "root",
             decision,
         )
         .expect("the binding row is well formed");

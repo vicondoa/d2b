@@ -47,19 +47,15 @@ pub fn parsed_binding_spec(binding: &StoredResource) -> Option<VolumeBindingSpec
     serde_json::from_value::<VolumeBindingSpec>(spec).ok()
 }
 
-/// Parse a stored `VolumeBinding` row as the canonical consumer request.
+/// Parse a stored `VolumeBinding` row as the consumer's canonical declaration.
 ///
-/// The canonical row's base spec is the consumer's own
-/// `VolumeBindingRequest`, so this is the same declaration read back out of
-/// committed bytes rather than a translated copy of an attachment list.  A
-/// row in the old attachment shape simply is not a canonical request, and
-/// this returns `None` for it instead of guessing a relationship out of one.
+/// The committed row is that declaration plus the source provider's accepted
+/// decision, in the one closed row encoding, so this is the same declaration
+/// read back out of the committed bytes rather than a translated copy of an
+/// attachment list.  A row whose identities are not one this family admits
+/// returns `None` instead of guessing a relationship out of one.
 pub fn parsed_consumer_request(binding: &StoredResource) -> Option<VolumeBindingRequest> {
-    let spec = serde_json::from_slice::<serde_json::Value>(&binding.canonical_json)
-        .ok()?
-        .get("spec")?
-        .clone();
-    serde_json::from_value::<VolumeBindingRequest>(spec).ok()
+    parsed_binding_spec(binding)?.request().ok()
 }
 
 #[cfg(test)]
@@ -234,7 +230,11 @@ mod tests {
                 "executionRef": execution_ref,
                 "view": "controller",
                 "access": "read-only",
-                "mountPath": "/state",
+                "presentation": {
+                    "presentation": "filesystem",
+                    "destination": "/state",
+                },
+                "slot": "state",
                 "source": {
                     "admittedRights": ["consume"],
                     "arbitration": "shared",
@@ -255,15 +255,19 @@ mod tests {
             &guest_ref
         );
         // Minted records carry the reserved envelope providerRef alongside
-        // the five typed fields; the parse must attribute them instead of
-        // failing closed.
+        // the typed fields; the parse must attribute them instead of failing
+        // closed.
         let minted_spec = |execution_ref: &str| {
             serde_json::json!({
                 "volumeRef": "Volume/work-state",
                 "executionRef": execution_ref,
                 "view": "controller",
                 "access": "read-only",
-                "mountPath": "/state",
+                "presentation": {
+                    "presentation": "filesystem",
+                    "destination": "/state",
+                },
+                "slot": "state",
                 "providerRef": "Provider/volume-virtiofs",
                 "source": {
                     "admittedRights": ["consume"],
@@ -296,6 +300,14 @@ mod tests {
                 .execution_ref(),
             &other_guest_ref
         );
+
+        // The committed row is read back as the consumer's declaration out of
+        // the same bytes, never from a second encoding of it.
+        let read_back = parsed_consumer_request(&own_minted).expect("the row declares a relationship");
+        assert_eq!(read_back.source_ref(), &target("Volume", "work-state"));
+        assert_eq!(read_back.consumer_ref(), &guest_ref);
+        assert_eq!(read_back.slot().as_str(), "state");
+        assert_eq!(read_back.presentation().destination(), Some("/state"));
         // An unparseable spec is a broken resource.
         let broken = stored_resource_with_spec(
             &target("VolumeBinding", "broken"),

@@ -163,7 +163,7 @@ mod tests {
     async fn the_service_delegates_onto_the_facets() {
         use d2b_contracts_resource::v3::{
             ResourceRef, ResourceUid, execution_policy::BoundedToken, volume::AttachmentAccess,
-            volume_binding::VolumeBindingSpec,
+            volume_binding::{VolumeBindingSpec, VolumePresentation},
         };
 
         let fake = FakeServingEffects::new();
@@ -181,7 +181,8 @@ mod tests {
                 ResourceRef::parse("Guest/acceptance-guest").expect("guest"),
                 "named",
                 AttachmentAccess::ReadWrite,
-                "/mnt/work",
+                VolumePresentation::filesystem("/mnt/work").expect("destination"),
+                "named",
                 d2b_contracts_resource::v3::BindingSourceDecision::new(
                     vec![d2b_contracts_resource::v3::RequestedRights::Consume],
                     d2b_contracts_resource::v3::binding::BindingArbitration::Shared,

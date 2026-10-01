@@ -52,7 +52,7 @@ use d2b_resource_runtime::error::{
     FailureKinds,
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName, StoredDesiredResource};
-use d2b_resource_runtime::relations::DecodedBindingRequest;
+use d2b_provider_volume_local::is_admitted_binding_row_name;
 use d2b_resource_types::{
     AllowedSources, CONVERTED_TYPE_VERBS, ChildCreation, ChildCustody, DriverDescriptor,
     WellKnownType,
@@ -397,7 +397,7 @@ pub fn canonical_binding_children(
             let row = canonical_binding_row(admitted)?;
             Ok(CanonicalBindingChild {
                 name: row.name().as_str().to_owned(),
-                spec: row.spec().to_vec(),
+                spec: with_binding_provider_ref(row.spec())?,
             })
         })
         .collect()
@@ -463,6 +463,13 @@ impl VolumeDriver {
 
     /// Derive the deterministic `VolumeBinding` children per virtiofs
     /// attachment (old `volume_children`).
+    ///
+    /// The attachment list is a path-typed input, so each row it mints names
+    /// a filesystem presentation at the declared mount path.  A block-device
+    /// attachment is not reachable from this translation and is never given a
+    /// destination invented for it: it arrives as a consumer request, is
+    /// admitted through the canonical path below, and commits its own device
+    /// slot.
     fn desired_children(
         &self,
         volume_ref: &ResourceRef,
@@ -476,16 +483,24 @@ impl VolumeDriver {
         intents
             .into_iter()
             .map(|intent| {
-                // Neutral binding payload only (KTD1): access mode and mount
-                // intent. The envelope carries no provider extension or
-                // attachment settings; the serving posture is the frozen
-                // default.
+                // Neutral binding payload only (KTD1): access mode and the
+                // consumer-side presentation. The envelope carries no
+                // provider extension or attachment settings; the serving
+                // posture is the frozen default.
                 let binding = d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec::new(
                     intent.volume_ref().clone(),
                     intent.execution_ref().clone(),
                     intent.view().as_str(),
                     intent.access(),
-                    intent.mount_path(),
+                    d2b_contracts_resource::v3::volume_binding::VolumePresentation::filesystem(
+                        intent.mount_path(),
+                    )
+                    .map_err(|_| self.error(VolumeDriverErrorKind::ChildDerivation, op))?,
+                    // The attachment names no consumer slot of its own, so the
+                    // view it selects is the slot this row occupies - the
+                    // same slot the admitted path derives from the request the
+                    // consumer authored for the same view.
+                    intent.view().as_str(),
                     d2b_contracts_resource::v3::BindingSourceDecision::new(
                         vec![d2b_contracts_resource::v3::RequestedRights::Consume],
                         d2b_contracts_resource::v3::binding::BindingArbitration::Shared,
@@ -543,12 +558,12 @@ impl VolumeDriver {
             .filter(|row| {
                 row.key.type_name == VOLUME_BINDING_TYPE
                     // Ownership boundary (U14): this diff owns the
-                    // attachment-shaped rows it derives. A row carrying a
-                    // canonical request belongs to the KTD2 admission below,
-                    // which retires only what it no longer derives - two
+                    // attachment-derived rows it derives. A row the KTD2
+                    // admission below minted belongs to that diff, which
+                    // retires only what it no longer derives - two
                     // derivations over one resource type would otherwise
                     // retire each other's rows on every pass.
-                    && !is_canonical_binding_row(&row.spec)
+                    && !is_canonical_binding_row(&row.key.name)
                     && !desired.iter().any(|child| child.name == row.key.name)
             })
             .map(|row| row.key.clone())
@@ -636,7 +651,7 @@ impl VolumeDriver {
             .iter()
             .filter(|row| {
                 row.key.type_name == VOLUME_BINDING_TYPE
-                    && is_canonical_binding_row(&row.spec)
+                    && is_canonical_binding_row(&row.key.name)
                     && !derived.iter().any(|child| child.name == row.key.name)
             })
             .map(|row| row.key.clone())
@@ -760,16 +775,41 @@ fn binding_contract_detail(code: &BindingContractError) -> FailureDetail {
         .with_note(code.to_string())
 }
 
-/// Whether one stored child row carries this family's canonical binding
-/// request (KTD2) rather than the attachment-shaped row the pre-cutover
-/// derivation commits.
+/// Attach the serving Provider reference to one committed row's envelope.
 ///
-/// The two are disjoint wire shapes, so the row itself says which
-/// derivation owns it: that is the durable ownership boundary between the
-/// two diffs, and it holds across a restart, where an in-memory set would
-/// not.
-fn is_canonical_binding_row(spec: &[u8]) -> bool {
-    DecodedBindingRequest::decode(VOLUME_BINDING_TYPE, spec).is_some()
+/// The base spec is the closed neutral row contract; the serving Provider is
+/// envelope metadata beside it, exactly as the attachment-derived rows carry
+/// it. Both the manager's relation index and the serving driver attribute
+/// these reserved fields before reading the base spec, so one committed row
+/// serves both readers.
+///
+/// # Errors
+///
+/// Returns [`BindingContractError::InvalidField`] when the row does not render
+/// as a JSON object the reference can be attached to.
+fn with_binding_provider_ref(spec: &[u8]) -> Result<Vec<u8>, BindingContractError> {
+    let mut value: serde_json::Value = serde_json::from_slice(spec)
+        .map_err(|_| BindingContractError::InvalidField)?;
+    value
+        .as_object_mut()
+        .ok_or(BindingContractError::InvalidField)?
+        .insert(
+            "providerRef".to_owned(),
+            serde_json::Value::String(BINDING_PROVIDER_REF.to_owned()),
+        );
+    serde_json::to_vec(&value).map_err(|_| BindingContractError::InvalidField)
+}
+
+/// Whether one owned `VolumeBinding` row belongs to the admitted-relationship
+/// derivation (KTD2).
+///
+/// The two derivations commit the same closed row encoding, so the row's
+/// desired bytes no longer say which one minted it - the row's name does, and
+/// it says so durably, across a restart, which an in-memory set of this pass's
+/// rows would not.  This is the ownership boundary between the two retirement
+/// diffs: each retires exactly the rows it mints.
+fn is_canonical_binding_row(name: &str) -> bool {
+    is_admitted_binding_row_name(name)
 }
 
 /// Whether one admitted relationship's KTD3 key names exactly this Volume
@@ -1520,10 +1560,11 @@ mod tests {
 
     use d2b_contracts_resource::v3::execution_policy::BoundedToken;
     use d2b_contracts_resource::v3::volume::{AttachmentAccess, VolumeSpec};
+    use d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec;
     use d2b_contracts_resource::v3::{
         BindingAuthorization, BindingRealizationFacet, BindingRealizationSupport, BindingSlot,
-        DesiredDigest, DesiredRevision, FreshnessTuple, ResourceUid, StoreIncarnation,
-        VolumeBindingRequest, VolumePresentation, ZoneId, canonical_json_bytes,
+        BindingSpecFingerprint, DesiredDigest, DesiredRevision, FreshnessTuple, ResourceUid,
+        StoreIncarnation, VolumeBindingRequest, VolumePresentation, ZoneId,
     };
     use d2b_provider_volume_local::{
         AdmittedVolumeBinding, VolumeAdmissionGrant, VolumeAdmissionSource, VolumeConsumerRequest,
@@ -1665,6 +1706,19 @@ mod tests {
         admitted_source("Volume/data", row_uid().as_str(), &canonical_graph_volume())
     }
 
+    /// One committed row's closed base spec: the reserved envelope fields the
+    /// producing half stamps beside it are attributed first, exactly as both
+    /// real readers do.
+    fn committed_base_spec(bytes: &[u8]) -> VolumeBindingSpec {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(bytes).expect("committed row value");
+        let object = value.as_object_mut().expect("a committed row is an object");
+        for field in ["providerRef", "updatePolicy", "provider"] {
+            object.remove(field);
+        }
+        serde_json::from_value(value).expect("the committed row is the closed row contract")
+    }
+
     /// The manager key one derived canonical row is committed under.
     fn binding_key(name: &str) -> ResourceKey {
         ResourceKey::new("work", VOLUME_BINDING_TYPE, name)
@@ -1708,7 +1762,7 @@ mod tests {
             let row = manager
                 .row(&binding_key(&child.name))
                 .unwrap_or_else(|| panic!("{} is committed under its KTD3 name", child.name));
-            assert_eq!(row.spec, child.spec, "the committed row is the consumer's request");
+            assert_eq!(row.spec, child.spec, "the committed row is the derived row");
             assert_eq!(row.owner_uid, Some(ROW_UID), "the deriving Volume owns the row");
             // The committed row is what the graph reads back: the manager's
             // own relation-index decoder resolves it to this exact
@@ -1720,7 +1774,18 @@ mod tests {
             assert_eq!(decoded.consumer_ref(), relationship.request().consumer_ref());
             assert_eq!(decoded.slot(), relationship.request().slot());
             assert_eq!(decoded.rights(), relationship.request().requested_rights());
-            assert_eq!(decoded.fingerprint(), &relationship.request().fingerprint());
+            assert_eq!(
+                decoded.required_facets(),
+                relationship.request().required_facets(),
+                "{} commits the facets its own presentation needs",
+                child.name
+            );
+            assert_eq!(
+                decoded.fingerprint(),
+                &BindingSpecFingerprint::from_request(&committed_base_spec(&row.spec)),
+                "the index digests the committed row itself, so its slot index and its \
+                 pre-commit check read the same bytes"
+            );
         }
         assert_eq!(
             *f.ctx.status::<VolumeDriverStatus>().expect("status"),
@@ -1893,28 +1958,32 @@ mod tests {
         let children = canonical_binding_children(&admitted).expect("derived rows");
         assert_eq!(children.len(), admitted.len());
         for (child, relationship) in children.iter().zip(&admitted) {
-            // The committed bytes ARE the consumer's request, so the row the
-            // graph reads back is the declaration that was admitted.
+            // The committed bytes are the closed row contract carrying the
+            // declaration that was admitted, so the row the graph reads back
+            // resolves to that relationship and the row the serving driver
+            // decodes is the same row.
             let decoded = DecodedBindingRequest::decode("VolumeBinding", &child.spec)
-                .expect("the committed row is a canonical request");
+                .expect("the committed row is an indexable relationship");
             assert_eq!(decoded.consumer_ref(), relationship.request().consumer_ref());
             assert_eq!(decoded.slot(), relationship.request().slot());
+            let row = committed_base_spec(&child.spec);
             assert_eq!(
                 decoded.fingerprint(),
-                &relationship.request().fingerprint()
+                &row.fingerprint(),
+                "the index digests the committed row itself"
             );
-            let rendered: serde_json::Value =
-                serde_json::from_slice(&canonical_json_bytes(relationship.request()).expect("bytes"))
-                    .expect("canonical request value");
-            let committed: serde_json::Value =
-                serde_json::from_slice(&child.spec).expect("committed row value");
-            // Only the presentation differs in shape; the rest is identical.
-            assert_eq!(committed["sourceRef"], rendered["sourceRef"]);
-            assert_eq!(committed["consumerRef"], rendered["consumerRef"]);
-            assert_eq!(committed["slot"], rendered["slot"]);
-            assert_eq!(committed["view"], rendered["view"]);
-            assert_eq!(committed["access"], rendered["access"]);
-            assert_eq!(committed["presentation"], rendered["presentation"]);
+            assert_eq!(
+                row.request().expect("the row declares the admitted relationship"),
+                *relationship.request(),
+                "the committed row carries the declaration the admission decided"
+            );
+            assert_eq!(
+                row.presentation(),
+                relationship.request().presentation(),
+                "a block-device relationship commits its device slot, never a destination"
+            );
+            assert_eq!(row.slot().as_str(), relationship.key().slot().as_str());
+            assert_eq!(row.source().arbitration(), relationship.admission().arbitration());
         }
     }
 

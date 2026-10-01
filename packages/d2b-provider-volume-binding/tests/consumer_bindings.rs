@@ -1,23 +1,26 @@
-//! The committed `VolumeBinding` row is the consumer's own canonical request.
+//! The committed `VolumeBinding` row is the consumer's own canonical
+//! declaration plus the source provider's accepted decision.
 //!
 //! KTD2 makes the consumer's desired request the one declaration site and KTD3
-//! makes its key the relationship's identity, so the row the source mints must
-//! round-trip: what the consumer authored is what a reader decodes, indexes,
-//! and admits.  These cases are the failures that would follow if it did not -
-//! a row shape that guesses a relationship out of an attachment list, a slot
-//! two sources can both occupy, a reader and a writer that collapse into one
-//! right, and a writable host path smuggled in beside the consumer-side
-//! destination.
+//! makes its key the relationship's identity.  The row the source mints is
+//! that declaration in one closed encoding, so the manager's relation index
+//! and the registered serving driver read the same bytes: what the consumer
+//! authored is what a reader decodes, indexes, serves, and admits.  These
+//! cases are the failures that would follow if it did not - a row shape that
+//! guesses a relationship out of an attachment list, a slot two sources can
+//! both occupy, a reader and a writer that collapse into one right, and a
+//! writable host path smuggled in beside the consumer-side destination.
 
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 use d2b_contracts_resource::v3::volume::AttachmentAccess;
 use d2b_contracts_resource::v3::{
     AdmissionStage, BindingArbitration, BindingAuthorization, BindingConsumerKind, BindingKind,
     BindingRealizationFacet, BindingRealizationSupport, BindingRefusal, BindingSlot,
-    BindingSlotDecision, BindingSlotIndex, BindingSpecFingerprint, CanonicalJsonValue, RefusalReason,
-    DesiredDigest, DesiredRevision, FreshnessTuple, RequestedRights, ResourceRef, ResourceUid,
-    SourceAdmission, StoreIncarnation, StoredResource, VolumeBindingRequest, VolumePresentation,
-    ZoneId, admit_binding_request, canonical_json_bytes,
+    BindingSlotDecision, BindingSlotIndex, BindingSourceDecision, BindingSpecFingerprint,
+    CanonicalJsonValue, RefusalReason, DesiredDigest, DesiredRevision, FreshnessTuple,
+    RequestedRights, ResourceRef, ResourceUid, SourceAdmission, StoreIncarnation, StoredResource,
+    VolumeBindingRequest, VolumeBindingSpec, VolumePresentation, ZoneId, admit_binding_request,
+    canonical_json_bytes,
 };
 use d2b_provider_volume_binding::{parsed_binding_spec, parsed_consumer_request};
 use d2b_resource_runtime::relations::DecodedBindingRequest;
@@ -72,8 +75,29 @@ const CONSUMERS: [(&str, &str); 4] = [
     ("Guest/work-vm", "123e4567-e89b-42d3-a456-426614174000"),
 ];
 
-fn canonical_bytes(request: &VolumeBindingRequest) -> Vec<u8> {
-    canonical_json_bytes(request).expect("canonical request bytes")
+/// The committed row the source mints for one admitted declaration: the
+/// consumer's own request plus the source provider's accepted decision.
+fn committed_row(request: &VolumeBindingRequest) -> VolumeBindingSpec {
+    VolumeBindingSpec::new(
+        request.source_ref().clone(),
+        request.consumer_ref().clone(),
+        request.view().as_str(),
+        request.access(),
+        request.presentation().clone(),
+        request.slot().as_str(),
+        BindingSourceDecision::new(
+            vec![RequestedRights::Consume],
+            BindingArbitration::Shared,
+            request.required_facets().to_vec(),
+        )
+        .expect("source decision"),
+    )
+    .expect("the committed row this family admits")
+}
+
+/// The exact bytes the source commits for one declaration.
+fn committed_bytes(request: &VolumeBindingRequest) -> Vec<u8> {
+    canonical_json_bytes(&committed_row(request)).expect("canonical row bytes")
 }
 
 fn key_for(request: &VolumeBindingRequest, consumer_uid: ResourceUid) -> d2b_contracts_resource::v3::BindingKey {
@@ -131,8 +155,8 @@ fn stored_binding_row(request: &VolumeBindingRequest) -> StoredResource {
             "revision": 1,
             "uid": "a23e4567-e89b-42d3-a456-426614174000"
         },
-        "spec": serde_json::from_slice::<serde_json::Value>(&canonical_bytes(request))
-            .expect("canonical request value"),
+        "spec": serde_json::from_slice::<serde_json::Value>(&committed_bytes(request))
+            .expect("canonical row value"),
         "status": { "resource": {} }
     });
     StoredResource {
@@ -174,9 +198,9 @@ fn every_consumer_kind_and_presentation_round_trips_through_one_row_shape() {
                 AttachmentAccess::ReadWrite,
                 presentation,
             );
-            let bytes = canonical_bytes(&request);
+            let bytes = committed_bytes(&request);
             let decoded = DecodedBindingRequest::decode("VolumeBinding", &bytes)
-                .unwrap_or_else(|| panic!("{consumer} {label} did not commit as a canonical request"));
+                .unwrap_or_else(|| panic!("{consumer} {label} did not commit as a canonical row"));
             assert_eq!(decoded.kind(), BindingKind::Volume);
             assert_eq!(decoded.source_ref(), request.source_ref());
             assert_eq!(decoded.consumer_ref(), request.consumer_ref());
@@ -187,7 +211,7 @@ fn every_consumer_kind_and_presentation_round_trips_through_one_row_shape() {
                 request.required_facets(),
                 "{consumer} {label} must commit the facets its presentation needs"
             );
-            assert_eq!(decoded.fingerprint(), &request.fingerprint());
+            assert_eq!(decoded.fingerprint(), &committed_row(&request).fingerprint());
             // The consumer slot named a relationship the graph can key, for
             // every consumer kind and both presentations alike.
             let key = decoded
@@ -225,9 +249,9 @@ fn a_committed_row_reads_back_as_the_request_the_consumer_authored() {
 }
 
 #[test]
-fn a_row_that_is_not_the_canonical_request_declares_no_relationship() {
-    // The old attachment-shaped row is a different spec, not a canonical
-    // request.  It declares no indexed consumption relationship rather than a
+fn a_row_that_is_not_the_committed_shape_declares_no_relationship() {
+    // The pre-cutover attachment row is a different spec, not the committed
+    // row.  It declares no indexed consumption relationship rather than a
     // guessed one, and the reader says so instead of translating it.
     let legacy = serde_json::json!({
         "apiVersion": "resources.d2bus.org/v3",
@@ -278,17 +302,25 @@ fn a_row_that_is_not_the_canonical_request_declares_no_relationship() {
     };
     assert!(
         parsed_consumer_request(&row).is_none(),
-        "an attachment-shaped row is not a canonical request"
+        "an attachment-shaped row is not the committed row"
     );
-    // The row contract now carries the source provider's accepted decision, so
-    // a row that predates it is refused rather than read with its authority
-    // silently absent. An old attachment-shaped row is exactly that.
+    // The row contract carries the source provider's accepted decision and the
+    // consumer-side presentation, so a row that predates both is refused
+    // rather than read with its authority silently absent or a destination
+    // invented for it.
     assert!(
         parsed_binding_spec(&row).is_none(),
         "a row carrying no committed source decision declares no relationship"
     );
     assert!(
-        DecodedBindingRequest::decode("VolumeBinding", &row.canonical_json).is_none()
+        DecodedBindingRequest::decode(
+            "VolumeBinding",
+            &canonical_json_bytes_from_value(
+                &serde_json::from_slice::<serde_json::Value>(&row.canonical_json)
+                    .expect("canonical resource")["spec"],
+            ),
+        )
+        .is_none()
     );
 }
 
@@ -301,8 +333,8 @@ fn a_writable_path_grant_is_not_a_field_a_committed_row_accepts() {
         AttachmentAccess::ReadWrite,
         filesystem("/srv/work"),
     );
-    let mut granted = serde_json::from_slice::<serde_json::Value>(&canonical_bytes(&request))
-        .expect("canonical request value");
+    let mut granted = serde_json::from_slice::<serde_json::Value>(&committed_bytes(&request))
+        .expect("canonical row value");
     // A host-side path next to the consumer-side destination would be a
     // second, writable-path grant living in the same row.
     granted["hostPath"] = serde_json::Value::String("/var/lib/d2b/volumes/state".to_owned());
@@ -312,11 +344,11 @@ fn a_writable_path_grant_is_not_a_field_a_committed_row_accepts() {
             &canonical_json_bytes_from_value(&granted),
         )
         .is_none(),
-        "a host path beside the destination must not decode as a request"
+        "a host path beside the destination must not decode as a committed row"
     );
     assert!(
-        serde_json::from_value::<VolumeBindingRequest>(granted).is_err(),
-        "a host path is not an accepted field"
+        serde_json::from_value::<VolumeBindingSpec>(granted).is_err(),
+        "a host path is not an accepted field of the committed row"
     );
     // The destination the row does carry is the consumer's, not the source's.
     assert_eq!(request.presentation().destination(), Some("/srv/work"));
@@ -434,9 +466,9 @@ fn a_committed_row_never_widens_the_right_it_declares() {
             access,
             filesystem("/srv/state"),
         );
-        let bytes = canonical_bytes(&request);
+        let bytes = committed_bytes(&request);
         let decoded = DecodedBindingRequest::decode("VolumeBinding", &bytes)
-            .expect("canonical request decodes");
+            .expect("the committed row decodes");
         assert_eq!(decoded.rights(), rights, "{access:?} must commit its own right");
         // The source decides which of these it admits; a read-only
         // relationship is never admitted as a writer by its own row.

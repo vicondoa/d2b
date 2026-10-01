@@ -181,6 +181,55 @@
       ],
       "x-d2b-reference-kind": "ResourceRef",
       "x-d2b-reference-scope": "same-zone"
+    },
+    "VolumePresentation": {
+      "description": "The consumer-side presentation one admitted Volume view takes.\n\nThe destination is a location inside the consumer. It is never the source: a host source path is resolved privately from the admitted source and its named view, never authored here.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The exact named view presented at a destination inside the consumer.",
+          "properties": {
+            "destination": {
+              "description": "The consumer-side destination path.",
+              "type": "string"
+            },
+            "presentation": {
+              "enum": [
+                "filesystem"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "destination",
+            "presentation"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The exact named view presented as a block device in a consumer slot.",
+          "properties": {
+            "deviceSlot": {
+              "description": "The consumer-side device slot.",
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "presentation": {
+              "enum": [
+                "block-device"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "deviceSlot",
+            "presentation"
+          ],
+          "type": "object"
+        }
+      ]
     }
   },
   "description": "Durable neutral Volume view attachment to one execution target.",
@@ -232,7 +281,7 @@
     },
     "spec": {
       "additionalProperties": false,
-      "description": "Strict base VolumeBinding specification.",
+      "description": "Strict base VolumeBinding specification.\n\nThe row names the source Volume, the consumer, the named Volume view it selects, the access level it was admitted at, the consumer-side presentation that view takes, the stable consumer slot the relationship occupies, and the source provider's accepted decision.  The presentation is what makes a block-device attachment a representable row rather than a filesystem destination invented for it, so the field is the closed [`VolumePresentation`] vocabulary and never a bare path.",
       "properties": {
         "access": {
           "$ref": "#/definitions/AttachmentAccess"
@@ -242,8 +291,8 @@
           "x-d2b-reference-kind": "ResourceRef",
           "x-d2b-reference-scope": "same-zone"
         },
-        "mountPath": {
-          "type": "string"
+        "presentation": {
+          "$ref": "#/definitions/VolumePresentation"
         },
         "providerRef": {
           "pattern": "^Provider/[a-z][a-z0-9-]{0,62}$",
@@ -253,6 +302,9 @@
           ],
           "x-d2b-reference-kind": "ResourceRef",
           "x-d2b-reference-scope": "same-zone"
+        },
+        "slot": {
+          "$ref": "#/definitions/BoundedToken"
         },
         "source": {
           "$ref": "#/definitions/BindingSourceDecision"
@@ -284,7 +336,8 @@
       "required": [
         "access",
         "executionRef",
-        "mountPath",
+        "presentation",
+        "slot",
         "source",
         "view",
         "volumeRef"

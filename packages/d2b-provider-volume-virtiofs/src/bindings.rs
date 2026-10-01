@@ -538,11 +538,37 @@ mod tests {
             "executionRef": "Guest/work-vm",
             "view": "ro-store",
             "access": "read-only",
-            "mountPath": "/nix/.ro-store",
+            "presentation": {
+                "presentation": "filesystem",
+                "destination": "/nix/.ro-store",
+            },
+            "slot": "store",
             "source": {
                 "admittedRights": ["consume"],
                 "arbitration": "shared",
                 "realizedFacets": ["filesystem-presentation"],
+            },
+        })
+    }
+
+    /// The same relationship presented as a block device: the committed row
+    /// carries its device slot and no destination at all.
+    fn block_binding_spec() -> serde_json::Value {
+        serde_json::json!({
+            "providerRef": "Provider/volume-virtiofs",
+            "volumeRef": "Volume/work-state",
+            "executionRef": "Guest/work-vm",
+            "view": "raw-store",
+            "access": "read-only",
+            "presentation": {
+                "presentation": "block-device",
+                "deviceSlot": 1,
+            },
+            "slot": "store",
+            "source": {
+                "admittedRights": ["consume"],
+                "arbitration": "shared",
+                "realizedFacets": ["consumer-device-slot"],
             },
         })
     }
@@ -559,7 +585,8 @@ mod tests {
             stored.spec().volume_ref().to_canonical_string(),
             "Volume/work-state"
         );
-        assert_eq!(stored.spec().mount_path(), "/nix/.ro-store");
+        assert_eq!(stored.spec().presentation().destination(), Some("/nix/.ro-store"));
+        assert_eq!(stored.spec().slot().as_str(), "store");
         assert_eq!(stored.generation().get(), 1);
         assert_eq!(stored.revision().get(), 7);
         assert_eq!(
@@ -568,6 +595,23 @@ mod tests {
                 .expect("uid")
                 .to_canonical_string()
         );
+    }
+
+    /// A block-device attachment is a committed row like any other: the stored
+    /// envelope parses it, and the parsed row reports its device slot with no
+    /// destination to invent for it.
+    #[test]
+    fn a_block_device_attachment_parses_as_a_committed_row_with_its_device_slot() {
+        let stored = StoredBinding::from_resource_spec(&envelope(
+            VOLUME_BINDING_RESOURCE_TYPE,
+            serde_json::json!("Volume/work-state"),
+            block_binding_spec(),
+        ))
+        .expect("a block presentation is a representable committed row");
+        assert_eq!(stored.spec().presentation().device_slot(), Some(1));
+        assert_eq!(stored.spec().presentation().destination(), None);
+        assert_eq!(stored.spec().view().as_str(), "raw-store");
+        assert_eq!(stored.spec().slot().as_str(), "store");
     }
 
     #[test]

@@ -13163,7 +13163,11 @@ mod tests {
             intent.execution_ref().clone(),
             intent.view().as_str(),
             intent.access(),
-            intent.mount_path(),
+            d2b_contracts_resource::v3::volume_binding::VolumePresentation::filesystem(
+                intent.mount_path(),
+            )
+            .expect("a consumer destination"),
+            intent.view().as_str(),
             d2b_contracts_resource::v3::BindingSourceDecision::new(
                 vec![d2b_contracts_resource::v3::RequestedRights::Consume],
                 d2b_contracts_resource::v3::binding::BindingArbitration::Shared,
@@ -13182,7 +13186,11 @@ mod tests {
             ResourceRef::parse("Guest/victim-vm").expect("guest ref"),
             intent.view().as_str(),
             intent.access(),
-            intent.mount_path(),
+            d2b_contracts_resource::v3::volume_binding::VolumePresentation::filesystem(
+                intent.mount_path(),
+            )
+            .expect("a consumer destination"),
+            intent.view().as_str(),
             d2b_contracts_resource::v3::BindingSourceDecision::new(
                 vec![d2b_contracts_resource::v3::RequestedRights::Consume],
                 d2b_contracts_resource::v3::binding::BindingArbitration::Shared,

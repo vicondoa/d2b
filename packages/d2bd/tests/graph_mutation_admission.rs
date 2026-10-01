@@ -14,7 +14,7 @@ use d2b_contracts_resource::v3::volume::AttachmentAccess;
 use d2b_contracts_resource::v3::{
     AuthoritySubject, AuthoritySubjectKind, BindingAuthorization, BindingKind, BindingSlot,
     DesiredDigest, DesiredRevision, FreshnessTuple, ResourceRef, ResourceUid, StoreIncarnation,
-    VolumeBindingRequest, VolumePresentation, ZoneId,
+    VolumeBindingRequest, VolumeBindingSpec, VolumePresentation, ZoneId,
 };
 use d2b_contracts_zone_session::v3::role::AuthorizedRole;
 use d2b_contracts_zone_session::v3::RoleBindingSpec;
@@ -377,14 +377,22 @@ fn volume_controller() -> AuthenticatedMutation {
 }
 
 fn binding_spec(slot: &str, access: AttachmentAccess) -> Vec<u8> {
+    // The committed row is the ROW contract, which is what the manager's
+    // relation index decodes; the consumer's request is projected onto it.
     serde_json::to_vec(
-        &VolumeBindingRequest::new(
+        &VolumeBindingSpec::new(
             reference("Volume/data"),
             reference("Guest/vm"),
-            BindingSlot::parse(slot).unwrap(),
-            d2b_contracts_resource::v3::BoundedToken::parse("root").unwrap(),
+            "root",
             access,
             VolumePresentation::filesystem("/state").unwrap(),
+            slot,
+            d2b_contracts_resource::v3::BindingSourceDecision::new(
+                vec![d2b_contracts_resource::v3::RequestedRights::Consume],
+                d2b_contracts_resource::v3::binding::BindingArbitration::Shared,
+                vec![d2b_contracts_resource::v3::BindingRealizationFacet::FilesystemPresentation],
+            )
+            .unwrap(),
         )
         .unwrap(),
     )

@@ -35,10 +35,5 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "ti
 tokio = { workspace = true, features = ["test-util"] }
 
 [[test]]
-name = "registration"
-path = "tests/registration.rs"
-required-features = ["test-support"]
-
-[[test]]
 name = "endpoint_binding"
 path = "tests/endpoint_binding.rs"

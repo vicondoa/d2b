@@ -20,10 +20,11 @@
 //! property to keep.
 
 use d2b_contracts_resource::v3::{
-    BindingLifecycleState, BindingObservation, BindingSlot, BoundedToken, BudgetSpec,
-    CompletionCondition, ExecutionDomain, ExecutionPolicy, ReleaseOutcome,
-    ResourceGeneration, ResourceRef, ResourceUid, VolumeBindingRequest, VolumePresentation, ZoneId,
-    ZoneRevision, volume::AttachmentAccess,
+    BindingArbitration, BindingLifecycleState, BindingObservation, BindingRealizationFacet,
+    BindingSlot, BindingSourceDecision, BoundedToken, BudgetSpec, CompletionCondition, ExecutionDomain,
+    ExecutionPolicy, ReleaseOutcome, ResourceGeneration, ResourceRef, ResourceUid,
+    VolumeBindingRequest, VolumeBindingSpec, VolumePresentation, ZoneId, ZoneRevision,
+    volume::AttachmentAccess,
 };
 use d2bd::resource_runtime::cloud_hypervisor_guest_graph;
 use d2b_provider_guest::GuestSpec;
@@ -36,7 +37,9 @@ fn uid(seed: u32) -> ResourceUid {
     ResourceUid::parse(format!("123e4567-e89b-42d3-a456-42661417{seed:04}")).expect("valid uid")
 }
 
-/// One committed `VolumeBinding` row carrying the canonical consumer request.
+/// One committed `VolumeBinding` row: the consumer's canonical declaration
+/// plus the source provider's accepted decision, in the one committed row
+/// encoding.
 fn binding_row(name: &str, consumer: &str, view: &str) -> d2b_contracts_resource::v3::StoredResource {
     let request = VolumeBindingRequest::new(
         reference("Volume/gateway-system"),
@@ -47,6 +50,21 @@ fn binding_row(name: &str, consumer: &str, view: &str) -> d2b_contracts_resource
         VolumePresentation::filesystem("/var/lib/d2b/system").expect("valid destination"),
     )
     .expect("valid fixture request");
+    let row = VolumeBindingSpec::new(
+        request.source_ref().clone(),
+        request.consumer_ref().clone(),
+        request.view().as_str(),
+        request.access(),
+        request.presentation().clone(),
+        request.slot().as_str(),
+        BindingSourceDecision::new(
+            vec![d2b_contracts_resource::v3::RequestedRights::Consume],
+            BindingArbitration::Shared,
+            vec![BindingRealizationFacet::FilesystemPresentation],
+        )
+        .expect("valid source decision"),
+    )
+    .expect("valid fixture row");
     d2b_contracts_resource::v3::StoredResource {
         resource_ref: reference(&format!("VolumeBinding/{name}")),
         zone: ZoneId::parse("work").expect("valid zone"),
@@ -56,7 +74,7 @@ fn binding_row(name: &str, consumer: &str, view: &str) -> d2b_contracts_resource
         generation: ResourceGeneration::new(1).expect("nonzero generation"),
         revision: ZoneRevision::new(3),
         canonical_json: serde_json::to_vec(&serde_json::json!({
-            "spec": request,
+            "spec": row,
         }))
         .expect("serializable row"),
         payload_digest: d2b_contracts_resource::v3::StateDigest::parse(

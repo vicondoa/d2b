@@ -70,9 +70,10 @@ pub use controller::{
 };
 pub use error::VolumeLocalError;
 pub use bindings::{
-    AdmittedVolumeBinding, BindingIntent, BindingRow, VolumeAdmissionGrant, VolumeAdmissionSource,
-    VolumeConsumerRequest, admit_consumer_request, admit_consumer_requests, binding_row_name,
-    canonical_binding_row, desired_binding_intents,
+    ADMITTED_BINDING_ROW_PREFIX, AdmittedVolumeBinding, BindingIntent, BindingRow,
+    VolumeAdmissionGrant, VolumeAdmissionSource, VolumeConsumerRequest, admit_consumer_request,
+    admit_consumer_requests, binding_row_name, canonical_binding_row, desired_binding_intents,
+    is_admitted_binding_row_name,
 };
 pub use finalization::{
     FinalizationAction, FinalizationObservation, FinalizationResult, SourceReleaseDecision,

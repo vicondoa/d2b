@@ -41,8 +41,8 @@ use d2b_contracts_resource::v3::{
     CredentialBindingRequest, CREDENTIAL_BINDING_RESOURCE_TYPE, DeviceBindingRequest,
     DEVICE_BINDING_RESOURCE_TYPE, EndpointBindingRequest, ENDPOINT_BINDING_RESOURCE_TYPE,
     NetworkBindingRequest, NETWORK_BINDING_RESOURCE_TYPE, OPERATION_RESOURCE_TYPE,
-    OperationImplementation, RequestedRights, ResourceRef, ResourceUid, VolumeBindingRequest,
-    VOLUME_BINDING_RESOURCE_TYPE, ZoneId,
+    OperationImplementation, RequestedRights, ResourceRef, ResourceUid, VOLUME_BINDING_RESOURCE_TYPE,
+    VolumeBindingSpec, ZoneId,
 };
 
 /// The module declared name, asserted by the crate smoke test.
@@ -661,13 +661,18 @@ impl std::error::Error for BindingSlotConflict {}
 // Contract-layer projections
 // ---------------------------------------------------------------------------
 
-/// One decoded canonical consumer-side binding request.
+/// The reserved fields a stored envelope carries beside the closed base spec.
+const RESERVED_ROW_ENVELOPE_FIELDS: &[&str] = &["providerRef", "updatePolicy", "provider"];
+
+/// One decoded committed binding row's canonical relationship.
 ///
 /// KTD2 makes the consumer's desired request the canonical place a relationship
-/// is authored: the source controller admits it and asks the manager to create
-/// the source-owned binding. This is that request read back out of committed
-/// bytes, so the relation index and the manager's pre-commit slot check cannot
-/// disagree about which relationship a row declares.
+/// is authored: the source controller admits it and mints the source-owned
+/// binding row. The row is that declaration plus the source provider's own
+/// accepted decision, in the one committed encoding, so the relation index and
+/// the manager's pre-commit slot check read the same bytes the registered
+/// serving driver reconciles and cannot disagree about which relationship a
+/// row declares.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodedBindingRequest {
     kind: BindingKind,
@@ -680,16 +685,16 @@ pub struct DecodedBindingRequest {
 }
 
 impl DecodedBindingRequest {
-    /// Decode one committed row's canonical request.
+    /// Decode one committed row's canonical relationship.
     ///
-    /// `None` means the row's bytes are not this family's canonical request,
-    /// which is the normal answer for a type whose rows have not been converted
-    /// to the request form: such a row declares no indexed consumption
+    /// `None` means the row's bytes are not this family's canonical row,
+    /// which is the normal answer for a type whose rows have not been
+    /// converted to the row form: such a row declares no indexed consumption
     /// relationship rather than a guessed one.
     pub fn decode(type_name: &str, spec: &[u8]) -> Option<Self> {
         macro_rules! decode {
-            ($request:ty, $kind:expr) => {{
-                let request = serde_json::from_slice::<$request>(spec).ok()?;
+            ($row:ty, $kind:expr) => {{
+                let request = serde_json::from_slice::<$row>(spec).ok()?;
                 Some(Self {
                     kind: $kind,
                     source_ref: request.source_ref().clone(),
@@ -702,7 +707,32 @@ impl DecodedBindingRequest {
             }};
         }
         match type_name {
-            VOLUME_BINDING_RESOURCE_TYPE => decode!(VolumeBindingRequest, BindingKind::Volume),
+            // The Volume row is read as the committed [`VolumeBindingSpec`]:
+            // the source provider mints it, so the row's own references and
+            // slot are the relationship the source admitted, and this is the
+            // same encoding the serving driver decodes.
+            VOLUME_BINDING_RESOURCE_TYPE => {
+                // The reserved envelope fields sit beside the closed base spec
+                // and are not part of it, so they are attributed before the
+                // row decodes - the same treatment the serving driver's own row
+                // reader applies. One committed encoding, read identically by
+                // both.
+                let mut value: serde_json::Value = serde_json::from_slice(spec).ok()?;
+                let object = value.as_object_mut()?;
+                for field in RESERVED_ROW_ENVELOPE_FIELDS {
+                    object.remove(*field);
+                }
+                let row: VolumeBindingSpec = serde_json::from_value(value).ok()?;
+                Some(Self {
+                    kind: BindingKind::Volume,
+                    source_ref: row.volume_ref().clone(),
+                    consumer_ref: row.execution_ref().clone(),
+                    slot: BindingSlot::parse(row.slot().as_str()).ok()?,
+                    rights: row.requested_rights(),
+                    required_facets: row.required_facets().to_vec(),
+                    fingerprint: row.fingerprint(),
+                })
+            }
             DEVICE_BINDING_RESOURCE_TYPE => decode!(DeviceBindingRequest, BindingKind::Device),
             NETWORK_BINDING_RESOURCE_TYPE => decode!(NetworkBindingRequest, BindingKind::Network),
             ENDPOINT_BINDING_RESOURCE_TYPE => {

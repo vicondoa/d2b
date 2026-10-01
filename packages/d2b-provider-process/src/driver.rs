@@ -2802,7 +2802,8 @@ mod tests {
                 "executionRef": "Guest/acceptance-guest",
                 "view": "root",
                 "access": "read-only",
-                "mountPath": "/mnt/data",
+                "presentation": { "presentation": "filesystem", "destination": "/mnt/data" },
+                "slot": "data",
                 "source": {
                     "admittedRights": ["consume"],
                     "arbitration": "shared",

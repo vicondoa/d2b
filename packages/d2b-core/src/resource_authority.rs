@@ -1220,7 +1220,9 @@ mod tests {
             reference("Guest/worker"),
             "root",
             d2b_contracts_resource::v3::volume::AttachmentAccess::ReadOnly,
-            "/mnt/work",
+            d2b_contracts_resource::v3::volume_binding::VolumePresentation::filesystem("/mnt/work")
+                .expect("a consumer destination"),
+            "work",
             decision,
         )
         .expect("a volume binding row validates");
@@ -1269,7 +1271,9 @@ mod tests {
             reference("Guest/worker"),
             "root",
             d2b_contracts_resource::v3::volume::AttachmentAccess::ReadOnly,
-            "/mnt/work",
+            d2b_contracts_resource::v3::volume_binding::VolumePresentation::filesystem("/mnt/work")
+                .expect("a consumer destination"),
+            "work",
             decision,
         )
         .expect("a volume binding row validates");

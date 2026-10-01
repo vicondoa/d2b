@@ -10,11 +10,13 @@ use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 use d2b_contracts_resource::v3::volume::{
     AttachmentAccess, AttachmentTransport, VolumeSpec,
 };
+use d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec;
 use d2b_contracts_resource::v3::{
     AdmissionStage, BindingAdmission, BindingArbitration, BindingAuthorization, BindingContractError,
-    BindingKey, BindingRealizationSupport, BindingRefusal, BindingSpecFingerprint, FreshnessTuple,
-    RefusalReason, RequestedRights, ResourceUid, SourceAdmission, VolumeBindingRequest, ZoneId,
-    admit_binding_request, canonical_json_bytes,
+    BindingKey, BindingRealizationFacet, BindingRealizationSupport, BindingRefusal,
+    BindingSourceDecision, BindingSpecFingerprint, FreshnessTuple, RefusalReason, RequestedRights,
+    ResourceUid, SourceAdmission, VolumeBindingRequest, ZoneId, admit_binding_request,
+    canonical_json_bytes,
 };
 use sha2::{Digest, Sha256};
 
@@ -141,9 +143,14 @@ fn derive_binding_name(
 // Everything above translates the old attachment list into binding intents.
 // What follows admits the canonical relationship instead: the consumer's own
 // `VolumeBindingRequest` is the one declaration site, the Volume source is
-// the one admitter, and the committed `VolumeBinding` row is a source-owned
-// child whose spec is that request.  There is no second relationship list
-// here to keep in step with the first.
+// the one admitter, and the committed `VolumeBinding` row is the source-owned
+// child carrying that declaration plus the source's own accepted decision.
+// There is no second relationship list here to keep in step with the first.
+//
+// The two derivations commit disjoint row names - the attachment derivation
+// mints `vol-binding-` rows and the admitted one `vol-admitted-` rows - so
+// each pass's retirement diff owns exactly the rows it mints, durably and
+// across a restart, rather than depending on a wire shape that both share.
 //
 // The source owns writer arbitration across every realization of a view: a
 // Process mount and a Guest attachment asking to write are arbitrated
@@ -292,15 +299,17 @@ impl core::fmt::Debug for VolumeAdmissionSource<'_> {
 /// One admitted Volume relationship, ready to become one owned row.
 ///
 /// It carries the exact relationship key, the request that was admitted
-/// unchanged, the admission the shared evaluator minted, and the declared
-/// view subdirectory.  The resolved host path, the serving socket path, and
-/// every numeric identity stay out of it: those are resolved privately from
-/// the admitted source at realization time.
+/// unchanged, the admission the shared evaluator minted, the realization
+/// facets that admission proved the selected backend can enforce, and the
+/// declared view subdirectory.  The resolved host path, the serving socket
+/// path, and every numeric identity stay out of it: those are resolved
+/// privately from the admitted source at realization time.
 #[derive(Clone, PartialEq, Eq)]
 pub struct AdmittedVolumeBinding {
     key: BindingKey,
     request: VolumeBindingRequest,
     admission: BindingAdmission,
+    realized_facets: Vec<BindingRealizationFacet>,
     view_subdirectory: String,
 }
 
@@ -318,6 +327,16 @@ impl AdmittedVolumeBinding {
     /// Borrow the admission this relationship was granted.
     pub const fn admission(&self) -> &BindingAdmission {
         &self.admission
+    }
+
+    /// The realization facets this admission proved the selected backend can
+    /// enforce.
+    ///
+    /// This is the source provider's own accepted decision, committed on the
+    /// row: a boundary rebuilding the accepted graph from committed rows
+    /// alone must be able to recover what the source admitted.
+    pub fn realized_facets(&self) -> &[BindingRealizationFacet] {
+        &self.realized_facets
     }
 
     /// The exact subdirectory the admitted view presents inside the Volume.
@@ -353,9 +372,10 @@ impl core::fmt::Debug for AdmittedVolumeBinding {
 /// One source-owned `VolumeBinding` row the source mints for one
 /// admitted relationship.
 ///
-/// The row's spec is the canonical request itself, so reading the committed
-/// row back yields the same request the consumer authored rather than a
-/// translated copy of it.
+/// The row is the committed form of the relationship: the consumer's
+/// declaration plus the source provider's accepted decision, in the one
+/// encoding the manager's relation index, the authority rebuild, and the
+/// registered serving driver all read.
 #[derive(Clone, PartialEq, Eq)]
 pub struct BindingRow {
     name: BoundedToken,
@@ -489,10 +509,21 @@ pub fn admit_consumer_request(
         source.grant.support,
         source.grant.dependencies,
     )?;
+    // The source's accepted decision commits the facets the selected backend
+    // was proven to realize, which is the admission's own evidence rather
+    // than the request's wish: the request states what it needs, the
+    // admission states what this source admitted it can enforce.
+    let realized_facets = request
+        .required_facets()
+        .iter()
+        .copied()
+        .filter(|facet| source.grant.support.realizes(*facet))
+        .collect();
     Ok(AdmittedVolumeBinding {
         key,
         request: request.clone(),
         admission,
+        realized_facets,
         view_subdirectory: view_subdirectory(source.spec(), request.view())?.to_owned(),
     })
 }
@@ -525,6 +556,20 @@ pub fn admit_consumer_requests(
     Ok(admitted)
 }
 
+/// The name prefix the admitted-relationship derivation owns.
+///
+/// The attachment translation above mints `vol-binding-` names and this
+/// derivation mints `vol-admitted-` names, so each pass's retirement diff
+/// owns exactly the rows it mints.  The marker is durable and survives a
+/// restart, which an in-memory set of this pass's rows would not.
+pub const ADMITTED_BINDING_ROW_PREFIX: &str = "vol-admitted-";
+
+
+/// Whether one row name belongs to the admitted-relationship derivation.
+pub fn is_admitted_binding_row_name(name: &str) -> bool {
+    name.starts_with(ADMITTED_BINDING_ROW_PREFIX)
+}
+
 /// The deterministic row name the source mints for one relationship.
 ///
 /// The name derives from the relationship's committed identities - Zone,
@@ -533,7 +578,7 @@ pub fn admit_consumer_requests(
 /// identities and two relationships cannot collide by position.
 pub fn binding_row_name(key: &BindingKey) -> Result<BoundedToken, BindingContractError> {
     let mut hasher = Sha256::new();
-    hasher.update(b"d2b/volume/binding-row/v2");
+    hasher.update(b"d2b/volume/admitted-binding-row/v1");
     for part in [
         key.zone().to_canonical_string(),
         key.source_ref().to_canonical_string(),
@@ -551,29 +596,49 @@ pub fn binding_row_name(key: &BindingKey) -> Result<BoundedToken, BindingContrac
         suffix.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0'));
         suffix.push(char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('0'));
     }
-    BoundedToken::parse(format!("vol-binding-{suffix}")).map_err(|_| BindingContractError::InvalidField)
+    BoundedToken::parse(format!("{ADMITTED_BINDING_ROW_PREFIX}{suffix}"))
+        .map_err(|_| BindingContractError::InvalidField)
 }
 
 /// The committed `VolumeBinding` row one admitted relationship mints.
 ///
-/// The row's desired bytes are the canonical request, so the durable record
-/// of the relationship is the declaration the consumer authored rather than
-/// a second description of it.  No host path, socket path, or writable-path
-/// grant is added: the destination is consumer-side and the source side is
-/// resolved privately from the admitted source and its named view.
+/// The row's desired bytes are the committed form of the relationship: the
+/// consumer's declaration plus the source provider's own accepted decision,
+/// which is the one encoding the manager's relation index, the authority
+/// rebuild, and the registered serving driver all read.  No host path, socket
+/// path, or writable-path grant is added: the destination is consumer-side
+/// and the source side is resolved privately from the admitted source and its
+/// named view.  A block-device attachment commits its device slot rather
+/// than a destination invented for it.
 ///
 /// # Errors
 ///
-/// Returns [`BindingContractError::InvalidField`] when the derived row name
-/// is not a bounded token.
+/// Returns [`BindingContractError::InvalidField`] when the admitted decision
+/// is not one the source contract admits, the derived row name is not a
+/// bounded token, or the row does not render as canonical bytes.
 pub fn canonical_binding_row(
     admitted: &AdmittedVolumeBinding,
 ) -> Result<BindingRow, BindingContractError> {
-    let spec = canonical_json_bytes(admitted.request())
-        .map_err(|_| BindingContractError::InvalidField)?;
+    let request = admitted.request();
+    let decision = BindingSourceDecision::new(
+        vec![admitted.admission().rights()],
+        admitted.admission().arbitration(),
+        admitted.realized_facets().to_vec(),
+    )
+    .map_err(|_| BindingContractError::InvalidField)?;
+    let row = VolumeBindingSpec::new(
+        request.source_ref().clone(),
+        request.consumer_ref().clone(),
+        request.view().as_str(),
+        request.access(),
+        request.presentation().clone(),
+        admitted.key().slot().as_str(),
+        decision,
+    )
+    .map_err(|_| BindingContractError::InvalidField)?;
     Ok(BindingRow {
         name: binding_row_name(admitted.key())?,
-        spec,
+        spec: canonical_json_bytes(&row).map_err(|_| BindingContractError::InvalidField)?,
     })
 }
 

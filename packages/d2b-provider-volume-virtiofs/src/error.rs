@@ -44,6 +44,12 @@ pub enum VirtiofsBindingError {
     /// The private socket path could not be derived from the binding's
     /// own identity and the broker runtime root it composes.
     ServingSocketPathUnresolved,
+    /// The committed row asks for a presentation this serving family cannot
+    /// realize. A block-device attachment is a representable relationship -
+    /// it commits its own device slot - but a virtiofs worker presents a
+    /// filesystem at a destination, so it refuses that row by name rather
+    /// than serving it at a destination invented for it.
+    PresentationUnsupported,
 }
 
 impl VirtiofsBindingError {
@@ -63,11 +69,12 @@ impl VirtiofsBindingError {
             Self::UnauthorizedWriter => "unauthorized-writer",
             Self::SourceKindUnsupported => "source-kind-unsupported",
             Self::ServingSocketPathUnresolved => "serving-socket-path-unresolved",
+            Self::PresentationUnsupported => "presentation-unsupported",
         }
     }
 
     /// The complete closed code set, for conformance assertions.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::InvalidBinding,
         Self::ViewNotFound,
         Self::ViewRightsInsufficient,
@@ -81,6 +88,7 @@ impl VirtiofsBindingError {
         Self::UnauthorizedWriter,
         Self::SourceKindUnsupported,
         Self::ServingSocketPathUnresolved,
+        Self::PresentationUnsupported,
     ];
 }
 

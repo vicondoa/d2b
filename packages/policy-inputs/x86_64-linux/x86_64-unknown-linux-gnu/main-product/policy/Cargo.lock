@@ -2054,6 +2054,8 @@ dependencies = [
  "d2b-provider-endpoint",
  "d2b-provider-process-minijail",
  "d2b-provider-toolkit",
+ "d2b-provider-volume",
+ "d2b-provider-volume-local",
  "d2b-provider-volume-virtiofs",
  "d2b-resource-runtime",
  "d2b-resource-types",

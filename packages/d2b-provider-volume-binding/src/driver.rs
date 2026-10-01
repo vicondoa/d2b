@@ -599,6 +599,20 @@ impl BindingDriver {
         view: &ViewSpec,
         op: DriverOp,
     ) -> Result<VirtiofsdWorkerPlan, BindingDriverError> {
+        // A committed row names the presentation it takes inside the
+        // consumer. This family realizes exactly one of them: a virtiofs
+        // worker presents the named view as a filesystem at a destination.
+        // A block-device attachment is a representable relationship - it
+        // commits its own device slot - but this family has no device
+        // realization for it, so the row is refused by name rather than
+        // served at a destination invented for it.
+        if binding.spec().presentation().destination().is_none() {
+            return Err(self.rejected(
+                ctx,
+                VirtiofsBindingError::PresentationUnsupported.code(),
+                op,
+            ));
+        }
         let principal = binding
             .worker_principal()
             .map_err(|reason| self.rejected(ctx, reason.code(), op))?;
@@ -1188,13 +1202,46 @@ mod tests {
     /// The exact VolumeBinding child spec envelope the Volume driver mints
     /// (neutral binding + serving Provider reference).
     fn binding_row(owner_uid: [u8; 16]) -> StoredDesiredResource {
+        binding_row_with("root", "/mnt/data", owner_uid)
+    }
+
+    /// The same row presented as a block device instead of a filesystem at a
+    /// destination: a representable committed relationship this family has no
+    /// realization for.
+    fn block_binding_row(owner_uid: [u8; 16]) -> StoredDesiredResource {
+        StoredDesiredResource {
+            spec: serde_json::json!({
+                "providerRef": "Provider/volume-virtiofs",
+                "volumeRef": "Volume/data",
+                "executionRef": "Guest/guest-a",
+                "view": "root",
+                "access": "read-only",
+                "presentation": { "presentation": "block-device", "deviceSlot": 1 },
+                "slot": "root",
+                "source": {
+                    "admittedRights": ["consume"],
+                    "arbitration": "shared",
+                    "realizedFacets": ["consumer-device-slot"],
+                },
+            })
+            .to_string()
+            .into_bytes(),
+            ..binding_row(owner_uid)
+        }
+    }
+
+    fn binding_row_with(view: &str, destination: &str, owner_uid: [u8; 16]) -> StoredDesiredResource {
         let binding_spec = serde_json::json!({
             "providerRef": "Provider/volume-virtiofs",
             "volumeRef": "Volume/data",
             "executionRef": "Guest/guest-a",
-            "view": "root",
+            "view": view,
             "access": "read-only",
-            "mountPath": "/mnt/data",
+            "presentation": {
+                "presentation": "filesystem",
+                "destination": destination,
+            },
+            "slot": view,
             "source": {
                 "admittedRights": ["consume"],
                 "arbitration": "shared",
@@ -1202,7 +1249,11 @@ mod tests {
             },
         });
         StoredDesiredResource {
-            key: ResourceKey::new("work", "VolumeBinding", "vol-binding-000000000000000000000000"),
+            key: ResourceKey::new(
+                "work",
+                "VolumeBinding",
+                "vol-admitted-000000000000000000000000",
+            ),
             uid: [0x42; 16],
             generation: 1,
             owner_uid: Some(owner_uid),
@@ -1750,6 +1801,46 @@ mod tests {
         );
     }
 
+
+    /// A block-device attachment is a committed relationship the row states in
+    /// its own presentation, and this family refuses it by name rather than
+    /// serving it at a destination invented for it.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_block_device_attachment_is_refused_by_name_and_never_given_a_destination() {
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log_handle());
+        let row = block_binding_row([0x42; 16]);
+        // The row is a committed, decodable VolumeBinding: the refusal is the
+        // presentation this family cannot realize, never an undecodable spec.
+        let decoded = serde_json::from_slice::<
+            d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec,
+        >(
+            &serde_json::from_slice::<d2b_contracts_resource::v3::ResourceSpec>(&row.spec)
+                .expect("binding envelope")
+                .base()
+                .to_canonical_bytes(),
+        )
+        .expect("a block presentation is a representable committed row");
+        assert_eq!(decoded.presentation().device_slot(), Some(1));
+        assert_eq!(decoded.presentation().destination(), None);
+
+        let mut f = fixture(row, manager.clone());
+        let mut d = driver(fake).await;
+
+        let failure = d.reconcile(&mut f.ctx).await.expect_err("terminal");
+        assert_eq!(failure.class(), FailureClass::Terminal);
+        assert!(matches!(
+            f.ctx.status::<BindingDriverStatus>(),
+            Some(BindingDriverStatus::Rejected {
+                reason: "presentation-unsupported"
+            })
+        ));
+        assert!(
+            manager.call_order().iter().all(|entry| !entry.starts_with("ensure:")),
+            "an unrealizable presentation mints no worker or endpoint child"
+        );
+    }
     // -- owner guard -----------------------------------------------------------
 
     /// Issue #511 at the parent-row read (`BindingDriver::parent_volume`): a

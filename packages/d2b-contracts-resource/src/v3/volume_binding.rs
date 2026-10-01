@@ -2,10 +2,17 @@
 //!
 //! One `VolumeBinding` is the durable neutral record of one Volume /
 //! execution-target / named-view relationship.  It is a standard unqualified
-//! core type: the Volume side mints it and owns the relationship, and
-//! `volume-virtiofs` only observes it and writes its fenced status
+//! core type: the Volume side mints it and owns the relationship, and the
+//! serving Provider only observes it and writes its fenced status
 //! projection.  The spec never carries a host path, socket path,
 //! shared-directory path, argv, or numeric identity.
+//!
+//! [`VolumeBindingSpec`] is the committed row's one encoding.  The manager's
+//! relation index, the source-side authority rebuild, and the registered
+//! serving driver all read these exact bytes, so a row can never be indexed
+//! as one relationship and served as another.  [`VolumeBindingRequest`] is
+//! the consumer-side declaration the source admits; the committed row is
+//! that declaration plus the source provider's own accepted decision.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -28,10 +35,15 @@ use d2b_contracts::wire_deserialize;
 /// Canonical standard VolumeBinding ResourceType.
 pub const VOLUME_BINDING_RESOURCE_TYPE: &str = "VolumeBinding";
 
-/// Maximum Guest-visible mount path length.
-pub const MAX_BINDING_MOUNT_PATH_BYTES: usize = 255;
-
 /// Strict base VolumeBinding specification.
+///
+/// The row names the source Volume, the consumer, the named Volume view it
+/// selects, the access level it was admitted at, the consumer-side
+/// presentation that view takes, the stable consumer slot the relationship
+/// occupies, and the source provider's accepted decision.  The presentation
+/// is what makes a block-device attachment a representable row rather than a
+/// filesystem destination invented for it, so the field is the closed
+/// [`VolumePresentation`] vocabulary and never a bare path.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct VolumeBindingSpec {
@@ -39,18 +51,26 @@ pub struct VolumeBindingSpec {
     execution_ref: ResourceRef,
     view: BoundedToken,
     access: AttachmentAccess,
-    mount_path: String,
+    presentation: VolumePresentation,
+    slot: BoundedToken,
     source: BindingSourceDecision,
 }
 
 impl VolumeBindingSpec {
     /// Construct a strict binding specification from typed references.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a source that is not a `Volume` (or a consumer this binding
+    /// kind does not deliver to), a presentation whose own fields are not
+    /// internally consistent, and a slot or view that is not a bounded token.
     pub fn new(
         volume_ref: ResourceRef,
         execution_ref: ResourceRef,
         view: impl Into<String>,
         access: AttachmentAccess,
-        mount_path: impl Into<String>,
+        presentation: VolumePresentation,
+        slot: impl Into<String>,
         source: BindingSourceDecision,
     ) -> Result<Self, PrimitiveSpecError> {
         // The consumer is whatever the binding kind admits, derived from the
@@ -64,17 +84,23 @@ impl VolumeBindingSpec {
             &execution_ref,
         )
         .map_err(|_| PrimitiveSpecError::WrongResourceType)?;
-        let view = BoundedToken::parse(view.into())?;
-        let mount_path = mount_path.into();
-        if !validate_mount_path(&mount_path) {
-            return Err(PrimitiveSpecError::InvalidPath);
-        }
+        // The presentation arrives as a typed value whose variants are public,
+        // so its own rule is enforced here rather than assumed: a row is
+        // never committed over a destination or device slot the closed
+        // vocabulary refuses.
+        presentation
+            .validate()
+            .map_err(|error| match error {
+                BindingContractError::OutOfRange => PrimitiveSpecError::OutOfRange,
+                _ => PrimitiveSpecError::InvalidPath,
+            })?;
         Ok(Self {
             volume_ref,
             execution_ref,
-            view,
+            view: BoundedToken::parse(view.into())?,
             access,
-            mount_path,
+            presentation,
+            slot: BoundedToken::parse(slot.into())?,
             source,
         })
     }
@@ -104,9 +130,14 @@ impl VolumeBindingSpec {
         self.access
     }
 
-    /// Borrow the Guest-visible mount path.
-    pub fn mount_path(&self) -> &str {
-        &self.mount_path
+    /// Borrow the consumer-side presentation this view takes.
+    pub const fn presentation(&self) -> &VolumePresentation {
+        &self.presentation
+    }
+
+    /// Borrow the stable consumer slot this attachment occupies.
+    pub const fn slot(&self) -> &BoundedToken {
+        &self.slot
     }
 
     /// Borrow the source provider's accepted decision for this relationship.
@@ -114,11 +145,31 @@ impl VolumeBindingSpec {
         &self.source
     }
 
+    /// The right this committed relationship asks the source for.
+    pub const fn requested_rights(&self) -> RequestedRights {
+        volume_access_rights(self.access)
+    }
+
+    /// The realization facets this committed presentation depends on.
+    pub const fn required_facets(&self) -> &'static [BindingRealizationFacet] {
+        self.presentation.required_facets()
+    }
+
+    /// The digest of this row's exact desired bytes.
+    pub fn fingerprint(&self) -> BindingSpecFingerprint {
+        BindingSpecFingerprint::from_request(self)
+    }
+
+    /// The KTD3 consumer slot this committed row occupies.
+    fn slot_key(&self) -> Result<BindingSlot, BindingContractError> {
+        BindingSlot::parse(self.slot.as_str()).map_err(|_| BindingContractError::InvalidCollection)
+    }
+
     /// Derive this committed relationship's KTD3 key from its identities.
     ///
     /// The same derivation the source-side request performs, over the row's own
-    /// committed references, so a boundary evaluating a committed row reaches
-    /// exactly the key the source admitted.
+    /// committed references and slot, so a boundary evaluating a committed row
+    /// reaches exactly the key the source admitted.
     pub fn key(
         &self,
         zone: ZoneId,
@@ -132,19 +183,31 @@ impl VolumeBindingSpec {
             source_uid,
             self.execution_ref.clone(),
             consumer_uid,
-            self.slot_for_key()?,
+            self.slot_key()?,
         )
     }
 
-    /// The consumer slot this attachment occupies: the named Volume view.
+    /// The consumer-side declaration this committed row carries.
     ///
-    /// A Volume binding has no separate slot field because the view already
-    /// identifies the attachment - it is what makes a rights or destination
-    /// update the same relationship rather than a second one.
-    fn slot_for_key(&self) -> Result<BindingSlot, BindingContractError> {
-        BindingSlot::parse(self.view.as_str()).map_err(|_| BindingContractError::InvalidCollection)
+    /// The row is that declaration plus the source provider's own accepted
+    /// decision, so a reader that wants the relationship rather than the
+    /// decision reads it back out of the same bytes instead of keeping a
+    /// second encoding of the relationship.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BindingContractError`] when the committed identities are not
+    /// one this binding family admits.
+    pub fn request(&self) -> Result<VolumeBindingRequest, BindingContractError> {
+        VolumeBindingRequest::new(
+            self.volume_ref.clone(),
+            self.execution_ref.clone(),
+            self.slot_key()?,
+            self.view.clone(),
+            self.access,
+            self.presentation.clone(),
+        )
     }
-
 
     /// Admit one binding create or update against its owner reference.
     ///
@@ -174,7 +237,8 @@ wire_deserialize!(
         execution_ref: ResourceRef,
         view: String,
         access: AttachmentAccess,
-        mount_path: String,
+        presentation: VolumePresentation,
+        slot: String,
         source: BindingSourceDecision,
     },
     wire,
@@ -183,7 +247,8 @@ wire_deserialize!(
         wire.execution_ref,
         wire.view,
         wire.access,
-        wire.mount_path,
+        wire.presentation,
+        wire.slot,
         wire.source,
     )
     .map_err(serde::de::Error::custom)
@@ -192,18 +257,15 @@ wire_deserialize!(
 // ---------------------------------------------------------------------------
 // The graph-era VolumeBinding request.
 //
-// The `VolumeBindingSpec` above is the existing production DTO: a Guest-only
-// durable record whose source is named by reference and whose destination is
-// a Guest-visible mount path. It stays exactly as it is until the production
-// cutover switches public schema exports; nothing below changes it.
-//
 // `VolumeBindingRequest` is the canonical desired request KTD2 places in the
 // consumer's own spec. It is the one authoritative declaration of one
 // Volume/view/consumer relationship: a Process mount, an EphemeralProcess
 // mount, and a Host or Guest attachment all normalize into this shape
 // instead of authoring a second list. It names the source Volume by exact
 // reference, never a raw host path, and it names the consumer by exact
-// reference, never a numerical principal.
+// reference, never a numerical principal. It is what the consumer authors;
+// the committed row above is what the source mints from it, so the two
+// carry the same relationship in the two roles it has.
 // ---------------------------------------------------------------------------
 
 /// The consumer-side presentation one admitted Volume view takes.
@@ -244,19 +306,40 @@ pub enum VolumePresentation {
 impl VolumePresentation {
     /// Construct a filesystem presentation after validating its destination.
     pub fn filesystem(destination: impl Into<String>) -> Result<Self, BindingContractError> {
-        let destination = destination.into();
-        if !validate_mount_path(&destination) {
-            return Err(BindingContractError::InvalidField);
-        }
-        Ok(Self::Filesystem { destination })
+        let presentation = Self::Filesystem { destination: destination.into() };
+        presentation.validate()?;
+        Ok(presentation)
     }
 
     /// Construct a block presentation after checking its slot bound.
-    pub const fn block_device(device_slot: u16) -> Result<Self, BindingContractError> {
-        if device_slot > MAX_CONSUMER_DEVICE_SLOT {
-            return Err(BindingContractError::OutOfRange);
+    pub fn block_device(device_slot: u16) -> Result<Self, BindingContractError> {
+        let presentation = Self::BlockDevice { device_slot };
+        presentation.validate()?;
+        Ok(presentation)
+    }
+
+    /// Whether this presentation's own fields are internally consistent.
+    ///
+    /// The variants are public, so a presentation built by field rather than
+    /// by constructor is still checked here: a committed row is never written
+    /// over a destination or device slot the closed vocabulary refuses.
+    pub fn validate(&self) -> Result<(), BindingContractError> {
+        match self {
+            Self::Filesystem { destination } => {
+                if validate_mount_path(destination) {
+                    Ok(())
+                } else {
+                    Err(BindingContractError::InvalidField)
+                }
+            }
+            Self::BlockDevice { device_slot } => {
+                if *device_slot > MAX_CONSUMER_DEVICE_SLOT {
+                    Err(BindingContractError::OutOfRange)
+                } else {
+                    Ok(())
+                }
+            }
         }
-        Ok(Self::BlockDevice { device_slot })
     }
 
     /// The realization facet this presentation requires.
@@ -563,7 +646,8 @@ mod tests {
             guest_ref(),
             "ro-store",
             AttachmentAccess::ReadOnly,
-            "/nix/.ro-store",
+            VolumePresentation::filesystem("/nix/.ro-store").expect("valid destination"),
+            "store",
             decision(),
         )
         .expect("valid fixture spec")
@@ -591,7 +675,11 @@ mod tests {
                 "executionRef": "Guest/work-vm",
                 "view": "ro-store",
                 "access": "read-only",
-                "mountPath": "/nix/.ro-store",
+                "presentation": {
+                    "presentation": "filesystem",
+                    "destination": "/nix/.ro-store",
+                },
+                "slot": "store",
                 "source": {
                     "admittedRights": ["observe"],
                     "arbitration": "shared",
@@ -602,6 +690,55 @@ mod tests {
         let parsed: VolumeBindingSpec =
             serde_json::from_value(value).expect("spec round trips");
         assert_eq!(parsed, spec());
+    }
+
+    /// The committed row is the declaration the consumer authored plus the
+    /// source provider's accepted decision, so reading it back as the
+    /// consumer's request must reproduce that declaration exactly.
+    #[test]
+    fn a_committed_row_reads_back_as_the_declaration_it_was_minted_from() {
+        let row = spec();
+        let request = row.request().expect("the row declares an admitted relationship");
+        assert_eq!(request.source_ref(), row.volume_ref());
+        assert_eq!(request.consumer_ref(), row.execution_ref());
+        assert_eq!(request.slot().as_str(), row.slot().as_str());
+        assert_eq!(request.view(), row.view());
+        assert_eq!(request.access(), row.access());
+        assert_eq!(request.presentation(), row.presentation());
+        assert_eq!(request.requested_rights(), row.requested_rights());
+        assert_eq!(request.required_facets(), row.required_facets());
+    }
+
+    /// A block-device attachment is a row with its own presentation, not a
+    /// filesystem destination invented for it: the committed row carries the
+    /// device slot and reads back with no destination at all.
+    #[test]
+    fn a_block_device_attachment_commits_its_device_slot_and_no_destination() {
+        let row = VolumeBindingSpec::new(
+            volume_ref(),
+            ResourceRef::parse("Process/worker").expect("valid fixture ref"),
+            "raw-store",
+            AttachmentAccess::ReadOnly,
+            VolumePresentation::block_device(1).expect("bounded device slot"),
+            "store",
+            decision(),
+        )
+        .expect("a block presentation is an admitted row");
+        assert_eq!(row.presentation().device_slot(), Some(1));
+        assert_eq!(row.presentation().destination(), None);
+        assert_eq!(row.requested_rights(), RequestedRights::Observe);
+        assert_eq!(row.required_facets(), &[BindingRealizationFacet::ConsumerDeviceSlot]);
+        let request = row.request().expect("the row declares an admitted relationship");
+        assert_eq!(request.presentation().device_slot(), Some(1));
+        assert_eq!(request.presentation().destination(), None);
+
+        let value = serde_json::to_value(&row).expect("spec serializes");
+        assert_eq!(
+            value["presentation"],
+            serde_json::json!({ "presentation": "block-device", "deviceSlot": 1 })
+        );
+        let parsed: VolumeBindingSpec = serde_json::from_value(value).expect("spec round trips");
+        assert_eq!(parsed, row);
     }
 
     #[test]
@@ -615,20 +752,35 @@ mod tests {
             guest_ref(),
             "ro-store",
             AttachmentAccess::ReadOnly,
-            "/nix/.ro-store",
+            VolumePresentation::filesystem("/nix/.ro-store").expect("valid destination"),
+            "store",
             decision(),
         );
         assert_eq!(wrong_volume.unwrap_err(), PrimitiveSpecError::WrongResourceType);
 
+        // The presentation is validated at the row boundary too, so a value
+        // built by field rather than by constructor cannot be committed.
         let invalid_path = VolumeBindingSpec::new(
             volume_ref(),
             guest_ref(),
             "ro-store",
             AttachmentAccess::ReadOnly,
-            "relative/path",
+            VolumePresentation::Filesystem { destination: "relative/path".to_owned() },
+            "store",
             decision(),
         );
         assert_eq!(invalid_path.unwrap_err(), PrimitiveSpecError::InvalidPath);
+
+        let invalid_slot = VolumeBindingSpec::new(
+            volume_ref(),
+            guest_ref(),
+            "ro-store",
+            AttachmentAccess::ReadOnly,
+            VolumePresentation::filesystem("/nix/.ro-store").expect("valid destination"),
+            "Not A Slot",
+            decision(),
+        );
+        assert_eq!(invalid_slot.unwrap_err(), PrimitiveSpecError::InvalidToken);
     }
 
     #[test]
