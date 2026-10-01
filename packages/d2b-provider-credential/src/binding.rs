@@ -462,7 +462,7 @@ pub fn admitted_delivery_row(
         return Err(CredentialBindingCommitRefusal::ConsumerNotScoped);
     }
     let derived = credential_binding_row_name(&decoded)
-        .map_err(|error| CredentialBindingCommitRefusal::RowContract(error))?;
+        .map_err(CredentialBindingCommitRefusal::RowContract)?;
     if derived.as_str() != row.name {
         return Err(CredentialBindingCommitRefusal::RowNameNotDerived);
     }

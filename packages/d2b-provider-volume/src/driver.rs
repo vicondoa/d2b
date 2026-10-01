@@ -1694,7 +1694,7 @@ mod tests {
     #[tokio::test]
     async fn an_admitted_relationship_commits_one_row_a_second_pass_does_not_duplicate() {
         let fake = RecordingRuntime::new();
-        fake.set_admitted(admitted_for_row());
+        fake.set_admitted(admitted_for_row()).await;
         let manager = RecordingManagerEndpoint::new();
         let mut f = fixture(test_row(&canonical_row_bytes()), manager.clone());
         let mut d = driver(fake.clone()).await;
@@ -1757,7 +1757,7 @@ mod tests {
     #[tokio::test]
     async fn a_relationship_the_admitted_set_no_longer_names_is_retired_with_its_owner() {
         let fake = RecordingRuntime::new();
-        fake.set_admitted(admitted_for_row());
+        fake.set_admitted(admitted_for_row()).await;
         let manager = RecordingManagerEndpoint::new();
         let mut f = fixture(test_row(&canonical_row_bytes()), manager.clone());
         let mut d = driver(fake.clone()).await;
@@ -1782,7 +1782,7 @@ mod tests {
             .row(&binding_key(&kept_name))
             .expect("the kept row is committed")
             .generation;
-        fake.set_admitted(vec![kept]);
+        fake.set_admitted(vec![kept]).await;
 
         let calls = manager.call_order().len();
         assert_eq!(d.reconcile(&mut f.ctx).await.expect("shrunk pass"), ReconcileOutcome::Satisfied);
@@ -1843,14 +1843,14 @@ mod tests {
         );
 
         // With evidence on the seam, the relationships commit.
-        fake.set_admitted(admitted_for_row());
+        fake.set_admitted(admitted_for_row()).await;
         assert_eq!(d.reconcile(&mut f.ctx).await.expect("evidenced pass"), ReconcileOutcome::Satisfied);
         let committed = generations(&committed_bindings(&manager));
         assert_eq!(committed.len(), 2);
 
         // Losing the evidence is not evidence that a relationship ended: the
         // pass commits nothing new and retires nothing.
-        fake.withdraw_evidence();
+        fake.withdraw_evidence().await;
         assert_eq!(d.reconcile(&mut f.ctx).await.expect("unevidenced pass"), ReconcileOutcome::Satisfied);
         assert_eq!(
             generations(&committed_bindings(&manager)),
@@ -1868,7 +1868,7 @@ mod tests {
     async fn a_relationship_naming_another_source_is_refused_instead_of_committed_here() {
         let fake = RecordingRuntime::new();
         // The seam answers for a relationship this row is not the source of.
-        fake.set_admitted(admitted_set());
+        fake.set_admitted(admitted_set()).await;
         let manager = RecordingManagerEndpoint::new();
         let mut f = fixture(test_row(&canonical_row_bytes()), manager.clone());
         let mut d = driver(fake.clone()).await;

@@ -83,7 +83,7 @@ pub struct RecordingRuntime {
     /// (`reconcile_volume` returns `Ok(false)`).
     pub degraded: AtomicBool,
     /// The admitted canonical relationships `admit_bindings` answers with.
-    admitted: Mutex<Vec<AdmittedVolumeBinding>>,
+    admitted: tokio::sync::Mutex<Vec<AdmittedVolumeBinding>>,
     /// Whether the seam carries admission evidence at all. Off, the seam
     /// refuses and names the absent facts; on, it answers with `admitted`,
     /// which may legitimately be empty.
@@ -100,7 +100,7 @@ impl RecordingRuntime {
             calls: Mutex::new(Vec::new()),
             ready: AtomicBool::new(false),
             degraded: AtomicBool::new(false),
-            admitted: Mutex::new(Vec::new()),
+            admitted: tokio::sync::Mutex::new(Vec::new()),
             evidence: AtomicBool::new(false),
             admission_passes: AtomicUsize::new(0),
         })
@@ -117,11 +117,8 @@ impl RecordingRuntime {
     /// (U14). The seam now carries the evidence the driver's pass needs, and
     /// an empty set is a real admission of nothing - not an absence.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    pub fn set_admitted(&self, admitted: Vec<AdmittedVolumeBinding>) {
-        *self
-            .admitted
-            .lock()
-            .expect("a test-support recorder lock is never poisoned") = admitted;
+    pub async fn set_admitted(&self, admitted: Vec<AdmittedVolumeBinding>) {
+        *self.admitted.lock().await = admitted;
         self.evidence.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
@@ -129,11 +126,8 @@ impl RecordingRuntime {
     /// facts it does not carry, so the driver commits no canonical row and
     /// retires none.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    pub fn withdraw_evidence(&self) {
-        *self
-            .admitted
-            .lock()
-            .expect("a test-support recorder lock is never poisoned") = Vec::new();
+    pub async fn withdraw_evidence(&self) {
+        *self.admitted.lock().await = Vec::new();
         self.evidence.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
@@ -215,10 +209,6 @@ impl VolumeRuntime for RecordingRuntime {
                 BindingAdmissionEvidence::FreshnessFence,
             ]));
         }
-        Ok(self
-            .admitted
-            .lock()
-            .expect("a test-support recorder lock is never poisoned")
-            .clone())
+        Ok(self.admitted.lock().await.clone())
     }
 }
