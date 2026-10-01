@@ -311,7 +311,6 @@ filegroup(
         "//packages/d2b-provider-process-systemd:cargo_workspace_sources",
         "//packages/d2b-provider-toolkit:cargo_workspace_sources",
         "//packages/d2b-provider-transport-azure-relay:cargo_workspace_sources",
-        "//packages/d2b-provider-transport-unix:cargo_workspace_sources",
         "//packages/d2b-provider-transport-vsock:cargo_workspace_sources",
         "//packages/d2b-provider-volume-local:cargo_workspace_sources",
         "//packages/d2b-provider-volume-virtiofs:cargo_workspace_sources",
@@ -423,7 +422,6 @@ filegroup(
         "//packages/d2b-provider-test-controller:BUILD.bazel",
         "//packages/d2b-provider-toolkit:BUILD.bazel",
         "//packages/d2b-provider-transport-azure-relay:BUILD.bazel",
-        "//packages/d2b-provider-transport-unix:BUILD.bazel",
         "//packages/d2b-provider-transport-vsock:BUILD.bazel",
         "//packages/d2b-provider-user:BUILD.bazel",
         "//packages/d2b-provider-volume-binding:BUILD.bazel",
@@ -626,8 +624,6 @@ filegroup(
     ]),
     visibility = ["//visibility:public"],
 )
-
-# keep
 filegroup(
     name = "github_workspace_sources",
     srcs = glob(
