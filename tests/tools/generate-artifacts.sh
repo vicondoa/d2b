@@ -27,6 +27,14 @@ for command in "$@"; do
   if [[ "$command" == gen-package-policy-inputs ]]; then
     args+=(--write)
   fi
+  # The provider-crate layout check is the generator for the committed
+  # type-authority tables (the Nix resource-type registry, the provider
+  # registration table, the process-role projections). Regenerating them
+  # anywhere but here would make `make generate` incomplete and leave the
+  # committed artifacts stale against the per-crate declarations.
+  if [[ "$command" == check-provider-crate-layout ]]; then
+    args+=(--fix)
+  fi
   printf 'generate: %s\n' "$command"
   (cd "$repo_root" && D2B_REPO_ROOT="$repo_root" "$xtask" "${args[@]}")
 done

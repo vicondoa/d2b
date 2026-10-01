@@ -18,6 +18,10 @@ GENERATED_ARTIFACT_COMMANDS = [
     "gen-daemon-api",
     "gen-broker-operations",
     "gen-package-policy-inputs",
+    # Regenerates the committed type-authority tables from the per-crate
+    # `resource-types.json` declarations. Last, so it reads every schema the
+    # generators above just emitted.
+    "check-provider-crate-layout",
 ]
 
 def generated_artifact_check(name, command, data, env_inherit = [], tags = []):

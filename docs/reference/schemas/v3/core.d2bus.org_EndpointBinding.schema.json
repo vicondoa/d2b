@@ -1,17 +1,8 @@
 {
-  "$id": "https://d2bus.org/schemas/v3/core.d2bus.org_VolumeBinding.schema.json",
+  "$id": "https://d2bus.org/schemas/v3/core.d2bus.org_EndpointBinding.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "definitions": {
-    "AttachmentAccess": {
-      "description": "Access level of one Volume attachment.",
-      "enum": [
-        "read-only",
-        "read-write",
-        "shared-write"
-      ],
-      "type": "string"
-    },
     "BindingArbitration": {
       "description": "How the source arbitrates one admitted relationship.",
       "oneOf": [
@@ -124,6 +115,32 @@
       "minLength": 1,
       "type": "string"
     },
+    "EndpointAttachmentKind": {
+      "description": "How one consumer reaches the exact endpoint.",
+      "oneOf": [
+        {
+          "description": "The consumer opens the endpoint as a client.",
+          "enum": [
+            "connect"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The consumer accepts on the endpoint as a server.",
+          "enum": [
+            "listen"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The consumer attaches to the endpoint's device or stream.",
+          "enum": [
+            "attach"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "RequestedRights": {
       "description": "The right one request asks for.\n\nThis is the shared requested-rights vocabulary. Each kind admits only the subset its own semantics define, so a device claim, a storage writer, a network membership, and a credential delivery cannot be exchanged for one another by spelling a different variant.",
       "oneOf": [
@@ -183,7 +200,7 @@
       "x-d2b-reference-scope": "same-zone"
     }
   },
-  "description": "Durable neutral Volume view attachment to one execution target.",
+  "description": "Durable exact-endpoint delivery binding to one execution target.",
   "properties": {
     "apiVersion": {
       "const": "resources.d2bus.org/v3"
@@ -232,18 +249,20 @@
     },
     "spec": {
       "additionalProperties": false,
-      "description": "Strict base VolumeBinding specification.",
+      "description": "Strict base EndpointBinding specification.\n\nAn EndpointBinding row delivers exactly one named endpoint to one consumer. The consumer is whatever the kind admits - `Guest`, `Process`, or `EphemeralProcess`, never `Host`, because a provider's host-side delivery is an admitted realization leg of the binding whose consumer is that helper, not a binding whose consumer is the Host.\n\nThe row carries no purpose: the endpoint's own spec carries it and the admission path never reads it off the request, so a row that restated it would let the two drift.",
       "properties": {
-        "access": {
-          "$ref": "#/definitions/AttachmentAccess"
+        "attachment": {
+          "$ref": "#/definitions/EndpointAttachmentKind"
+        },
+        "endpointRef": {
+          "$ref": "#/definitions/ResourceRef",
+          "x-d2b-reference-kind": "ResourceRef",
+          "x-d2b-reference-scope": "same-zone"
         },
         "executionRef": {
           "$ref": "#/definitions/ResourceRef",
           "x-d2b-reference-kind": "ResourceRef",
           "x-d2b-reference-scope": "same-zone"
-        },
-        "mountPath": {
-          "type": "string"
         },
         "providerRef": {
           "pattern": "^Provider/[a-z][a-z0-9-]{0,62}$",
@@ -253,6 +272,9 @@
           ],
           "x-d2b-reference-kind": "ResourceRef",
           "x-d2b-reference-scope": "same-zone"
+        },
+        "slot": {
+          "$ref": "#/definitions/BoundedToken"
         },
         "source": {
           "$ref": "#/definitions/BindingSourceDecision"
@@ -271,29 +293,20 @@
           },
           "required": [],
           "type": "object"
-        },
-        "view": {
-          "$ref": "#/definitions/BoundedToken"
-        },
-        "volumeRef": {
-          "$ref": "#/definitions/ResourceRef",
-          "x-d2b-reference-kind": "ResourceRef",
-          "x-d2b-reference-scope": "same-zone"
         }
       },
       "required": [
-        "access",
+        "attachment",
+        "endpointRef",
         "executionRef",
-        "mountPath",
-        "source",
-        "view",
-        "volumeRef"
+        "slot",
+        "source"
       ],
-      "title": "VolumeBindingSpec",
+      "title": "EndpointBindingSpec",
       "type": "object"
     },
     "type": {
-      "const": "VolumeBinding"
+      "const": "EndpointBinding"
     }
   },
   "required": [
@@ -302,7 +315,7 @@
     "spec",
     "type"
   ],
-  "title": "VolumeBinding",
+  "title": "EndpointBinding",
   "type": "object",
-  "x-d2b-resource-type": "VolumeBinding"
+  "x-d2b-resource-type": "EndpointBinding"
 }

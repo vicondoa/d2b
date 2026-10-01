@@ -1382,6 +1382,18 @@ pub enum BrokerResponse {
     /// shape so the audit pipeline and daemon-side error propagation
     /// stay shape-compatible across the dispatcher transition.
     Error(BrokerErrorResponse),
+    /// The broker's answer to one `admittedEffect` invocation.
+    ///
+    /// A frame refused AT the carrier - a retired variant, a frame that is not
+    /// the carrier, or a frame carrying an authority-bearing field - is not an
+    /// `AdmittedEffectResponse`: it never decoded, so it has no invocation id
+    /// and no idempotency key to answer with. That refusal stays
+    /// [`BrokerResponse::Error`] carrying the boundary's own closed code.
+    ///
+    /// An invocation that DID decode is answered here, with either a result
+    /// and its descriptors or a refusal, so a caller can join the reply to the
+    /// audit record and a retry to the recorded outcome.
+    AdmittedEffect(AdmittedEffectResponse),
     ExportBrokerAudit(ExportBrokerAuditResponse),
     /// Daemon ↔ broker handshake confirmation response. Returned in
     /// reply to a `BrokerRequest::Hello` so the daemon can
@@ -4119,6 +4131,24 @@ pub struct AuthorityProjectionRow {
     /// below is taken over `to_canonical_bytes()`, so the receipt side
     /// validates the bytes as canonical instead of trusting the transport.
     pub admitted: CanonicalJsonObject,
+    /// The resolved identity of the capability this row binds, when the row
+    /// is a binding relationship.
+    ///
+    /// A binding key is over committed identity, not over references: a rename
+    /// must not produce a second relationship. The row deliberately does not
+    /// repeat these two uids, so this is IDENTITY and not a second copy of the
+    /// manager's desired store (KTD7).
+    ///
+    /// The manager is the party that resolved them, and it resolves them once.
+    /// A row published without them carries no key, contributes no accepted
+    /// source, and therefore refuses - which is the correct answer for an
+    /// absence and not for a committed relationship.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_uid: Option<ResourceUid>,
+    /// The resolved identity of the consumer this row binds, when the row is a
+    /// binding relationship. See [`Self::source_uid`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consumer_uid: Option<ResourceUid>,
 }
 
 /// The full document one bounded snapshot transfers.

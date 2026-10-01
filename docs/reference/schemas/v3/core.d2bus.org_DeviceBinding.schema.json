@@ -1,17 +1,8 @@
 {
-  "$id": "https://d2bus.org/schemas/v3/core.d2bus.org_VolumeBinding.schema.json",
+  "$id": "https://d2bus.org/schemas/v3/core.d2bus.org_DeviceBinding.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "definitions": {
-    "AttachmentAccess": {
-      "description": "Access level of one Volume attachment.",
-      "enum": [
-        "read-only",
-        "read-write",
-        "shared-write"
-      ],
-      "type": "string"
-    },
     "BindingArbitration": {
       "description": "How the source arbitrates one admitted relationship.",
       "oneOf": [
@@ -124,6 +115,33 @@
       "minLength": 1,
       "type": "string"
     },
+    "DeviceClaimRequest": {
+      "description": "How one consumer claims the device capability.",
+      "oneOf": [
+        {
+          "description": "The consumer shares the capability with its peers.",
+          "enum": [
+            "shared"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The consumer holds the capability alone until it releases.",
+          "enum": [
+            "exclusive"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "DeviceFunction": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/BoundedToken"
+        }
+      ],
+      "description": "The named function one device claim covers.\n\nThe Device provider resolves the name against its trusted inventory; this contract never carries the physical identity, a device node path, or a host permission bit that could be widened later."
+    },
     "RequestedRights": {
       "description": "The right one request asks for.\n\nThis is the shared requested-rights vocabulary. Each kind admits only the subset its own semantics define, so a device claim, a storage writer, a network membership, and a credential delivery cannot be exchanged for one another by spelling a different variant.",
       "oneOf": [
@@ -183,7 +201,7 @@
       "x-d2b-reference-scope": "same-zone"
     }
   },
-  "description": "Durable neutral Volume view attachment to one execution target.",
+  "description": "Durable device function attachment binding to one execution target.",
   "properties": {
     "apiVersion": {
       "const": "resources.d2bus.org/v3"
@@ -232,18 +250,23 @@
     },
     "spec": {
       "additionalProperties": false,
-      "description": "Strict base VolumeBinding specification.",
+      "description": "Strict base DeviceBinding specification.\n\nA DeviceBinding row is the committed attachment of one named device function to one consumer. The `function` is part of the row rather than implied by the device: [`DeviceInventory::entry`] is keyed by the function alone, so a row that did not name one would be a claim on \"some function of this device\" - precisely the template-shaped grant this contract removes. The consumer is whatever the kind admits, not a fixed `Guest`.",
       "properties": {
-        "access": {
-          "$ref": "#/definitions/AttachmentAccess"
+        "claim": {
+          "$ref": "#/definitions/DeviceClaimRequest"
+        },
+        "deviceRef": {
+          "$ref": "#/definitions/ResourceRef",
+          "x-d2b-reference-kind": "ResourceRef",
+          "x-d2b-reference-scope": "same-zone"
         },
         "executionRef": {
           "$ref": "#/definitions/ResourceRef",
           "x-d2b-reference-kind": "ResourceRef",
           "x-d2b-reference-scope": "same-zone"
         },
-        "mountPath": {
-          "type": "string"
+        "function": {
+          "$ref": "#/definitions/DeviceFunction"
         },
         "providerRef": {
           "pattern": "^Provider/[a-z][a-z0-9-]{0,62}$",
@@ -253,6 +276,9 @@
           ],
           "x-d2b-reference-kind": "ResourceRef",
           "x-d2b-reference-scope": "same-zone"
+        },
+        "slot": {
+          "$ref": "#/definitions/BoundedToken"
         },
         "source": {
           "$ref": "#/definitions/BindingSourceDecision"
@@ -271,29 +297,21 @@
           },
           "required": [],
           "type": "object"
-        },
-        "view": {
-          "$ref": "#/definitions/BoundedToken"
-        },
-        "volumeRef": {
-          "$ref": "#/definitions/ResourceRef",
-          "x-d2b-reference-kind": "ResourceRef",
-          "x-d2b-reference-scope": "same-zone"
         }
       },
       "required": [
-        "access",
+        "claim",
+        "deviceRef",
         "executionRef",
-        "mountPath",
-        "source",
-        "view",
-        "volumeRef"
+        "function",
+        "slot",
+        "source"
       ],
-      "title": "VolumeBindingSpec",
+      "title": "DeviceBindingSpec",
       "type": "object"
     },
     "type": {
-      "const": "VolumeBinding"
+      "const": "DeviceBinding"
     }
   },
   "required": [
@@ -302,7 +320,7 @@
     "spec",
     "type"
   ],
-  "title": "VolumeBinding",
+  "title": "DeviceBinding",
   "type": "object",
-  "x-d2b-resource-type": "VolumeBinding"
+  "x-d2b-resource-type": "DeviceBinding"
 }

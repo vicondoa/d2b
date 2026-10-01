@@ -1,17 +1,8 @@
 {
-  "$id": "https://d2bus.org/schemas/v3/core.d2bus.org_VolumeBinding.schema.json",
+  "$id": "https://d2bus.org/schemas/v3/core.d2bus.org_NetworkBinding.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "definitions": {
-    "AttachmentAccess": {
-      "description": "Access level of one Volume attachment.",
-      "enum": [
-        "read-only",
-        "read-write",
-        "shared-write"
-      ],
-      "type": "string"
-    },
     "BindingArbitration": {
       "description": "How the source arbitrates one admitted relationship.",
       "oneOf": [
@@ -124,6 +115,52 @@
       "minLength": 1,
       "type": "string"
     },
+    "NetworkPresentation": {
+      "description": "How one consumer's membership reaches it.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "An interface with the requested name inside the consumer's own network namespace.",
+          "properties": {
+            "name": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/BoundedToken"
+                }
+              ],
+              "description": "The requested interface name inside the consumer."
+            },
+            "presentation": {
+              "enum": [
+                "namespace-interface"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "presentation"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Membership through the provider-owned shared fabric realization.",
+          "properties": {
+            "presentation": {
+              "enum": [
+                "shared-fabric"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "presentation"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "RequestedRights": {
       "description": "The right one request asks for.\n\nThis is the shared requested-rights vocabulary. Each kind admits only the subset its own semantics define, so a device claim, a storage writer, a network membership, and a credential delivery cannot be exchanged for one another by spelling a different variant.",
       "oneOf": [
@@ -183,7 +220,7 @@
       "x-d2b-reference-scope": "same-zone"
     }
   },
-  "description": "Durable neutral Volume view attachment to one execution target.",
+  "description": "Durable network fabric membership binding to one execution target.",
   "properties": {
     "apiVersion": {
       "const": "resources.d2bus.org/v3"
@@ -232,18 +269,20 @@
     },
     "spec": {
       "additionalProperties": false,
-      "description": "Strict base VolumeBinding specification.",
+      "description": "Strict base NetworkBinding specification.\n\nA NetworkBinding row is one consumer's membership in a shared fabric. It carries no ports, egress rules, or other per-consumer traffic policy: the firewall is the Network's single ownership slot, so a second per-consumer ruleset here would fork that authority. The membership policy is the source provider's admitted state and is resolved against the row, never restated by it.\n\nThe consumer is whatever the kind admits, which includes `Host`: a host consuming a fabric as its own parent is a distinct, live case.",
       "properties": {
-        "access": {
-          "$ref": "#/definitions/AttachmentAccess"
-        },
         "executionRef": {
           "$ref": "#/definitions/ResourceRef",
           "x-d2b-reference-kind": "ResourceRef",
           "x-d2b-reference-scope": "same-zone"
         },
-        "mountPath": {
-          "type": "string"
+        "networkRef": {
+          "$ref": "#/definitions/ResourceRef",
+          "x-d2b-reference-kind": "ResourceRef",
+          "x-d2b-reference-scope": "same-zone"
+        },
+        "presentation": {
+          "$ref": "#/definitions/NetworkPresentation"
         },
         "providerRef": {
           "pattern": "^Provider/[a-z][a-z0-9-]{0,62}$",
@@ -271,29 +310,19 @@
           },
           "required": [],
           "type": "object"
-        },
-        "view": {
-          "$ref": "#/definitions/BoundedToken"
-        },
-        "volumeRef": {
-          "$ref": "#/definitions/ResourceRef",
-          "x-d2b-reference-kind": "ResourceRef",
-          "x-d2b-reference-scope": "same-zone"
         }
       },
       "required": [
-        "access",
         "executionRef",
-        "mountPath",
-        "source",
-        "view",
-        "volumeRef"
+        "networkRef",
+        "presentation",
+        "source"
       ],
-      "title": "VolumeBindingSpec",
+      "title": "NetworkBindingSpec",
       "type": "object"
     },
     "type": {
-      "const": "VolumeBinding"
+      "const": "NetworkBinding"
     }
   },
   "required": [
@@ -302,7 +331,7 @@
     "spec",
     "type"
   ],
-  "title": "VolumeBinding",
+  "title": "NetworkBinding",
   "type": "object",
-  "x-d2b-resource-type": "VolumeBinding"
+  "x-d2b-resource-type": "NetworkBinding"
 }
