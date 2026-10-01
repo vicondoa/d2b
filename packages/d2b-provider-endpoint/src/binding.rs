@@ -288,6 +288,9 @@ fn contract_reason(error: BindingContractError) -> RefusalReason {
             RefusalReason::ConflictingDeclaration
         }
         BindingContractError::WrongConsumer => RefusalReason::IdentityNotAuthorized,
+        // This row contract cannot carry the presentation the source declared,
+        // so the source policy refuses it rather than the runtime guessing.
+        BindingContractError::UnsupportedPresentation => RefusalReason::SourcePolicyRefused,
     }
 }
 

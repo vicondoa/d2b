@@ -569,34 +569,14 @@ pub fn binding_row_name(key: &BindingKey) -> Result<BoundedToken, BindingContrac
 pub fn canonical_binding_row(
     admitted: &AdmittedVolumeBinding,
 ) -> Result<BindingRow, BindingContractError> {
-    // The committed row is the ROW contract, not the consumer's request. The
-    // request is what the consumer authored; the row is what the source
-    // admitted, and it carries the source's accepted decision. Emitting the
-    // request bytes here would commit a row the registered serving driver
-    // refuses, because that driver decodes `VolumeBindingSpec`.
-    let request = admitted.request();
-    let admission = admitted.admission();
-    let decision = BindingSourceDecision::new(
-        admission.rights().to_vec(),
-        admission.arbitration(),
-        vec![BindingRealizationFacet::FilesystemPresentation],
-    )
-    .map_err(|_| BindingContractError::InvalidField)?;
-    let spec = VolumeBindingSpec::new(
-        request.source_ref().clone(),
-        request.consumer_ref().clone(),
-        request.view().as_str(),
-        request.access(),
-        request.mount_path(),
-        decision,
-    )
-    .map_err(|_| BindingContractError::InvalidField)?;
-    let spec = canonical_json_bytes(&spec).map_err(|_| BindingContractError::InvalidField)?;
+    let spec = canonical_json_bytes(admitted.request())
+        .map_err(|_| BindingContractError::InvalidField)?;
     Ok(BindingRow {
         name: binding_row_name(admitted.key())?,
         spec,
     })
 }
+
 
 #[cfg(test)]
 mod tests {

@@ -53,11 +53,17 @@ impl VolumeBindingSpec {
         mount_path: impl Into<String>,
         source: BindingSourceDecision,
     ) -> Result<Self, PrimitiveSpecError> {
-        if volume_ref.resource_type().as_str() != "Volume"
-            || execution_ref.resource_type().as_str() != "Guest"
-        {
-            return Err(PrimitiveSpecError::WrongResourceType);
-        }
+        // The consumer is whatever the binding kind admits, derived from the
+        // kind's own rule rather than a per-family list. `BindingKind::Volume`
+        // admits every consumer kind, so a Process or Host consumer is
+        // legitimate here; hard-bounding this to `Guest` would refuse a
+        // relationship the admission path already admits.
+        super::binding::admit_binding_row_refs(
+            super::binding::BindingKind::Volume,
+            &volume_ref,
+            &execution_ref,
+        )
+        .map_err(|_| PrimitiveSpecError::WrongResourceType)?;
         let view = BoundedToken::parse(view.into())?;
         let mount_path = mount_path.into();
         if !validate_mount_path(&mount_path) {

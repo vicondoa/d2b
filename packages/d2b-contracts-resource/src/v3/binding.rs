@@ -83,6 +83,11 @@ pub enum BindingContractError {
     SourceMismatch,
     /// A parent's default was applied to a different consumer.
     WrongConsumer,
+    /// The presentation this row contract cannot carry: the committed
+    /// VolumeBinding row models a filesystem presentation, so a block-device
+    /// delivery has no row here rather than a row with an invented path.
+    UnsupportedPresentation,
+
 }
 
 impl core::fmt::Display for BindingContractError {
@@ -99,6 +104,9 @@ impl core::fmt::Display for BindingContractError {
             Self::SlotOccupied => f.write_str("a different declaration occupies the live slot"),
             Self::SourceMismatch => f.write_str("request names a different source than the slot occupant"),
             Self::WrongConsumer => f.write_str("default applies to a different consumer"),
+            Self::UnsupportedPresentation => {
+                f.write_str("presentation is not one this row contract carries")
+            }
         }
     }
 }
