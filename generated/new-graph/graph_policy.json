@@ -1647,6 +1647,15 @@
     "methods": []
   },
   {
+    "providerRef": "Provider/transport-vsock",
+    "crate": "d2b-provider-transport-vsock",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
     "providerRef": "Provider/user",
     "crate": "d2b-provider-user",
     "effectServices": [
