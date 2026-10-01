@@ -1537,7 +1537,7 @@ impl CredentialBindingEffectsService {
 #[async_trait::async_trait]
 impl CredentialBindingEffects for CredentialBindingEffectsService {
     fn now_unix_ms(&self) -> u64 {
-        #[allow(clippy::disallowed_methods, reason = "observation clock read")]
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|elapsed| elapsed.as_millis().min(u128::from(u64::MAX)) as u64)

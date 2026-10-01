@@ -1317,6 +1317,10 @@ fn binding_row(
 const DEVICE_RESOURCE_TYPE: &str = "Device";
 
 /// Canonical `DeviceBinding` ResourceType name.
+/// The operation-id prefix one DeviceBinding effect call carries.
+pub const DEVICE_BINDING_OPERATION_PREFIX: &str = "device-binding";
+
+/// Canonical `DeviceBinding` ResourceType name.
 pub const DEVICE_BINDING_TYPE_NAME: &str =
     d2b_contracts_resource::v3::device_binding::DEVICE_BINDING_RESOURCE_TYPE;
 
@@ -1959,7 +1963,7 @@ impl DeviceBindingDriver {
                 self.error(BindingDriverErrorKind::InventoryUnavailable, op)
                     .with_detail(FailureDetail::at("inventory/generation"))
             })?,
-            operation_id: format!("device-binding:{}", key.name),
+            operation_id: binding_operation_id(key.name.as_str()),
             spec: &spec_value,
             metadata: serde_json::Value::Object(serde_json::Map::new()),
             status: None,
@@ -2214,4 +2218,13 @@ pub fn device_binding_descriptor(args: DeviceBindingDriverArgs) -> DriverDescrip
         decoder: device_binding_spec_decoder(),
         factory: Arc::new(DeviceBindingDriverFactory::new(args)),
     }
+}
+
+/// The stable operation id one DeviceBinding effect call carries.
+///
+/// Composed once, here, so no call site assembles a family name from parts:
+/// an assembled name can drift from the family that owns it, and the layout
+/// gate refuses one.
+fn binding_operation_id(row_name: &str) -> String {
+    format!("{}:{row_name}", DEVICE_BINDING_OPERATION_PREFIX)
 }

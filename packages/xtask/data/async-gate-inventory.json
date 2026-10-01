@@ -433,52 +433,32 @@
     },
     {
       "file": "packages/d2b-provider-endpoint/src/test_support.rs",
+      "line": 73,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2b-provider-endpoint/src/test_support.rs",
       "line": 78,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-endpoint/src/test_support.rs",
-      "line": 83,
+      "line": 84,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-endpoint/src/test_support.rs",
-      "line": 89,
+      "line": 123,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-endpoint/src/test_support.rs",
-      "line": 128,
+      "line": 132,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-endpoint/src/test_support.rs",
-      "line": 137,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2b-provider-endpoint/src/test_support.rs",
-      "line": 147,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2b-provider-endpoint/src/test_support.rs",
-      "line": 256,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2b-provider-endpoint/src/test_support.rs",
-      "line": 273,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2b-provider-endpoint/src/test_support.rs",
-      "line": 289,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2b-provider-endpoint/src/test_support.rs",
-      "line": 306,
+      "line": 142,
       "reason": "test-support recorder lock"
     },
     {
@@ -908,7 +888,7 @@
     },
     {
       "file": "packages/d2bd/src/resource_plane_v3.rs",
-      "line": 6927,
+      "line": 6949,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {

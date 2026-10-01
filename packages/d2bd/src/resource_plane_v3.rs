@@ -3147,11 +3147,23 @@ impl ResourcePlaneV3 {
                 controller_generation: inputs.authority.controller_generation,
                 facets: inputs.security_key_facets.clone(),
             })),
-            "device" => vec![device_descriptor(DeviceDriverArgs {
-                zone: inputs.zone.clone(),
-                controller_generation: inputs.authority.controller_generation,
-                facets: inputs.device_facets.clone(),
-            })],
+            "device" => vec![
+                device_descriptor(DeviceDriverArgs {
+                    zone: inputs.zone.clone(),
+                    controller_generation: inputs.authority.controller_generation,
+                    facets: inputs.device_facets.clone(),
+                }),
+                // The DeviceBinding row type this family also serves (U16):
+                // built from the same daemon-supplied facet set, so the row
+                // and its parent are driven through one set (R2).
+                d2b_provider_device::device_binding_descriptor(
+                    d2b_provider_device::DeviceBindingDriverArgs {
+                        zone: inputs.zone.clone(),
+                        controller_generation: inputs.authority.controller_generation,
+                        facets: inputs.device_facets.clone(),
+                    },
+                ),
+            ],
             // The VolumeBinding family (U6): the driver builds its effects
             // from the daemon-supplied facet set; no externally built port
             // appears at this construction site (R2).
@@ -3170,11 +3182,21 @@ impl ResourcePlaneV3 {
             // The Credential family (U8): the driver builds its effects from
             // the daemon-supplied facet set; no externally built port
             // appears at this construction site (R2).
-            "credential" => vec![credential_descriptor(CredentialDriverArgs {
-                zone: inputs.zone.clone(),
-                controller_generation: inputs.authority.controller_generation,
-                facets: inputs.credential_facets.clone(),
-            })],
+            "credential" => vec![
+                // The CredentialBinding row type this family also serves (U37).
+                d2b_provider_credential::credential_binding_descriptor(
+                    d2b_provider_credential::CredentialBindingDriverArgs {
+                        zone: inputs.zone.clone(),
+                        controller_generation: inputs.authority.controller_generation,
+                        facets: inputs.credential_facets.clone(),
+                    },
+                ),
+                credential_descriptor(CredentialDriverArgs {
+                    zone: inputs.zone.clone(),
+                    controller_generation: inputs.authority.controller_generation,
+                    facets: inputs.credential_facets.clone(),
+                }),
+            ],
             // The Volume family (U7): the driver builds its effects from the
             // declared facets; no externally built port appears here (R2).
             "volume" => vec![volume_descriptor(VolumeDriverArgs {

@@ -28,7 +28,9 @@ mod driver;
 mod effects_service;
 mod facets;
 
+
 #[cfg(any(test, feature = "test-support"))]
+/// Recording doubles shared with downstream crates unit tests.
 pub mod test_support;
 
 pub use driver::{
@@ -42,27 +44,19 @@ pub use effects_service::{
     device_worker_endpoint_class, device_worker_purpose, guest_control_producer,
     guest_control_purpose,
 };
+pub use facets::{DeviceWorkerEvidenceSource, EndpointEffectFacets, EndpointSocketSource, GuestVmmEvidenceSource};
 
 pub use binding::{
-    AdmittedEndpointBinding, BindingDriverError, BindingReadiness, DeclaredEndpointBinding,
-    DeliveryFenceViolation, DeliveryForm, ENDPOINT_BINDING_TYPE_NAME, EndpointAccessObservation,
-    EndpointBindingAdmission, EndpointBindingDriver, EndpointBindingDriverArgs,
-    EndpointBindingDriverEffects, EndpointBindingDriverStatus, EndpointBindingEffects,
-    EndpointBindingError, EndpointBindingRegistry, EndpointBindingRow, EndpointConsumerTarget,
-    EndpointDelivery, EndpointProvenance, EndpointSocketIdentity, EndpointSourceKey,
-    EndpointTeardown, ParentInputOutcome, UndeliveredReason, binding_descriptor,
-    binding_row_name, binding_spec_decoder, canonical_binding_row, canonical_binding_rows,
+    AdmittedEndpointBinding, BindingReadiness, DeclaredEndpointBinding, DeliveryFenceViolation,
+    DeliveryForm, EndpointAccessObservation, EndpointBindingAdmission, EndpointBindingError,
+    EndpointBindingRegistry, EndpointBindingRow, EndpointConsumerTarget, EndpointDelivery,
+    EndpointProvenance, EndpointSocketIdentity, EndpointSourceKey, EndpointTeardown,
+    ParentInputOutcome, binding_row_name, canonical_binding_row, canonical_binding_rows,
     declared_delivery_form, endpoint_binding_support, endpoint_binding_support_ceiling,
     endpoint_grants_observe, ensure_realizable, fence_delivery_environment,
     fence_delivery_environment_all, fence_delivery_payload, fence_delivery_payload_all,
     required_right_bits,
 };
-pub use facets::{
-    DeviceWorkerEvidenceSource, EndpointAccessSource, EndpointBindingEffectFacets,
-    EndpointEffectFacets, EndpointGrantSource, EndpointLocatorSource, EndpointRevokeSource,
-    EndpointSocketSource, GuestVmmEvidenceSource,
-};
-
 
 /// The Endpoint ResourceType spec and status shapes owned by this crate.
 pub mod endpoint;

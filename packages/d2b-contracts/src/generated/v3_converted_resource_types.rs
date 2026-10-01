@@ -6,7 +6,7 @@
 
 /// The resource types the v3 resource runtime owns end to end (R35/F1
 /// exclusive per-type partition): served only by the per-zone manager plane.
-pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 40] = [
+pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 38] = [
     "Process",
     "EphemeralProcess",
     "Guest",
@@ -44,7 +44,5 @@ pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 40] = [
     "SeccompProfile",
     "CredentialBinding",
     "DeviceBinding",
-    "EndpointBinding",
     "ExecutionPolicy",
-    "NetworkBinding",
 ];

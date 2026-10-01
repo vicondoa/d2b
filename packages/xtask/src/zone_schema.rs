@@ -1101,22 +1101,6 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
             ),
         ),
         (
-            "EndpointBinding",
-            dto_resource_schema::<d2b_contracts_resource::v3::endpoint_binding::EndpointBindingSpec>(
-                "EndpointBinding",
-                "One exact endpoint delivered to one named consumer.",
-                true,
-            ),
-        ),
-        (
-            "NetworkBinding",
-            dto_resource_schema::<d2b_contracts_resource::v3::network_binding::NetworkBindingSpec>(
-                "NetworkBinding",
-                "One consumer's membership in one shared fabric.",
-                true,
-            ),
-        ),
-        (
             "CredentialBinding",
             dto_resource_schema::<d2b_contracts_resource::v3::credential_binding::CredentialBindingSpec>(
                 "CredentialBinding",

@@ -23,8 +23,6 @@
   "Network"
   "Device"
   "CredentialBinding"
-  "NetworkBinding"
-  "EndpointBinding"
   "DeviceBinding"
   "User"
   "Credential"
