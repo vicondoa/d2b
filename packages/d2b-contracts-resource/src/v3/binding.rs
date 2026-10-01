@@ -1735,3 +1735,70 @@ impl core::fmt::Display for BindingRowError {
 }
 
 impl std::error::Error for BindingRowError {}
+
+/// The source's accepted decision, as committed on a binding row.
+///
+/// A binding row is not only a relationship: it is the source provider's
+/// decision about that relationship. The accepted graph a boundary evaluates
+/// against is rebuilt from committed rows alone, so the rights the source
+/// admitted, the arbitration it chose, and the realization facets it declared
+/// all have to be recoverable from the row. Without them a boundary would see
+/// an absence and refuse - which is the correct default for an absent fact,
+/// and the wrong answer for a committed one.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BindingSourceDecision {
+    admitted_rights: Vec<RequestedRights>,
+    arbitration: BindingArbitration,
+    realized_facets: Vec<BindingRealizationFacet>,
+}
+
+impl BindingSourceDecision {
+    /// Construct a source decision after checking its bounds.
+    pub fn new(
+        admitted_rights: Vec<RequestedRights>,
+        arbitration: BindingArbitration,
+        realized_facets: Vec<BindingRealizationFacet>,
+    ) -> Result<Self, BindingContractError> {
+        if admitted_rights.is_empty() {
+            return Err(BindingContractError::MissingRequiredField);
+        }
+        let mut rights = admitted_rights.clone();
+        rights.sort_unstable();
+        rights.dedup();
+        if rights.len() != admitted_rights.len() {
+            return Err(BindingContractError::InvalidCollection);
+        }
+        if realized_facets.is_empty() {
+            return Err(BindingContractError::MissingRequiredField);
+        }
+        let mut facets = realized_facets.clone();
+        facets.sort_unstable();
+        facets.dedup();
+        if facets.len() != realized_facets.len() {
+            return Err(BindingContractError::InvalidCollection);
+        }
+        Ok(Self {
+            admitted_rights,
+            arbitration,
+            realized_facets,
+        })
+    }
+
+    /// Borrow the rights the source admitted.
+    pub fn admitted_rights(&self) -> &[RequestedRights] {
+        &self.admitted_rights
+    }
+
+    /// Return the arbitration the source chose.
+    pub const fn arbitration(&self) -> BindingArbitration {
+        self.arbitration
+    }
+
+    /// Borrow the realization facets the source declared it can realize.
+    pub fn realized_facets(&self) -> &[BindingRealizationFacet] {
+        &self.realized_facets
+    }
+}
+
+redacted_debug!(BindingSourceDecision);

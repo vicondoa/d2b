@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use super::{
     ResourceRef,
     binding::{
-        BindingRowError, BindingConsumerKind, BindingContractError, BindingKey, BindingKind, BindingRealizationFacet,
+        BindingRowError, BindingSourceDecision, BindingConsumerKind, BindingContractError, BindingKey, BindingKind, BindingRealizationFacet,
         BindingSlot, BindingSpecFingerprint, ExecutionParentInput, RequestedRights,
     },
     execution_policy::{
@@ -279,6 +279,7 @@ pub struct CredentialBindingSpec {
     operations: Vec<CredentialOperation>,
     lifetime_ms: u64,
     slot: BoundedToken,
+    source: BindingSourceDecision,
 }
 
 impl CredentialBindingSpec {
@@ -293,6 +294,7 @@ impl CredentialBindingSpec {
         operations: Vec<CredentialOperation>,
         lifetime_ms: u64,
         slot: BoundedToken,
+        source: BindingSourceDecision,
     ) -> Result<Self, BindingRowError> {
         super::binding::admit_binding_row_refs(
             super::binding::BindingKind::Credential,
@@ -317,7 +319,38 @@ impl CredentialBindingSpec {
             operations,
             lifetime_ms,
             slot,
+            source,
         })
+    }
+
+    /// Borrow the source provider's accepted decision for this relationship.
+    pub const fn source(&self) -> &BindingSourceDecision {
+        &self.source
+    }
+
+    /// Derive this committed relationship's KTD3 key from its identities.
+    ///
+    /// The same derivation the source-side request performs, over the row's own
+    /// committed references: a boundary evaluating a committed row must reach
+    /// exactly the key the source admitted, or it would refuse a relationship
+    /// that exists.
+    pub fn key(
+        &self,
+        zone: ZoneId,
+        source_uid: ResourceUid,
+        consumer_uid: ResourceUid,
+    ) -> Result<BindingKey, BindingRowError> {
+        BindingKey::new(
+            zone,
+            BindingKind::Credential,
+            self.credential_ref.clone(),
+            source_uid,
+            self.execution_ref.clone(),
+            consumer_uid,
+            BindingSlot::parse(self.slot.as_str())
+                .map_err(|_| BindingRowError::WrongSourceType)?,
+        )
+        .map_err(|_| BindingRowError::WrongSourceType)
     }
 
     /// Return the standard ResourceType name.
@@ -362,6 +395,7 @@ wire_deserialize!(
         operations: Vec<CredentialOperation>,
         lifetime_ms: u64,
         slot: String,
+        source: BindingSourceDecision,
     },
     wire,
     Self::new(
@@ -370,6 +404,7 @@ wire_deserialize!(
         wire.operations,
         wire.lifetime_ms,
         BoundedToken::parse(wire.slot).map_err(serde::de::Error::custom)?,
+        wire.source,
     )
     .map_err(serde::de::Error::custom)
 );

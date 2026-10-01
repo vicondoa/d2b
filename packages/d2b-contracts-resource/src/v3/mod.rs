@@ -39,7 +39,7 @@ pub use authority::{
     ZoneDesiredSequence, DESIRED_ROW_DIGEST_DOMAIN_TAG, MAX_STORE_INCARNATION_BYTES,
 };
 pub use binding::{
-    admit_binding_row_refs, BindingRowError,
+    admit_binding_row_refs, BindingRowError, BindingSourceDecision,
     admit_binding_request, BindingAdmission, BindingArbitration, BindingAuthorization,
     BindingConsumerKind, BindingContractError, BindingEvidence, BindingKey, BindingKind,
     BindingLifecycleState, BindingObservation, BindingRealizationFacet, BindingRealizationSupport,
@@ -54,16 +54,16 @@ pub use bridge::*;
 pub use credential_binding::{
     CredentialBindingRequest, CredentialLifetime, CredentialOperation,
     CREDENTIAL_BINDING_RESOURCE_TYPE, MAX_CREDENTIAL_LIFETIME_MS, MAX_CREDENTIAL_OPERATIONS,
-    MIN_CREDENTIAL_LIFETIME_MS,
-};
+    MIN_CREDENTIAL_LIFETIME_MS, CredentialBindingSpec,
+ };
 pub use device::*;
 pub use device_binding::{
     DeviceAttachmentMode, DeviceBindingRequest, DeviceClaimRequest, DeviceFunction,
-    DEVICE_BINDING_RESOURCE_TYPE,
-};
+    DEVICE_BINDING_RESOURCE_TYPE, DeviceBindingSpec,
+ };
 pub use endpoint_binding::{
-    EndpointAttachmentKind, EndpointBindingRequest, ENDPOINT_BINDING_RESOURCE_TYPE,
-};
+    EndpointAttachmentKind, EndpointBindingRequest, ENDPOINT_BINDING_RESOURCE_TYPE, EndpointBindingSpec,
+ };
 pub use error::{
     MAX_RESOURCE_ERROR_REASON_BYTES, MAX_RESOURCE_ERROR_RETRY_AFTER_MS, ResourceError,
     ResourceErrorKind, ResourceErrorReason, ResourceErrorValidation, RetryClass,
@@ -93,8 +93,8 @@ pub use ifname::*;
 pub use limits::*;
 pub use network::*;
 pub use network_binding::{
-    NetworkBindingRequest, NetworkMembership, NetworkPresentation, NETWORK_BINDING_RESOURCE_TYPE,
-};
+    NetworkBindingRequest, NetworkMembership, NetworkPresentation, NETWORK_BINDING_RESOURCE_TYPE, NetworkBindingSpec,
+ };
 pub use operation::{
     AuditJoin, AuditMode, BrokerRequirement, CallableOperation, FdContract, FdKind,
     OperationAudit, OperationAuthority, OperationBounds, OperationContractError, OperationDomain,

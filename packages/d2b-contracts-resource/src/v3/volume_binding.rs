@@ -14,7 +14,8 @@ use super::{
     ResourceRef, ResourceUid,
     binding::{
         BindingConsumerKind, BindingContractError, BindingKey, BindingKind, BindingRealizationFacet,
-        BindingSlot, BindingSpecFingerprint, ExecutionParentInput, MAX_CONSUMER_DEVICE_SLOT,
+        BindingSlot, BindingSourceDecision, BindingSpecFingerprint, ExecutionParentInput,
+        MAX_CONSUMER_DEVICE_SLOT,
         RequestedRights,
     },
     execution_policy::{BoundedToken, PrimitiveSpecError, redacted_debug, require_resource_type},
@@ -39,6 +40,7 @@ pub struct VolumeBindingSpec {
     view: BoundedToken,
     access: AttachmentAccess,
     mount_path: String,
+    source: BindingSourceDecision,
 }
 
 impl VolumeBindingSpec {
@@ -49,6 +51,7 @@ impl VolumeBindingSpec {
         view: impl Into<String>,
         access: AttachmentAccess,
         mount_path: impl Into<String>,
+        source: BindingSourceDecision,
     ) -> Result<Self, PrimitiveSpecError> {
         if volume_ref.resource_type().as_str() != "Volume"
             || execution_ref.resource_type().as_str() != "Guest"
@@ -66,6 +69,7 @@ impl VolumeBindingSpec {
             view,
             access,
             mount_path,
+            source,
         })
     }
 
@@ -99,6 +103,43 @@ impl VolumeBindingSpec {
         &self.mount_path
     }
 
+    /// Borrow the source provider's accepted decision for this relationship.
+    pub const fn source(&self) -> &BindingSourceDecision {
+        &self.source
+    }
+
+    /// Derive this committed relationship's KTD3 key from its identities.
+    ///
+    /// The same derivation the source-side request performs, over the row's own
+    /// committed references, so a boundary evaluating a committed row reaches
+    /// exactly the key the source admitted.
+    pub fn key(
+        &self,
+        zone: ZoneId,
+        source_uid: ResourceUid,
+        consumer_uid: ResourceUid,
+    ) -> Result<BindingKey, BindingContractError> {
+        BindingKey::new(
+            zone,
+            BindingKind::Volume,
+            self.volume_ref.clone(),
+            source_uid,
+            self.execution_ref.clone(),
+            consumer_uid,
+            self.slot_for_key()?,
+        )
+    }
+
+    /// The consumer slot this attachment occupies: the named Volume view.
+    ///
+    /// A Volume binding has no separate slot field because the view already
+    /// identifies the attachment - it is what makes a rights or destination
+    /// update the same relationship rather than a second one.
+    fn slot_for_key(&self) -> Result<BindingSlot, BindingContractError> {
+        BindingSlot::parse(self.view.as_str()).map_err(|_| BindingContractError::InvalidCollection)
+    }
+
+
     /// Admit one binding create or update against its owner reference.
     ///
     /// Every binding mutation must be owned by an existing Volume: a create
@@ -128,6 +169,7 @@ wire_deserialize!(
         view: String,
         access: AttachmentAccess,
         mount_path: String,
+        source: BindingSourceDecision,
     },
     wire,
     Self::new(
@@ -136,6 +178,7 @@ wire_deserialize!(
         wire.view,
         wire.access,
         wire.mount_path,
+        wire.source,
     )
     .map_err(serde::de::Error::custom)
 );

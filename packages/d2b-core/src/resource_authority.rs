@@ -33,11 +33,22 @@
 
 use std::collections::BTreeMap;
 
+use d2b_contracts_resource::v3::credential_binding::CREDENTIAL_BINDING_RESOURCE_TYPE;
+use d2b_contracts_resource::v3::device_binding::DEVICE_BINDING_RESOURCE_TYPE;
+use d2b_contracts_resource::v3::endpoint_binding::ENDPOINT_BINDING_RESOURCE_TYPE;
+use d2b_contracts_resource::v3::network_binding::NETWORK_BINDING_RESOURCE_TYPE;
+use d2b_contracts_resource::v3::volume_binding::VOLUME_BINDING_RESOURCE_TYPE;
+use d2b_contracts_resource::v3::BindingSourceDecision;
+use d2b_contracts_resource::v3::credential_binding::CredentialBindingSpec;
+use d2b_contracts_resource::v3::device_binding::DeviceBindingSpec;
+use d2b_contracts_resource::v3::endpoint_binding::EndpointBindingSpec;
+use d2b_contracts_resource::v3::network_binding::NetworkBindingSpec;
+use d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec;
 use d2b_contracts_resource::v3::{
     admit_binding_request, AdmissionDecision, AdmissionStage, AuthoritySubject, BindingAdmission,
-    BindingAuthorization, BindingKey, BindingRefusal,
-    BindingRealizationFacet, BindingRealizationSupport, CanonicalJsonObject, FreshnessTuple,
-    RefusalReason, RequestedRights, ResourceRef, SourceAdmission, StoreIncarnation, ZoneId,
+    BindingAuthorization, BindingKey, BindingRefusal, BindingRealizationFacet,
+    BindingRealizationSupport, CanonicalJsonObject, FreshnessTuple, RefusalReason, RequestedRights,
+    ResourceRef, ResourceUid, SourceAdmission, StoreIncarnation, ZoneId,
 };
 use d2b_contracts_zone_session::v3::role::{AuthorizedRole, ROLE_RESOURCE_TYPE};
 use d2b_contracts_zone_session::v3::role_binding::ROLE_BINDING_RESOURCE_TYPE;
@@ -53,12 +64,42 @@ use d2b_contracts_zone_session::v3::{RoleBindingSpec, RoleResourceVerb, RoleRule
 pub struct ProjectionRow<'a> {
     reference: &'a ResourceRef,
     admitted: &'a CanonicalJsonObject,
+    identity: Option<(&'a ResourceUid, &'a ResourceUid)>,
 }
 
 impl<'a> ProjectionRow<'a> {
     /// Borrow one row's reference and canonical admitted bytes.
     pub const fn new(reference: &'a ResourceRef, admitted: &'a CanonicalJsonObject) -> Self {
-        Self { reference, admitted }
+        Self {
+            reference,
+            admitted,
+            identity: None,
+        }
+    }
+
+    /// A row whose relationship identity the projection resolved: the source
+    /// and consumer row uids this row's [`BindingKey`] folds in.
+    ///
+    /// A binding row names its source and consumer by reference, but a key is
+    /// over committed identity, so a rename cannot produce a second
+    /// relationship. A row without this is not a binding relationship this
+    /// graph can admit, and that is an absence, which refuses.
+    pub const fn with_identity(
+        reference: &'a ResourceRef,
+        admitted: &'a CanonicalJsonObject,
+        source_uid: &'a ResourceUid,
+        consumer_uid: &'a ResourceUid,
+    ) -> Self {
+        Self {
+            reference,
+            admitted,
+            identity: Some((source_uid, consumer_uid)),
+        }
+    }
+
+    /// Borrow the resolved source and consumer identity, when this row has it.
+    pub const fn identity(&self) -> Option<(&'a ResourceUid, &'a ResourceUid)> {
+        self.identity
     }
 
     /// The exact resource the row was accepted for.
@@ -85,6 +126,9 @@ pub enum AuthorityRowKind {
     Role,
     /// An accepted `RoleBinding`: one subject's grant shape.
     RoleBinding,
+    /// A committed binding row: the source provider's accepted decision about
+    /// one relationship, recoverable from the row alone.
+    Binding,
     /// A row that is not authority this evaluator reads.
     Other,
 }
@@ -97,6 +141,8 @@ impl AuthorityRowKind {
             Self::Role
         } else if name == ROLE_BINDING_RESOURCE_TYPE {
             Self::RoleBinding
+        } else if is_binding_resource_type(name) {
+            Self::Binding
         } else {
             Self::Other
         }
@@ -474,7 +520,7 @@ impl AcceptedGraph {
         root_subject: AuthoritySubject,
         rows: impl IntoIterator<Item = ProjectionRow<'a>>,
     ) -> Result<Self, AcceptedGraphError> {
-        let mut graph = Self::new(zone, store, root_subject);
+        let mut graph = Self::new(zone.clone(), store, root_subject);
         for row in rows {
             // The canonical bytes are re-derived from the decoded object
             // rather than carried beside it, so the contract row is decoded
@@ -494,10 +540,105 @@ impl AcceptedGraph {
                 let binding: RoleBindingSpec = serde_json::from_slice(&bytes)
                     .map_err(|_| AcceptedGraphError::UndecodableRow)?;
                 graph.role_bindings.insert(row.reference.clone(), binding);
+            } else if row.kind() == AuthorityRowKind::Binding {
+                // A binding row IS the source provider's accepted decision, so
+                // a boundary can rebuild the accepted source fact from it. A
+                // row whose identity the projection did not resolve carries no
+                // key, contributes nothing, and is an absence - which refuses.
+                if let Some((source_uid, consumer_uid)) = row.identity() {
+                    let (key, decision) =
+                        decode_binding_source(row.reference, &bytes, &zone, source_uid, consumer_uid)?;
+                    if graph.sources.contains_key(&key) {
+                        return Err(AcceptedGraphError::DuplicateRow);
+                    }
+                    let admission = SourceAdmission::new(
+                        key.clone(),
+                        decision.admitted_rights().to_vec(),
+                        decision.arbitration(),
+                    )
+                    .map_err(|_| AcceptedGraphError::UndecodableRow)?;
+                    let support = BindingRealizationSupport::new(decision.realized_facets().to_vec())
+                        .map_err(|_| AcceptedGraphError::UndecodableRow)?;
+                    graph
+                        .sources
+                        .insert(key, AcceptedSource::new(admission, support));
+                }
             }
         }
         Ok(graph)
     }
+}
+
+/// Whether one ResourceType names a typed binding row.
+fn is_binding_resource_type(name: &str) -> bool {
+    matches!(
+        name,
+        VOLUME_BINDING_RESOURCE_TYPE
+            | DEVICE_BINDING_RESOURCE_TYPE
+            | ENDPOINT_BINDING_RESOURCE_TYPE
+            | NETWORK_BINDING_RESOURCE_TYPE
+            | CREDENTIAL_BINDING_RESOURCE_TYPE
+    )
+}
+
+/// Rebuild one binding row's accepted source fact.
+///
+/// Each family is decoded through its own contract, never through a shape
+/// guessed here, so a row can never be admitted under a spelling the contract
+/// does not define.
+fn decode_binding_source(
+    reference: &ResourceRef,
+    bytes: &[u8],
+    zone: &ZoneId,
+    source_uid: &ResourceUid,
+    consumer_uid: &ResourceUid,
+) -> Result<(BindingKey, BindingSourceDecision), AcceptedGraphError> {
+    /// One decoded row: its relationship key and its source's decision.
+    type Facts = Result<(BindingKey, BindingSourceDecision), AcceptedGraphError>;
+
+    let volume = || -> Facts {
+        let row: VolumeBindingSpec = decode_binding(bytes)?;
+        Ok((map_key(row.key(zone.clone(), source_uid.clone(), consumer_uid.clone()))?, row.source().clone()))
+    };
+    let device = || -> Facts {
+        let row: DeviceBindingSpec = decode_binding(bytes)?;
+        Ok((map_key(row.key(zone.clone(), source_uid.clone(), consumer_uid.clone()))?, row.source().clone()))
+    };
+    let endpoint = || -> Facts {
+        let row: EndpointBindingSpec = decode_binding(bytes)?;
+        Ok((map_key(row.key(zone.clone(), source_uid.clone(), consumer_uid.clone()))?, row.source().clone()))
+    };
+    let network = || -> Facts {
+        let row: NetworkBindingSpec = decode_binding(bytes)?;
+        Ok((map_key(row.key(zone.clone(), source_uid.clone(), consumer_uid.clone()))?, row.source().clone()))
+    };
+    let credential = || -> Facts {
+        let row: CredentialBindingSpec = decode_binding(bytes)?;
+        Ok((map_key(row.key(zone.clone(), source_uid.clone(), consumer_uid.clone()))?, row.source().clone()))
+    };
+
+    let outcome = match reference.resource_type().as_str() {
+        VOLUME_BINDING_RESOURCE_TYPE => volume(),
+        DEVICE_BINDING_RESOURCE_TYPE => device(),
+        ENDPOINT_BINDING_RESOURCE_TYPE => endpoint(),
+        NETWORK_BINDING_RESOURCE_TYPE => network(),
+        CREDENTIAL_BINDING_RESOURCE_TYPE => credential(),
+        _ => return Err(AcceptedGraphError::UndecodableRow),
+    };
+    let (key, decision) = outcome?;
+    Ok((key, decision))
+}
+
+/// Map a binding key derivation failure onto the graph's refusal type.
+fn map_key<E>(key: Result<BindingKey, E>) -> Result<BindingKey, AcceptedGraphError> {
+    key.map_err(|_| AcceptedGraphError::UndecodableRow)
+}
+
+/// Decode one binding row through its own family contract.
+fn decode_binding<T: serde::de::DeserializeOwned>(
+    bytes: &[u8],
+) -> Result<T, AcceptedGraphError> {
+    serde_json::from_slice(bytes).map_err(|_| AcceptedGraphError::UndecodableRow)
 }
 
 // ---------------------------------------------------------------------------
@@ -1058,5 +1199,95 @@ mod tests {
             GraphAuthority::admit_binding(request, &accepted).unwrap_err().reason(),
             RefusalReason::IdentityNotAuthorized
         );
+    
+    }
+    ///
+    /// This is the regression that made every leg-bearing admission refuse:
+    /// `sources` was populated only by a builder with no production caller, so
+    /// `admit_binding` saw an absence and refused - correctly, for a fact that
+    /// was in fact committed. A boundary must be able to rebuild the accepted
+    /// source from the row alone.
+    #[test]
+    fn a_committed_binding_row_rebuilds_its_accepted_source() {
+        let decision = d2b_contracts_resource::v3::BindingSourceDecision::new(
+            vec![RequestedRights::Consume],
+            BindingArbitration::Shared,
+            vec![BindingRealizationFacet::DeviceAttachment],
+        )
+        .expect("decision validates");
+        let spec = DeviceBindingSpec::new(
+            reference("Device/gpu0"),
+            reference("Process/worker"),
+            d2b_contracts_resource::v3::device_binding::DeviceFunction::parse("gpu0")
+                .expect("function"),
+            d2b_contracts_resource::v3::device_binding::DeviceClaimRequest::Exclusive,
+            d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("slot0").unwrap(),
+            decision,
+        )
+        .expect("a device binding row validates");
+        let bytes = CanonicalJsonObject::parse(
+            &d2b_contracts_resource::v3::resource_schema::canonical_json_bytes(&spec)
+                .expect("the row renders canonically"),
+        )
+        .expect("the canonical bytes are a JSON object");
+
+        let source_uid = ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap();
+        let consumer_uid = ResourceUid::parse("22222222-2222-4222-8222-222222222222").unwrap();
+        let row_ref = reference("DeviceBinding/gpu0");
+        let graph = AcceptedGraph::from_canonical_rows(
+            zone(),
+            StoreIncarnation::parse("store-1").unwrap(),
+            AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap),
+            std::iter::once(ProjectionRow::with_identity(
+                &row_ref,
+                &bytes,
+                &source_uid,
+                &consumer_uid,
+            )),
+        )
+        .expect("the committed row rebuilds an accepted source");
+
+        let key = spec
+            .key(zone(), source_uid, consumer_uid)
+            .expect("the row derives its own key");
+        let source = graph.source(&key).expect("the rebuilt source is present");
+        assert_eq!(source.admission().admitted_rights(), &[RequestedRights::Consume]);
+        assert!(source.support().realizes(BindingRealizationFacet::DeviceAttachment));
+    }
+
+    /// A row whose identity the projection did not resolve contributes
+    /// nothing. Absence is a refusal, not an admission.
+    #[test]
+    fn a_binding_row_without_resolved_identity_admits_nothing() {
+        let decision = d2b_contracts_resource::v3::BindingSourceDecision::new(
+            vec![RequestedRights::Consume],
+            BindingArbitration::Shared,
+            vec![BindingRealizationFacet::DeviceAttachment],
+        )
+        .expect("decision validates");
+        let spec = DeviceBindingSpec::new(
+            reference("Device/gpu0"),
+            reference("Process/worker"),
+            d2b_contracts_resource::v3::device_binding::DeviceFunction::parse("gpu0")
+                .expect("function"),
+            d2b_contracts_resource::v3::device_binding::DeviceClaimRequest::Exclusive,
+            d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("slot0").unwrap(),
+            decision,
+        )
+        .expect("a device binding row validates");
+        let bytes = CanonicalJsonObject::parse(
+            &d2b_contracts_resource::v3::resource_schema::canonical_json_bytes(&spec)
+                .expect("the row renders canonically"),
+        )
+        .expect("the canonical bytes are a JSON object");
+        let row_ref = reference("DeviceBinding/gpu0");
+        let graph = AcceptedGraph::from_canonical_rows(
+            zone(),
+            StoreIncarnation::parse("store-1").unwrap(),
+            AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap),
+            std::iter::once(ProjectionRow::new(&row_ref, &bytes)),
+        )
+        .expect("an unresolved row is not a decode failure");
+        assert_eq!(graph.sources().count(), 0, "an unresolved row carries no accepted source");
     }
 }

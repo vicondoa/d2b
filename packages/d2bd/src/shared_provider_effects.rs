@@ -2885,8 +2885,18 @@ impl d2b_provider_device::facets::DeviceInventorySource for ProductionSharedProv
         &self,
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<DeviceInventory, SharedProviderEffectError> {
+        // The committed Device row carries the envelope's own `providerRef`
+        // alongside the spec facets. `DeviceSpec` denies unknown fields, so the
+        // envelope fields are stripped before decoding - the same strip the
+        // network path does. Decoding without it failed for every Device row.
+        let mut spec_value = (*request.spec).clone();
+        if let Some(spec_object) = spec_value.as_object_mut() {
+            for field in ["providerRef", "updatePolicy", "provider"] {
+                spec_object.remove(field);
+            }
+        }
         let spec: d2b_contracts_resource::v3::DeviceSpec =
-            serde_json::from_value(request.spec.clone())
+            serde_json::from_value(spec_value)
                 .map_err(|_| SharedProviderEffectError::InvalidResource)?;
         let provider_ref = request
             .spec
