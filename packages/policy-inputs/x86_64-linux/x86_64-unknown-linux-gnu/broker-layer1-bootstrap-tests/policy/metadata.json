@@ -4,7 +4,7 @@
   "features": [
     "layer1-bootstrap"
   ],
-  "lockSha256": "7d2c8492b2da61a72996a63fa15be755bbd4e1f4e702c62db16e5b0f153faaa7",
+  "lockSha256": "750d11c01271200c3e2ce3e0fa37cfb4d2971d1fb2e418b2ffa3ee38b35d7946",
   "policyPackageCount": 80,
   "policyPackageIds": [
     "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -89,7 +89,7 @@
     "zmij@1.0.23#registry+https://github.com/rust-lang/crates.io-index"
   ],
   "productionPackageCount": 71,
-  "resolveNodeCount": 415,
+  "resolveNodeCount": 419,
   "roots": [
     "d2b-broker"
   ],

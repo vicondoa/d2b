@@ -280,9 +280,12 @@ fn a_row_that_is_not_the_canonical_request_declares_no_relationship() {
         parsed_consumer_request(&row).is_none(),
         "an attachment-shaped row is not a canonical request"
     );
+    // The row contract now carries the source provider's accepted decision, so
+    // a row that predates it is refused rather than read with its authority
+    // silently absent. An old attachment-shaped row is exactly that.
     assert!(
-        parsed_binding_spec(&row).is_some(),
-        "the old reader still reads its own shape"
+        parsed_binding_spec(&row).is_none(),
+        "a row carrying no committed source decision declares no relationship"
     );
     assert!(
         DecodedBindingRequest::decode("VolumeBinding", &row.canonical_json).is_none()

@@ -539,6 +539,11 @@ mod tests {
             "view": "ro-store",
             "access": "read-only",
             "mountPath": "/nix/.ro-store",
+            "source": {
+                "admittedRights": ["consume"],
+                "arbitration": "shared",
+                "realizedFacets": ["filesystem-presentation"],
+            },
         })
     }
 

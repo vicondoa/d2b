@@ -1195,6 +1195,11 @@ mod tests {
             "view": "root",
             "access": "read-only",
             "mountPath": "/mnt/data",
+            "source": {
+                "admittedRights": ["consume"],
+                "arbitration": "shared",
+                "realizedFacets": ["filesystem-presentation"],
+            },
         });
         StoredDesiredResource {
             key: ResourceKey::new("work", "VolumeBinding", "vol-binding-000000000000000000000000"),

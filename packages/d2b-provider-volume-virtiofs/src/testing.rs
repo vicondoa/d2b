@@ -326,6 +326,11 @@ pub mod fixtures {
                 "view": view,
                 "access": access,
                 "mountPath": "/nix/.ro-store",
+            "source": {
+                "admittedRights": ["consume"],
+                "arbitration": "shared",
+                "realizedFacets": ["filesystem-presentation"],
+            },
             },
         })
     }

@@ -182,6 +182,12 @@ mod tests {
                 "named",
                 AttachmentAccess::ReadWrite,
                 "/mnt/work",
+                d2b_contracts_resource::v3::BindingSourceDecision::new(
+                    vec![d2b_contracts_resource::v3::RequestedRights::Consume],
+                    d2b_contracts_resource::v3::binding::BindingArbitration::Shared,
+                    vec![d2b_contracts_resource::v3::BindingRealizationFacet::FilesystemPresentation],
+                )
+                .expect("decision validates"),
             )
             .expect("binding spec"),
             ResourceUid::parse("00000000-0000-4000-8000-000000000000").expect("uid"),

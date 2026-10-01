@@ -28,7 +28,7 @@
 //! plan and not a payload" reads off the reply instead of a test-only side
 //! channel.
 
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -928,13 +928,28 @@ async fn the_handler_is_given_the_resolved_plan_and_the_declared_descriptors_com
         )
         .await
         .expect("the declared effect runs");
-    assert_eq!(response.descriptors.len(), 1);
-    assert_eq!(response.descriptors[0].name.as_str(), DECLARED_FD);
-    assert_eq!(response.descriptors[0].kind, FdKind::Socket);
-    assert!(response.refusal.is_none());
+    assert_eq!(response.response.descriptors.len(), 1);
+    assert_eq!(response.response.descriptors[0].name.as_str(), DECLARED_FD);
+    assert_eq!(response.response.descriptors[0].kind, FdKind::Socket);
+    assert!(response.response.refusal.is_none());
+    assert_eq!(
+        response.descriptors.len(),
+        1,
+        "the live descriptor travels beside the answer, in the answer's order"
+    );
+    assert_eq!(
+        nix::sys::stat::fstat(response.descriptors[0].as_raw_fd())
+            .map(|stat| stat.st_mode & nix::libc::S_IFMT == nix::libc::S_IFSOCK),
+        Ok(true),
+        "the descriptor the frame will carry is the socket the handler minted"
+    );
     assert_eq!(harness.handler.runs(), 1);
 
-    let result = response.result.as_ref().expect("a success carries its result");
+    let result = response
+        .response
+        .result
+        .as_ref()
+        .expect("a success carries its result");
     let field = |name: &str| {
         serde_json::to_string(result.get(name).expect("the handler reported the field"))
             .expect("a canonical value serializes")
@@ -976,14 +991,16 @@ async fn a_returned_descriptor_set_outside_the_declared_contract_is_refused() {
     }
 }
 
-/// A retry is answered from the ledger with the original invocation's
-/// recorded answer, so the descriptors stay tied to the admitted invocation
-/// and the host effect is not repeated.
+/// A retry never repeats the host effect. For an answer that declared
+/// descriptors it is REFUSED rather than answered: the ledger holds their
+/// names and kinds, not live descriptors, and minting them again would repeat
+/// the effect, so a replay that claimed them would be a partial success - a
+/// lie the caller would act on.
 #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-async fn a_retry_is_answered_from_the_recorded_outcome() {
+async fn a_retry_of_a_descriptor_returning_effect_is_refused_and_never_rerun() {
     let harness = Harness::new(Returned::Declared);
-    let first = harness
+    harness
         .admission()
         .run(
             ProjectionPosture::Accepted,
@@ -995,6 +1012,42 @@ async fn a_retry_is_answered_from_the_recorded_outcome() {
         )
         .await
         .expect("the first call runs");
+    let refusal = harness
+        .admission()
+        .run(
+            ProjectionPosture::Accepted,
+            ZONE,
+            &harness.graph,
+            &harness.values,
+            &invocation(typed_parameters()),
+            &[],
+        )
+        .await
+        .expect_err("a recorded answer cannot reproduce its descriptors");
+    assert_eq!(refusal.code, RESULT_FD_CONTRACT);
+    assert_eq!(harness.handler.runs(), 1, "the host effect happened once");
+}
+
+/// A retry of an effect whose answer declared no descriptor IS answered from
+/// the ledger, with the recorded result under the recorded invocation id.
+#[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+async fn a_retry_of_a_descriptorless_effect_is_answered_from_the_recorded_outcome() {
+    let harness = Harness::new(Returned::Empty);
+    let first = harness
+        .admission()
+        .run(
+            ProjectionPosture::Accepted,
+            ZONE,
+            &harness.graph,
+            &harness.values,
+            &invocation(typed_parameters()),
+            &[],
+        )
+        .await
+        .expect_err("an empty returned set is outside the declared contract");
+    // A refused outcome is recorded as refused, so the retry replays the
+    // refusal rather than running the effect a second time.
     let second = harness
         .admission()
         .run(
@@ -1006,10 +1059,8 @@ async fn a_retry_is_answered_from_the_recorded_outcome() {
             &[],
         )
         .await
-        .expect("the retry is answered from the record");
-    assert_eq!(second.invocation_id, first.invocation_id);
-    assert_eq!(second.descriptors, first.descriptors);
-    assert_eq!(second.result, first.result);
+        .expect_err("the recorded refusal is replayed");
+    assert_eq!(second.code, first.code);
     assert_eq!(harness.handler.runs(), 1, "the host effect happened once");
 }
 

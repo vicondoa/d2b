@@ -3,11 +3,30 @@
   "types": [
     {
       "resourceType": "NetworkBinding",
-      "allowedSources": ["builtin", "startup"],
-      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete"],
-      "execution": ["host"],
+      "allowedSources": [
+        "builtin",
+        "startup"
+      ],
+      "verbs": [
+        "get",
+        "list",
+        "watch",
+        "create",
+        "update-spec",
+        "update-status",
+        "update-metadata",
+        "update-finalizers",
+        "delete"
+      ],
+      "execution": [
+        "host"
+      ],
       "exportable": false,
-      "reads": []
+      "reads": [
+        "Network",
+        "Host",
+        "Guest"
+      ]
     }
   ],
   "provides": [],

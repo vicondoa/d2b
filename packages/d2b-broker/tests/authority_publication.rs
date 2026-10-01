@@ -114,7 +114,66 @@ fn projection_row(name: &str, admitted: &CanonicalJsonObject) -> AuthorityProjec
         desired_revision: revision(1),
         desired_digest: DesiredDigest::of(&admitted.to_canonical_bytes()),
         admitted: admitted.clone(),
+        source_uid: None,
+        consumer_uid: None,
     }
+}
+
+/// The same row, published with the relationship identity the manager
+/// resolved: a `Role` or `RoleBinding` never carries one, and a committed
+/// binding row without it is an absence the graph refuses.
+fn projection_row_with_identity(
+    name: &str,
+    admitted: &CanonicalJsonObject,
+    source_uid: &str,
+    consumer_uid: &str,
+) -> AuthorityProjectionRow {
+    AuthorityProjectionRow {
+        source_uid: Some(uid(source_uid)),
+        consumer_uid: Some(uid(consumer_uid)),
+        ..projection_row(name, admitted)
+    }
+}
+
+/// One committed `VolumeBinding` row: the source provider's own accepted
+/// decision about a relationship, in canonical bytes.
+fn volume_binding_admitted() -> CanonicalJsonObject {
+    use d2b_contracts_resource::v3::volume::AttachmentAccess;
+    use d2b_contracts_resource::v3::{
+        BindingArbitration, BindingRealizationFacet, BindingSourceDecision, RequestedRights,
+        VolumeBindingSpec,
+    };
+
+    let decision = BindingSourceDecision::new(
+        vec![RequestedRights::Consume],
+        BindingArbitration::Shared,
+        vec![BindingRealizationFacet::FilesystemPresentation],
+    )
+    .expect("the source decision is well formed");
+    let spec = VolumeBindingSpec::new(
+        reference("Volume/data"),
+        reference("Guest/work"),
+        "root",
+        AttachmentAccess::ReadWrite,
+        "/var/lib/d2b/volumes/data",
+        decision,
+    )
+    .expect("the binding row is well formed");
+    canonical(&spec)
+}
+
+/// The published row, resolved: the two uids its `BindingKey` folds in.
+fn volume_binding_row(source_uid: &str, consumer_uid: &str) -> AuthorityProjectionRow {
+    projection_row_with_identity(
+        "VolumeBinding/data",
+        &volume_binding_admitted(),
+        source_uid,
+        consumer_uid,
+    )
+}
+
+fn uid(value: &str) -> d2b_contracts_resource::v3::ResourceUid {
+    d2b_contracts_resource::v3::ResourceUid::parse(value).expect("the fixture uid is canonical")
 }
 
 /// The `Role/reader` row: every CRUD verb on a `Process`, nothing else.
@@ -546,6 +605,64 @@ async fn an_unpublished_zone_reports_no_authority() {
         assert!(state.is_fenced(), "{label} admits nothing before its first publication");
     }
     assert_eq!(projection.epoch().await, 1, "the first open mints epoch one");
+}
+
+/// A published binding row rebuilds its accepted source under the exact key
+/// its resolved identity produces, through the real publication path.
+///
+/// This is the end-to-end half of the identity round trip: the manager
+/// resolves the two uids, the transfer carries them, the projection persists
+/// them, and the graph an effect admission reads finds the source provider's
+/// own accepted decision under the key an invocation would name.
+#[tokio::test]
+async fn a_published_binding_row_is_readable_as_an_accepted_source() {
+    use d2b_contracts_resource::v3::{BindingKey, BindingKind, BindingSlot, RequestedRights};
+
+    const SOURCE_UID: &str = "11111111-1111-4111-8111-111111111111";
+    const CONSUMER_UID: &str = "22222222-2222-4222-8222-222222222222";
+
+    let mut harness = Harness::start().await;
+    harness
+        .publish_snapshot(
+            TX_BOOTSTRAP,
+            cursor(1),
+            vec![
+                reader_role(),
+                shell_binding(),
+                volume_binding_row(SOURCE_UID, CONSUMER_UID),
+            ],
+            None,
+        )
+        .await
+        .expect("the graph with a binding row installs");
+
+    let graph = harness
+        .projection
+        .accepted_graph(ZONE)
+        .await
+        .expect("the Zone's published rows decode into a graph");
+    let key = BindingKey::new(
+        d2b_contracts_resource::v3::ZoneId::parse(ZONE).expect("the fixture Zone is canonical"),
+        BindingKind::Volume,
+        reference("Volume/data"),
+        uid(SOURCE_UID),
+        reference("Guest/work"),
+        uid(CONSUMER_UID),
+        BindingSlot::parse("root").expect("the fixture slot is a bounded token"),
+    )
+    .expect("the relationship key is well formed");
+    let source = graph
+        .source(&key)
+        .expect("the published row is the source provider's accepted decision");
+    assert_eq!(
+        source.admission().admitted_rights(),
+        &[RequestedRights::Consume],
+        "the rebuilt source carries the row's own accepted rights"
+    );
+    assert!(
+        graph.role(&reference("Role/reader")).is_some(),
+        "the graph still carries the Role the fence decisions read"
+    );
 }
 
 // ---------------------------------------------------------------------------

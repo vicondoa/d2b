@@ -337,9 +337,15 @@ fn stale_wire_refusal(retired: &RetiredWireVariant) -> BrokerResponse {
 /// The gate is the pre-dispatch half of KTD8: a frame that is not this kind
 /// never reaches an admitted-effect handler, so the legacy typed arms the
 /// production entry point still serves cannot be reached by presenting a
-/// privileged effect. The production cutover installs this gate in the accept
-/// loop; until then it is reachable from the boundary's own tests and from
-/// the composition that wires it.
+/// privileged effect.
+///
+/// The gate's refusal half is production code today: `screen_admitted_effect_frame`
+/// answers a refused frame with the boundary's own closed code, so a raw
+/// launch posture is a named refusal rather than a malformed-wire drop.
+/// Its dispatch half is not installed in the accept loop yet: a successful
+/// admitted effect has no response envelope to travel in, and the accepted
+/// graph carries no source row for a leg to resolve against, so wiring the
+/// dispatch today would produce a route that can only ever refuse.
 pub const ADMITTED_EFFECT_FRAME_KIND: &str = "admittedEffect";
 
 /// One frame the admitted-effect gate refused.
@@ -456,6 +462,212 @@ pub fn admit_effect_frame(
         ));
     }
     Ok(invocation)
+}
+
+/// Screen one frame at the admitted-effect boundary and answer a refusal.
+///
+/// This is the production refusal path: the screen's closed code becomes the
+/// response `kind`, [`admitted_effect_refusal_detail`] supplies a fixed
+/// operator phrase, and no field of the frame reaches either - a refusal
+/// cannot reflect a host path, a command line, or a numerical credential back
+/// over the socket.
+///
+/// A frame that passes the screen returns the invocation the admission step
+/// decides on.
+///
+/// # Errors
+///
+/// Returns the `BrokerResponse` the caller is owed when the screen refuses the
+/// frame under one of [`crate::envelope::ADMITTED_EFFECT_REFUSALS`].
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn screen_admitted_effect_frame(
+    frame: &Value,
+) -> Result<d2b_contracts_broker::broker_wire::AdmittedEffectInvocation, BrokerResponse> {
+    admit_effect_frame(frame).map_err(|refusal| {
+        BrokerError::AdmittedEffectRefused { code: refusal.code }.into_response()
+    })
+}
+
+/// Serve one admitted privileged effect on the origination leg.
+///
+/// The order is the boundary's own, and every refusal happens before anything
+/// runs:
+///
+/// 1. The carrier screen, which answers by name and never touches a handler.
+/// 2. The authenticated peer. An admitted effect is admitted FOR its subject,
+///    but only the daemon may open this socket, so a frame from any other
+///    peer is refused with the transport's own code rather than the
+///    boundary's.
+/// 3. The per-uid IPC limiter, exactly as the typed path applies it, so the
+///    gate is not a way around the broker's own admission bound.
+/// 4. The Zone the invocation names - carried by the expected dependency
+///    versions, which the carrier requires and the plan resolver cross-checks
+///    against the graph's own Zone.
+/// 5. The published projection posture and the Zone's accepted graph, both
+///    read from the broker's own projection. A Zone the projection holds no
+///    accepted, unfenced authority for admits no effect.
+/// 6. The boundary itself, over the process-lifetime ledger, the serve-time
+///    implementation table, and the broker's own private execution values.
+#[cfg(not(feature = "layer1-bootstrap"))]
+async fn answer_admitted_effect_frame(
+    connection: AsyncSeqpacket,
+    server: &Server,
+    frame: Value,
+    request_fds: Vec<OwnedFd>,
+    peer_uid: u32,
+    peer_gid: u32,
+) -> io::Result<()> {
+    use d2b_contracts_broker::broker_wire::BrokerResponse;
+
+    let audit_log = Arc::clone(&server.audit_log);
+    let refuse = |code: &'static str| BrokerError::AdmittedEffectRefused { code }.into_response();
+
+    let invocation = match screen_admitted_effect_frame(&frame) {
+        Ok(invocation) => invocation,
+        Err(response) => return connection.send_json_frame(&response).await,
+    };
+
+    if peer_uid != server.config.d2bd_uid {
+        let _ = write_refusal_audit_bounded(
+            &audit_log,
+            AuditWriteClass::Unprivileged,
+            ADMITTED_EFFECT_FRAME_KIND,
+            peer_uid,
+            peer_gid,
+            "peer-refused",
+            ADMITTED_EFFECT_FRAME_KIND,
+            "closed",
+        );
+        return connection
+            .send_json_frame(
+                &BrokerError::PeerCredentialRefused {
+                    operation: ADMITTED_EFFECT_FRAME_KIND,
+                }
+                .into_response(),
+            )
+            .await;
+    }
+
+    // The limiter runs on the synchronous dispatch workers, which must never
+    // block, so it spins on `try_lock` for the short bounded `check`
+    // critical section. The guard is dropped before any dispatch below.
+    let rate_allowed = {
+        let mut limiter = loop {
+            match server.ipc_rate_limiter.try_lock() {
+                Ok(guard) => break guard,
+                Err(_) => std::hint::spin_loop(),
+            }
+        };
+        limiter.check(
+            IpcRatePool::Daemon,
+            peer_uid,
+            CallerRole::AdminUid { uid: peer_uid }.for_display(),
+            ADMITTED_EFFECT_FRAME_KIND,
+        )
+    };
+    if !rate_allowed {
+        let _ = write_refusal_audit_bounded(
+            &audit_log,
+            AuditWriteClass::Privileged,
+            ADMITTED_EFFECT_FRAME_KIND,
+            peer_uid,
+            peer_gid,
+            "ipc-rate-limited",
+            ADMITTED_EFFECT_FRAME_KIND,
+            "closed",
+        );
+        return connection
+            .send_json_frame(&BrokerError::IpcRateLimited.into_response())
+            .await;
+    }
+
+    // The Zone is the one the caller's expected dependency versions name. The
+    // carrier requires at least one and rejects a set that spans two Zones or
+    // two store generations, and the plan resolver compares every expected
+    // tuple against the graph's own Zone, so a caller cannot steer the lookup.
+    let Some(anchor) = invocation.expected_dependencies().first() else {
+        return connection
+            .send_json_frame(&refuse(crate::envelope::UNDECLARED_PARAMETER))
+            .await;
+    };
+    let zone = anchor.zone().to_canonical_string();
+
+    // The published authority. A broker that holds no projection holds no
+    // accepted graph, and an effect it cannot show authority for is refused
+    // rather than admitted blind.
+    let Some(projection) = crate::authority_projection::authority_projection() else {
+        let _ = write_refusal_audit_bounded(
+            &audit_log,
+            AuditWriteClass::Privileged,
+            ADMITTED_EFFECT_FRAME_KIND,
+            peer_uid,
+            peer_gid,
+            crate::envelope::UNACCEPTED_PROJECTION,
+            &zone,
+            "refused",
+        );
+        return connection
+            .send_json_frame(&refuse(crate::envelope::UNACCEPTED_PROJECTION))
+            .await;
+    };
+    let posture = crate::envelope::ProjectionPosture::current(&zone).await;
+    let Some(accepted) = projection.accepted_graph(&zone).await else {
+        let _ = write_refusal_audit_bounded(
+            &audit_log,
+            AuditWriteClass::Privileged,
+            ADMITTED_EFFECT_FRAME_KIND,
+            peer_uid,
+            peer_gid,
+            crate::envelope::UNACCEPTED_PROJECTION,
+            &zone,
+            "refused",
+        );
+        return connection
+            .send_json_frame(&refuse(crate::envelope::UNACCEPTED_PROJECTION))
+            .await;
+    };
+
+    let wiring = live_admitted_effects();
+    let boundary = crate::envelope::AdmittedEffectAdmission::new(
+        admitted_effect_ledger(),
+        &wiring.table,
+        Some(&wiring.chain_audit),
+    );
+    let outcome = envelope_call_runtime()
+        .block_on(boundary.run(
+            posture,
+            &zone,
+            &accepted,
+            &wiring.values,
+            &invocation,
+            &request_fds,
+        ));
+    let answer = match outcome {
+        Ok(answer) => answer,
+        Err(refusal) => {
+            let _ = write_refusal_audit_bounded(
+                &audit_log,
+                AuditWriteClass::Privileged,
+                ADMITTED_EFFECT_FRAME_KIND,
+                peer_uid,
+                peer_gid,
+                refusal.code,
+                &zone,
+                "refused",
+            );
+            return connection.send_json_frame(&refuse(refusal.code)).await;
+        }
+    };
+
+    // The answer's descriptors travel as the frame's SCM_RIGHTS attachments in
+    // the answer's own order, which is what makes "entry `i` answers declared
+    // entry `i`" a position the caller can rely on.
+    let response = BrokerResponse::AdmittedEffect(answer.response);
+    if answer.descriptors.is_empty() {
+        return connection.send_json_frame(&response).await;
+    }
+    let raw: Vec<i32> = answer.descriptors.iter().map(AsRawFd::as_raw_fd).collect();
+    connection.send_json_frame_with_fds(&response, &raw).await
 }
 /// Process-start configuration for one broker run, resolved from CLI
 /// flags and environment defaults by [`parse_command`].
@@ -706,6 +918,19 @@ pub(crate) enum BrokerError {
     RequestValidation {
         operation: &'static str,
         reason: &'static str,
+    },
+    /// An admitted privileged effect the broker's admitted-effect boundary
+    /// refused, on the origination leg.
+    ///
+    /// `code` is one of the boundary's own closed
+    /// [`ADMITTED_EFFECT_REFUSALS`](crate::envelope::ADMITTED_EFFECT_REFUSALS),
+    /// so a caller reads the same vocabulary whether the frame was refused at
+    /// the carrier screen or inside admission. Nothing the payload carried
+    /// reaches the wire: the kind IS the refusal, and the detail is a fixed
+    /// phrase per code.
+    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    AdmittedEffectRefused {
+        code: &'static str,
     },
     /// A generic envelope invocation the committed rows do not admit.
     IpcRateLimited,
@@ -1426,6 +1651,14 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
     #[cfg(not(feature = "layer1-bootstrap"))]
     install_live_operation_envelope(&config, &audit_log)?;
 
+    // Install the admitted-effect wiring beside it, from the same serve-time
+    // inputs and before any connection is accepted: the accept loop's gate
+    // resolves an admitted invocation against the declared implementation
+    // table and the broker's private execution values installed here, and
+    // never against a table it builds for one call.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    install_live_admitted_effects(&audit_log)?;
+
     // Signal systemd that the broker is ready to accept connections.
     // Called after the listener is established and the audit log is open,
     // before entering the accept loop.  No-op when NOTIFY_SOCKET is absent.
@@ -1798,6 +2031,25 @@ async fn handle_connection(connection: AsyncSeqpacket, server: &Server) -> io::R
                 .send_json_frame(&stale_wire_refusal(retired))
                 .await?;
             return Ok(());
+        }
+        // The admitted-effect gate, in front of the typed decode.
+        //
+        // It has to be here and not one step later: `RequestEnvelope` denies
+        // unknown fields and carries no admitted-effect member, so an
+        // admitted frame could not decode as one and the typed gate would drop
+        // it as malformed wire before any screen ran. An `admittedEffect` frame
+        // therefore leaves here for the boundary and never reaches a typed
+        // arm, and no other frame kind is routed into the boundary at all.
+        if request_kind(&envelope_value) == Some(ADMITTED_EFFECT_FRAME_KIND) {
+            return answer_admitted_effect_frame(
+                connection,
+                server,
+                envelope_value,
+                request_fds,
+                peer_uid,
+                peer_gid,
+            )
+            .await;
         }
         // The harness-only peer-uid override is unwrapped here, in front of
         // the typed decode: the wire contract's envelope carries no such
@@ -7384,6 +7636,80 @@ fn install_live_operation_envelope(
         .map_err(|_| RunError::Protocol("live envelope installed twice".to_owned()))
 }
 
+// ---------------------------------------------------------------------------
+// The admitted-effect wiring (U10, KTD8)
+// ---------------------------------------------------------------------------
+
+/// The broker's declared admitted-effect implementations and the private
+/// execution values it resolves them against.
+///
+/// Installed once at serve time beside the committed-operation envelope, and
+/// built from the same serve-time inputs, so the accept loop's gate never
+/// constructs a table of its own.
+#[cfg(not(feature = "layer1-bootstrap"))]
+struct AdmittedEffectWiring {
+    /// The sealed table of declared implementations.
+    table: crate::envelope::AdmittedEffectTable,
+    /// The broker's own private execution values.
+    values: d2b_core::execution_plan::PrivateExecutionTable,
+    /// The chain-audit sink the boundary records its legs in.
+    chain_audit: Arc<dyn d2b_audit::evidence_chain::ChainAuditSink>,
+}
+
+/// The admitted-effect wiring this process installed, absent until
+/// [`install_live_admitted_effects`] runs.
+#[cfg(not(feature = "layer1-bootstrap"))]
+static LIVE_ADMITTED_EFFECTS: OnceLock<AdmittedEffectWiring> = OnceLock::new();
+
+/// Install the admitted-effect wiring at serve time, before any connection is
+/// accepted.
+///
+/// The table is sealed, so two implementations claiming one `Operation` are
+/// refused here rather than becoming two routes to one effect. It carries no
+/// implementation today: no declared `Operation` contract has been published
+/// that an admitted invocation could be admitted against, and a table that
+/// served an invented handler would be a second authority source. An
+/// `Operation` the table does not carry is refused by name at admission, which
+/// is the contract's own `unknown-implementation` rule.
+///
+/// The private execution values are the empty table, which refuses every
+/// lookup. That is the absence, not a default: the broker resolves a private
+/// source, view, identity, and executable from its accepted graph and its
+/// trusted implementation contract, and where it holds no value it refuses
+/// rather than inventing a uid, a program, or a mount policy.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn install_live_admitted_effects(audit_log: &Arc<AuditLog>) -> Result<(), RunError> {
+    let table = crate::envelope::AdmittedEffectTable::new(Vec::new())
+        .map_err(|error| RunError::Protocol(format!("admitted effect table: {error}")))?;
+    LIVE_ADMITTED_EFFECTS
+        .set(AdmittedEffectWiring {
+            table,
+            values: d2b_core::execution_plan::PrivateExecutionTable::empty(),
+            chain_audit: Arc::new(AuditLogChainSink {
+                log: Arc::clone(audit_log),
+            }),
+        })
+        .map_err(|_| RunError::Protocol("admitted effects installed twice".to_owned()))
+}
+
+/// The admitted-effect wiring this process installed at serve time.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn live_admitted_effects() -> &'static AdmittedEffectWiring {
+    LIVE_ADMITTED_EFFECTS
+        .get()
+        .expect("live admitted effects installed at serve time before any dispatch")
+}
+
+/// Install the admitted-effect wiring from a test, if it is not installed.
+///
+/// The wiring is process-lifetime, exactly as the live envelope is, so the
+/// first caller installs it and every later one keeps that one rather than
+/// replacing it.
+#[cfg(all(test, not(feature = "layer1-bootstrap")))]
+fn init_admitted_effects(audit_log: &Arc<AuditLog>) {
+    let _ = install_live_admitted_effects(audit_log);
+}
+
 /// The envelope this process installed at serve time.
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn live_operation_envelope() -> &'static crate::envelope::BrokerEnvelope {
@@ -11103,6 +11429,25 @@ impl BrokerError {
                     message,
                 )?;
             }
+            // A refusal at the admitted-effect boundary is a decision, not an
+            // error: the closed code is the whole record, and no caller text
+            // is appended, so a refused effect can never echo its payload into
+            // the durable log.
+            Self::AdmittedEffectRefused { code } => {
+                audit_log.write_entry_with_caller_ids(
+                    ADMITTED_EFFECT_FRAME_KIND,
+                    caller_uid,
+                    caller_gid,
+                    "admitted-effect-refused",
+                    opaque_target_id,
+                    "refused",
+                )?;
+                tracing::warn!(
+                    error_kind = "AdmittedEffectRefused",
+                    code = code,
+                    "admitted privileged effect refused at the boundary"
+                );
+            }
             Self::Protocol(message) => {
                 audit_log.write_error_entry_with_caller_ids(
                     operation,
@@ -11491,6 +11836,17 @@ impl BrokerError {
                 ),
                 "Investigate out-of-band nftables changes or refresh host.json with the last applied table hash before retrying.",
             ),
+            // The kind IS the closed refusal code, so the caller reads the
+            // boundary's own vocabulary. The message is a fixed phrase and
+            // the payload never reaches it, so nothing caller-supplied can be
+            // reflected back.
+            Self::AdmittedEffectRefused { code } => error_response(
+                code,
+                ADMITTED_EFFECT_FRAME_KIND,
+                None,
+                admitted_effect_refusal_detail(code),
+                "Name the admitted invocation instead of a serialized launch posture, and publish the Zone's accepted authority before retrying.",
+            ),
             Self::Protocol(message) => error_response(
                 "Broker.Protocol",
                 "Broker",
@@ -11678,6 +12034,60 @@ fn authz_audit_requires_admin_response() -> BrokerResponse {
         "ExportBrokerAudit requires caller_role: AdminUid { uid } from d2bd.",
         "Have d2bd verify d2b.site.adminUsers before forwarding the audit export request.",
     )
+}
+
+/// The fixed operator phrase one admitted-effect refusal code answers with.
+///
+/// Every arm is a literal: no branch formats a value out of the frame, so a
+/// refusal cannot reflect a host path, a command line, or any other
+/// caller-supplied text back over the socket.
+fn admitted_effect_refusal_detail(code: &'static str) -> &'static str {
+    use crate::envelope::{
+        AUTHORITY_PARAMETER, CORRELATION_SUBJECT_REPLACED, FD_LEG, HANDLER_CRASHED,
+        HANDLER_ERRORED, HANDLER_REFUSED, HANDLER_TIMED_OUT, IDEMPOTENCY_CONFLICT,
+        LEGACY_EFFECT_REQUEST, NESTED_DEPTH_EXCEEDED, RESULT_FD_CONTRACT, STALE_DEPENDENCY,
+        STALE_WIRE_VERSION, UNACCEPTED_PROJECTION, UNDECLARED_PARAMETER, UNKNOWN_IMPLEMENTATION,
+        UNPROVEN_EFFECT, UNTRUSTED_IMPLEMENTATION,
+    };
+    match code {
+        STALE_WIRE_VERSION => "this wire variant was retired; upgrade the calling binary",
+        LEGACY_EFFECT_REQUEST => {
+            "this frame is not an admitted-effect invocation and has no route to a handler"
+        }
+        AUTHORITY_PARAMETER => {
+            "the invocation named an authority-bearing value no admitted effect may carry"
+        }
+        UNDECLARED_PARAMETER => {
+            "the invocation carried a parameter its operation's declared contract does not admit"
+        }
+        UNACCEPTED_PROJECTION => {
+            "the Zone holds no accepted, unfenced authority projection in this broker"
+        }
+        UNKNOWN_IMPLEMENTATION => "no declared implementation answers this operation",
+        UNTRUSTED_IMPLEMENTATION => {
+            "the resolved plan names an implementation this broker does not trust"
+        }
+        UNPROVEN_EFFECT => "the effect could not be resolved against the accepted graph",
+        STALE_DEPENDENCY => {
+            "a dependency moved past the version the invocation expected to be current"
+        }
+        IDEMPOTENCY_CONFLICT => {
+            "this idempotency key was already used with different parameters"
+        }
+        CORRELATION_SUBJECT_REPLACED => {
+            "this nested leg presents a subject its recorded root was not admitted for"
+        }
+        NESTED_DEPTH_EXCEEDED => "this invocation is nested past the chain depth the broker admits",
+        FD_LEG => "the attached descriptors do not match the operation's declared fd contract",
+        RESULT_FD_CONTRACT => {
+            "the returned descriptors do not match the operation's declared response contract"
+        }
+        HANDLER_REFUSED => "the declared implementation refused its own invocation",
+        HANDLER_ERRORED => "the declared implementation failed while running the effect",
+        HANDLER_TIMED_OUT => "the declared implementation overran the effect's deadline",
+        HANDLER_CRASHED => "the declared implementation did not survive the effect",
+        _ => "the admitted-effect boundary refused this invocation",
+    }
 }
 
 fn error_response(
@@ -16097,6 +16507,311 @@ mod tests {
         })
     }
 
+    /// The expected dependency version a real caller names, built from the
+    /// real `FreshnessTuple` rather than a hand-written literal: the digest
+    /// and the revision are the contract's own, so the carrier decodes.
+    fn admitted_effect_freshness_json() -> serde_json::Value {
+        use d2b_contracts_resource::v3::{
+            DesiredDigest, DesiredRevision, FreshnessTuple, ResourceRef, ResourceUid,
+            StoreIncarnation, ZoneId,
+        };
+
+        let tuple = FreshnessTuple::new(
+            ZoneId::parse("pubzone").expect("the fixture Zone is canonical"),
+            StoreIncarnation::parse("store-generation-1").expect("the store is a bounded token"),
+            ResourceRef::parse("Volume/data").expect("the fixture reference is canonical"),
+            ResourceUid::parse("11111111-1111-4111-8111-111111111111")
+                .expect("the fixture uid is canonical"),
+            DesiredRevision::INITIAL
+                .try_next()
+                .expect("the desired revision has room"),
+            DesiredDigest::of(b"volume-1"),
+        );
+        serde_json::to_value(tuple).expect("the freshness tuple serializes")
+    }
+
+    /// The admitted-effect boundary's own production refusal path, driven
+    /// with the frame a real caller would send.
+    ///
+    /// An `EnvelopeInvoke` payload's raw launch posture - a host path, a
+    /// capability class, a seccomp class, and an environment class - carried
+    /// as the invocation's parameters. It rides the admitted-effect carrier
+    /// here, so the frame itself decodes and the screen - not the decode - is
+    /// what refuses it, under its own closed code.
+    fn raw_launch_posture_frame() -> serde_json::Value {
+        serde_json::json!({
+            "request": {
+                "kind": ADMITTED_EFFECT_FRAME_KIND,
+                "invocation": {
+                    "operation": "Operation/spawn-process",
+                    "subject": { "kind": "process", "resourceRef": "Process/shell" },
+                    "legs": [{
+                        "binding": {
+                            "zone": "pubzone",
+                            "kind": "volume",
+                            "sourceRef": "Volume/data",
+                            "sourceUid": "11111111-1111-4111-8111-111111111111",
+                            "consumerRef": "Process/shell",
+                            "consumerUid": "22222222-2222-4222-8222-222222222222",
+                            "slot": "data",
+                        },
+                        "rights": "observe",
+                        "presentation": ["filesystem-presentation"],
+                    }],
+                    "parameters": {
+                        "sandboxPlan": {
+                            "namespaceClasses": ["mount", "pid"],
+                            "capabilityClasses": ["cap-sys-admin"],
+                            "seccompClass": "seccomp-default",
+                            "environmentClass": "inherit",
+                            "hostPath": "/etc/shadow",
+                        },
+                    },
+                    "expectedDependencies": [admitted_effect_freshness_json()],
+                    "idempotencyKey": "launch-0001",
+                },
+            },
+        })
+    }
+
+    /// The same invocation with only typed, non-authority parameters: a frame
+    /// the screen admits, so what happens next is the boundary's answer and
+    /// not the decode's.
+    fn well_formed_admitted_effect_frame() -> serde_json::Value {
+        serde_json::json!({
+            "request": {
+                "kind": ADMITTED_EFFECT_FRAME_KIND,
+                "invocation": {
+                    "operation": "Operation/spawn-process",
+                    "subject": { "kind": "process", "resourceRef": "Process/shell" },
+                    "legs": [{
+                        "binding": {
+                            "zone": "pubzone",
+                            "kind": "volume",
+                            "sourceRef": "Volume/data",
+                            "sourceUid": "11111111-1111-4111-8111-111111111111",
+                            "consumerRef": "Process/shell",
+                            "consumerUid": "22222222-2222-4222-8222-222222222222",
+                            "slot": "data",
+                        },
+                        "rights": "observe",
+                        "presentation": ["filesystem-presentation"],
+                    }],
+                    "parameters": { "servingWorker": true },
+                    "expectedDependencies": [admitted_effect_freshness_json()],
+                    "idempotencyKey": "launch-0002",
+                },
+            },
+        })
+    }
+
+    /// Serve one frame on the production accept loop, over a real socket, and
+    /// return the response a peer receives.
+    ///
+    /// This is the whole production entry: the frame is written to a real
+    /// seqpacket pair and [`handle_connection`] reads it, screens it, and
+    /// answers. Nothing here is a seam the broker does not use in production.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn serve_one_frame(label: &str, frame: &serde_json::Value) -> BrokerResponse {
+        use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
+
+        let root = test_audit_dir(label);
+        fs::create_dir_all(&root).expect("create audit test dir");
+        let config = test_server_config(&root, &root.join("unused-bundle.json"));
+        let log = Arc::new(
+            AuditLog::open(
+                &config.audit_dir,
+                Gid::current().as_raw(),
+                true,
+                config.audit_retention_days,
+            )
+            .expect("open audit log"),
+        );
+        init_admitted_effects(&log);
+        let limiter = Arc::new(tokio::sync::Mutex::new(IpcRateLimiter::new(64)));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let served = Server {
+            config: Arc::new(config.clone()),
+            audit_log: Arc::clone(&log),
+            dispatches: DispatchPool::new(2),
+            nested_dispatches: DispatchPool::new(2),
+            ipc_rate_limiter: Arc::clone(&limiter),
+        };
+
+        let (client, server) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("socketpair");
+        crate::protocol::send_json_frame(client.as_raw_fd(), frame).expect("send the frame");
+        runtime
+            .block_on(async {
+                let connection =
+                    AsyncSeqpacket::from_owned(server).expect("register accepted socket");
+                handle_connection(connection, &served).await
+            })
+            .expect("the accept loop answers instead of dropping the connection");
+        let response = crate::protocol::recv_json_frame::<BrokerResponse>(client.as_raw_fd())
+            .expect("the accept loop wrote a reply frame")
+            .expect("the reply frame is present");
+        let _ = fs::remove_dir_all(&root);
+        response
+    }
+
+    /// On the production socket, a raw launch posture is refused by name.
+    ///
+    /// Before the gate this frame had nowhere to go at all: it is well-formed
+    /// JSON, it is not a `RequestEnvelope`, and the typed decode dropped it as
+    /// malformed wire with the connection closed and no answer. Now the caller
+    /// is told, by name, exactly what it presented.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn the_accept_loop_refuses_a_raw_launch_posture_by_name() {
+        use crate::envelope::AUTHORITY_PARAMETER;
+
+        let response =
+            serve_one_frame("admitted-effect-posture", &raw_launch_posture_frame());
+        let BrokerResponse::Error(error) = response else {
+            panic!("the boundary answers a refusal with a typed error envelope");
+        };
+        assert_eq!(error.kind, AUTHORITY_PARAMETER);
+        assert_eq!(error.operation, ADMITTED_EFFECT_FRAME_KIND);
+        assert_eq!(
+            error.message,
+            redact_public_detail(admitted_effect_refusal_detail(AUTHORITY_PARAMETER))
+        );
+    }
+
+    /// On the production socket, a Zone this broker holds no accepted
+    /// authority for admits no effect.
+    ///
+    /// This is the projection being consumed rather than bypassed: the frame
+    /// decodes and passes the screen, and the boundary then refuses it because
+    /// the broker can show no accepted, unfenced authority for the Zone it
+    /// names. It is a refusal, not a fall-through to the typed path and not a
+    /// permissive admit.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn the_accept_loop_refuses_an_effect_for_a_zone_with_no_accepted_projection() {
+        use crate::envelope::UNACCEPTED_PROJECTION;
+
+        let response =
+            serve_one_frame("admitted-effect-posture", &well_formed_admitted_effect_frame());
+        let BrokerResponse::Error(error) = response else {
+            panic!("the boundary answers a refusal with a typed error envelope");
+        };
+        assert_eq!(error.kind, UNACCEPTED_PROJECTION);
+        assert_eq!(error.operation, ADMITTED_EFFECT_FRAME_KIND);
+        assert_eq!(
+            error.message,
+            redact_public_detail(admitted_effect_refusal_detail(UNACCEPTED_PROJECTION))
+        );
+    }
+
+    /// A raw launch posture is refused at the boundary with a named closed
+    /// code, and the refusal carries nothing the frame said.
+    ///
+    /// This drives [`screen_admitted_effect_frame`], the production refusal
+    /// path the accept loop runs, rather than the screen behind it: the
+    /// observable is the response a peer would actually receive, so the
+    /// closed code and the fixed operator phrase are both pinned here.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn a_raw_launch_posture_is_refused_at_the_boundary_with_its_named_code() {
+        use crate::envelope::{ADMITTED_EFFECT_REFUSALS, AUTHORITY_PARAMETER};
+
+        let response = screen_admitted_effect_frame(&raw_launch_posture_frame())
+            .expect_err("a serialized launch posture is refused");
+        let BrokerResponse::Error(error) = response else {
+            panic!("the boundary answers a refusal with a typed error envelope");
+        };
+        assert_eq!(error.kind, AUTHORITY_PARAMETER);
+        assert!(
+            ADMITTED_EFFECT_REFUSALS.contains(&error.kind.as_str()),
+            "the refusal code must come from the boundary's closed vocabulary"
+        );
+        assert_eq!(error.operation, ADMITTED_EFFECT_FRAME_KIND);
+        // The public message is the redacted form of the boundary's fixed
+        // phrase: the peer learns a stable value per code, and never the
+        // frame's own text.
+        assert_eq!(
+            error.message,
+            redact_public_detail(admitted_effect_refusal_detail(AUTHORITY_PARAMETER)),
+            "the message is the fixed phrase, never the frame's own text"
+        );
+        for leaked in ["/etc/shadow", "cap-sys-admin", "seccomp-default", "inherit"] {
+            assert!(
+                !error.message.contains(leaked)
+                    && !error.action.contains(leaked)
+                    && !error.operation.contains(leaked),
+                "a refusal must not echo `{leaked}` back to the caller"
+            );
+        }
+    }
+
+    /// A frame that is not the admitted-effect carrier is refused by the same
+    /// production path, under its own closed code: there is no translation and
+    /// no route into a legacy handler, and a retired variant keeps the code
+    /// that names the version boundary it has not moved past.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn a_legacy_frame_is_refused_at_the_boundary_with_its_own_code() {
+        use crate::envelope::{LEGACY_EFFECT_REQUEST, STALE_WIRE_VERSION};
+
+        for (variant, expected) in [
+            ("SpawnRunner", STALE_WIRE_VERSION),
+            ("EnvelopeInvoke", LEGACY_EFFECT_REQUEST),
+            ("LaunchMinijailChild", LEGACY_EFFECT_REQUEST),
+        ] {
+            let frame = serde_json::json!({
+                "request": {
+                    "kind": variant,
+                    "payload": { "binaryPath": "/bin/sh", "argv": ["/bin/sh"] },
+                },
+            });
+            let BrokerResponse::Error(error) =
+                screen_admitted_effect_frame(&frame).expect_err("a legacy frame is refused")
+            else {
+                panic!("the boundary answers a refusal with a typed error envelope");
+            };
+            assert_eq!(error.kind, expected, "variant `{variant}`");
+            assert_eq!(error.operation, ADMITTED_EFFECT_FRAME_KIND);
+        }
+    }
+
+    /// A Zone whose projection this broker does not hold admits no ordinary
+    /// effect, and the refusal is the boundary's own closed code rather than a
+    /// bypass. The posture is read from the broker's own projection, so an
+    /// absent store is an absent authority - never an unconditional admit.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[tokio::test]
+    async fn an_unaccepted_projection_answers_its_own_closed_code() {
+        use crate::envelope::{ProjectionPosture, UNACCEPTED_PROJECTION};
+
+        let posture = ProjectionPosture::current("pubzone").await;
+        assert_eq!(posture, ProjectionPosture::Unaccepted);
+        assert!(!posture.admits());
+        let response =
+            BrokerError::AdmittedEffectRefused {
+                code: UNACCEPTED_PROJECTION,
+            }
+            .into_response();
+        let BrokerResponse::Error(error) = response else {
+            panic!("the boundary answers a refusal with a typed error envelope");
+        };
+        assert_eq!(error.kind, UNACCEPTED_PROJECTION);
+        assert_eq!(
+            error.message,
+            redact_public_detail(admitted_effect_refusal_detail(UNACCEPTED_PROJECTION))
+        );
+    }
+
     /// Drop one kernel-spawned runner's runner-id-keyed registrations and
     /// drain the reap buffer so no state leaks into a sibling test.
     fn cleanup_spawn_test_runner(runner_id: &str) {
@@ -16233,6 +16948,62 @@ mod tests {
         cleanup_spawn_test_runner(runner_id);
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&sysfs_root);
+    }
+
+    /// The regression this test exists for: every production runner row
+    /// declares a read-only `/nix/store` plus default device-node hiding, so
+    /// a kernel that hardcodes the namespace-first realization hands `sys.rs`
+    /// a launch it refuses with `presentation-requires-mount-realization` and
+    /// NO ordinary Process launch reaches its binary. The realization is
+    /// derived from the row's own mount policy, so this exact row launches.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn spawn_process_applies_the_production_mount_policy_rather_than_refusing_it() {
+        let _registry_guard = RegistryTestGuard::new();
+        let root = test_audit_dir("spawn-kernel-production-mount-policy");
+        fs::create_dir_all(&root).expect("create test root");
+        let bundle = build_test_bundle(&root);
+        let _bundle_guard = TestKernelBundleResolver::install(bundle.resolver.clone());
+
+        let mut payload = spawn_payload(
+            vec![spawn_test_binary("true")],
+            "cloud-hypervisor",
+            false,
+            "vm-a",
+            "process-a",
+            "runner:vm-a:process-a",
+        );
+        // Byte-for-byte the mount policy `mint_template_intent` emits for
+        // every production runner role: no mount namespace of its own, a
+        // read-only Nix closure, and default device-node hiding. An empty
+        // policy cannot reach the refusal, which is why every other kernel
+        // test stayed green through the regression.
+        payload["mountPolicy"] = serde_json::json!({
+            "readOnlyPaths": ["/nix/store"],
+            "writablePaths": [],
+            "nixStoreReadOnly": true,
+            "hideDeviceNodesByDefault": true,
+            "deviceBinds": [],
+        });
+
+        let harness = SpawnKernelHarness::new(&root, &bundle.bundle_path, &root.join("runtime"));
+        let response = envelope_response(
+            harness
+                .invoke("spawn-process", payload, Vec::new())
+                .expect("a production-shaped mount policy dispatches"),
+        );
+        assert_eq!(
+            response.refusal, None,
+            "spawn refused: {:?}",
+            response.detail
+        );
+        assert!(
+            response.result.is_some(),
+            "the kernel must answer a launched runner, not an empty result"
+        );
+        cleanup_spawn_test_runner("vm-a:process-a");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]

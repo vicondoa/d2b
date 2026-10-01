@@ -235,6 +235,11 @@ mod tests {
                 "view": "controller",
                 "access": "read-only",
                 "mountPath": "/state",
+                "source": {
+                    "admittedRights": ["consume"],
+                    "arbitration": "shared",
+                    "realizedFacets": ["filesystem-presentation"],
+                },
             })
         };
         let own = stored_resource_with_spec(
@@ -260,6 +265,11 @@ mod tests {
                 "access": "read-only",
                 "mountPath": "/state",
                 "providerRef": "Provider/volume-virtiofs",
+                "source": {
+                    "admittedRights": ["consume"],
+                    "arbitration": "shared",
+                    "realizedFacets": ["filesystem-presentation"],
+                },
             })
         };
         let own_minted = stored_resource_with_spec(

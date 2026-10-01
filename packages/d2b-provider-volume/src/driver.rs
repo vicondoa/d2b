@@ -432,6 +432,14 @@ impl VolumeDriver {
                     intent.view().as_str(),
                     intent.access(),
                     intent.mount_path(),
+                    d2b_contracts_resource::v3::BindingSourceDecision::new(
+                        vec![d2b_contracts_resource::v3::RequestedRights::Consume],
+                        d2b_contracts_resource::v3::binding::BindingArbitration::Shared,
+                        vec![
+                            d2b_contracts_resource::v3::BindingRealizationFacet::FilesystemPresentation,
+                        ],
+                    )
+                    .map_err(|_| self.error(VolumeDriverErrorKind::ChildDerivation, op))?,
                 )
                 .map_err(|_| self.error(VolumeDriverErrorKind::ChildDerivation, op))?;
                 let mut binding_spec = serde_json::to_value(&binding)

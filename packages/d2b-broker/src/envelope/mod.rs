@@ -2259,6 +2259,23 @@ pub const ADMITTED_EFFECT_REFUSALS: [&str; 18] = [
     HANDLER_CRASHED,
 ];
 
+/// What one admitted dispatch produced: the wire answer plus the descriptors
+/// it names.
+///
+/// The wire type carries each descriptor's declared `name` and its observed
+/// `kind`, never the descriptor itself, so the live ones travel beside it in
+/// the same order. The accept loop attaches `descriptors[i]` as the frame's
+/// `i`-th `SCM_RIGHTS` entry, which is what makes "entry `i` answers declared
+/// entry `i`" a position the caller can rely on rather than an index it has to
+/// correlate.
+#[derive(Debug)]
+pub struct AdmittedEffectAnswer {
+    /// The answer as it crosses the origination leg.
+    pub response: AdmittedEffectResponse,
+    /// The descriptors the answer names, in the answer's own order.
+    pub descriptors: Vec<OwnedFd>,
+}
+
 /// One refused admitted effect, with the stage and the reason that refused
 /// it.
 ///
@@ -2919,7 +2936,8 @@ impl<'a> AdmittedEffectAdmission<'a> {
         })
     }
 
-    /// Admit and run one invocation, returning the wire reply.
+    /// Admit and run one invocation, returning the wire answer and the
+    /// descriptors it names.
     ///
     /// # Errors
     ///
@@ -2935,7 +2953,7 @@ impl<'a> AdmittedEffectAdmission<'a> {
         values: &PrivateExecutionTable,
         invocation: &AdmittedEffectInvocation,
         request_fds: &[OwnedFd],
-    ) -> Result<AdmittedEffectResponse, EffectRefusal> {
+    ) -> Result<AdmittedEffectAnswer, EffectRefusal> {
         // A recorded outcome answers a retry without running anything: the
         // host mutation happened once, and a second presentation of the same
         // key returns the first call's answer rather than repeating it. The
@@ -2958,14 +2976,33 @@ impl<'a> AdmittedEffectAdmission<'a> {
             }
             return match recorded.outcome {
                 RecordedEffectOutcome::Completed { result, descriptors } => {
-                    Ok(AdmittedEffectResponse {
-                        invocation_id: recorded.invocation_id,
-                        operation: invocation.operation().clone(),
-                        idempotency_key: invocation.idempotency_key().clone(),
-                        result: Some(result),
-                        descriptors,
-                        refusal: None,
-                        correlation: invocation.correlation().cloned(),
+                    // A recorded answer that declared descriptors cannot be
+                    // reproduced: the ledger holds their names and kinds, not
+                    // live descriptors, and minting them again would repeat
+                    // the effect. So a retry of such an effect is refused by
+                    // name rather than answered with entries the frame does
+                    // not carry - a partial success is a lie, and the host
+                    // effect still happened exactly once either way.
+                    if !descriptors.is_empty() {
+                        return Err(EffectRefusal::new(
+                            invocation,
+                            recorded.invocation_id,
+                            RESULT_FD_CONTRACT,
+                            AdmissionStage::Activate,
+                            RefusalReason::MandatoryFacetUnsupported,
+                        ));
+                    }
+                    Ok(AdmittedEffectAnswer {
+                        response: AdmittedEffectResponse {
+                            invocation_id: recorded.invocation_id,
+                            operation: invocation.operation().clone(),
+                            idempotency_key: invocation.idempotency_key().clone(),
+                            result: Some(result),
+                            descriptors,
+                            refusal: None,
+                            correlation: invocation.correlation().cloned(),
+                        },
+                        descriptors: Vec::new(),
                     })
                 }
                 RecordedEffectOutcome::Refused { code, stage, reason } => {
@@ -3099,14 +3136,37 @@ impl<'a> AdmittedEffectAdmission<'a> {
             ChainOutcome::Succeeded,
             None,
         );
-        Ok(AdmittedEffectResponse {
-            invocation_id,
-            operation: invocation.operation().clone(),
-            idempotency_key: invocation.idempotency_key().clone(),
-            result: Some(outcome.result),
-            descriptors,
-            refusal: None,
-            correlation: admitted.correlation,
+        // The descriptors themselves leave with the answer, in the same order
+        // the wire names them: the frame's SCM_RIGHTS attachment list is
+        // position-aligned with `descriptors`, so a caller joins entry `i` to
+        // attachment `i`. The ledger keeps only the names and kinds, because
+        // a recorded outcome is replayed on a later retry and must not hold a
+        // live descriptor open to do it.
+        let returned: Vec<OwnedFd> = outcome
+            .descriptors
+            .iter()
+            .map(|descriptor| descriptor.fd.try_clone())
+            .collect::<Result<Vec<OwnedFd>, std::io::Error>>()
+            .map_err(|_| {
+                EffectRefusal::new(
+                    invocation,
+                    invocation_id.clone(),
+                    FD_LEG,
+                    AdmissionStage::Activate,
+                    RefusalReason::MandatoryFacetUnsupported,
+                )
+            })?;
+        Ok(AdmittedEffectAnswer {
+            response: AdmittedEffectResponse {
+                invocation_id,
+                operation: invocation.operation().clone(),
+                idempotency_key: invocation.idempotency_key().clone(),
+                result: Some(outcome.result),
+                descriptors,
+                refusal: None,
+                correlation: admitted.correlation,
+            },
+            descriptors: returned,
         })
     }
 

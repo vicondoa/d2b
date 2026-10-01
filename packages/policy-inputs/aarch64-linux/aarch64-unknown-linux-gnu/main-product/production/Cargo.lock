@@ -1265,6 +1265,21 @@ dependencies = [
 
 
 [[package]]
+name = "d2b-provider-credential-binding"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-provider-toolkit",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+
+[[package]]
 name = "d2b-provider-credential-entra"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1327,6 +1342,21 @@ dependencies = [
  "parking_lot",
  "serde_json",
  "tokio",
+]
+
+
+[[package]]
+name = "d2b-provider-device-binding"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-provider-toolkit",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 
@@ -1471,6 +1501,24 @@ dependencies = [
 
 
 [[package]]
+name = "d2b-provider-endpoint-binding"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-provider-endpoint",
+ "d2b-provider-toolkit",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+
+[[package]]
 name = "d2b-provider-execution-policy"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1590,6 +1638,22 @@ dependencies = [
  "nix 0.29.0",
  "serde_json",
  "tokio",
+]
+
+
+[[package]]
+name = "d2b-provider-network-binding"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-provider-toolkit",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 

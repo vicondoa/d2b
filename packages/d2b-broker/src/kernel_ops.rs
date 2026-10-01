@@ -2211,9 +2211,48 @@ fn parse_device_worker(
     })
 }
 
+/// How one launch realizes the mounts its own resolved row declares (KTD11).
+///
+/// The realization is derived from the row, never assumed. A row that
+/// declares anything the broker has to realize inside a mount namespace - a
+/// mount namespace of its own, a read-only or writable path, a device bind, a
+/// cross-domain bind, the read-only Nix closure, or default device-node
+/// hiding - is realized by a private mount tree the broker prepares and then
+/// applies. A row that declares none of those gives the broker nothing to
+/// mount, so it keeps ADR 0021's namespace-first service-source posture,
+/// which applies no mount of its own and therefore skips nothing.
+///
+/// Both halves are load-bearing. Naming the namespace-first posture for a row
+/// that asks for a mount hands `sys.rs` a pairing it refuses
+/// (`presentation-requires-mount-realization`), and dropping the mount to keep
+/// the launch would report success for a capability the role never received.
+/// Every production runner row declares a read-only `/nix/store` plus default
+/// device-node hiding, so the derived posture is the private mount tree for
+/// ordinary launches, and the refusal stays reachable for any producer that
+/// pairs the two the other way round.
+fn launch_presentation(
+    namespaces: &NamespaceSet,
+    mount_policy: &MountPolicy,
+) -> PresentationRealization {
+    if namespaces.mount
+        || !mount_policy.read_only_paths.is_empty()
+        || !mount_policy.writable_paths.is_empty()
+        || !mount_policy.device_binds.is_empty()
+        || !mount_policy.bind_mounts.is_empty()
+        || mount_policy.nix_store_read_only
+        || mount_policy.hide_device_nodes_by_default
+    {
+        return PresentationRealization::FilesystemPresentation;
+    }
+    PresentationRealization::NamespaceFirstServiceSource
+}
+
 /// The fully-resolved spawn plan, parsed from the payload the daemon-side
 /// family handler carried.
 fn parse_plan(payload: &CanonicalJsonObject) -> Result<SpawnRunnerPlanInput, DispatchFailure> {
+    let namespaces: NamespaceSet = parse_field(payload, "namespaces")?;
+    let mount_policy: MountPolicy = parse_field(payload, "mountPolicy")?;
+    let presentation = launch_presentation(&namespaces, &mount_policy);
     Ok(SpawnRunnerPlanInput {
         binary_path: PathBuf::from(field_str(payload, "binaryPath")?),
         argv: field_str_array(payload, "argv")?,
@@ -2225,16 +2264,20 @@ fn parse_plan(payload: &CanonicalJsonObject) -> Result<SpawnRunnerPlanInput, Dis
             .collect(),
         env: field_str_array(payload, "env")?,
         capabilities: field_str_array(payload, "capabilities")?,
-        namespaces: parse_field(payload, "namespaces")?,
+        namespaces,
         seccomp_policy_ref: optional_seccomp_ref(payload)?,
-        mount_policy: parse_field(payload, "mountPolicy")?,
+        mount_policy,
         cgroup_placement: parse_field(payload, "cgroupPlacement")?,
         root_carve_out: optional_field_bool(payload, "rootCarveOut")?.unwrap_or(false),
         skip_binary_exists_check: optional_field_bool(payload, "skipBinaryExistsCheck")?
             .unwrap_or(false),
         user_namespace: optional_user_namespace(payload)?,
         umask: optional_umask(payload)?,
-        presentation: crate::ops::spawn_runner::PresentationRealization::NamespaceFirstServiceSource,
+        presentation,
+        // The legacy payload carries no admitted destination: this row has no
+        // resolved `ExecutionPlan` behind it, so the private mount tree holds
+        // the row's own policy and nothing is bound into it here. The
+        // admitted-effect route fills both halves from the resolved plan.
         admitted_presentation: crate::ops::spawn_runner::AdmittedPresentation {
             private_execution_root: std::path::PathBuf::new(),
             binds: Vec::new(),

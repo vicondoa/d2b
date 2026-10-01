@@ -78,7 +78,7 @@ use d2b_contracts_broker::broker_wire::{
 };
 use d2b_contracts_resource::v3::{
     AdmissionDecision, AdmissionStage, AuthoritySubject, AuthoritySubjectKind,
-    CanonicalJsonObject, DesiredDigest, DesiredRevision, RefusalReason, ResourceRef,
+    CanonicalJsonObject, DesiredDigest, DesiredRevision, RefusalReason, ResourceRef, ResourceUid,
     StoreIncarnation, ZoneId,
 };
 use d2b_core::resource_authority::{
@@ -214,6 +214,24 @@ struct AcceptedAuthorityRow {
     desired_revision: DesiredRevision,
     desired_digest: DesiredDigest,
     admitted: CanonicalJsonObject,
+    /// The resolved identity of a committed binding row: the uids of the
+    /// source row and the consumer row its [`ProjectionRow::with_identity`]
+    /// key folds in.
+    ///
+    /// This is IDENTITY, not spec bytes, and it is the only thing a binding
+    /// row contributes beyond its accepted object. A relationship key is over
+    /// committed identity, so the two uids are what stop a rename from
+    /// producing a second relationship - the row's own bytes deliberately do
+    /// not repeat them, which is exactly why storing them here is identity
+    /// rather than a second copy of the manager's desired store (KTD7).
+    ///
+    /// A row the manager published without them is not a relationship this
+    /// graph can admit: it carries no key, contributes nothing, and that is an
+    /// absence, which refuses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_uid: Option<ResourceUid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    consumer_uid: Option<ResourceUid>,
 }
 
 /// How far one accepted launch has got.
@@ -468,15 +486,44 @@ impl ProjectionWorkerState {
     }
 
     /// The prior accepted graph this Zone's decisions read.
+    ///
+    /// A row whose relationship identity the publication resolved is handed to
+    /// the graph with that identity, so the row's own committed source
+    /// decision is reachable under the exact key a later admission names. A
+    /// row without it is handed as a bare row: a `Role` or `RoleBinding`
+    /// carries no identity by nature, and a binding row published without one
+    /// contributes nothing, which is an absence, and an absence refuses.
     fn prior_graph(&self, zone: &PersistedZone) -> Result<AcceptedGraph, AcceptedGraphError> {
         AcceptedGraph::from_canonical_rows(
             zone.zone_id.clone(),
             zone.store_incarnation.clone(),
             zone.root_subject.clone(),
-            zone.rows
-                .values()
-                .map(|row| ProjectionRow::new(&row.reference, &row.admitted)),
+            zone.rows.values().map(|row| {
+                match (&row.source_uid, &row.consumer_uid) {
+                    (Some(source_uid), Some(consumer_uid)) => ProjectionRow::with_identity(
+                        &row.reference,
+                        &row.admitted,
+                        source_uid,
+                        consumer_uid,
+                    ),
+                    _ => ProjectionRow::new(&row.reference, &row.admitted),
+                }
+            }),
         )
+    }
+
+    /// The accepted graph one Zone's admitted effects read, when this
+    /// projection holds accepted rows for it.
+    ///
+    /// It is the same [`Self::prior_graph`] the fence decisions read, built
+    /// from the same durable rows, so an effect admission and a mutation
+    /// admission can never see different authority for one Zone. A Zone with
+    /// no durable record, or one whose rows do not decode, reads as no graph
+    /// at all: the caller refuses rather than deciding against a half-read
+    /// authority.
+    fn accepted_graph(&self, zone: &str) -> Option<AcceptedGraph> {
+        let zone_state = self.durable.zones.get(zone)?;
+        self.prior_graph(zone_state).ok()
     }
 
     /// The Zone's durable record, created on first sight.
@@ -560,9 +607,20 @@ fn drop_transfer(state: &mut ProjectionWorkerState, zone: &str) {
 /// `Display`: `Display for ResourceRef` is the redacted diagnostic rendering,
 /// so every reference would collapse onto one key and the projection would
 /// keep only the last row of a published set.
+///
+/// A committed binding row is stored too. It is not a `Role` or a
+/// `RoleBinding`, but it is the source provider's own accepted decision about
+/// one relationship, and an effect admission cannot read that decision unless
+/// the projection kept the row. The class comes from the contract's own
+/// [`AuthorityRowKind::of_reference`], never from a name list here.
 fn authority_rows(rows: &[AuthorityProjectionRow]) -> BTreeMap<String, AcceptedAuthorityRow> {
     rows.iter()
-        .filter(|row| AuthorityRowKind::of_reference(&row.resource_ref).is_authority())
+        .filter(|row| {
+            !matches!(
+                AuthorityRowKind::of_reference(&row.resource_ref),
+                AuthorityRowKind::Other
+            )
+        })
         .map(|row| {
             (
                 row.resource_ref.to_canonical_string(),
@@ -571,6 +629,12 @@ fn authority_rows(rows: &[AuthorityProjectionRow]) -> BTreeMap<String, AcceptedA
                     desired_revision: row.desired_revision,
                     desired_digest: row.desired_digest.clone(),
                     admitted: row.admitted.clone(),
+                    // The relationship identity the manager resolved when it
+                    // published the row. A row published without it lands
+                    // unresolved, and this graph then refuses the relationship
+                    // it names - the contract's own rule, not a default.
+                    source_uid: row.source_uid.clone(),
+                    consumer_uid: row.consumer_uid.clone(),
                 },
             )
         })
@@ -711,6 +775,11 @@ enum ProjectionCommand {
         zone: String,
         reply: oneshot::Sender<ZoneAuthorityState>,
     },
+    /// The accepted graph one Zone's admitted effects are decided against.
+    AcceptedGraph {
+        zone: String,
+        reply: oneshot::Sender<Option<AcceptedGraph>>,
+    },
     Epoch {
         reply: oneshot::Sender<u64>,
     },
@@ -831,6 +900,30 @@ impl AuthorityProjection {
         reply_rx.await.unwrap_or(ZoneAuthorityState::Unprovisioned)
     }
 
+    /// The accepted graph an admitted effect for `zone` is decided against.
+    ///
+    /// This is the projection's own published authority, read through the
+    /// same constructor the fence decisions read. It is `None` for a Zone
+    /// this projection holds no accepted state for and for one whose rows do
+    /// not decode, so an admission that gets `None` refuses rather than
+    /// deciding against a graph the broker cannot show.
+    pub async fn accepted_graph(&self, zone: &str) -> Option<AcceptedGraph> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        if self
+            .writer
+            .commands
+            .send(ProjectionCommand::AcceptedGraph {
+                zone: zone.to_owned(),
+                reply: reply_tx,
+            })
+            .await
+            .is_err()
+        {
+            return None;
+        }
+        reply_rx.await.unwrap_or(None)
+    }
+
     /// Open one Zone publication session.
     pub async fn open_session(
         &self,
@@ -920,6 +1013,9 @@ fn projection_worker_loop(mut receiver: mpsc::Receiver<ProjectionCommand>) {
             }
             ProjectionCommand::Status { zone, reply } => {
                 let _ = reply.send(state.public_state(&zone));
+            }
+            ProjectionCommand::AcceptedGraph { zone, reply } => {
+                let _ = reply.send(state.accepted_graph(&zone));
             }
             ProjectionCommand::Epoch { reply } => {
                 let _ = reply.send(state.durable.epoch);
@@ -2389,4 +2485,160 @@ pub(crate) async fn init_authority_projection_async(state_dir: &Path) -> Reply<(
 /// [`init_authority_projection`] runs.
 pub(crate) fn authority_projection() -> Option<&'static AuthorityProjection> {
     AUTHORITY_PROJECTION.get()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ZONE: &str = "pubzone";
+    const STORE: &str = "store-generation-1";
+    const VOLUME: &str = "Volume/data";
+    const GUEST: &str = "Guest/work";
+    const ROW: &str = "VolumeBinding/data";
+    const SOURCE_UID: &str = "11111111-1111-4111-8111-111111111111";
+    const CONSUMER_UID: &str = "22222222-2222-4222-8222-222222222222";
+
+    fn reference(value: &str) -> ResourceRef {
+        ResourceRef::parse(value).expect("the fixture references are canonical")
+    }
+
+    fn uid(value: &str) -> ResourceUid {
+        ResourceUid::parse(value).expect("the fixture uids are canonical")
+    }
+
+    /// One committed `VolumeBinding` row: the source provider's own accepted
+    /// decision, in canonical bytes. The row deliberately does NOT repeat the
+    /// two uids - that is identity the projection stores beside it.
+    fn binding_row() -> AcceptedAuthorityRow {
+        use d2b_contracts_resource::v3::volume::AttachmentAccess;
+        use d2b_contracts_resource::v3::{
+            BindingArbitration, BindingRealizationFacet, BindingSourceDecision, RequestedRights,
+            VolumeBindingSpec,
+        };
+
+        let decision = BindingSourceDecision::new(
+            vec![RequestedRights::Consume],
+            BindingArbitration::Shared,
+            vec![BindingRealizationFacet::FilesystemPresentation],
+        )
+        .expect("the source decision is well formed");
+        let spec = VolumeBindingSpec::new(
+            reference(VOLUME),
+            reference(GUEST),
+            "root",
+            AttachmentAccess::ReadWrite,
+            "/var/lib/d2b/volumes/data",
+            decision,
+        )
+        .expect("the binding row is well formed");
+        AcceptedAuthorityRow {
+            reference: reference(ROW),
+            desired_revision: DesiredRevision::INITIAL,
+            desired_digest: DesiredDigest::of(b"volume-binding-1"),
+            admitted: CanonicalJsonObject::parse(
+                &d2b_contracts_resource::v3::resource_schema::canonical_json_bytes(&spec)
+                    .expect("the row renders canonically"),
+            )
+            .expect("the canonical bytes are a JSON object"),
+            source_uid: Some(uid(SOURCE_UID)),
+            consumer_uid: Some(uid(CONSUMER_UID)),
+        }
+    }
+
+    fn zone_with(rows: Vec<AcceptedAuthorityRow>) -> PersistedZone {
+        PersistedZone {
+            zone: ZONE.to_owned(),
+            zone_id: ZoneId::parse(ZONE).expect("the fixture Zone is canonical"),
+            store_incarnation: StoreIncarnation::parse(STORE).expect("the store is a token"),
+            root_subject: AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap),
+            accepted: AuthorityCursor::initial(),
+            session: None,
+            posture: PersistedPosture::Unfenced,
+            rows: rows
+                .into_iter()
+                .map(|row| (row.reference.to_canonical_string(), row))
+                .collect(),
+            effects: BTreeMap::new(),
+            reservations: BTreeMap::new(),
+            transactions: BTreeSet::new(),
+        }
+    }
+
+    fn worker_with(zone: PersistedZone) -> ProjectionWorkerState {
+        let mut zones = BTreeMap::new();
+        zones.insert(ZONE.to_owned(), zone);
+        ProjectionWorkerState {
+            root: std::path::PathBuf::new(),
+            durable: PersistedProjection {
+                epoch: 1,
+                material: SessionMaterial::mint(),
+                zones,
+            },
+            transfers: BTreeMap::new(),
+        }
+    }
+
+    /// A committed binding row the publication resolved rebuilds its accepted
+    /// source under the exact key a later admission names.
+    ///
+    /// This is the projection's own read path, not the contract's: the row is
+    /// handed to the graph with the identity the projection persisted, and the
+    /// graph finds the source under the key that identity produces.
+    #[test]
+    fn a_published_binding_row_rebuilds_its_accepted_source_under_its_key() {
+        use d2b_contracts_resource::v3::{BindingKey, BindingKind, BindingSlot};
+
+        let state = worker_with(zone_with(vec![binding_row()]));
+        let graph = state
+ .accepted_graph(ZONE)
+            .expect("the Zone's rows decode into a graph");
+        let key = BindingKey::new(
+            ZoneId::parse(ZONE).expect("canonical"),
+            BindingKind::Volume,
+            reference(VOLUME),
+            uid(SOURCE_UID),
+            reference(GUEST),
+            uid(CONSUMER_UID),
+            BindingSlot::parse("root").expect("the fixture slot is a bounded token"),
+        )
+        .expect("the relationship key is well formed");
+        let source = graph
+            .source(&key)
+            .expect("the committed row is the source provider's accepted decision");
+        assert_eq!(
+            source.admission().admitted_rights(),
+            &[d2b_contracts_resource::v3::RequestedRights::Consume],
+            "the rebuilt source carries the row's own accepted rights"
+        );
+    }
+
+    /// A row the publication did not resolve contributes nothing, and nothing
+    /// is invented for it: absence is a refusal, not a default source.
+    #[test]
+    fn an_unresolved_binding_row_contributes_no_accepted_source() {
+        use d2b_contracts_resource::v3::{BindingKey, BindingKind, BindingSlot};
+
+        let mut row = binding_row();
+        row.source_uid = None;
+        row.consumer_uid = None;
+        let state = worker_with(zone_with(vec![row]));
+        let graph = state
+            .accepted_graph(ZONE)
+            .expect("an unresolved row is not an undecodable one");
+        let key = BindingKey::new(
+            ZoneId::parse(ZONE).expect("canonical"),
+            BindingKind::Volume,
+            reference(VOLUME),
+            uid(SOURCE_UID),
+            reference(GUEST),
+            uid(CONSUMER_UID),
+            BindingSlot::parse("root").expect("the fixture slot is a bounded token"),
+        )
+        .expect("the relationship key is well formed");
+        assert!(
+            graph.source(&key).is_none(),
+            "a row with no resolved identity is an absence, which refuses"
+        );
+    }
 }
