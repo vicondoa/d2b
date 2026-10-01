@@ -213,7 +213,7 @@ fn kernel_lane_available() -> bool {
         pre_opened_device_fds: Vec::new(),
         memlock_limit_bytes: None,
         activation_stdin: None,
-        presentation: Some(PresentationRealization::FilesystemPresentation),
+        presentation: PresentationRealization::FilesystemPresentation,
         private_execution_root: None,
         presentation_binds: Vec::new(),
     };
@@ -264,7 +264,7 @@ fn run_worker(
         pre_opened_device_fds: Vec::new(),
         memlock_limit_bytes: None,
         activation_stdin: None,
-        presentation: Some(PresentationRealization::FilesystemPresentation),
+        presentation: PresentationRealization::FilesystemPresentation,
         private_execution_root: Some(root),
         presentation_binds: binds,
     };
@@ -364,7 +364,7 @@ fn root_mount_lane_available() -> bool {
         pre_opened_device_fds: Vec::new(),
         memlock_limit_bytes: None,
         activation_stdin: None,
-        presentation: Some(PresentationRealization::FilesystemPresentation),
+        presentation: PresentationRealization::FilesystemPresentation,
         private_execution_root: Some(root),
         presentation_binds: Vec::new(),
     };
@@ -487,7 +487,7 @@ fn a_source_that_does_not_resolve_refuses_before_any_child() {
         pre_opened_device_fds: Vec::new(),
         memlock_limit_bytes: None,
         activation_stdin: None,
-        presentation: Some(PresentationRealization::FilesystemPresentation),
+        presentation: PresentationRealization::FilesystemPresentation,
         private_execution_root: Some(tree.private_execution_root()),
         presentation_binds: vec![bind(
             Path::new("/nonexistent/d2b-volume-source"),
@@ -550,7 +550,7 @@ fn a_destination_outside_the_private_root_is_refused() {
         pre_opened_device_fds: Vec::new(),
         memlock_limit_bytes: None,
         activation_stdin: None,
-        presentation: Some(PresentationRealization::FilesystemPresentation),
+        presentation: PresentationRealization::FilesystemPresentation,
         private_execution_root: Some(tree.private_execution_root()),
         presentation_binds: vec![bind(&tree.view, &tree.root.path().join("host-root"), false)],
     };
@@ -603,7 +603,7 @@ fn a_child_mount_failure_exits_with_the_mount_code_and_is_reaped() {
         pre_opened_device_fds: Vec::new(),
         memlock_limit_bytes: None,
         activation_stdin: None,
-        presentation: Some(PresentationRealization::FilesystemPresentation),
+        presentation: PresentationRealization::FilesystemPresentation,
         private_execution_root: Some(private_root),
         presentation_binds: vec![bind(&tree.view, &destination, false)],
     };
@@ -794,11 +794,11 @@ fn namespace_first_service_source_refuses_a_process_filesystem_mount() {
         "true".to_owned(),
         format!("--shared-dir={}", destination.display()),
     ];
-    input.presentation = Some(PresentationRealization::NamespaceFirstServiceSource);
-    input.admitted_presentation = Some(AdmittedPresentation {
+    input.presentation = PresentationRealization::NamespaceFirstServiceSource;
+    input.admitted_presentation = AdmittedPresentation {
         private_execution_root: tree.private_execution_root(),
         binds: vec![bind(&tree.view, &destination, false)],
-    });
+    };
     assert!(
         matches!(
             preflight(&input),
@@ -827,7 +827,7 @@ fn namespace_first_service_source_refuses_a_requested_mount_policy() {
         pre_opened_device_fds: Vec::new(),
         memlock_limit_bytes: None,
         activation_stdin: None,
-        presentation: Some(PresentationRealization::NamespaceFirstServiceSource),
+        presentation: PresentationRealization::NamespaceFirstServiceSource,
         private_execution_root: None,
         presentation_binds: Vec::new(),
     };
@@ -905,10 +905,10 @@ fn preflight_refuses_argv_that_names_the_host_source() {
         "true".to_owned(),
         format!("--shared-dir={}", tree.view.display()),
     ];
-    input.admitted_presentation = Some(AdmittedPresentation {
+    input.admitted_presentation = AdmittedPresentation {
         private_execution_root: tree.private_execution_root(),
         binds: vec![bind(&tree.view, &destination, false)],
-    });
+    };
     assert!(matches!(
         preflight(&input),
         Err(SpawnRunnerError::PresentationArgvNamesHostSource)
@@ -939,8 +939,11 @@ fn plan_input() -> SpawnRunnerPlanInput {
         skip_binary_exists_check: true,
         user_namespace: None,
         umask: None,
-        presentation: Some(PresentationRealization::FilesystemPresentation),
-        admitted_presentation: None,
+        presentation: PresentationRealization::FilesystemPresentation,
+        admitted_presentation: AdmittedPresentation {
+            private_execution_root: std::path::PathBuf::new(),
+            binds: Vec::new(),
+        },
     }
 }
 
