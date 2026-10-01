@@ -210,16 +210,19 @@ generated_artifact_check(
     env_inherit = ["HOME", "CARGO_HOME", "RUSTUP_HOME", "PATH"],
 )
 
-# The new-graph composition renders the declarations and cross-checks them
-# against the provider crates' compiled sources, so its drift target declares
-# those declarations, those sources, and the committed closure it rewrites.
+# The new-graph composition renders the per-crate declarations and
+# cross-checks them against the provider crates' compiled sources. Both ride
+# in on `packages_workspace_sources`: each provider crate's
+# `cargo_workspace_sources` globs the four declaration files beside its own
+# Rust sources, because a glob in the root package cannot reach into a
+# subpackage and so cannot name them from there. The target also stages the
+# committed closure it rewrites.
 generated_artifact_check(
     name = "gen_new_graph_drift",
     command = "gen-new-graph",
     data = [
         "//:generated_new_graph",
         "//:packages_workspace_sources",
-        "//:provider_graph_declarations",
     ],
 )
 
