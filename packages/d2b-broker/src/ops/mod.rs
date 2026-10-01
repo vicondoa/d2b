@@ -16,12 +16,13 @@
 //! nothing in the runtime depends on them beyond the integrator-managed
 //! dispatch wiring.
 //!
-//! Only three of the arms below are `pub` - `network`, `audit_op`, and
-//! `pidfd` - because the crate's integration tests are separate crates
-//! and address those arms by path (`tests/bridge_lifecycle.rs`,
-//! `tests/persistent_tap_lifecycle.rs`, `tests/security_key_broker.rs`,
-//! `tests/pidfd_handoff_scm_rights.rs`, `tests/pidfd_real_spawner.rs`);
-//! `pub(crate)` would hide them from that oracle. Every other arm is
+//! Only four of the arms below are `pub` - `network`, `audit_op`, `pidfd`,
+//! and `endpoint_access` - because the crate's integration tests are
+//! separate crates and address those arms by path
+//! (`tests/bridge_lifecycle.rs`, `tests/persistent_tap_lifecycle.rs`,
+//! `tests/security_key_broker.rs`, `tests/pidfd_handoff_scm_rights.rs`,
+//! `tests/pidfd_real_spawner.rs`, `tests/endpoint_delivery.rs`);
+//! `pub(crate)` would hide the arms from those oracles. Every other arm is
 //! `pub(crate)`: no crate outside `d2b-broker` imports it, so its items
 //! were reachable published surface for no consumer. Keep the split -
 //! a new handler arm stays `pub(crate)` until something outside this
@@ -60,6 +61,12 @@ pub(crate) mod device;
 // pin, per-Guest socket directory, Device row uid derivation).
 pub(crate) mod device_worker;
 pub(crate) mod consumer_principal;
+// Exact-endpoint ACL wire (U18, R23): the private resolution of a socket name
+// inside the broker's own runtime root, the consumer-principal derivation, and
+// the pinned observe/grant/revoke answer.
+// Public arm: `tests/endpoint_delivery.rs` drives the accept path from outside
+// the crate, for the same reason the arms above are public.
+pub mod endpoint_access;
 // Broker-owned host-path bounds for the ACL grants that reach outside the
 // broker runtime tree (served view roots, host session runtime directory).
 pub(crate) mod launch_acl_bounds;

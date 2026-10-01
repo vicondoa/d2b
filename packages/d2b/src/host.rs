@@ -370,14 +370,8 @@ fn render_reset_human(envelope: &Value) -> String {
             };
             out.push_str(&format!("    [{kind}] {path} ({state})\n"));
         }
-        for source in envelope
-            .get("externalSources")
-            .and_then(Value::as_array)
-            .unwrap_or(&empty)
-        {
-            if let Some(path) = source.as_str() {
-                out.push_str(&format!("  external source  : {path} (untouched)\n"));
-            }
+        if let Some(subject) = envelope.get("admittedSubject").and_then(Value::as_str) {
+            out.push_str(&format!("  admitted as      : {subject}\n"));
         }
         if let Some(incarnation) = envelope.get("incarnation")
             && let Some(store) = incarnation.get("storeIncarnation").and_then(Value::as_str)

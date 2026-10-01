@@ -135,6 +135,72 @@ pub(crate) use d2bd_runtime::unix_transport::{
     connect_seqpacket, connect_seqpacket_with_timeout, drain_rejected_peer_input, read_frame,
     set_frame_read_deadline, write_json_frame, write_json_frame_deadlined,
 };
+
+/// The daemon-side exact-endpoint ACL dispatch facet (U18, R23).
+///
+/// The Endpoint family's binding driver builds the typed request and reconciles
+/// the answer; this object is the privileged wire path it rides. It dispatches
+/// over the daemon's broker socket with the daemon's `AdminUid` authority, so
+/// the request arrives as a claim the broker checks - it recomputes the
+/// authority binding and re-derives the consumer principal from the verified
+/// Zone bundle before it touches an ACL entry - and the `(device, inode)` and
+/// effective rights that come back are the broker's own answers.
+pub(crate) struct DaemonEndpointAccessDispatch {
+    state: Arc<ServerState>,
+}
+
+impl DaemonEndpointAccessDispatch {
+    /// Bind the dispatch to the daemon's broker seam.
+    pub(crate) fn new(state: Arc<ServerState>) -> Self {
+        Self { state }
+    }
+}
+
+#[async_trait::async_trait]
+impl d2b_provider_endpoint::EndpointAccessDispatch for DaemonEndpointAccessDispatch {
+    async fn dispatch(
+        &self,
+        verb: d2b_contracts_broker::broker_wire::EndpointAccessVerb,
+        request: d2b_contracts_broker::broker_wire::EndpointAccessRequest,
+    ) -> Result<
+        d2b_contracts_broker::broker_wire::EndpointAccessResponse,
+        d2b_provider_endpoint::EndpointAccessDispatchError,
+    > {
+        use d2b_contracts_broker::broker_wire::BrokerResponse;
+        use d2b_provider_endpoint::EndpointAccessDispatchError;
+
+        let variant = match verb {
+            d2b_contracts_broker::broker_wire::EndpointAccessVerb::Observe => {
+                BrokerRequest::EndpointObserve(request)
+            }
+            d2b_contracts_broker::broker_wire::EndpointAccessVerb::Grant => {
+                BrokerRequest::EndpointGrantAccess(request)
+            }
+            d2b_contracts_broker::broker_wire::EndpointAccessVerb::Revoke => {
+                BrokerRequest::EndpointRevokeAccess(request)
+            }
+        };
+        match dispatch_broker_request_as(
+            &self.state,
+            variant,
+            BrokerCallerRole::AdminUid {
+                uid: self.state.daemon_uid,
+            },
+        ) {
+            Ok(BrokerResponse::EndpointAccess(response)) => Ok(response),
+            Ok(BrokerResponse::Error(response)) => Err(EndpointAccessDispatchError::Refused(
+                format!("endpoint-access-{}", response.kind),
+            )),
+            // Any other answer is not an answer about this endpoint, so it is
+            // reported as a leg that did not answer rather than as a refusal
+            // the relationship could act on.
+            Ok(_) | Err(_) => Err(EndpointAccessDispatchError::Unavailable(
+                "the broker did not answer the exact-endpoint request".to_owned(),
+            )),
+        }
+    }
+}
+
 #[cfg(test)]
 use d2bd_runtime::wire_response_helpers::response_remediation;
 pub(crate) use d2bd_runtime::wire_response_helpers::{
@@ -4575,12 +4641,12 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
             source: None,
         })?;
     // U31: the Guest publishes its own verified target-local authority before
-    // it serves anything. It reads and verifies the deployment graph at its
-    // own deployment root, keeps only its own Zone's bindings, and grants
+    // it serves anything. It reads and verifies the deployment graph its own
+    // image closure delivered, keeps only its own Zone's bindings, and grants
     // no host surface and no credential custody; a graph it cannot verify
     // or a publication that asks for host authority refuses the Guest
     // before its ComponentSession listener is reachable.
-    publish_guest_target_authority(&options.state_dir, &runtime)
+    publish_guest_target_authority(Path::new(GUEST_DEPLOYMENT_ROOT), &runtime)
         .await
         .map_err(|detail| {
         tracing::error!(
@@ -14690,34 +14756,33 @@ struct PublishedDeployment {
     activation: std::sync::Arc<d2b_provider_activation_nixos::AcceptedDeploymentGraph>,
 }
 
+/// The deployment root the Guest image closure delivers this Guest's own
+/// verified deployment graph into.
+///
+/// The document arrives at `<root>/deployment-bootstrap.json` through the
+/// Guest image's own `/etc` closure, the same mechanism that delivers the
+/// ComponentSession keys, so it is store content inside the closure the
+/// broker StoreSyncs and digests rather than writable per-boot state a
+/// Guest has to trust about itself. [`serve_guest`] reads it from here and
+/// re-verifies it before a single row is read out of it.
+pub const GUEST_DEPLOYMENT_ROOT: &str = "/etc/d2b/deployment";
+
 /// Publish the Guest's own verified target-local authority.
 ///
-/// The Guest reads and verifies the deployment graph at its own deployment
-/// root - the state directory the Guest was started with - and publishes
-/// only what belongs to the target: its own Zone, the bindings the verified
-/// graph carries for that Zone, and no host surface and no credential
-/// custody. The publication carries the Guest's own store incarnation, so a
-/// Guest that cannot read a verified graph for itself serves nothing rather
-/// than serving under the host's authority.
+/// The Guest reads and verifies the deployment graph its own image closure
+/// delivers - a document naming the Guest's own Zone, never the Host's -
+/// and publishes only what belongs to the target: its own Zone, the
+/// bindings the verified graph carries for that Zone, and no host surface
+/// and no credential custody. The publication carries the Guest's own store
+/// incarnation, so a Guest that cannot read a verified graph for itself
+/// serves nothing rather than serving under the host's authority.
 async fn publish_guest_target_authority(
-    state_dir: &std::path::Path,
+    deployment_root: &Path,
     runtime: &d2bd_runtime::guest_mode::GuestRuntime,
 ) -> Result<(), String> {
-    use crate::foundation_seed::DeploymentBootstrap;
-
-    let root = state_dir.join("deployment");
-    let graph = DeploymentBootstrap::read_from_deployment_root(&root)
-        .await
-        .map_err(|error| error.to_string())?;
     let identity = runtime.identity();
     let zone = identity.zone().clone();
-    if graph.zone.as_str() != zone.as_str() {
-        return Err(format!(
-            "deployment bootstrap refused: the graph describes Zone {}, not the Guest's own Zone {}",
-            graph.zone.as_str(),
-            zone.as_str()
-        ));
-    }
+    let graph = guest_deployment_bootstrap(deployment_root, &zone).await?;
     let bindings = graph
         .accepted_graph()
         .map_err(|error| error.to_string())?
@@ -14739,10 +14804,262 @@ async fn publish_guest_target_authority(
         .map_err(|error| error.to_string())?;
     tracing::info!(
         guest_ref = %identity.guest_ref().name().as_str(),
-        deployment_root = %root.display(),
+        deployment_root = %deployment_root.display(),
         "Guest published its verified target-local authority"
     );
     Ok(())
+}
+
+/// Read and verify the deployment graph delivered to one Guest.
+///
+/// This is the daemon's verified document with one difference: the Zone it
+/// names is the Guest's own rather than the Host's system Zone. The
+/// schema tag, the canonical preimage, and the framed digest domain are the
+/// ones the daemon verifies, so the two halves agree about what a verified
+/// deployment graph is; a Guest is never handed authority because its image
+/// was handed a document. Verification happens before any row is read out
+/// of the graph, and the Zone the verified document names must be the Zone
+/// the Guest was started for.
+async fn guest_deployment_bootstrap(
+    root: &Path,
+    zone: &ZoneId,
+) -> Result<crate::foundation_seed::DeploymentBootstrap, String> {
+    use crate::foundation_seed::{
+        DEPLOYMENT_BOOTSTRAP_DIGEST_DOMAIN, DEPLOYMENT_BOOTSTRAP_SCHEMA, DeploymentBootstrap,
+        read_deployment_bootstrap_bytes,
+    };
+
+    let bytes = read_deployment_bootstrap_bytes(root)
+        .await
+        .map_err(|error| error.to_string())?;
+    let graph: DeploymentBootstrap = serde_json::from_slice(&bytes).map_err(|_| {
+        format!(
+            "deployment bootstrap refused: {} is not a deployment graph",
+            crate::foundation_seed::DEPLOYMENT_BOOTSTRAP_FILE
+        )
+    })?;
+    if graph.schema_version != DEPLOYMENT_BOOTSTRAP_SCHEMA {
+        return Err(format!(
+            "deployment bootstrap refused: schema {} is not this release's contract",
+            graph.schema_version
+        ));
+    }
+    // The bytes the self-hash covers are the daemon's own reconstruction of
+    // them, not a second spelling: verification removes the digest field the
+    // publisher had not yet written and canonicalizes what is left.
+    let preimage = DeploymentBootstrap::canonical_bytes_without_digest(&graph)
+        .map_err(|error| error.to_string())?;
+    let observed = d2b_contracts_resource::v3::framed_canonical_digest(
+        DEPLOYMENT_BOOTSTRAP_DIGEST_DOMAIN,
+        &preimage,
+    );
+    if observed != graph.graph_digest {
+        return Err(format!(
+            "deployment bootstrap refused: the graph's self-hash {} does not cover its own bytes",
+            graph.graph_digest
+        ));
+    }
+    if graph.zone.as_str() != zone.as_str() {
+        return Err(format!(
+            "deployment bootstrap refused: the graph describes Zone {}, not the Guest's own Zone {}",
+            graph.zone.as_str(),
+            zone.as_str()
+        ));
+    }
+    Ok(graph)
+}
+
+#[cfg(test)]
+mod guest_deployment_bootstrap_tests {
+    use super::*;
+    use d2b_contracts_resource::v3::CanonicalJsonValue;
+    use d2bd_runtime::target_runtime::AdmissionLimits;
+
+    /// The per-Zone deployment graph the Nix producer renders for Zone
+    /// `work`, byte for byte.
+    ///
+    /// This is the document `nixos-modules/deployment-bootstrap.nix`
+    /// constructs for a Guest image, captured from that producer rather
+    /// than re-derived here, so what the Guest reads in these tests is what
+    /// the Guest image actually delivers. Re-render it with:
+    ///
+    /// ```text
+    /// nix eval --impure --raw --file nixos-modules/deployment-bootstrap.nix \
+    ///   --arg lib 'import <nixpkgs> {}.lib'
+    /// ```
+    const WORK_ZONE_DOCUMENT: &str = concat!(
+    r#"{"graphDigest":"sha256:3e0db4853b89f2126441dc58f15e3255cae072e2f7e66466afb06fb62966c787","#,
+    r#""implementations":["activation-nixos","audio-binding","audio-service","credential","device","device-security-key","device-usbip","endpoint","guest","host","network-local","process","process-systemd","shell-pool","shell-session","user","volume","volume-binding","wayland-policy","wayland-session"],"#,
+    r#""roleBindings":[{"admitted":{"roleRef":"Role/operation-publisher","subjects":["Provider/system-minijail"]},"reference":"RoleBinding/system-minijail-self-operation-publisher"}],"#,
+    r#""roles":[{"admitted":{"operationRefs":[],"rules":[{"executionRefs":[],"resourceNames":[],"resourceTypes":["Operation"],"sessionVerbs":[],"subresources":[],"verbs":["create"],"zones":[]}]},"reference":"Role/operation-publisher"}],"#,
+    r#""schemaVersion":"d2b-deployment-bootstrap/1","stateVolume":"Volume/d2b-state","#,
+    r#""storeIncarnation":"foundation-1","zone":"work"}"#
+    );
+
+    /// The delivery root one Guest reads, under a scratch directory that is
+    /// this test's own.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn deployment_root(name: &str, document: Option<&str>) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("d2b-guest-bootstrap-{name}"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("guest deployment root");
+        if let Some(document) = document {
+            std::fs::write(
+                root.join(crate::foundation_seed::DEPLOYMENT_BOOTSTRAP_FILE),
+                document,
+            )
+            .expect("delivered deployment graph");
+        }
+        root
+    }
+
+    fn identity(zone: &str) -> d2bd_runtime::guest_mode::GuestIdentity {
+        d2bd_runtime::guest_mode::GuestIdentity::new(
+            ResourceRef::parse("Guest/workload").expect("Guest ref"),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("Guest UID"),
+            ZoneId::parse(zone).expect("Zone"),
+            d2bd_runtime::guest_mode::BootIdentity::from_kernel_boot_id("guest-bootstrap-test")
+                .expect("boot identity"),
+            d2b_contracts_resource::v3::identity::SessionPurpose::parse(
+                d2bd_runtime::guest_mode::GUEST_COMPONENT_SESSION_PURPOSE,
+            )
+            .expect("purpose"),
+            SchemaFingerprint::parse(
+                "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+            )
+            .expect("schema"),
+            ReconnectGeneration::new(1).expect("reconnect generation"),
+            1,
+            1,
+            1,
+        )
+        .expect("Guest identity")
+    }
+
+    async fn guest_runtime(zone: &str) -> d2bd_runtime::guest_mode::GuestRuntime {
+        d2bd_runtime::guest_mode::GuestRuntime::new(
+            identity(zone),
+            PathBuf::from("/run/d2b/guest-broker.sock"),
+            997,
+            AdmissionLimits::guest_default(),
+        )
+        .await
+        .expect("Guest runtime")
+    }
+
+    /// The producer's construction for a document naming another Zone: the
+    /// canonical preimage with the Zone replaced, hashed over the same
+    /// framed domain and carrying its own digest. Built the way the Guest
+    /// image builds it, so a refusal below is the Zone the document names
+    /// and not a broken self-hash.
+    fn document_for_zone(document: &str, zone: &str) -> String {
+        let mut value = CanonicalJsonValue::parse(document.as_bytes())
+            .expect("canonical document")
+            .as_object()
+            .expect("document object")
+            .clone();
+        value.insert(
+            "zone".to_owned(),
+            CanonicalJsonValue::String(zone.to_owned()),
+        );
+        value.remove("graphDigest");
+        let digest = d2b_contracts_resource::v3::framed_canonical_digest(
+            crate::foundation_seed::DEPLOYMENT_BOOTSTRAP_DIGEST_DOMAIN,
+            &CanonicalJsonValue::Object(value.clone()).to_canonical_bytes(),
+        );
+        value.insert("graphDigest".to_owned(), CanonicalJsonValue::String(digest));
+        String::from_utf8(CanonicalJsonValue::Object(value).to_canonical_bytes())
+            .expect("canonical document bytes")
+    }
+
+    #[tokio::test]
+    async fn a_guest_publishes_target_local_authority_from_its_own_zone_graph() {
+        let root = deployment_root("work", Some(WORK_ZONE_DOCUMENT));
+        let runtime = guest_runtime("work").await;
+
+        publish_guest_target_authority(&root, &runtime)
+            .await
+            .expect("the delivered Zone graph publishes the Guest's own authority");
+
+        let authority = runtime
+            .require_target_authority()
+            .expect("a published Guest authority");
+        assert_eq!(authority.zone.as_str(), "work");
+        assert_eq!(authority.store_incarnation.as_str(), "foundation-1");
+        assert_eq!(
+            authority.bindings,
+            vec!["RoleBinding/system-minijail-self-operation-publisher".to_owned()],
+            "the Guest carries the bindings its own Zone's verified graph names, and no host surface",
+        );
+        assert!(
+            !authority.credential_custody,
+            "a Guest publication never takes credential custody",
+        );
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    #[tokio::test]
+    async fn a_graph_naming_another_zone_is_refused() {
+        let root = deployment_root(
+            "other-zone",
+            Some(&document_for_zone(WORK_ZONE_DOCUMENT, "other")),
+        );
+        let runtime = guest_runtime("work").await;
+
+        let refusal = publish_guest_target_authority(&root, &runtime)
+            .await
+            .expect_err("a graph for another Zone never publishes");
+
+        assert!(
+            refusal.contains("describes Zone other"),
+            "the refusal names the Zone the graph actually describes: {refusal}",
+        );
+        assert!(
+            !runtime.has_target_authority(),
+            "a refused graph leaves the Guest with no authority at all",
+        );
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    #[tokio::test]
+    async fn a_graph_whose_digest_does_not_cover_its_preimage_is_refused() {
+        let tampered = WORK_ZONE_DOCUMENT.replace(
+            "\"storeIncarnation\":\"foundation-1\"",
+            "\"storeIncarnation\":\"foundation-2\"",
+        );
+        let root = deployment_root("tampered", Some(&tampered));
+        let runtime = guest_runtime("work").await;
+
+        let refusal = publish_guest_target_authority(&root, &runtime)
+            .await
+            .expect_err("an edited preimage never publishes");
+
+        assert!(
+            refusal.contains("self-hash"),
+            "the refusal names the self-hash that no longer covers the bytes: {refusal}",
+        );
+        assert!(
+            !runtime.has_target_authority(),
+            "an unverifiable graph leaves the Guest with no authority at all",
+        );
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    #[tokio::test]
+    async fn a_guest_with_no_delivered_graph_publishes_nothing() {
+        let root = deployment_root("absent", None);
+        let runtime = guest_runtime("work").await;
+
+        publish_guest_target_authority(&root, &runtime)
+            .await
+            .expect_err("there is no default graph for a Guest to fall back on");
+
+        assert!(
+            !runtime.has_target_authority(),
+            "a Guest with no delivered graph serves nothing",
+        );
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
 }
 
 async fn open_resource_plane(
@@ -15012,6 +15329,11 @@ async fn open_resource_plane(
             // graph, so the Activation family refuses to plan a runner for a
             // deployment that did not publish it.
             inputs.deployment_graph = Some(std::sync::Arc::clone(&published.activation));
+            // U18: the daemon state the Endpoint family's privileged broker
+            // dispatch is built over. Only the daemon holds the broker socket
+            // and the caller role, so the family receives a dispatch facet
+            // rather than a socket or a principal.
+            inputs.server_state = Some(std::sync::Arc::new(state.clone()));
             // The Provider driver reads the zone's live controller-session
             // evidence (the same seam the G5 reader bridge uses), never a
             // durable status copy.

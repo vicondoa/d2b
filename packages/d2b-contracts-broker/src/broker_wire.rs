@@ -209,7 +209,34 @@ pub enum BrokerRequest {
     /// wire version (KTD10) so a straggler peer gets the stale-wire-version
     /// refusal plus an audit record, never a silent malformed-wire drop.
     EnvelopeInvoke(EnvelopeInvokeRequest),
-}
+    /// Re-read what one consumer principal actually has on ONE exact host
+    /// endpoint (U18, R23).
+    ///
+    /// The three endpoint-access variants share ONE request struct and ONE
+    /// resolution path, and the verb is the only thing that tells them
+    /// apart: they differ in the host effect they perform, not in the
+    /// admission they are admitted under. A consumer that is admitted one
+    /// exact endpoint gets an answer about that endpoint and nothing else -
+    /// the reply carries the pinned `(dev, ino)` the broker resolved, the
+    /// kernel's effective rights on it, whether every ancestor directory
+    /// applies a traverse bit, and whether the containing directory is
+    /// listable (which is the directory authority R23 removed).
+    ///
+    /// The request names no path anywhere. See [`EndpointAccessRequest`].
+    EndpointObserve(EndpointAccessRequest),
+    /// Apply the exact-endpoint grant: the consumer principal's entry on ONE
+    /// endpoint socket plus traverse on the ancestor directories, and no
+    /// listing authority on any of them.
+    ///
+    /// The broker resolves the socket inside a directory it derives from its
+    /// own serve-time configuration, so the grant lands on the inode it
+    /// resolved and on no other. See [`EndpointAccessRequest`].
+    EndpointGrantAccess(EndpointAccessRequest),
+    /// Remove the exact-endpoint grant: the consumer principal's own entry on
+    /// that one socket, leaving the ancestor traversal grants - which sibling
+    /// endpoints and the producer's own helpers also depend on - in place.
+    EndpointRevokeAccess(EndpointAccessRequest),
+ }
 
 /// Path-free result of a source-to-target generation handoff.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1050,6 +1077,9 @@ impl BrokerRequest {
             Self::SecurityKeyOpenDevice(_) => "SecurityKeyOpenDevice",
             Self::SecurityKeyApplyUdevRules(_) => "SecurityKeyApplyUdevRules",
             Self::EnvelopeInvoke(_) => "EnvelopeInvoke",
+            Self::EndpointObserve(_) => EndpointAccessVerb::Observe.as_str(),
+            Self::EndpointGrantAccess(_) => EndpointAccessVerb::Grant.as_str(),
+            Self::EndpointRevokeAccess(_) => EndpointAccessVerb::Revoke.as_str(),
         }
     }
 
@@ -1271,6 +1301,23 @@ impl BrokerRequest {
                 request.bundle_udev_intent_ref.clone(),
                 format!("{}:{}", self.op_name(), request.bundle_udev_intent_ref),
             ),
+            // The join axes are the committed endpoint the effect acts on and
+            // the committed consumer it acts for, with the socket name
+            // inside the broker's own directory as the third component. All
+            // three are opaque identities: the join carries no path, and it
+            // deliberately consults neither the display category nor the
+            // opaque target label.
+            Self::EndpointObserve(request)
+            | Self::EndpointGrantAccess(request)
+            | Self::EndpointRevokeAccess(request) => (
+                request.endpoint_ref.to_canonical_string(),
+                format!(
+                    "{}:{}:{}",
+                    self.op_name(),
+                    request.consumer_ref.to_canonical_string(),
+                    request.socket.as_str()
+                ),
+            ),
             Self::ExportBrokerAudit(_)
             | Self::Hello(_)
             | Self::PublishTrustedContext(_)
@@ -1435,6 +1482,14 @@ pub enum BrokerResponse {
     /// result or its closed refusal, plus any descriptors the dispatching
     /// leg minted via the response frame's SCM_RIGHTS attachments.
     EnvelopeInvoke(EnvelopeInvokeResponse),
+    /// The broker's answer to one exact-endpoint access request.
+    ///
+    /// The three endpoint-access verbs answer with the same body, because
+    /// they answer the same question - what this consumer principal has on
+    /// this one exact endpoint - at three different points in the effect's
+    /// life. A revoke answers with the inode it removed the entry from, so a
+    /// retry can tell a removal that landed from one that did not.
+    EndpointAccess(EndpointAccessResponse),
 }
 
 /// Typed broker error envelope for the real wire. Mirrors the
@@ -2492,6 +2547,157 @@ pub struct OpenHidrawSecurityKeyResponse {
     /// Closed-set device-class label confirming the node is a
     /// FIDO-class HID device.
     pub device_class: String,
+}
+
+/// The closed verb set the exact-endpoint ACL wire carries.
+///
+/// Three wire variants share one request struct and one resolution path, and
+/// this enum is the whole difference between them: they perform different
+/// host effects over the same admission, not different admissions. The verb
+/// is part of the authority binding, so a key minted for a grant cannot be
+/// replayed as an observation or as a revoke.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum EndpointAccessVerb {
+    /// Re-read what the consumer principal actually has on the exact endpoint.
+    Observe,
+    /// Apply the exact endpoint's grant and the ancestor traversal.
+    Grant,
+    /// Remove the exact endpoint's entry and nothing else.
+    Revoke,
+}
+
+impl EndpointAccessVerb {
+    /// The committed operation name this verb is dispatched under, and the
+    /// spelling the authority binding mixes in.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Observe => "EndpointObserve",
+            Self::Grant => "EndpointGrantAccess",
+            Self::Revoke => "EndpointRevokeAccess",
+        }
+    }
+}
+
+/// One exact-endpoint ACL request for one admitted endpoint/consumer pair.
+///
+/// The struct names the exact endpoint, the exact committed consumer, and the
+/// socket's NAME inside a directory the broker resolves from its own
+/// serve-time configuration. There is no path field here, and that is the
+/// whole security property: `socket` is a [`BoundedToken`], whose
+/// `^[a-z][a-z0-9-]*$` grammar admits no `/`, no `.`, and no `..`, so the
+/// only filesystem object a request can ever select is a direct child of the
+/// directory the broker itself resolved. An alternate absolute socket, a
+/// `..` escape, and the containing directory are therefore not refusals this
+/// dispatch has to detect - they are values this wire cannot represent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EndpointAccessRequest {
+    /// The exact `Endpoint` row the relationship is admitted against.
+    pub endpoint_ref: ResourceRef,
+    /// The committed `Process` / `EphemeralProcess` row the effect acts for.
+    pub consumer_ref: ResourceRef,
+    /// The Zone self-resource uid whose verified bundle declares that row.
+    pub zone_uid: ResourceUid,
+    /// The socket's name inside the broker's own endpoint directory.
+    pub socket: BoundedToken,
+    /// The POSIX permission bits the grant asks for on the socket (`1..=7`).
+    pub socket_rights: u8,
+    /// A claim about the consumer's numeric principal.
+    ///
+    /// The claim is a check, never a source: the broker re-derives the
+    /// principal from the verified bundle and refuses a claim that does not
+    /// reproduce it, and the reply always carries the derived numbers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_principal: Option<EndpointPrincipalClaim>,
+    /// The broker-recomputed binding this request must reproduce, from
+    /// [`endpoint_access_authority_binding`].
+    pub authority_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+/// A claimed numeric principal for one committed consumer row.
+///
+/// A number a caller can construct is exactly why this is a claim and not an
+/// input: nothing downstream reads it, whether it agrees or not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EndpointPrincipalClaim {
+    /// The claimed host uid.
+    pub uid: u32,
+    /// The claimed host gid.
+    pub gid: u32,
+}
+
+/// Derive the exact endpoint-access binding accepted by the privileged broker.
+///
+/// The same fence [`security_key_authority_binding`] applies to a Device
+/// selector: the broker recomputes the key from the request's own committed
+/// facts and compares it before any path is resolved or any ACL is touched,
+/// so a request that repoints a relationship at a different socket, a
+/// different consumer, or a different verb does not reproduce the key the
+/// admission was minted under. It is a consistency proof, never a secret -
+/// and never a source: the endpoint, the consumer, the Zone, the socket name,
+/// and the verb are all read from the request and cross-checked against the
+/// verified bundle regardless of what the key says.
+pub fn endpoint_access_authority_binding(
+    endpoint_ref: &ResourceRef,
+    consumer_ref: &ResourceRef,
+    zone_uid: &ResourceUid,
+    socket: &BoundedToken,
+    verb: EndpointAccessVerb,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"d2b:endpoint-access-authority/v1");
+    for part in [
+        endpoint_ref.to_canonical_string(),
+        consumer_ref.to_canonical_string(),
+        zone_uid.to_canonical_string(),
+        socket.as_str().to_owned(),
+        verb.as_str().to_owned(),
+    ] {
+        hasher.update([0]);
+        hasher.update(part.as_bytes());
+    }
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+/// What one exact endpoint actually answers for one consumer principal.
+///
+/// The `(device, inode)` pair is the identity the broker PINNED - read from
+/// the descriptor it held while the answer was taken - and is never
+/// recomputed by the reader. A producer that replaced its socket therefore
+/// shows up as a different inode here, which is how a relationship prepared
+/// against the old one can tell it is stale.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EndpointAccessResponse {
+    /// The exact endpoint this answer is about.
+    pub endpoint_ref: ResourceRef,
+    /// The committed consumer the answer is for.
+    pub consumer_ref: ResourceRef,
+    /// The socket name the broker resolved (never a path).
+    pub socket: BoundedToken,
+    /// The device the pinned endpoint socket lives on.
+    pub socket_device: u64,
+    /// The inode the pinned endpoint socket resolved to.
+    pub socket_inode: u64,
+    /// The permission the KERNEL applies to the consumer on the socket, not
+    /// the mode the broker asked for.
+    pub socket_effective_rights: u32,
+    /// Whether every ancestor directory applies a traverse bit to the
+    /// consumer, which is what makes the socket reachable at all.
+    pub ancestors_traversable: bool,
+    /// Whether the consumer may enumerate the socket's parent directory.
+    /// Traverse is what a consumer needs; listing is the directory authority
+    /// R23 removed, so a correct grant answers `false` here.
+    pub parent_listable: bool,
+    /// The uid the verified bundle derived for the consumer row. This is the
+    /// derived number even when the request carried a claim.
+    pub consumer_uid: u32,
+    /// The gid the verified bundle derived for the consumer row.
+    pub consumer_gid: u32,
 }
 
 /// The concrete `/var/lib/d2b/vms/<vm>` or `/run/d2b/<vm>` path

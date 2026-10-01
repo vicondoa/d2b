@@ -400,6 +400,9 @@ wire_variants! {
         BrokerRequest::SecurityKeyOpenDevice(..) => "SecurityKeyOpenDevice",
         BrokerRequest::SecurityKeyApplyUdevRules(..) => "SecurityKeyApplyUdevRules",
         BrokerRequest::EnvelopeInvoke(..) => "EnvelopeInvoke",
+        BrokerRequest::EndpointObserve(..) => "EndpointObserve",
+        BrokerRequest::EndpointGrantAccess(..) => "EndpointGrantAccess",
+        BrokerRequest::EndpointRevokeAccess(..) => "EndpointRevokeAccess",
 }
 
 /// The committed row one wire variant names, when a row declares it.

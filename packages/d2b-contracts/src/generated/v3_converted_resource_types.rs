@@ -6,13 +6,14 @@
 
 /// The resource types the v3 resource runtime owns end to end (R35/F1
 /// exclusive per-type partition): served only by the per-zone manager plane.
-pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 38] = [
+pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 39] = [
     "Process",
     "EphemeralProcess",
     "Guest",
     "Volume",
     "VolumeBinding",
     "Endpoint",
+    "EndpointBinding",
     "Host",
     "User",
     "activation-nixos.d2bus.org.NixosGeneration",

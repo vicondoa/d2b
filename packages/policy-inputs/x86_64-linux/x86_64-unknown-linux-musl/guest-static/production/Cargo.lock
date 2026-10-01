@@ -1263,6 +1263,7 @@ name = "d2b-provider-endpoint"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
+ "d2b-contracts-broker",
  "d2b-contracts-resource",
  "d2b-resource-runtime",
  "d2b-resource-types",

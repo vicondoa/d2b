@@ -5,7 +5,7 @@
 //! calls the plane's injected [`GraphMutationAdmission`], which defers every
 //! rule to the one pure evaluator, and the manager's derived relation indexes
 //! are rebuilt from committed rows alone. The unchanged production entry point
-//! (`SystemZoneWriteFence` plus the string-subject messages) is deliberately
+//! (the graph admission plus the string-subject messages) is deliberately
 //! untouched and is not exercised here.
 
 use std::sync::Arc;

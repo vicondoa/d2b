@@ -31,6 +31,7 @@ pub const RESOURCE_TYPE_VALUES: &[&str] = &[
     "ResourceImport",
     "Operation",
     "SeccompProfile",
+    "EndpointBinding",
     "ExecutionPolicy",
     "vendor",
 ];
@@ -102,4 +103,7 @@ pub const BROKER_OPERATION_VALUES: &[&str] = &[
     "SecurityKeyOpenDevice",
     "SecurityKeyApplyUdevRules",
     "EnvelopeInvoke",
+    "EndpointObserve",
+    "EndpointGrantAccess",
+    "EndpointRevokeAccess",
 ];

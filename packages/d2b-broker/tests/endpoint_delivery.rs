@@ -33,6 +33,7 @@
 //! wait, and the ACL probes carry the sanctioned `cfg(test) helper` allow at
 //! each site rather than a crate-wide one.
 
+use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -43,8 +44,24 @@ use std::time::{Duration, Instant};
 use d2b_broker::live_handlers::{
     exact_endpoint_access, grant_exact_endpoint_access, revoke_exact_endpoint_access,
 };
+use d2b_broker::ops::endpoint_access::{
+    EndpointAccessError, accept_endpoint_access, endpoint_socket_path,
+};
 use d2b_broker::ops::spawn_runner::{PresentationBindSpec, PresentationRealization};
 use d2b_broker::sys::pidfd_sys::{RunnerIsolationSpec, UserNamespaceSpec, clone3_spawn_runner};
+use d2b_contracts_broker::broker_wire::{
+    BrokerRequest, EndpointAccessRequest, EndpointAccessResponse, EndpointAccessVerb,
+    EndpointPrincipalClaim, endpoint_access_authority_binding,
+};
+use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+use d2b_contracts_resource::v3::resource_schema::{
+    CanonicalJsonValue, canonical_json_bytes, framed_canonical_digest,
+};
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
+use d2b_core::bundle::{Bundle, BundleGeneration};
+use d2b_core::bundle_resolver::{BundleResolver, DEVICE_TPM_PROVIDER_REF};
+use d2b_core::manifest_v04::ManifestV04;
+use d2b_core::processes::ProcessesJson;
 use d2b_core::sandbox_profile::{MountPolicy, NamespaceSet};
 
 /// The exact compositor socket a consumer is admitted against.
@@ -929,4 +946,872 @@ fn open_pinned(path: &Path) -> std::fs::File {
     )
     .map(std::fs::File::from)
     .unwrap_or_else(|error| panic!("pin {}: {error}", path.display()))
+}
+
+// ---------------------------------------------------------------------------
+// Accept path: the same properties ACROSS the wire
+// ---------------------------------------------------------------------------
+//
+// The cases above drive the three helpers directly, so they prove the kernel
+// semantics but not the boundary. The cases below carry every request through
+// the broker's own wire contract - a `BrokerRequest` encoded and decoded again
+// - and then through the accept path the dispatch arm calls, with the broker
+// runtime root and a verified Zone bundle as its only inputs.
+//
+// What they add is the part a helper-level test cannot reach: the wire has no
+// field a path could travel in, the broker's resolved target is a direct child
+// of its OWN directory whatever the request says, the principal the ACL names
+// is the one the verified bundle derives, and a request whose facts were
+// edited on the wire is refused before anything is touched - so "refused" and
+// "mutated nothing" stay the same observation.
+
+/// The Zone the fixture bundle declares.
+const ZONE: &str = "work";
+/// The Zone self-resource uid that Zone's verified bundle is bound to.
+const ZONE_UID: &str = "123e4567-e89b-42d3-a456-426614174000";
+/// The committed consumer row the grant acts for.
+const CONSUMER: &str = "Process/shell";
+/// The exact `Endpoint` row the relationship is admitted against.
+const ENDPOINT: &str = "Endpoint/compositor";
+/// The directory the broker resolves endpoint socket names inside, relative to
+/// its runtime root.
+const BROKER_ENDPOINT_DIR: &str = "endpoints";
+
+/// A broker runtime root laid out the way the broker itself resolves it.
+///
+/// `runtime/` is the broker's runtime root: the directory its private socket's
+/// parent names. `endpoints/` is the one directory under that root the exact
+/// endpoint wire can select from, and it holds live AF_UNIX sockets.
+/// `elsewhere/` is a sibling of the runtime root entirely and holds the
+/// alternate absolute socket - the thing a path on the wire would reach if a
+/// path could travel on the wire at all.
+struct AcceptTree {
+    /// Held so the tree outlives every case that borrows it; the path is
+    /// reached through `runtime` and `elsewhere` rather than from here.
+    _scratch: tempfile::TempDir,
+    runtime: PathBuf,
+    endpoints: PathBuf,
+    elsewhere: PathBuf,
+    /// One marker per live socket, so a case can assert the tree really holds
+    /// all three before it claims the alternates carry nothing.
+    live_sockets: usize,
+}
+
+impl AcceptTree {
+    /// Build the tree under a root whose own ancestors already apply traverse.
+    ///
+    /// `tempfile::tempdir()` follows `TMPDIR`, which a sandboxed test runner
+    /// points inside a private, non-traversable directory - and the broker
+    /// grants traversal only inside its OWN runtime root, so a tree under
+    /// such a parent could never be walked to and the case would be measuring
+    /// the harness rather than the grant. `/tmp` is where the host runtime
+    /// roots' own ancestors (`/run`, `/`) already are: traversable, and never
+    /// listable by a consumer this broker does not own.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn new() -> Self {
+        let scratch = tempfile::Builder::new()
+            .prefix("d2b-endpoint-accept-")
+            .tempdir_in(world_traversable_root())
+            .expect("accept-path tempdir");
+        let runtime = scratch.path().join("runtime");
+        let endpoints = runtime.join(BROKER_ENDPOINT_DIR);
+        let elsewhere = scratch.path().join("elsewhere");
+        for directory in [&runtime, &endpoints, &elsewhere] {
+            fs::create_dir_all(directory).expect("accept-path directory");
+            // 0750: traversable by the consumer and not listable, and a non-zero
+            // GROUP class so the kernel's ACL mask does not cap the named
+            // traverse entry this grant installs (the AE19 trap - see the
+            // recorded solution in
+            // `docs/solutions/infrastructure/posix-acl-mask-nullified-by-chmod-on-mode-0700-directories.md`).
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o750))
+                .expect("chmod accept-path directory");
+        }
+        // The tree's own parent is an ancestor of the broker runtime root, and
+        // the broker grants traversal only up to its own root, so the rest of
+        // the chain must already be traversable - exactly as `/run` and `/`
+        // already are in production. 0711: traversable, never listable.
+        fs::set_permissions(scratch.path(), fs::Permissions::from_mode(0o711))
+            .expect("chmod the accept-path scratch dir");
+        let mut listeners = Vec::new();
+        for path in [endpoints.join(ADMITTED), endpoints.join(SIBLING)] {
+            UnixListener::bind(&path).expect("bind endpoint socket");
+            // 0660: the socket grants the consumer NOTHING through the other
+            // class, so every bit the kernel applies to a non-owner principal
+            // is a bit the broker's grant installed - and the group class keeps
+            // the mask wide enough for the named entry to be effective.
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o660))
+                .expect("chmod endpoint socket");
+            listeners.push(());
+        }
+        UnixListener::bind(elsewhere.join("attacker.sock")).expect("bind alternate socket");
+        fs::set_permissions(
+            elsewhere.join("attacker.sock"),
+            fs::Permissions::from_mode(0o660),
+        )
+        .expect("chmod alternate socket");
+        assert_ancestors_are_traversable(&runtime);
+        Self {
+            _scratch: scratch,
+            runtime,
+            endpoints,
+            elsewhere,
+            live_sockets: listeners.len() + 1,
+        }
+    }
+
+    /// The exact socket the relationship is admitted against.
+    fn admitted(&self) -> PathBuf {
+        self.endpoints.join(ADMITTED)
+    }
+
+    /// A sibling socket in the SAME directory, which the consumer must not reach.
+    fn sibling(&self) -> PathBuf {
+        self.endpoints.join(SIBLING)
+    }
+
+    /// The alternate absolute socket, outside the broker's runtime root.
+    fn alternate_absolute(&self) -> PathBuf {
+        self.elsewhere.join("attacker.sock")
+    }
+
+    /// Every socket in the tree, so a "nothing was granted anywhere" claim is
+    /// checked against all of them rather than against a chosen one.
+    fn every_socket(&self) -> Vec<PathBuf> {
+        vec![self.admitted(), self.sibling(), self.alternate_absolute()]
+    }
+
+    /// The directories the broker grants traversal on, root-first.
+    fn ancestors(&self) -> Vec<PathBuf> {
+        vec![self.runtime.clone(), self.endpoints.clone()]
+    }
+
+    /// Every inode in the tree: the three sockets and the two directories.
+    fn every_inode(&self) -> Vec<PathBuf> {
+        let mut paths = self.every_socket();
+        paths.extend(self.ancestors());
+        paths
+    }
+
+    /// How many live endpoints the tree holds, so "the sibling and the
+    /// alternate carry nothing" is a statement about a real tree.
+    fn live_endpoints(&self) -> usize {
+        self.live_sockets
+    }
+}
+
+/// The directory the accept-path tree is built under.
+///
+/// `/tmp` when the test process can write there, else the process temp
+/// directory. Either way the choice is checked, not assumed:
+/// [`AcceptTree::assert_ancestors_are_traversable`] fails the case if the
+/// directory above the broker's own runtime root is not traversable, so a
+/// harness that hands the test a sealed tree is reported instead of quietly
+/// weakening every traversal claim the cases make.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+fn world_traversable_root() -> &'static Path {
+    Path::new("/tmp")
+}
+
+/// Every ancestor from the filesystem root down to (but excluding) the
+/// broker's runtime root must already apply a traverse bit to everyone.
+///
+/// This is the production shape - the broker's runtime root is `/run/d2b`, and
+/// `/run` and `/` are traversable by every principal - and the broker does not
+/// repair it when it is not: a traversal grant above the broker's own root
+/// would be a mutation of a directory the broker does not own. The case
+/// asserts the precondition instead of assuming it, so the traversal claims it
+/// makes are about the broker's grant and never about the harness.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+fn assert_ancestors_are_traversable(runtime_root: &Path) {
+    for ancestor in runtime_root.ancestors().skip(1) {
+        if ancestor.as_os_str().is_empty() {
+            continue;
+        }
+        let mode = fs::metadata(ancestor)
+            .unwrap_or_else(|error| panic!("stat {}: {error}", ancestor.display()))
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o001,
+            0o001,
+            "{} must already apply a traverse bit to every principal: the broker grants \
+             traversal only inside its own runtime root, so a sealed ancestor makes the \
+             exact endpoint unreachable no matter what the broker applies",
+            ancestor.display()
+        );
+    }
+}
+
+/// The canonical content hash one fixture resource array hashes to, computed
+/// the way `ResourceBundle` computes it, so the fixture bundle verifies.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+fn fixture_content_hash(resources: &[serde_json::Value]) -> String {
+    let array = serde_json::Value::Array(resources.to_vec());
+    let canonical = CanonicalJsonValue::parse(
+        &serde_json::to_vec(&array).expect("fixture resources serialize"),
+    )
+    .expect("fixture resources are canonical JSON");
+    framed_canonical_digest(
+        "d2b:v3:resource-bundle",
+        &canonical_json_bytes(&canonical).expect("fixture resources encode"),
+    )
+}
+
+/// One Zone resource bundle declaring a single template-bound `Process`
+/// consumer row, in the shape the compiler emits: the owning `Provider` row
+/// and the consumer row under `resources`, plus the executable binding that
+/// gives the row a numeric principal under `processTemplates`.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+fn zone_bundle(zone: &str, zone_uid: &str, row_name: &str) -> Vec<u8> {
+    let host = format!("{zone}-host");
+    let provider = serde_json::json!({
+        "apiVersion": "resources.d2bus.org/v3",
+        "type": "Provider",
+        "metadata": { "name": "device-tpm", "zone": zone },
+        "spec": { "artifactId": "device-tpm" },
+    });
+    let consumer = serde_json::json!({
+        "apiVersion": "resources.d2bus.org/v3",
+        "type": "Process",
+        "metadata": {
+            "name": row_name,
+            "zone": zone,
+            "ownerRef": DEVICE_TPM_PROVIDER_REF,
+        },
+        "spec": {
+            "domain": "system",
+            "executionRef": format!("Host/{host}"),
+            "processClass": "controller",
+            "providerRef": "Provider/system-minijail",
+            "template": "consumer-worker",
+        },
+    });
+    // `ResourceBundle::verify` requires rows sorted by `(type, name)`.
+    let resources = vec![consumer, provider];
+    let binding = serde_json::json!({
+        "processRef": format!("Process/{row_name}"),
+        "ownerRef": DEVICE_TPM_PROVIDER_REF,
+        "executionRef": format!("Host/{host}"),
+        "template": "consumer-worker",
+        "artifactId": "device-tpm",
+        "binaryRef": "swtpm",
+        "artifactDigest": format!("sha256:{}", "a".repeat(64)),
+        "binaryPath": "/nix/store/device-tpm/bin/swtpm",
+    });
+    serde_json::to_vec(&serde_json::json!({
+        "schemaVersion": 3,
+        "bundleVersion": 1,
+        "zone": zone,
+        "zoneUid": zone_uid,
+        "contentHash": fixture_content_hash(&resources),
+        "artifactCatalogDigest": format!("sha256:{}", "c".repeat(64)),
+        "schemaFingerprints": {},
+        "providerSchemaDigests": {},
+        "resources": resources,
+        "processTemplates": [binding],
+        "generatedAt": "1970-01-01T00:00:00.000Z",
+    }))
+    .expect("fixture zone resource bundle serializes")
+}
+
+/// A resolver carrying the fixture Zone's committed bundle, assembled the way
+/// the loader assembles one from the verified artifact bytes.
+///
+/// The principal this resolver answers with is DERIVED from the committed row -
+/// a number in the reserved 50,000 range, never the test process's uid - which
+/// is the point: the ACL the accept path writes names the bundle's answer, not
+/// a number a test chose.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+fn accept_resolver() -> BundleResolver {
+    BundleResolver::from_artifacts_with_zone_resource_bundles(
+        Bundle {
+            bundle_version: 11,
+            schema_version: "v2".to_owned(),
+            privileges_path: "privileges.json".to_owned(),
+            storage_path: None,
+            realm_workloads_launcher_v2_path: None,
+            generation: BundleGeneration {
+                generator: "test".to_owned(),
+                source_revision: None,
+                generated_at: None,
+            },
+            bundle_hash: None,
+            artifact_hashes: None,
+        },
+        serde_json::from_str(include_str!(
+            "../../../tests/fixtures/deny-unknown/host-valid.json"
+        ))
+        .expect("host fixture parses"),
+        ProcessesJson {
+            schema_version: "v2".to_owned(),
+            vms: Vec::new(),
+        },
+        ManifestV04::from_slice(
+            include_str!("../../../tests/golden/manifest_v04/baseline-vms.json").as_bytes(),
+        )
+        .expect("manifest fixture parses"),
+        BTreeMap::from_iter([(ZONE.to_owned(), zone_bundle(ZONE, ZONE_UID, "shell"))]),
+    )
+}
+
+/// The one request struct all three variants share, for one verb.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+fn access_request(socket: &str, verb: EndpointAccessVerb) -> EndpointAccessRequest {
+    let endpoint_ref = ResourceRef::parse(ENDPOINT).expect("fixture endpoint ref");
+    let consumer_ref = ResourceRef::parse(CONSUMER).expect("fixture consumer ref");
+    let zone_uid = ResourceUid::parse(ZONE_UID).expect("fixture zone uid");
+    let socket = BoundedToken::parse(socket).expect("the fixture socket name is a bounded token");
+    EndpointAccessRequest {
+        authority_key: endpoint_access_authority_binding(
+            &endpoint_ref,
+            &consumer_ref,
+            &zone_uid,
+            &socket,
+            verb,
+        ),
+        endpoint_ref,
+        consumer_ref,
+        zone_uid,
+        socket,
+        socket_rights: 0o6,
+        claimed_principal: None,
+        tracing_span_id: None,
+    }
+}
+
+/// The wire request for one verb, bound to the relationship it is admitted
+/// under: the variant is the verb the request travels as.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+fn access_request_variant(verb: EndpointAccessVerb) -> BrokerRequest {
+    let request = access_request(ADMITTED, verb);
+    match verb {
+        EndpointAccessVerb::Observe => BrokerRequest::EndpointObserve(request),
+        EndpointAccessVerb::Grant => BrokerRequest::EndpointGrantAccess(request),
+        EndpointAccessVerb::Revoke => BrokerRequest::EndpointRevokeAccess(request),
+    }
+}
+
+/// Cross the wire: encode a request with the broker's own codec and decode it
+/// again, so a case is proven against the value the accept path receives
+/// rather than against the value the test built.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+fn across_the_wire(request: &BrokerRequest) -> BrokerRequest {
+    let frame = serde_json::to_vec(request).expect("the request encodes for the wire");
+    serde_json::from_slice(&frame).expect("the frame decodes back into a request")
+}
+
+/// Drive one request across the wire and through the accept path.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+fn accept(
+    request: &BrokerRequest,
+    tree: &AcceptTree,
+    resolver: &BundleResolver,
+) -> Result<EndpointAccessResponse, EndpointAccessError> {
+    accept_endpoint_access(&across_the_wire(request), &tree.runtime, resolver)
+}
+
+/// Assert that no inode anywhere in `tree` carries an entry for `uid`, so a
+/// refusal and "mutated nothing" are the same observation.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+fn assert_nothing_granted(tree: &AcceptTree, uid: u32, context: &str) {
+    for path in tree.every_inode() {
+        assert_eq!(
+            pinned_acl(&path, uid).granted_bits(),
+            None,
+            "{context}: {} must carry no entry for the consumer principal",
+            path.display()
+        );
+    }
+}
+
+/// AE7: the request cannot carry a path, so an alternate absolute socket, a
+/// `..` escape, and the containing directory never reach a resolver at all.
+///
+/// Every refusal here happens in the CONTRACT, before any broker code runs:
+/// the token grammar rejects the spelling, and a hand-built hostile frame fails
+/// to decode into a request. That is the difference between a fence the broker
+/// applies and a fence the wire cannot be argued past.
+#[test]
+fn an_alternate_absolute_socket_a_relative_escape_and_the_runtime_directory_cannot_be_named() {
+    let hostile = [
+        // An alternate absolute socket, spelled as a workload would spell it.
+        "/tmp/attacker.sock",
+        // The same socket reached relatively from the broker's own directory.
+        "../../elsewhere/attacker.sock",
+        // A `..` escape out of the broker's endpoint directory.
+        "..",
+        // A sibling reached through its neighbour.
+        "wayland-0/../wayland-1",
+        // The empty name, and a name that does not start with a letter.
+        "",
+        "0-wayland",
+    ];
+    for spelling in hostile {
+        assert!(
+            BoundedToken::parse(spelling).is_err(),
+            "{spelling:?} must not be a bounded token: it is not a single safe path component"
+        );
+    }
+
+    // A frame an attacker would hand the socket: every field present, with the
+    // socket spelled as a path. It does not decode, so no broker code is
+    // reached and no path is ever resolved.
+    for spelling in [
+        "/tmp/attacker.sock",
+        "../../elsewhere/attacker.sock",
+        "..",
+        "wayland-0/../wayland-1",
+    ] {
+        let payload = serde_json::json!({
+            "endpointRef": ENDPOINT,
+            "consumerRef": CONSUMER,
+            "zoneUid": ZONE_UID,
+            "socket": spelling,
+            "socketRights": 7u8,
+            "authorityKey": "sha256:00",
+        });
+        assert!(
+            serde_json::from_value::<BrokerRequest>(serde_json::json!({
+                "kind": "EndpointGrantAccess",
+                "payload": payload.clone(),
+            }))
+            .is_err(),
+            "{spelling:?} decoded into a request: the wire accepted a path"
+        );
+        assert!(
+            serde_json::from_value::<EndpointAccessRequest>(payload).is_err(),
+            "{spelling:?} decoded into an endpoint access request: the wire accepted a path"
+        );
+    }
+
+    // The admitted request's own encoded payload is exactly the contract's
+    // fields, and its socket is a bare name.
+    let encoded =
+        serde_json::to_value(access_request_variant(EndpointAccessVerb::Grant)).expect("encodes");
+    let payload = &encoded["payload"];
+    let mut keys: Vec<&str> = payload
+        .as_object()
+        .expect("the payload is an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        vec![
+            "authorityKey",
+            "consumerRef",
+            "endpointRef",
+            "socket",
+            "socketRights",
+            "zoneUid",
+        ],
+        "the wire payload is exactly the contract's fields and nothing else"
+    );
+    assert_eq!(payload["socket"], serde_json::json!(ADMITTED));
+
+    // And what the broker resolves from that name is a DIRECT child of its own
+    // directory, for the admitted name and for every legal name. The container
+    // itself is therefore not a reachable target either: a token always names
+    // something below it, never it.
+    let tree = AcceptTree::new();
+    for name in [ADMITTED, SIBLING, "any-other-endpoint"] {
+        let token = BoundedToken::parse(name).expect("a legal socket name");
+        let resolved = endpoint_socket_path(&tree.runtime, &token).expect("a direct child");
+        assert_eq!(resolved, tree.endpoints.join(name));
+        assert_eq!(
+            resolved.parent(),
+            Some(tree.endpoints.as_path()),
+            "{name}: the resolved socket must be a DIRECT child of the broker's own directory"
+        );
+        assert_ne!(resolved, tree.endpoints, "{name}: the container is not a target");
+        assert_ne!(resolved, tree.runtime, "{name}: the runtime root is not a target");
+    }
+    assert!(
+        !tree.alternate_absolute().starts_with(&tree.runtime),
+        "the alternate absolute socket must live outside the broker's runtime root"
+    );
+    assert_eq!(tree.live_endpoints(), 3);
+}
+
+/// AE7: the grant the broker applies lands on the exact endpoint and nowhere
+/// else, and the answer it returns names the inode it actually pinned.
+///
+/// The three sockets are real and live before the request, so "the sibling and
+/// the alternate carry nothing" is a statement about the grant rather than
+/// about an empty directory. The alternate lives OUTSIDE the broker runtime
+/// root, which is what makes it the alternate absolute socket: reaching it
+/// would have to mean leaving the one directory the wire selects from.
+#[test]
+fn the_accepted_grant_lands_on_the_exact_endpoint_and_on_no_other_inode() {
+    let tree = AcceptTree::new();
+    let resolver = accept_resolver();
+    for socket in tree.every_socket() {
+        assert!(
+            socket.exists(),
+            "{} must exist before the grant",
+            socket.display()
+        );
+    }
+
+    let granted = accept(
+        &access_request_variant(EndpointAccessVerb::Grant),
+        &tree,
+        &resolver,
+    )
+    .expect("the committed relationship is granted");
+    let uid = granted.consumer_uid;
+
+    // The answer is about the socket the request named, read from the real
+    // filesystem - not from a field the broker echoed back.
+    assert_eq!(granted.socket.as_str(), ADMITTED);
+    assert_eq!(granted.endpoint_ref.to_canonical_string(), ENDPOINT);
+    assert_eq!(granted.consumer_ref.to_canonical_string(), CONSUMER);
+    assert_eq!(
+        (granted.socket_device, granted.socket_inode),
+        pinned_identity(&tree.admitted()),
+        "the reply must carry the (dev, ino) the broker pinned, not a recomputed one"
+    );
+    assert_ne!(
+        (granted.socket_device, granted.socket_inode),
+        pinned_identity(&tree.sibling()),
+        "the sibling is a different inode, so the reply is about the admitted one"
+    );
+    // The ACL is applied to the bundle's own answer, never to a number the
+    // caller supplied: the request carried no claim at all, and the principal
+    // in the answer is not the process running the test.
+    assert_ne!(
+        uid,
+        nix::unistd::Uid::current().as_raw(),
+        "the applied principal must be the bundle's derived one, not the test's own uid"
+    );
+
+    // Cross-check the kernel's own answer for the derived principal through
+    // `getfacl`, so the broker's parser is not the only witness.
+    assert_eq!(
+        effective_permission(&tree.admitted(), uid),
+        Some(0o6),
+        "the kernel must apply the grant to the derived principal on the exact endpoint"
+    );
+    assert_eq!(granted.socket_effective_rights, 0o6);
+    assert!(granted.ancestors_traversable);
+    assert!(!granted.parent_listable);
+    for (label, alternate) in [
+        ("the sibling socket", tree.sibling()),
+        ("the alternate absolute socket", tree.alternate_absolute()),
+    ] {
+        assert_eq!(
+            pinned_acl(&alternate, uid).granted_bits(),
+            None,
+            "{label} must carry no entry for the derived principal at all"
+        );
+        assert_eq!(
+            effective_permission(&alternate, uid),
+            None,
+            "{label} must have nothing the kernel would apply"
+        );
+    }
+    // The container directory stays unlistable for the derived principal: the
+    // traversal grant carries no read bit, which is the directory authority
+    // R23 removed.
+    for directory in tree.ancestors() {
+        assert_eq!(
+            effective_permission(&directory, uid),
+            Some(0o1),
+            "{} must be traversable and nothing more",
+            directory.display()
+        );
+    }
+    assert_eq!(tree.every_socket().len(), 3, "the tree must still hold all three");
+}
+
+/// AE7: a request whose facts were edited on the wire is refused, and the
+/// refusal is the same observation as "nothing was touched".
+///
+/// Every case below starts from the admitted grant and changes exactly one
+/// field, so each refusal is attributable to that field: a socket repointed at
+/// the sibling, a grant's authority key replayed as a revoke, another Zone, and
+/// a permission outside the socket's own triple. The forged principal claim
+/// and the two empty/absent requests are the same shape of proof: the claim is
+/// checked and never read, and a request that names an endpoint the broker's
+/// directory does not hold is refused by name.
+#[test]
+fn a_repointed_or_forged_request_is_refused_and_mutates_nothing() {
+    // The derived principal is a pure function of the committed row, so it is
+    // the same number in every tree. Learn it from a real grant in its own
+    // tree, then prove a refusal writes nothing anywhere in a FRESH one.
+    let reference = AcceptTree::new();
+    let resolver = accept_resolver();
+    let granted = accept(
+        &access_request_variant(EndpointAccessVerb::Grant),
+        &reference,
+        &resolver,
+    )
+    .expect("the committed relationship is granted");
+    let uid = granted.consumer_uid;
+    accept(
+        &access_request_variant(EndpointAccessVerb::Revoke),
+        &reference,
+        &resolver,
+    )
+    .expect("the reference grant is revoked");
+
+    let tree = AcceptTree::new();
+
+    // 1. The socket repointed at the sibling. The sibling's NAME is a legal
+    //    token, so only the authority binding can refuse this - and it does,
+    //    because the binding is recomputed over the socket name.
+    let mut repointed = access_request(ADMITTED, EndpointAccessVerb::Grant);
+    repointed.socket = BoundedToken::parse(SIBLING).expect("the sibling name is a legal token");
+    let refusal = accept(
+        &BrokerRequest::EndpointGrantAccess(repointed),
+        &tree,
+        &resolver,
+    )
+    .expect_err("a repointed socket must be refused");
+    assert_eq!(refusal.code(), "endpoint-access-authority-mismatch");
+    assert_nothing_granted(&tree, uid, "a repointed socket");
+
+    // 2. A grant's authority key replayed as a revoke and as an observation.
+    //    The request is byte-for-byte the granted one; only the VARIANT it
+    //    travels as changes, and the verb is part of the binding, so the key
+    //    cannot travel with it.
+    let granted_request = access_request(ADMITTED, EndpointAccessVerb::Grant);
+    for request in [
+        BrokerRequest::EndpointRevokeAccess(granted_request.clone()),
+        BrokerRequest::EndpointObserve(granted_request.clone()),
+    ] {
+        let refusal = accept(&request, &tree, &resolver)
+            .expect_err("a grant's key must not be replayable as another verb");
+        assert_eq!(refusal.code(), "endpoint-access-authority-mismatch");
+        assert_nothing_granted(&tree, uid, "a replayed authority key");
+    }
+
+    // 3. Another Zone's committed bundle answers for another Zone's consumer,
+    //    so a request that repoints the Zone is refused by the binding.
+    let mut other_zone = access_request(ADMITTED, EndpointAccessVerb::Grant);
+    other_zone.zone_uid =
+        ResourceUid::parse("123e4567-e89b-42d3-a456-4266141740ff").expect("a second zone uid");
+    let refusal = accept(
+        &BrokerRequest::EndpointGrantAccess(other_zone),
+        &tree,
+        &resolver,
+    )
+    .expect_err("a repointed Zone must be refused");
+    assert_eq!(refusal.code(), "endpoint-access-authority-mismatch");
+    assert_nothing_granted(&tree, uid, "a repointed Zone");
+
+    // 4. A permission outside the socket's own triple, including the empty
+    //    one. The binding is reproduced deliberately here, so the refusal is
+    //    attributable to the rights and not to the key.
+    for rights in [0u8, 0o10, 0o70] {
+        let mut widened = access_request(ADMITTED, EndpointAccessVerb::Grant);
+        widened.socket_rights = rights;
+        widened.authority_key = endpoint_access_authority_binding(
+            &widened.endpoint_ref,
+            &widened.consumer_ref,
+            &widened.zone_uid,
+            &widened.socket,
+            EndpointAccessVerb::Grant,
+        );
+        let refusal = accept(
+            &BrokerRequest::EndpointGrantAccess(widened),
+            &tree,
+            &resolver,
+        )
+        .expect_err("a permission outside the socket triple must be refused");
+        assert_eq!(refusal.code(), "endpoint-access-rights-out-of-range");
+        assert_nothing_granted(&tree, uid, "a widened permission");
+    }
+
+    // 5. A forged principal claim. The claim is re-pinned against the
+    //    derivation and refused, and a claim that AGREES still yields the
+    //    derived numbers, never the claim's copy.
+    let mut forged = access_request(ADMITTED, EndpointAccessVerb::Grant);
+    forged.claimed_principal = Some(EndpointPrincipalClaim {
+        uid: nix::unistd::Uid::current().as_raw(),
+        gid: nix::unistd::Gid::current().as_raw(),
+    });
+    let refusal = accept(
+        &BrokerRequest::EndpointGrantAccess(forged),
+        &tree,
+        &resolver,
+    )
+    .expect_err("a forged principal claim must be refused");
+    assert_eq!(refusal.code(), "endpoint-access-consumer-principal");
+    assert_nothing_granted(&tree, uid, "a forged principal claim");
+    assert_eq!(
+        pinned_acl(&tree.admitted(), nix::unistd::Uid::current().as_raw()).granted_bits(),
+        None,
+        "the forged claim's own numbers must have been applied to nothing"
+    );
+
+    // 6. A socket the broker's own directory does not hold. The name is a legal
+    //    token, so the refusal is the resolved path coming back empty - and it
+    //    is the broker's OWN directory the broker looked in, not a path the
+    //    request supplied.
+    let absent = accept(
+        &BrokerRequest::EndpointGrantAccess(access_request(
+            "no-such-endpoint",
+            EndpointAccessVerb::Grant,
+        )),
+        &tree,
+        &resolver,
+    )
+    .expect_err("a socket the broker's directory does not hold must be refused");
+    assert_eq!(absent.code(), "endpoint-access-endpoint-absent");
+    assert_nothing_granted(&tree, uid, "an absent socket");
+
+    // 7. With every refusal accounted for, the admitted request still grants -
+    //    so the refusals were fences and not a blanket denial.
+    let granted = accept(
+        &access_request_variant(EndpointAccessVerb::Grant),
+        &tree,
+        &resolver,
+    )
+    .expect("the committed relationship is granted once the fences are respected");
+    assert_eq!(granted.consumer_uid, uid, "the derived principal is stable");
+    assert_eq!(
+        effective_permission(&tree.admitted(), uid),
+        Some(0o6),
+        "and only now does the exact endpoint carry the grant"
+    );
+    assert_eq!(
+        effective_permission(&tree.sibling(), uid),
+        None,
+        "the sibling still carries nothing"
+    );
+    assert_eq!(
+        effective_permission(&tree.alternate_absolute(), uid),
+        None,
+        "the alternate absolute socket still carries nothing"
+    );
+}
+
+/// Revocation over the wire removes the admitted entry, reports the inode it
+/// removed from, and leaves the ancestor traversal and the sibling alone.
+#[test]
+fn revocation_across_the_wire_removes_only_the_admitted_entry() {
+    let tree = AcceptTree::new();
+    let resolver = accept_resolver();
+    let granted = accept(
+        &access_request_variant(EndpointAccessVerb::Grant),
+        &tree,
+        &resolver,
+    )
+    .expect("the committed relationship is granted");
+    let uid = granted.consumer_uid;
+    let pinned = (granted.socket_device, granted.socket_inode);
+    assert_eq!(pinned, pinned_identity(&tree.admitted()));
+    assert_eq!(effective_permission(&tree.admitted(), uid), Some(0o6));
+
+    // The observation between the two effects answers the same question, from
+    // the same pinned inode.
+    let observed = accept(
+        &access_request_variant(EndpointAccessVerb::Observe),
+        &tree,
+        &resolver,
+    )
+    .expect("the granted endpoint is observable");
+    assert_eq!((observed.socket_device, observed.socket_inode), pinned);
+    assert_eq!(observed.socket_effective_rights, 0o6);
+    assert!(observed.ancestors_traversable);
+    assert!(!observed.parent_listable);
+
+    let revoked = accept(
+        &access_request_variant(EndpointAccessVerb::Revoke),
+        &tree,
+        &resolver,
+    )
+    .expect("the grant is revoked");
+    assert_eq!(
+        (revoked.socket_device, revoked.socket_inode),
+        pinned,
+        "the revoke must report the inode it removed the entry from"
+    );
+    assert_eq!(
+        revoked.socket_effective_rights,
+        0,
+        "after the revoke the kernel applies nothing from an entry that is gone"
+    );
+    assert!(revoked.ancestors_traversable, "traversal survives the revoke");
+    assert!(!revoked.parent_listable, "listing was never granted");
+    assert_eq!(
+        effective_permission(&tree.admitted(), uid),
+        None,
+        "the revoked principal must have no entry on the exact endpoint at all"
+    );
+    for directory in tree.ancestors() {
+        assert_eq!(
+            effective_permission(&directory, uid),
+            Some(0o1),
+            "{} must keep the traversal grant sibling endpoints depend on",
+            directory.display()
+        );
+    }
+    for (label, alternate) in [
+        ("the sibling socket", tree.sibling()),
+        ("the alternate absolute socket", tree.alternate_absolute()),
+    ] {
+        assert_eq!(
+            effective_permission(&alternate, uid),
+            None,
+            "{label} must never have been granted anything"
+        );
+    }
+
+    // Revocation is idempotent under retry: a second pass finds nothing and
+    // still resolves the inode.
+    let again = accept(
+        &access_request_variant(EndpointAccessVerb::Revoke),
+        &tree,
+        &resolver,
+    )
+    .expect("a repeated revoke is a no-op, not an error");
+    assert_eq!((again.socket_device, again.socket_inode), pinned);
+}
+
+/// A producer that recycled its socket is visible across the wire: the
+/// observation names a different inode, so a relationship prepared against
+/// the old one can tell it is stale.
+#[test]
+fn a_recycled_socket_reads_as_a_different_inode_across_the_wire() {
+    let tree = AcceptTree::new();
+    let resolver = accept_resolver();
+    let granted = accept(
+        &access_request_variant(EndpointAccessVerb::Grant),
+        &tree,
+        &resolver,
+    )
+    .expect("the committed relationship is granted");
+    let previous = (granted.socket_device, granted.socket_inode);
+    assert_eq!(previous, pinned_identity(&tree.admitted()));
+
+    fs::remove_file(tree.admitted()).expect("unlink the admitted socket");
+    UnixListener::bind(tree.admitted()).expect("rebind the socket");
+    // The producer's replacement carries the same posture the first one did:
+    // it grants the consumer nothing through the other class, so "nothing is
+    // granted" is about the broker's grant rather than about the socket mode.
+    fs::set_permissions(
+        tree.admitted(),
+        fs::Permissions::from_mode(0o660),
+    )
+    .expect("chmod the replacement socket");
+
+    let observed = accept(
+        &access_request_variant(EndpointAccessVerb::Observe),
+        &tree,
+        &resolver,
+    )
+    .expect("the replacement socket is present");
+    assert_ne!(
+        (observed.socket_device, observed.socket_inode),
+        previous,
+        "a recycled socket must read as a different inode, or cached readiness survives it"
+    );
+    assert_eq!(
+        observed.socket_effective_rights,
+        0,
+        "and the replacement starts with nothing granted to the consumer"
+    );
 }

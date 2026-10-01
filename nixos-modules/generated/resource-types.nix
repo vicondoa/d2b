@@ -31,5 +31,6 @@
   "ResourceImport"
   "Operation"
   "SeccompProfile"
+  "EndpointBinding"
   "ExecutionPolicy"
 ]

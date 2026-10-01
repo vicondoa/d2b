@@ -5,7 +5,7 @@
 //! asking through the one shared evaluator, then asks the two owning
 //! providers whether the candidate fits the Zone's accepted ceilings and
 //! whether an accepted emergency reduction admits new use. The unchanged
-//! production entry points (`SystemZoneWriteFence` plus the string-subject
+//! production entry points (the graph admission plus the string-subject
 //! messages) are deliberately untouched and are not exercised here.
 //!
 //! Three properties are proven, each against observed state rather than a

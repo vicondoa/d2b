@@ -25,6 +25,7 @@ d2b_rust_library(
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     deps = [
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-provider-device-tpm:d2b_provider_device_tpm",
         "//packages/d2b-provider-guest-cloud-hypervisor:d2b_provider_guest_cloud_hypervisor",
@@ -41,6 +42,7 @@ d2b_rust_library(
     crate_name = "d2b_provider_endpoint",
     compile_data = ["Cargo.toml"],
     deps = [
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-provider-device-tpm:d2b_provider_device_tpm_test_support",
         "//packages/d2b-provider-guest-cloud-hypervisor:d2b_provider_guest_cloud_hypervisor_test_support",
@@ -56,7 +58,27 @@ d2b_rust_test(
     compile_data = ["Cargo.toml"],
     deps = [
         ":d2b_provider_endpoint",
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
+    name = "endpoint_delivery",
+    srcs = ["tests/endpoint_delivery.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "//:tests/golden/manifest_v04/baseline-vms.json",
+        "//tests/fixtures:deny-unknown/host-valid.json",
+    ],
+    deps = [
+        ":d2b_provider_endpoint",
+        "//packages/d2b-broker:d2b_broker",
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        "//packages/d2b-resource-types:d2b_resource_types",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

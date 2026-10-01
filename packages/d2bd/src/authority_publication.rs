@@ -252,6 +252,7 @@ impl AuthorityPublicationLink for OriginationPublicationLink {
                 .map_err(|error| error.to_string())
             },
         )
+        .await
     }
 
     async fn serve(
@@ -271,6 +272,7 @@ impl AuthorityPublicationLink for OriginationPublicationLink {
                 .map_err(|error| error.to_string())
             },
         )
+        .await
     }
 }
 
@@ -282,7 +284,7 @@ impl AuthorityPublicationLink for OriginationPublicationLink {
 /// on the coordinator's own single bounded worker, reached by a oneshot reply.
 /// The caller of this function is the async coordinator, which awaits the reply;
 /// only the worker thread itself blocks.
-fn round_trip_on_worker<T, F>(
+async fn round_trip_on_worker<T, F>(
     socket_path: PathBuf,
     budget: Option<Duration>,
     exchange: F,
@@ -301,8 +303,11 @@ where
             let _ = reply_tx.send(result);
         }))
         .map_err(|_| "the publication worker is unavailable".to_owned())?;
+    // The reply is awaited rather than blocked on: the coordinator runs on a
+    // runtime worker, and only the worker thread itself blocks. Blocking here
+    // would panic on every publication the daemon ever attempted.
     reply_rx
-        .blocking_recv()
+        .await
         .map_err(|_| "the publication worker dropped the exchange".to_owned())?
 }
 

@@ -66,8 +66,12 @@
 //! source row that declares no delivery derives no row.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 
+use d2b_contracts_broker::broker_wire::{
+    EndpointAccessRequest, EndpointAccessVerb, endpoint_access_authority_binding,
+};
 use d2b_contracts_resource::v3::{
     AdmissionStage, BindingArbitration, BindingAuthorization, BindingConsumerKind,
     BindingContractError, BindingEvidence, BindingKey, BindingKind, BindingLifecycleState,
@@ -76,18 +80,34 @@ use d2b_contracts_resource::v3::{
     BindingSourceDecision, BindingSpecFingerprint, BindingSupportEntry, BoundedToken,
     ChildSupportCeiling, CompletionCondition, EndpointAttachmentKind, EndpointBindingRequest,
     FreshnessTuple, PrimitiveSpecError, RefusalReason, ReleaseOutcome, RequestedRights,
-    ResourceGeneration, ResourceRef, ResourceUid, SourceAdmission, SourceReservation, ZoneId,
-    admit_binding_request, canonical_json_bytes, redacted_debug,
+    ResourceGeneration, ResourceRef, ResourceSpec, ResourceUid, SourceAdmission, SourceReservation,
+    ZoneId, admit_binding_request, canonical_json_bytes, redacted_debug,
 };
 
 use d2b_contracts_resource::v3::endpoint_binding::{
     EndpointBindingSpec, EndpointExecutionParentInput,
 };
 
+use d2b_resource_runtime::context::{
+    ResourceContext, RowLookup, SpecDecoder, WatchCondition, typed_spec_decoder,
+};
+use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
+use d2b_resource_runtime::driver::{
+    DynResourceDriver, ReconcileOutcome, RecoveryOutcome, ResourceDriver, ResourceDriverFactory,
+};
+use d2b_resource_runtime::error::{
+    DriverFailure, DriverOp, FailureClass, FailureComparison, FailureDetail, FailureKind,
+    FailureKinds,
+};
+use d2b_resource_types::{
+    AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType,
+};
+
 use crate::endpoint::{
     EndpointClass, EndpointConsumerPolicy, EndpointLocality, EndpointOperation, EndpointSpec,
     EndpointTransport,
 };
+use crate::facets::EndpointAccessDispatch;
 
 /// The ResourceType of the exact endpoint a relationship's source is.
 const ENDPOINT_RESOURCE_TYPE: &str = "Endpoint";
@@ -2348,3 +2368,1060 @@ fn digest_into_hex(digest: [u8; 16], bytes: usize) -> String {
 const HEX: [char; 16] = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
 ];
+
+// ---------------------------------------------------------------------------
+// Source row -> declared deliveries
+// ---------------------------------------------------------------------------
+
+/// The `EndpointBinding` ResourceType one committed relationship commits as.
+///
+/// The name is the contract's own constant rather than a second hand-written
+/// spelling, so the child type the source ensures and the child type a serving
+/// driver decodes cannot drift.
+pub const ENDPOINT_BINDING_TYPE_NAME: &str =
+    d2b_contracts_resource::v3::endpoint_binding::ENDPOINT_BINDING_RESOURCE_TYPE;
+
+/// The domain tag framing one derived consumer-slot name.
+const DELIVERY_SLOT_DOMAIN: &str = "d2b:v3:endpoint-delivery-slot";
+
+/// Bytes of the framed digest one derived consumer slot carries.
+///
+/// The token has to fit the broker wire's own `^[a-z][a-z0-9-]*$` grammar with
+/// room for its fixed prefix, and it has to be the SAME name for every consumer
+/// of one endpoint, because it is the socket's name inside the broker's own
+/// endpoint directory rather than anything per-consumer.
+const DELIVERY_SLOT_BYTES: usize = 12;
+
+/// The consumer slot one committed `Endpoint` row delivers through.
+///
+/// Every consumer of one endpoint shares the endpoint's own socket, so the
+/// slot is a function of the ENDPOINT's committed identity alone. That is what
+/// makes the token safe to put on the wire: the broker joins it onto its own
+/// endpoint directory, and two endpoints in one Zone can never name one socket
+/// because their tokens are derived from different committed names.
+///
+/// The slot is not the endpoint's purpose token: purpose is a free-form label
+/// several endpoints in one Zone may legitimately share, and a relationship
+/// that let two endpoints collide on one socket would be exactly the alternate
+/// target AE7 closes. Deriving it from the row's own store-assigned name gives
+/// one endpoint, one socket name, with nothing to collide.
+///
+/// # Errors
+///
+/// Returns [`EndpointBindingError::Contract`] when the derived name is not a
+/// bounded token.
+pub fn endpoint_delivery_slot(
+    zone: &ZoneId,
+    endpoint_ref: &ResourceRef,
+) -> Result<BindingSlot, EndpointBindingError> {
+    let mut digest = framed_digest(DELIVERY_SLOT_DOMAIN.as_bytes());
+    for part in [
+        zone.as_str().to_owned(),
+        endpoint_ref.to_canonical_string(),
+    ] {
+        let next = framed_digest(part.as_bytes());
+        for (byte, part_byte) in digest.iter_mut().zip(next) {
+            *byte ^= part_byte;
+        }
+    }
+    let token = BoundedToken::parse(format!(
+        "endpoint-slot-{}",
+        digest_into_hex(digest, DELIVERY_SLOT_BYTES)
+    ))
+    .map_err(EndpointBindingError::from)?;
+    BindingSlot::parse(token.as_str()).map_err(EndpointBindingError::from)
+}
+
+/// The attachment kind one endpoint's own declaration offers its consumers.
+///
+/// Total over the endpoint's own vocabulary and nothing else: the endpoint's
+/// attachment capacity decides whether an `attach` relationship is offered at
+/// all, and its own operation allowlist decides which of the two descriptor-only
+/// kinds survives once capacity says no. An endpoint that admits none of the
+/// three operations realizes no delivery, and that endpoint derives no row
+/// rather than having one invented for it.
+pub fn declared_attachment(spec: &EndpointSpec) -> Option<EndpointAttachmentKind> {
+    let policy = spec.consumer_policy();
+    if spec.attachment_policy().supported && policy.admits_operation(EndpointOperation::Attach) {
+        return Some(EndpointAttachmentKind::Attach);
+    }
+    if policy.admits_operation(EndpointOperation::Resolve) {
+        return Some(EndpointAttachmentKind::Connect);
+    }
+    if policy.admits_operation(EndpointOperation::Observe) {
+        return Some(EndpointAttachmentKind::Listen);
+    }
+    None
+}
+
+/// The deliveries one committed `Endpoint` row declares for its consumers.
+///
+/// This is the derivation's own input: the endpoint's own consumer policy is
+/// the set of consumers the owner publishes its endpoint to, and every fact
+/// about HOW each of them reaches it is read off the same row. Nothing here is
+/// supplied by the consumer or by the caller, so a consumer cannot widen the
+/// relationship by asking for a different slot, a different operation, or a
+/// different endpoint.
+///
+/// A subject the binding kind does not admit as a consumer is refused rather
+/// than skipped: an `Endpoint` row naming a `Host` as its consumer is a
+/// declaration this family cannot honor, and silently deriving nothing for it
+/// would report the row as complete.
+///
+/// # Errors
+///
+/// Returns [`EndpointBindingError::WrongResourceType`] for a subject that is
+/// not a typed execution target, and [`EndpointBindingError::Contract`] when
+/// the endpoint's own derived slot is not a bounded slot.
+pub fn declared_endpoint_bindings(
+    zone: &ZoneId,
+    spec: &EndpointSpec,
+    endpoint_ref: &ResourceRef,
+) -> Result<Vec<DeclaredEndpointBinding>, EndpointBindingError> {
+    let Some(attachment) = declared_attachment(spec) else {
+        // No operation the endpoint itself admits: the absence of a delivery
+        // stays absent rather than becoming a default one.
+        return Ok(Vec::new());
+    };
+    let slot = endpoint_delivery_slot(zone, endpoint_ref)?;
+    spec.consumer_policy()
+        .allowed_subjects()
+        .iter()
+        .map(|subject| {
+            Ok(DeclaredEndpointBinding::new(
+                EndpointConsumerTarget::new(subject.clone())?,
+                slot.clone(),
+                attachment,
+            ))
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Serving one committed `EndpointBinding` row
+// ---------------------------------------------------------------------------
+
+/// The re-check cadence while the committed relationship's host effect is not
+/// yet provable.
+///
+/// The generations the pinned inode and the ACL mask are read against reach
+/// this actor as no watch delivery on the binding row, so a relationship whose
+/// effect is missing or stale re-checks on this interval rather than sitting
+/// on a cached answer.
+const ENDPOINT_BINDING_RESYNC: Duration = Duration::from_secs(5);
+
+/// Closed, field-free classifications of a serving failure on this row.
+///
+/// Every variant names a condition, never a material: a refusal carries no
+/// socket name, no host path, and no numerical principal, so it reads the same
+/// in a status, an audit record, and a log line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EndpointBindingDriverErrorKind {
+    /// The durable spec did not decode as the closed `EndpointBinding`
+    /// contract, or its committed name and decision are not this source's.
+    SpecInvalid,
+    /// The row's owner is not the `Endpoint` row the relationship names.
+    OwnerMismatch,
+    /// The owning `Endpoint` row is absent, unreadable, or its own policy no
+    /// longer admits this relationship.
+    ParentUnavailable,
+    /// The privileged exact-endpoint leg refused, or did not answer.
+    DeliveryRefused,
+}
+
+impl EndpointBindingDriverErrorKind {
+    /// The registered failure kind this classification reports.
+    const fn failure_kind(self) -> FailureKind {
+        match self {
+            Self::SpecInvalid => FailureKinds::BINDING_SPEC_INVALID,
+            Self::OwnerMismatch => FailureKinds::BINDING_OWNER_MISMATCH,
+            Self::ParentUnavailable => FailureKinds::BINDING_PARENT_UNAVAILABLE,
+            Self::DeliveryRefused => FailureKinds::BINDING_SERVING_EFFECT_FAILED,
+        }
+    }
+
+    /// How the plane should classify a failure of this kind.
+    fn failure_class(self) -> FailureClass {
+        match self {
+            Self::SpecInvalid | Self::OwnerMismatch => FailureClass::Terminal,
+            Self::ParentUnavailable | Self::DeliveryRefused => FailureClass::Retryable,
+        }
+    }
+}
+
+/// Typed serving failure for one committed `EndpointBinding` row.
+#[derive(Debug, Clone)]
+pub struct EndpointBindingDriverError {
+    kind: EndpointBindingDriverErrorKind,
+    op: DriverOp,
+    detail: FailureDetail,
+}
+
+impl EndpointBindingDriverError {
+    fn new(kind: EndpointBindingDriverErrorKind, op: DriverOp) -> Self {
+        Self {
+            kind,
+            op,
+            detail: FailureDetail::new(),
+        }
+    }
+
+    fn with_detail(mut self, detail: FailureDetail) -> Self {
+        self.detail = detail;
+        self
+    }
+}
+
+impl core::fmt::Display for EndpointBindingDriverError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self.kind {
+            EndpointBindingDriverErrorKind::SpecInvalid => "endpoint-binding-spec-invalid",
+            EndpointBindingDriverErrorKind::OwnerMismatch => "endpoint-binding-owner-mismatch",
+            EndpointBindingDriverErrorKind::ParentUnavailable => {
+                "endpoint-binding-parent-unavailable"
+            }
+            EndpointBindingDriverErrorKind::DeliveryRefused => {
+                "endpoint-binding-delivery-refused"
+            }
+        })
+    }
+}
+
+impl std::error::Error for EndpointBindingDriverError {}
+
+/// Why one committed relationship's exact endpoint is not delivered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EndpointDeliveryRefusal {
+    /// The broker refused the request. The slug is the wire's own closed
+    /// refusal class, so a refusal names which condition stopped it without
+    /// echoing the socket it was protecting.
+    Refused(String),
+    /// The privileged leg did not answer. An unanswered request is never an
+    /// absence of effect, so the relationship stays outstanding and the pass
+    /// retries.
+    Unanswered,
+}
+
+impl EndpointDeliveryRefusal {
+    /// The closed, path-free slug this refusal reports under.
+    pub fn code(&self) -> &str {
+        match self {
+            Self::Refused(code) => code,
+            Self::Unanswered => "endpoint-access-dispatch-unavailable",
+        }
+    }
+}
+
+impl core::fmt::Display for EndpointDeliveryRefusal {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(self.code())
+    }
+}
+
+impl std::error::Error for EndpointDeliveryRefusal {}
+
+/// Typed in-memory status projection (R11: never persisted).
+///
+/// Every field is a bound or an observed state. The pinned `(device, inode)`
+/// pair is the identity the BROKER pinned while it applied the grant, read back
+/// rather than recomputed here, so a producer that replaced its socket shows up
+/// as a different inode and the relationship says so instead of reporting the
+/// access it used to have.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EndpointBindingDriverStatus {
+    /// The exact endpoint is granted and the KERNEL's effective access covers
+    /// the admitted right.
+    Delivered {
+        /// The pinned identity the broker resolved for the consumer.
+        socket: EndpointSocketIdentity,
+        /// The permission the kernel applies, already folded with the ACL mask.
+        effective_rights: u32,
+    },
+    /// The pinned endpoint changed under a prepared relationship, so the access
+    /// the previous pass proved belongs to an inode that is no longer there.
+    ///
+    /// The relationship is reported here rather than silently re-read as
+    /// delivered: the grant has already been re-applied against the NEW inode,
+    /// and a consumer watching the old identity has to re-derive.
+    EndpointReplaced {
+        /// The inode the new grant landed on.
+        socket: EndpointSocketIdentity,
+    },
+    /// No host effect is standing for this relationship.
+    Undelivered {
+        /// Closed, field-free: why the exact endpoint is not delivered.
+        reason: EndpointDeliveryRefusal,
+    },
+    /// The relationship is fenced: pre-drain ran and no new use is admitted
+    /// while what is outstanding drains.
+    Draining,
+}
+
+/// The exact wire request one committed relationship's delivery is sent as.
+///
+/// The request is a pure function of the committed row and the verb: the
+/// socket is the row's own committed slot, the permission is the socket's own
+/// read/write triple for the admitted right, and the authority binding is the
+/// wire's own digest over the endpoint, the consumer, the Zone identity, the
+/// socket name, and THE VERB. Nothing here is a host path and nothing here is
+/// a numerical principal: the broker re-derives the principal from the
+/// verified Zone bundle and refuses a key that does not reproduce itself.
+///
+/// # Errors
+///
+/// Returns [`EndpointBindingError::Contract`] when the committed slot is not
+/// the bounded socket token the wire carries or when a permission outside the
+/// socket's own `1..=7` triple is asked for.
+pub fn endpoint_access_request(
+    zone_uid: &ResourceUid,
+    row: &EndpointBindingSpec,
+    rights: RequestedRights,
+    verb: EndpointAccessVerb,
+) -> Result<EndpointAccessRequest, EndpointBindingError> {
+    let socket = BoundedToken::parse(row.slot().as_str())
+        .map_err(EndpointBindingError::from)?;
+    let socket_rights = u8::try_from(required_right_bits(rights))
+        .ok()
+        .filter(|bits| *bits > 0 && *bits <= MAX_SOCKET_RIGHTS)
+        .ok_or(EndpointBindingError::InvalidRequest)?;
+    Ok(EndpointAccessRequest {
+        authority_key: endpoint_access_authority_binding(
+            row.endpoint_ref(),
+            row.execution_ref(),
+            zone_uid,
+            &socket,
+            verb,
+        ),
+        endpoint_ref: row.endpoint_ref().clone(),
+        consumer_ref: row.execution_ref().clone(),
+        zone_uid: zone_uid.clone(),
+        socket,
+        socket_rights,
+        claimed_principal: None,
+        tracing_span_id: None,
+    })
+}
+
+/// The highest POSIX permission one exact-endpoint grant may ask for.
+///
+/// A Unix-domain socket is reached, not listed, and the exact-endpoint contract
+/// withholds directory authority, so the ceiling is the socket's own
+/// read/write/traverse triple. This is the same bound the broker refuses
+/// outside, named here so the driver derives the request rather than guessing.
+const MAX_SOCKET_RIGHTS: u8 = 0o7;
+
+/// Everything the plane must construct to instantiate the `EndpointBinding`
+/// driver factory for one zone.
+pub struct EndpointBindingDriverArgs {
+    /// The zone this driver's rows live in.
+    pub zone: ZoneId,
+    /// The privileged exact-endpoint dispatch the daemon supplies (R2).
+    ///
+    /// The family never receives a daemon-built effect port and holds no
+    /// socket, no path, and no numerical principal of its own.
+    pub access: Arc<dyn EndpointAccessDispatch>,
+}
+
+/// The spec-store envelope for one `EndpointBinding` row, exactly as persisted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EndpointBindingSpecEnvelope {
+    base: d2b_contracts_resource::v3::CanonicalJsonObject,
+}
+
+/// The manager-wired decode hook for `EndpointBinding` rows.
+pub fn endpoint_binding_spec_decoder() -> Arc<dyn SpecDecoder> {
+    typed_spec_decoder(|bytes| {
+        serde_json::from_slice::<ResourceSpec>(bytes).map(|spec| EndpointBindingSpecEnvelope {
+            base: spec.base().clone(),
+        })
+    })
+}
+
+/// [`ResourceDriverFactory`] for the `EndpointBinding` resource type.
+/// Construction is infallible by contract.
+pub struct EndpointBindingDriverFactory {
+    types: [ResourceTypeName; 1],
+    args: EndpointBindingDriverArgs,
+}
+
+impl EndpointBindingDriverFactory {
+    /// Build the factory for one zone's plane.
+    pub fn new(args: EndpointBindingDriverArgs) -> Self {
+        Self {
+            types: [ResourceTypeName::new(ENDPOINT_BINDING_TYPE_NAME)],
+            args,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ResourceDriverFactory for EndpointBindingDriverFactory {
+    fn resource_types(&self) -> &[ResourceTypeName] {
+        &self.types
+    }
+
+    async fn create(&self, _key: &ResourceKey) -> Box<dyn DynResourceDriver> {
+        Box::new(EndpointBindingDriver::new(
+            self.args.zone.clone(),
+            Arc::clone(&self.args.access),
+        ))
+    }
+}
+
+/// One committed `EndpointBinding` row's driver.
+///
+/// The driver holds no host state: it builds the typed request, hands it to
+/// the declared [`EndpointAccessDispatch`] facet, and reconciles the broker's
+/// own answer against the committed decision. It never recomputes the pinned
+/// inode or the effective rights locally - those are what the kernel applies
+/// and only the broker, holding the pinned descriptor, can report them.
+pub struct EndpointBindingDriver {
+    zone: ZoneId,
+    access: Arc<dyn EndpointAccessDispatch>,
+    /// Rows this driver already registered a dependency watch on (R12/R17).
+    /// Runtime-only (R6/R11): one registration per target, so the dependency
+    /// edge that wakes this actor does not accumulate manager watch entries.
+    watched: Vec<ResourceKey>,
+}
+
+impl EndpointBindingDriver {
+    fn new(zone: ZoneId, access: Arc<dyn EndpointAccessDispatch>) -> Self {
+        Self {
+            zone,
+            access,
+            watched: Vec::new(),
+        }
+    }
+
+    fn error(&self, kind: EndpointBindingDriverErrorKind, op: DriverOp) -> EndpointBindingDriverError {
+        EndpointBindingDriverError::new(kind, op)
+    }
+
+    /// Decode the stored envelope into the strict `EndpointBinding` contract.
+    ///
+    /// The wire decoder is the row contract's own, so a stored row that is not
+    /// canonical `EndpointBinding` bytes - an unknown field, a consumer this
+    /// kind does not admit, a decision the family never commits - is refused
+    /// here rather than half-read.
+    fn decoded_binding(
+        &self,
+        ctx: &ResourceContext,
+        op: DriverOp,
+    ) -> Result<EndpointBindingSpec, EndpointBindingDriverError> {
+        let envelope = ctx
+            .spec::<EndpointBindingSpecEnvelope>()
+            .map_err(|_| self.error(EndpointBindingDriverErrorKind::SpecInvalid, op))?;
+        let binding = serde_json::from_slice::<EndpointBindingSpec>(
+            &envelope.base.to_canonical_bytes(),
+        )
+        .map_err(|_| self.error(EndpointBindingDriverErrorKind::SpecInvalid, op))?;
+        self.check_row_name(ctx, &binding, op)?;
+        Ok(binding)
+    }
+
+    /// The row's own name must be the name this source derives.
+    ///
+    /// [`binding_row_name`] is a deterministic function of the identities the
+    /// row itself carries, so a committed row whose name is anything else was
+    /// not minted by this source's admission. Checking it here is what makes
+    /// the row a boundary reads back and the derivation that minted it two
+    /// views of ONE relationship.
+    fn check_row_name(
+        &self,
+        ctx: &ResourceContext,
+        binding: &EndpointBindingSpec,
+        op: DriverOp,
+    ) -> Result<(), EndpointBindingDriverError> {
+        let slot = BindingSlot::parse(binding.slot().as_str())
+            .map_err(|_| self.error(EndpointBindingDriverErrorKind::SpecInvalid, op))?;
+        let derived = binding_row_name(&self.zone, binding.endpoint_ref(), binding.execution_ref(), &slot)
+            .map_err(|_| self.error(EndpointBindingDriverErrorKind::SpecInvalid, op))?;
+        if derived.as_str() != ctx.key().name {
+            return Err(self
+                .error(EndpointBindingDriverErrorKind::SpecInvalid, op)
+                .with_detail(FailureDetail::at("spec/rowName").comparison(
+                    FailureComparison::new("binding.rowName", derived.as_str(), &ctx.key().name),
+                )));
+        }
+        Ok(())
+    }
+
+    /// The committed `BindingSourceDecision` must admit what the row claims.
+    ///
+    /// Four refusals, all terminal, all read back out of the committed bytes:
+    ///
+    /// - an arbitration this family never commits. An `Endpoint` row delivers
+    ///   the same exact inode to every consumer it names, so a row claiming
+    ///   exclusivity was not minted here.
+    /// - an admitted-right set that does not cover the right the row's own
+    ///   attachment kind performs.
+    /// - realized facets that do not cover the facet that kind rides on.
+    /// - a facet this family does not declare it can realize. A committed
+    ///   facet is read back as something the source admitted through.
+    fn check_committed_decision(
+        &self,
+        binding: &EndpointBindingSpec,
+        op: DriverOp,
+    ) -> Result<RequestedRights, EndpointBindingDriverError> {
+        let refused = |field: &'static str, expected: String, observed: String| {
+            self.error(EndpointBindingDriverErrorKind::SpecInvalid, op).with_detail(
+                FailureDetail::at("spec/source").comparison(FailureComparison::new(
+                    field,
+                    expected,
+                    observed,
+                )),
+            )
+        };
+        let source = binding.source();
+        if source.arbitration() != ENDPOINT_BINDING_ARBITRATION {
+            return Err(refused(
+                "source.arbitration",
+                wire(&ENDPOINT_BINDING_ARBITRATION),
+                wire(&source.arbitration()),
+            ));
+        }
+        let attachment = *binding.attachment();
+        let claimed = attachment.requested_rights();
+        if !source.admitted_rights().contains(&claimed) {
+            return Err(refused("source.admittedRights", wire(&claimed), "absent".to_owned()));
+        }
+        let required = attachment.required_facets();
+        if !required
+            .iter()
+            .all(|facet| source.realized_facets().contains(facet))
+        {
+            return Err(refused(
+                "source.realizedFacets",
+                required.iter().map(wire).collect::<Vec<_>>().join(","),
+                "absent".to_owned(),
+            ));
+        }
+        let support = endpoint_binding_support();
+        if let Some(unsupported) = source
+            .realized_facets()
+            .iter()
+            .find(|facet| !support.realizes(**facet))
+        {
+            return Err(refused(
+                "source.realizedFacets",
+                support
+                    .facets()
+                    .iter()
+                    .map(wire)
+                    .collect::<Vec<_>>()
+                    .join(","),
+                wire(unsupported),
+            ));
+        }
+        Ok(claimed)
+    }
+
+    /// The Zone self-resource uid the broker's verified bundle is filed under.
+    ///
+    /// The authority binding names this uid and the broker resolves the
+    /// consumer's principal against the bundle that declares it, so it is a
+    /// committed row read rather than a value this driver could choose. A Zone
+    /// whose self row is absent defers the pass instead of answering with a
+    /// number nothing verified.
+    async fn zone_uid(
+        &self,
+        ctx: &mut ResourceContext,
+        op: DriverOp,
+    ) -> Result<ResourceUid, EndpointBindingDriverError> {
+        let key = ResourceKey::new(
+            self.zone.as_str(),
+            ZONE_RESOURCE_TYPE,
+            self.zone.as_str(),
+        );
+        match ctx.lookup(&key).await {
+            RowLookup::Present { row, .. } => ResourceUid::from_bytes(&row.uid)
+                .map_err(|_| self.error(EndpointBindingDriverErrorKind::ParentUnavailable, op)),
+            _ => Err(self
+                .error(EndpointBindingDriverErrorKind::ParentUnavailable, op)
+                .with_detail(FailureDetail::at("zone/lookup").comparison(
+                    FailureComparison::new("zone.uid", "the committed Zone self row", "absent"),
+                ))),
+        }
+    }
+
+    /// The owning `Endpoint` row's own spec, behind the owner fence.
+    ///
+    /// The relationship's source is what mints it, so the binding's declared
+    /// `Endpoint` must be the row the manager reports as this resource's owner.
+    async fn parent_endpoint(
+        &self,
+        ctx: &mut ResourceContext,
+        binding: &EndpointBindingSpec,
+        op: DriverOp,
+    ) -> Result<EndpointSpec, EndpointBindingDriverError> {
+        let key = ResourceKey::new(
+            self.zone.as_str(),
+            ENDPOINT_RESOURCE_TYPE,
+            binding.endpoint_ref().name().as_str(),
+        );
+        let row = match ctx.lookup(&key).await {
+            RowLookup::Present { row, .. } => row,
+            _ => {
+                return Err(self
+                    .error(EndpointBindingDriverErrorKind::ParentUnavailable, op)
+                    .with_detail(FailureDetail::at("parent/lookup").comparison(
+                        FailureComparison::new("parent.endpoint", "present", "absent"),
+                    )));
+            }
+        };
+        if let Some(owner) = ctx.owner()
+            && owner != &row.uid
+        {
+            return Err(self
+                .error(EndpointBindingDriverErrorKind::OwnerMismatch, op)
+                .with_detail(FailureDetail::at("parent/owner").comparison(
+                    FailureComparison::new("parent.ownerUid", uid_hex(owner), uid_hex(&row.uid)),
+                )));
+        }
+        let envelope = serde_json::from_slice::<ResourceSpec>(&row.spec).map_err(|_| {
+            self.error(EndpointBindingDriverErrorKind::ParentUnavailable, op).with_detail(
+                FailureDetail::at("parent/decode").comparison(FailureComparison::new(
+                    "parent.spec",
+                    "a canonical Endpoint row",
+                    "decode failed",
+                )),
+            )
+        })?;
+        // The Endpoint base keeps `providerRef` in the universal layer and
+        // validates it as part of its own typed contract, so the parent's
+        // complete typed object is reconstructed through the same
+        // `base_with_provider_ref` view the owning driver's decoder uses.
+        serde_json::from_slice::<EndpointSpec>(&envelope.base_with_provider_ref().to_canonical_bytes())
+            .map_err(|_| {
+            self.error(EndpointBindingDriverErrorKind::ParentUnavailable, op).with_detail(
+                FailureDetail::at("parent/decode").comparison(FailureComparison::new(
+                    "parent.spec",
+                    "a canonical Endpoint row",
+                    "decode failed",
+                )),
+            )
+        })
+    }
+
+    /// The parent's own declaration must still admit this relationship.
+    ///
+    /// The committed decision records what the source admitted when it minted
+    /// the row; this is the second, independent half - the `Endpoint` row's own
+    /// policy read at its CURRENT generation - and it is the half a consumer
+    /// cannot influence. Every check the derivation performs runs again here,
+    /// so a row whose source has since narrowed its policy is refused rather
+    /// than delivered from a stale decision.
+    fn check_parent_policy(
+        &self,
+        endpoint: &EndpointSpec,
+        binding: &EndpointBindingSpec,
+        op: DriverOp,
+    ) -> Result<(), EndpointBindingDriverError> {
+        let refused = |field: &'static str| {
+            self.error(EndpointBindingDriverErrorKind::ParentUnavailable, op).with_detail(
+                FailureDetail::at("parent/policy")
+                    .comparison(FailureComparison::new(field, "admitted", "absent")),
+            )
+        };
+        if !endpoint.consumer_policy().admits_subject(binding.execution_ref()) {
+            return Err(refused("endpoint.consumerPolicy.allowedSubjects"));
+        }
+        if !endpoint
+            .consumer_policy()
+            .admits_operation(EndpointConsumerPolicy::operation_for(*binding.attachment()))
+        {
+            return Err(refused("endpoint.consumerPolicy.allowedOperations"));
+        }
+        let Some(row_slot) = BindingSlot::parse(binding.slot().as_str()).ok() else {
+            return Err(self.error(EndpointBindingDriverErrorKind::SpecInvalid, op));
+        };
+        let derived = endpoint_delivery_slot(&self.zone, binding.endpoint_ref())
+            .map_err(|_| self.error(EndpointBindingDriverErrorKind::SpecInvalid, op))?;
+        if derived != row_slot {
+            return Err(refused("endpoint.bindingSlot"));
+        }
+        Ok(())
+    }
+
+    /// Every check one serving pass runs before it touches the broker: the
+    /// wire decode, the derived row name, the committed decision, the owning
+    /// `Endpoint` row behind its owner fence, that row's own policy at its
+    /// CURRENT generation, and the named consumer row.
+    ///
+    /// The admitted right travels back with the row because it is what the
+    /// delivery is held to: the permission the broker is asked for is derived
+    /// from the same right the committed decision admitted, so a row cannot
+    /// ask for more than its own source granted it.
+    async fn structural(
+        &self,
+        ctx: &mut ResourceContext,
+        op: DriverOp,
+    ) -> Result<(EndpointBindingSpec, RequestedRights), EndpointBindingDriverError> {
+        let binding = self.decoded_binding(ctx, op)?;
+        let rights = self.check_committed_decision(&binding, op)?;
+        let endpoint = self.parent_endpoint(ctx, &binding, op).await?;
+        self.check_parent_policy(&endpoint, &binding, op)?;
+        // The consumer's store-assigned identity is part of the relationship's
+        // key, so a consumer replaced under the same name produces a different
+        // relationship rather than silently continuing the old one.
+        let consumer = self.consumer_key(&binding);
+        if !matches!(ctx.lookup(&consumer).await, RowLookup::Present { .. }) {
+            return Err(self
+                .error(EndpointBindingDriverErrorKind::ParentUnavailable, op)
+                .with_detail(FailureDetail::at("consumer/lookup").comparison(
+                    FailureComparison::new("consumer.executionRef", "present", "absent"),
+                )));
+        }
+        Ok((binding, rights))
+    }
+
+    /// Register one dependency watch, at most once per target (R12/R17).
+    async fn watch_once(&mut self, ctx: &mut ResourceContext, target: ResourceKey) {
+        if self.watched.contains(&target) {
+            return;
+        }
+        if ctx.watch(target.clone(), WatchCondition::Ready).await.is_ok() {
+            self.watched.push(target);
+        }
+    }
+
+    /// The consumer row's key, for the dependency edge and the principal the
+    /// broker derives.
+    fn consumer_key(&self, binding: &EndpointBindingSpec) -> ResourceKey {
+        ResourceKey::new(
+            self.zone.as_str(),
+            binding.execution_ref().resource_type().as_str(),
+            binding.execution_ref().name().as_str(),
+        )
+    }
+
+    /// The parent `Endpoint` row's key.
+    fn endpoint_key(&self, binding: &EndpointBindingSpec) -> ResourceKey {
+        ResourceKey::new(
+            self.zone.as_str(),
+            ENDPOINT_RESOURCE_TYPE,
+            binding.endpoint_ref().name().as_str(),
+        )
+    }
+}
+
+#[async_trait::async_trait]
+impl ResourceDriver for EndpointBindingDriver {
+    type Error = EndpointBindingDriverError;
+
+    fn classify_error(&self, error: &EndpointBindingDriverError) -> DriverFailure {
+        let failure = match error.kind {
+            EndpointBindingDriverErrorKind::SpecInvalid
+            | EndpointBindingDriverErrorKind::OwnerMismatch => {
+                DriverFailure::refused(error.op, error.kind.failure_kind())
+            }
+            EndpointBindingDriverErrorKind::ParentUnavailable
+            | EndpointBindingDriverErrorKind::DeliveryRefused => DriverFailure::error(
+                error.op,
+                error.kind.failure_kind(),
+                error.kind.failure_class(),
+            ),
+        };
+        failure.with_detail(error.detail.clone())
+    }
+
+    /// Structural validation: the wire decode, the derived row name, the
+    /// committed decision, the owning `Endpoint` row behind its owner fence,
+    /// that row's own policy at its current generation, and the named consumer.
+    async fn validate(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        let op = DriverOp::Validate;
+        self.structural(ctx, op).await?;
+        Ok(())
+    }
+
+    /// Adoption of the pre-restart incarnation (F2).
+    ///
+    /// A relationship's host effect is a pinned ACL entry, and this actor has
+    /// no durable record of which inode it pinned, so it cannot prove the
+    /// pre-restart grant still answers for the socket that is there. A restart
+    /// therefore reports `Missing` and the next reconcile pass re-derives the
+    /// grant against the endpoint the broker pins now, rather than adopting an
+    /// entry whose inode nothing in this process witnessed.
+    async fn recover(&mut self, ctx: &mut ResourceContext) -> Result<RecoveryOutcome, Self::Error> {
+        self.structural(ctx, DriverOp::Recover).await?;
+        Ok(RecoveryOutcome::Missing)
+    }
+
+    /// One reconcile pass: apply the exact-endpoint grant through the broker
+    /// wire and publish what the KERNEL applies.
+    ///
+    /// The pass re-derives rather than caches. The authority binding is mixed
+    /// per verb, so a grant's key cannot be replayed as an observation or a
+    /// revoke; the answer's pinned `(device, inode)` is compared against what
+    /// the previous pass published, so a producer that replaced its socket
+    /// shows up as `EndpointReplaced` instead of as the access it used to have
+    /// (R41, U18 scenario 2); and the effective rights the broker reports are
+    /// the ones the delivery is held to, so an ACL mask a later `chmod`
+    /// nullified reports `Undelivered` rather than a prepared endpoint (AE19).
+    async fn reconcile(
+        &mut self,
+        ctx: &mut ResourceContext,
+    ) -> Result<ReconcileOutcome, Self::Error> {
+        let op = DriverOp::Reconcile;
+        let (binding, rights) = self.structural(ctx, op).await?;
+        // Dependency edges (R12/R17): the owning Endpoint row and the consumer
+        // row both wake this actor when they change.
+        self.watch_once(ctx, self.endpoint_key(&binding)).await;
+        self.watch_once(ctx, self.consumer_key(&binding)).await;
+        let zone_uid = self.zone_uid(ctx, op).await?;
+
+        let previous = pinned_before(ctx.status::<EndpointBindingDriverStatus>());
+        // A grant that is already standing is OBSERVED first, not re-applied:
+        // a re-grant would repair the very drift this pass exists to detect, so
+        // a replaced inode and an ACL mask a later `chmod` nullified would
+        // both be reported as healthy access to whatever is there now (R41,
+        // AE19). Only an answer that no longer covers the admitted right, or
+        // an inode that is no longer the pinned one, falls through to the
+        // grant that restores it.
+        if let Some(pinned) = previous {
+            let observation =
+                endpoint_access_request(&zone_uid, &binding, rights, EndpointAccessVerb::Observe)
+                    .map_err(|_| self.error(EndpointBindingDriverErrorKind::SpecInvalid, op))?;
+            if let Ok(answer) = self.access.dispatch(EndpointAccessVerb::Observe, observation).await
+                && answer_effective_access(&answer, rights)
+                && !answer.parent_listable
+                && EndpointSocketIdentity::new(answer.socket_device, answer.socket_inode) == pinned
+            {
+                ctx.set_status(EndpointBindingDriverStatus::Delivered {
+                    socket: pinned,
+                    effective_rights: answer.socket_effective_rights,
+                });
+                return Ok(ReconcileOutcome::Satisfied);
+            }
+        }
+
+        let request = endpoint_access_request(&zone_uid, &binding, rights, EndpointAccessVerb::Grant)
+            .map_err(|_| self.error(EndpointBindingDriverErrorKind::SpecInvalid, op))?;
+        match self.access.dispatch(EndpointAccessVerb::Grant, request).await {
+            Ok(answer) => {
+                let socket = EndpointSocketIdentity::new(answer.socket_device, answer.socket_inode);
+                // Effective access, not ACL presence (AE19): the bits the broker
+                // read back are the named entry already folded with the ACL
+                // mask, and traverse is the AND across the ancestors the grant
+                // had to install. A relationship short of the admitted right is
+                // refused rather than reported delivered.
+                let status = if !answer_effective_access(&answer, rights) {
+                    EndpointBindingDriverStatus::Undelivered {
+                        reason: EndpointDeliveryRefusal::Refused(
+                            ENDPOINT_EFFECTIVE_ACCESS_MISSING.to_owned(),
+                        ),
+                    }
+                } else if answer.parent_listable {
+                    // Enumerating the socket's parent is the directory
+                    // authority R23 removed; a grant that hands it back is not
+                    // a narrower grant, so it is refused here rather than
+                    // relied on the host posture for.
+                    EndpointBindingDriverStatus::Undelivered {
+                        reason: EndpointDeliveryRefusal::Refused(
+                            ENDPOINT_PARENT_LISTABLE.to_owned(),
+                        ),
+                    }
+                } else if previous.is_some_and(|before| before != socket) {
+                    EndpointBindingDriverStatus::EndpointReplaced { socket }
+                } else {
+                    EndpointBindingDriverStatus::Delivered {
+                        socket,
+                        effective_rights: answer.socket_effective_rights,
+                    }
+                };
+                ctx.set_status(status);
+            }
+            Err(error) => {
+                let reason = match &error {
+                    crate::facets::EndpointAccessDispatchError::Refused(code) => {
+                        EndpointDeliveryRefusal::Refused(code.clone())
+                    }
+                    crate::facets::EndpointAccessDispatchError::Unavailable(_) => {
+                        EndpointDeliveryRefusal::Unanswered
+                    }
+                };
+                ctx.set_status(EndpointBindingDriverStatus::Undelivered { reason });
+            }
+        }
+        if matches!(
+            ctx.status::<EndpointBindingDriverStatus>(),
+            Some(EndpointBindingDriverStatus::Undelivered { .. })
+        ) {
+            ctx.requeue_after(ENDPOINT_BINDING_RESYNC);
+        }
+        // `Satisfied` is this driver's own convergence: the pass did its work
+        // and published the answer, and an effect that is not standing
+        // re-checks above rather than deferring the row, so a consumer's own
+        // launch never forms a startup cycle with the observation it can see.
+        Ok(ReconcileOutcome::Satisfied)
+    }
+
+    /// Pre-drain (KTD10, R36): block NEW use before anything else is torn down.
+    ///
+    /// The fence is the driver's own in-memory status (R11), so a relationship
+    /// that has run pre-drain reports `Draining` on the next pass rather than
+    /// handing a consumer back a delivery it may no longer start. The
+    /// privileged removal is [`Self::delete`]'s work. Idempotent under retry,
+    /// and a row whose spec no longer decodes converges without effects.
+    async fn pre_drain(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        if self.structural(ctx, DriverOp::Delete).await.is_err() {
+            // Nothing durable to fence: converged without effects.
+            return Ok(());
+        }
+        ctx.set_status(EndpointBindingDriverStatus::Draining);
+        Ok(())
+    }
+
+    /// Drain step (R10, F3): the relationship owns no child rows, so this is
+    /// the generic children-first finalization and it converges immediately.
+    async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        ctx.finalize_owned_resources()
+            .await
+            .map_err(|_| {
+                self.error(
+                    EndpointBindingDriverErrorKind::ParentUnavailable,
+                    DriverOp::Delete,
+                )
+            })?;
+        Ok(())
+    }
+
+    /// Teardown: remove this relationship's exact entry and nothing else.
+    ///
+    /// The revoke travels as its own verb, so the key the grant was minted under
+    /// does not reproduce it: a replayed grant cannot become a revoke. The
+    /// broker's ancestors keep the traversal a live relationship still needs,
+    /// so revoking one consumer cannot pull the endpoint out from under another
+    /// (R38). An unanswered revoke withholds cleanup (R36) rather than
+    /// reporting a release it cannot prove. Idempotent under retry, and a row
+    /// whose spec no longer decodes converges without effects.
+    async fn delete(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        let op = DriverOp::Delete;
+        let Ok((binding, rights)) = self.structural(ctx, op).await else {
+            // Nothing durable to clean up; converged without effects.
+            return Ok(());
+        };
+        let Ok(zone_uid) = self.zone_uid(ctx, op).await else {
+            return Err(self.error(
+                EndpointBindingDriverErrorKind::DeliveryRefused,
+                op,
+            ));
+        };
+        let request =
+            endpoint_access_request(&zone_uid, &binding, rights, EndpointAccessVerb::Revoke)
+                .map_err(|_| self.error(EndpointBindingDriverErrorKind::SpecInvalid, op))?;
+        self.access
+            .dispatch(EndpointAccessVerb::Revoke, request)
+            .await
+            .map(|_| ())
+            .map_err(|error| {
+                self.error(EndpointBindingDriverErrorKind::DeliveryRefused, op)
+                    .with_detail(
+                        FailureDetail::at("delete/endpointAccess").comparison(
+                            FailureComparison::new(
+                                "endpoint.access",
+                                "revoked",
+                                error.code(),
+                            ),
+                        ),
+                    )
+            })
+    }
+}
+
+/// The closed slug an exact endpoint whose effective access is short reports.
+const ENDPOINT_EFFECTIVE_ACCESS_MISSING: &str = "endpoint-access-effective-access-missing";
+
+/// The closed slug an exact endpoint whose parent is listable reports.
+const ENDPOINT_PARENT_LISTABLE: &str = "endpoint-access-parent-listable";
+
+/// The `Zone` ResourceType whose committed self row carries the uid the
+/// broker's verified bundle is filed under.
+const ZONE_RESOURCE_TYPE: &str = "Zone";
+
+/// The execution domains the `EndpointBinding` type can be reconciled in.
+///
+/// An exact endpoint is a host-side host effect, so the relationship is
+/// reconciled on the Host domain whichever Zone declares it.
+const ENDPOINT_BINDING_EXECUTION_DOMAINS: &[&str] = &["host"];
+
+/// The resource types the exact-endpoint serving driver reads while
+/// reconciling: the owning `Endpoint` row, the committed consumer row it
+/// delivers to, and the `Zone` self row whose bundle declares that consumer.
+const ENDPOINT_BINDING_READS: &[WellKnownType] = &[
+    WellKnownType::ENDPOINT,
+    WellKnownType::ZONE,
+];
+
+/// The `EndpointBinding` type's driver declaration.
+///
+/// `EndpointBinding` is `BUILTIN | STARTUP` (no RUNTIME bit): the plane cannot
+/// serve a committed exact-endpoint relationship without it, so it must be
+/// registered before the plane opens. The type is not exportable:
+/// `ResourceExport` admits only qualified `*.d2bus.org.*Service` types, so a
+/// relationship can never be an export subject. The driver serves no broker
+/// operations, mints no children, contributes no startup steps, and declares no
+/// hosted effects service: a relationship delivers one exact endpoint to one
+/// consumer and owns nothing else, and a `ServiceDecl` with no host behind it
+/// would be a surface nothing can reach.
+pub fn endpoint_binding_descriptor(args: EndpointBindingDriverArgs) -> DriverDescriptor {
+    DriverDescriptor {
+        resource_type: WellKnownType::ENDPOINT_BINDING,
+        allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
+        verbs: CONVERTED_TYPE_VERBS,
+        execution: ENDPOINT_BINDING_EXECUTION_DOMAINS,
+        exportable: false,
+        reads: ENDPOINT_BINDING_READS,
+        operations: &[],
+        creations: &[],
+        startup: &[],
+        services: &[],
+        decoder: endpoint_binding_spec_decoder(),
+        factory: Arc::new(EndpointBindingDriverFactory::new(args)),
+    }
+}
+
+/// The canonical wire spelling one committed vocabulary value renders as.
+///
+/// Read back through the contract's own serde rename rather than a second
+/// hand-written spelling, so a failure detail cannot drift from the bytes the
+/// row was decoded from.
+fn wire<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|rendered| rendered.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "unrenderable".to_owned())
+}
+
+/// The hex spelling one compared uid renders as.
+fn uid_hex(bytes: &[u8; 16]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// The pinned inode one published status was delivered against.
+///
+/// A status that is not a delivered one pins nothing, so the next pass
+/// re-applies the grant rather than observing an effect it cannot name.
+fn pinned_before(status: Option<&EndpointBindingDriverStatus>) -> Option<EndpointSocketIdentity> {
+    match status {
+        Some(EndpointBindingDriverStatus::Delivered { socket, .. })
+        | Some(EndpointBindingDriverStatus::EndpointReplaced { socket }) => Some(*socket),
+        _ => None,
+    }
+}
+
+/// Whether one broker answer proves the effective access the right needs.
+///
+/// The bits are the KERNEL's, read back through the descriptor the broker held
+/// while it applied or read the grant: the named ACL entry already ANDed with
+/// the mask, and the traverse bit folded across every ancestor the grant had to
+/// install. A named entry the mask has nullified contributes nothing, which is
+/// the failure a mode reconciliation introduces and a presence check cannot see
+/// (AE19).
+fn answer_effective_access(
+    answer: &d2b_contracts_broker::broker_wire::EndpointAccessResponse,
+    rights: RequestedRights,
+) -> bool {
+    let required = required_right_bits(rights);
+    answer.ancestors_traversable && answer.socket_effective_rights & required == required
+}

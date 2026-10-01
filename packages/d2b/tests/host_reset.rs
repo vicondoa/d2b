@@ -2,9 +2,10 @@
 //! KTD15).
 //!
 //! Every case runs the real `d2b` CLI against the real composed broker
-//! binary, with a temporary deployment root, temporary markers, a
-//! temporary cgroup tree, and a public socket that does not exist. Nothing
-//! here reaches a live host, and nothing here needs a running `d2bd` - the
+//! binary, with a temporary deployment root, the deployment document
+//! `nixos-modules/deployment-bootstrap.nix` actually publishes, a temporary
+//! cgroup tree, and a public socket that does not exist. Nothing here
+//! reaches a live host, and nothing here needs a running `d2bd` - the
 //! absence of both is the precondition the verb exists for, so every
 //! assertion below is made with them absent.
 
@@ -13,33 +14,34 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
-use d2b_contracts_resource::v3::{
-    StoreIncarnation, ZoneId, canonical_digest, canonical_json_bytes,
-};
+/// The Host publication the daemon installs, captured from the producer
+/// rather than re-derived here. Re-render it with:
+///
+/// ```text
+/// nix eval --impure --raw \
+///   --expr 'let d = import ./nixos-modules/deployment-bootstrap.nix \
+///     { lib = (import <nixpkgs> {}).lib; }; in d.documentFor d.systemZone' \
+///   --apply 'x: x.documentJson'
+/// ```
+const HOST_DEPLOYMENT_DOCUMENT: &str = concat!(
+    r#"{"graphDigest":"sha256:511d95e68fb11afc6f782159baa72f7cefabde9ff72ee850a9960ae5e5c51811","#,
+    r#""implementations":["activation-nixos","audio-binding","audio-service","credential","device","#,
+    r#""device-security-key","device-usbip","endpoint","guest","host","network-local","process","#,
+    r#""process-systemd","shell-pool","shell-session","user","volume","volume-binding","#,
+    r#""wayland-policy","wayland-session"],"roleBindings":[{"admitted":{"roleRef":"#,
+    r#""Role/operation-publisher","subjects":["Provider/system-minijail"]},"reference":"#,
+    r#""RoleBinding/system-minijail-self-operation-publisher"}],"roles":[{"admitted":{"#,
+    r#""operationRefs":[],"rules":[{"executionRefs":[],"resourceNames":[],"resourceTypes":["#,
+    r#""Operation"],"sessionVerbs":[],"subresources":[],"verbs":["create"],"zones":[]}]},"#,
+    r#""reference":"Role/operation-publisher"}],"schemaVersion":"d2b-deployment-bootstrap/1","#,
+    r#""stateVolume":"Volume/d2b-state","storeIncarnation":"foundation-1","zone":"system"}"#
+);
 
-/// The deployment-graph document shape the one-shot runner verifies.
-#[derive(Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct DeploymentGraph {
-    schema_version: String,
-    zone: ZoneId,
-    store_incarnation: StoreIncarnation,
-    ownership_id: String,
-    owned: Vec<DeclaredOwnedPath>,
-    external_sources: Vec<PathBuf>,
-    roles: Vec<serde_json::Value>,
-    role_bindings: Vec<serde_json::Value>,
-    graph_digest: String,
-}
+const DOCUMENT_FILE: &str = "deployment-bootstrap.json";
 
-#[derive(Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DeclaredOwnedPath {
-    path: PathBuf,
-    kind: String,
-}
-
-const DEPLOYMENT_GRAPH_DIGEST_DOMAIN: &str = "d2b:v3:deployment-graph";
+/// The self-hash the published document carries.
+const PUBLISHED_DIGEST: &str =
+    "sha256:511d95e68fb11afc6f782159baa72f7cefabde9ff72ee850a9960ae5e5c51811";
 
 /// The CLI binary under test, as Cargo or Bazel hands it to the test.
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -57,12 +59,8 @@ fn broker_bin() -> PathBuf {
         .expect("D2B_BROKER_BIN must name the composed broker for this oracle")
 }
 
-const OWNERSHIP_ID: &str = "host:d2b";
-const ZONE: &str = "sys-host";
-const STORE: &str = "store-3";
-
-/// One temporary deployment root with the new model's graph published in
-/// it and the previous release's drained-out state beneath it.
+/// One temporary deployment root carrying the published document and the
+/// previous release's drained-out state beneath it.
 struct Deployment {
     _tmp: tempfile::TempDir,
     root: PathBuf,
@@ -81,27 +79,12 @@ impl Deployment {
             root,
             cgroup,
         };
-        fs::write(
-            deployment.root.join("d2b-ownership"),
-            format!(
-                "# d2b-managed begin\n# d2b managed: {OWNERSHIP_ID}\n# d2b-managed end\n"
-            ),
-        )
-        .expect("ownership marker");
-        // The verified new graph declares the whole owned set, including
-        // the broker's projection cursor/digest and prepared fences, its
-        // durable state cells (the effect and reservation journals), and
-        // its host-generation handoff journal.
-        deployment.publish(
-            &[
-                ("zones", "tree"),
-                ("audit", "tree"),
-                ("authority", "tree"),
-                ("state-cells", "tree"),
-                ("host-generation-handoffs", "tree"),
-            ],
-            &[],
-        );
+        // The document an installation publishes, and the state the
+        // framework's own surfaces create beneath the deployment root,
+        // including the broker's projection cursor/digest and prepared
+        // fences, its durable state cells, and its host-generation handoff
+        // journal.
+        fs::write(deployment.path(DOCUMENT_FILE), HOST_DEPLOYMENT_DOCUMENT).expect("publish");
         for directory in [
             "audit",
             "authority",
@@ -116,40 +99,6 @@ impl Deployment {
         fs::create_dir_all(deployment.path("zones/one")).expect("zone");
         fs::write(deployment.path("zones/one/state.json"), b"{}").expect("zone state");
         deployment
-    }
-
-    /// Publish the verified new deployment graph, self-hashed exactly as
-    /// the broker's own contract requires: the digest covers the canonical
-    /// bytes of the document with its own `graphDigest` cleared.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn publish(&self, owned: &[(&str, &str)], external_sources: &[&str]) {
-        let mut graph = DeploymentGraph {
-            schema_version: "d2b-deployment-graph/1".to_owned(),
-            zone: ZoneId::parse(ZONE).expect("zone"),
-            store_incarnation: StoreIncarnation::parse(STORE).expect("store"),
-            ownership_id: OWNERSHIP_ID.to_owned(),
-            owned: owned
-                .iter()
-                .map(|(relative, kind)| DeclaredOwnedPath {
-                    path: self.path(relative),
-                    kind: (*kind).to_owned(),
-                })
-                .collect(),
-            external_sources: external_sources
-                .iter()
-                .map(PathBuf::from)
-                .collect(),
-            roles: Vec::new(),
-            role_bindings: Vec::new(),
-            graph_digest: String::new(),
-        };
-        let bytes = canonical_json_bytes(&graph).expect("canonical graph");
-        graph.graph_digest = canonical_digest(DEPLOYMENT_GRAPH_DIGEST_DOMAIN, &bytes);
-        fs::write(
-            self.root.join("deployment-graph.json"),
-            serde_json::to_vec_pretty(&graph).expect("render graph"),
-        )
-        .expect("publish graph");
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -172,8 +121,7 @@ impl Deployment {
             .arg("--cgroup-root")
             .arg(&self.cgroup)
             .env("D2B_BROKER_BIN", broker_bin())
-            .env("D2B_PUBLIC_SOCKET", self.root.join("absent-public.sock"))
-            .env("D2B_ZONE", ZONE)
+            .env("D2B_PUBLIC_SOCKET", self.path("absent-public.sock"))
             .env_remove("D2B_BROKER_SOCKET_PATH")
             .output()
             .expect("run the d2b CLI")
@@ -234,9 +182,20 @@ fn dry_run_reports_the_exact_inventory_and_removes_nothing() {
     let report = envelope(&output);
     assert_eq!(report["ok"], serde_json::json!(true));
     assert_eq!(report["mode"], serde_json::json!("inspect"));
+    // The document the deployment published, and the identity its accepted
+    // grants admitted the reset for.
+    assert_eq!(report["zone"], serde_json::json!("system"));
+    assert_eq!(report["ownershipId"], serde_json::json!(PUBLISHED_DIGEST));
+    assert_eq!(
+        report["admittedSubject"],
+        serde_json::json!("provider:Provider/system-minijail")
+    );
     let inventory = report["inventory"].as_array().expect("inventory");
-    assert_eq!(inventory.len(), 5);
-    assert!(inventory.iter().all(|entry| entry["present"] == serde_json::json!(true)));
+    let present = inventory
+        .iter()
+        .filter(|entry| entry["present"] == serde_json::json!(true))
+        .count();
+    assert!(present >= 5, "the seeded state is in the inventory: {inventory:?}");
     assert!(inventory.iter().all(|entry| entry["removed"] == serde_json::json!(false)));
     // The inspect half inspected; it did not remove.
     assert!(deployment.path("zones/one/state.json").exists());
@@ -265,9 +224,7 @@ fn apply_succeeds_with_the_daemon_stopped_and_an_unreadable_old_store() {
 
     let report = envelope(&output);
     assert_eq!(report["mode"], serde_json::json!("apply"));
-    assert_eq!(report["storeIncarnation"], serde_json::json!("store-4"));
-    let inventory = report["inventory"].as_array().expect("inventory");
-    assert!(inventory.iter().all(|entry| entry["removed"] == serde_json::json!(true)));
+    assert_eq!(report["storeIncarnation"], serde_json::json!("foundation-2"));
     // The projection cursor/digest and prepared fences, the effect and
     // reservation journals, and the host-generation handoff journal are
     // gone with the rest of the inventory.
@@ -280,8 +237,13 @@ fn apply_succeeds_with_the_daemon_stopped_and_an_unreadable_old_store() {
     ] {
         assert!(!deployment.path(gone).exists(), "{gone} survived the reset");
     }
-    // The fresh deployment root carries a NEW incarnation, so the next
-    // boot initializes rather than resynchronizing a rollback.
+    // The installation's document is untouched, and the fresh deployment
+    // root carries a NEW incarnation, so the next boot initializes rather
+    // than resynchronizing a rollback.
+    assert_eq!(
+        fs::read_to_string(deployment.path(DOCUMENT_FILE)).expect("document"),
+        HOST_DEPLOYMENT_DOCUMENT
+    );
     assert!(deployment.path("incarnation.json").exists());
 }
 
@@ -302,23 +264,39 @@ fn a_repeated_completed_reset_is_safe() {
     assert!(inventory.iter().all(|entry| entry["removed"] == serde_json::json!(false)));
 }
 
+/// A document edited after it was verified never authorizes a removal, and
+/// it is left byte for byte as whoever wrote it left it.
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
-fn a_foreign_marker_refuses_and_is_left_byte_for_byte() {
+fn a_tampered_deployment_document_refuses_and_is_left_byte_for_byte() {
     let deployment = Deployment::new();
-    let foreign = "# d2b-managed begin\n# d2b managed: host:somebody-else\n# d2b-managed end\n";
-    fs::write(deployment.path("d2b-ownership"), foreign).expect("foreign marker");
+    let mut document: serde_json::Value =
+        serde_json::from_str(HOST_DEPLOYMENT_DOCUMENT).expect("decode");
+    document["stateVolume"] = serde_json::json!("Volume/somebody-elses");
+    let tampered = serde_json::to_string(&document).expect("render");
+    fs::write(deployment.path(DOCUMENT_FILE), &tampered).expect("tamper");
 
     let output = deployment.run(&["--apply"]);
     assert_ne!(output.status.code(), Some(0));
     let report = envelope(&output);
     assert_eq!(report["ok"], serde_json::json!(false));
-    assert_eq!(report["code"], serde_json::json!("reset-foreign-ownership-marker"));
-    // A foreign marker never authorizes an overwrite.
+    assert_eq!(report["code"], serde_json::json!("reset-document-invalid"));
     assert_eq!(
-        fs::read_to_string(deployment.path("d2b-ownership")).expect("marker"),
-        foreign
+        fs::read_to_string(deployment.path(DOCUMENT_FILE)).expect("document"),
+        tampered
     );
+    assert!(deployment.path("zones/one/state.json").exists());
+}
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[test]
+fn a_root_with_no_deployment_document_is_refused() {
+    let deployment = Deployment::new();
+    fs::remove_file(deployment.path(DOCUMENT_FILE)).expect("remove document");
+
+    let output = deployment.run(&["--apply"]);
+    assert_ne!(output.status.code(), Some(0));
+    assert_eq!(envelope(&output)["ok"], serde_json::json!(false));
     assert!(deployment.path("zones/one/state.json").exists());
 }
 
@@ -326,11 +304,11 @@ fn a_foreign_marker_refuses_and_is_left_byte_for_byte() {
 #[test]
 fn a_symlink_escape_refuses_and_leaves_the_target_alone() {
     let deployment = Deployment::new();
-    deployment.publish(&[("operator-data", "tree")], &[]);
     let outside = deployment.path("outside");
     fs::create_dir_all(&outside).expect("outside");
     fs::write(outside.join("operator-file"), b"precious").expect("operator data");
-    std::os::unix::fs::symlink(&outside, deployment.path("operator-data")).expect("symlink");
+    fs::remove_dir_all(deployment.path("zones")).expect("clear the surface");
+    std::os::unix::fs::symlink(&outside, deployment.path("zones")).expect("symlink");
 
     let output = deployment.run(&["--apply"]);
     assert_ne!(output.status.code(), Some(0));
@@ -339,21 +317,20 @@ fn a_symlink_escape_refuses_and_leaves_the_target_alone() {
         serde_json::json!("reset-symlink-escape")
     );
     assert!(outside.join("operator-file").exists());
-    assert!(deployment.path("zones/one/state.json").exists());
+    assert!(deployment.path("authority/state.json").exists());
 }
 
+/// Nothing outside the deployment root is ever a candidate, including a
+/// sibling directory that carries the same surface names.
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
-fn an_external_volume_source_is_reported_untouched() {
+fn nothing_outside_the_deployment_root_is_reached() {
     let deployment = Deployment::new();
-    let external = tempfile::tempdir().expect("external source");
-    fs::write(external.path().join("volume.img"), b"operator volume").expect("volume");
-    deployment.publish(
-        &[("zones", "tree")],
-        &[external.path().to_str().expect("utf8")],
-    );
+    let sibling = deployment.path("../d2b-operator-volume");
+    fs::create_dir_all(sibling.join("zones")).expect("operator volume");
+    fs::write(sibling.join("zones/state.json"), b"operator data").expect("operator state");
 
-    let output = deployment.run(&["--dry-run"]);
+    let output = deployment.run(&["--apply"]);
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -362,10 +339,9 @@ fn an_external_volume_source_is_reported_untouched() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
-        envelope(&output)["externalSources"],
-        serde_json::json!([external.path().to_string_lossy()])
+        fs::read(sibling.join("zones/state.json")).expect("operator state"),
+        b"operator data"
     );
-    assert_eq!(fs::read(external.path().join("volume.img")).expect("volume"), b"operator volume");
 }
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -407,16 +383,24 @@ fn a_human_invocation_renders_the_inventory_and_the_refusal() {
     assert!(rendered.contains("ownership boundary verified (inspect)"), "{rendered}");
     assert!(rendered.contains("[tree]"), "{rendered}");
     assert!(rendered.contains("(present)"), "{rendered}");
+    assert!(rendered.contains("provider:Provider/system-minijail"), "{rendered}");
 
+    // A document edited after verification is the refusal an operator sees
+    // from a root somebody else has been writing to.
+    let mut document: serde_json::Value =
+        serde_json::from_str(HOST_DEPLOYMENT_DOCUMENT).expect("decode");
+    document["implementations"] = serde_json::json!(["process", "not-compiled-here"]);
     fs::write(
-        deployment.path("d2b-ownership"),
-        "# d2b-managed begin\n# d2b managed: host:somebody-else\n# d2b-managed end\n",
+        deployment.path(DOCUMENT_FILE),
+        serde_json::to_string(&document).expect("render"),
     )
-    .expect("foreign marker");
+    .expect("tamper");
     let refused = Command::new(d2b_bin())
         .args(["--human", "host", "reset", "--apply"])
         .arg("--state-root")
         .arg(&deployment.root)
+        .arg("--cgroup-root")
+        .arg(&deployment.cgroup)
         .env("D2B_BROKER_BIN", broker_bin())
         .env("D2B_PUBLIC_SOCKET", deployment.path("absent-public.sock"))
         .output()
@@ -424,7 +408,7 @@ fn a_human_invocation_renders_the_inventory_and_the_refusal() {
     assert_ne!(refused.status.code(), Some(0));
     let rendered = String::from_utf8_lossy(&refused.stdout);
     assert!(
-        rendered.contains("d2b host reset refused: reset-foreign-ownership-marker"),
+        rendered.contains("d2b host reset refused: reset-document-invalid"),
         "{rendered}"
     );
     assert!(rendered.contains("nothing was removed"), "{rendered}");

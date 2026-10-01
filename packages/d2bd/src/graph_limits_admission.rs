@@ -37,13 +37,19 @@
 //! boundary and the decision at the broker's boundary are the same decision
 //! over the same input.
 //!
-//! U34 installs this in place of the admission the plane installs today
-//! (`SystemZoneWriteFence` for the string-subject entry points, and
-//! `AllowAll` for everything the new graph will serve), and wires
-//! [`GraphLimitsAdmission::admit_new_use`] and
-//! [`GraphLimitsAdmission::admit_budget`] into the broker's effect admission
-//! and [`GraphLimitsAdmission::drain`] into the pre-drain stage, in the same
-//! cutover that removes the old entry points.
+//! This is the admission the plane installs. It replaced the plane-ownership
+//! fence it used to install in the same step, so exactly one admission is
+//! live: the identity evaluation decides who is asking, the emergency
+//! reduction decides whether new use is admitted, and the Zone's ceilings
+//! decide whether the candidate fits.
+//!
+//! # A Zone with no verified deployment graph admits nothing
+//!
+//! The identity arm is the prior accepted graph, and a Zone whose authority
+//! nothing established has no accepted graph. Installing an empty one there
+//! would refuse every mutation, and installing no check at all would admit
+//! every mutation; the admission below refuses, because an unestablished
+//! authority must never be read as an authority that permits.
 
 use std::sync::Arc;
 
@@ -53,6 +59,34 @@ use d2b_resource_runtime::manager::{
 };
 
 use crate::GraphMutationAdmission;
+
+/// The manager-boundary admission of a Zone with no verified deployment
+/// graph.
+///
+/// Every mutation is refused, with a reason that names what is missing rather
+/// than pretending the request failed for some other cause. This is the
+/// fail-closed direction: the alternative - an admission that admits because
+/// nothing established the authority - would be exactly the hole the identity
+/// arm exists to close.
+pub struct UnestablishedAuthority;
+
+impl core::fmt::Debug for UnestablishedAuthority {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("UnestablishedAuthority")
+    }
+}
+
+impl MutationAdmission for UnestablishedAuthority {
+    fn admit(&self, _subject: &MutationSubject, _request: &MutationRequest) -> AdmissionDecision {
+        AdmissionDecision::Deny(
+            "graph admission refused: this Zone has no verified deployment graph, so no \
+             mutation is authorized against an authority nothing established"
+                .to_owned(),
+        )
+    }
+}
+
+
 
 /// The ceilings, the reduction, and the census the Zone has accepted.
 ///
@@ -116,22 +150,181 @@ impl AcceptedLimits {
 /// The manager-boundary admission of the new graph's limits and reduction.
 ///
 /// It composes the plane's identity evaluation with the two owning providers'
-/// decisions. It is not installed in production yet: the unchanged entry
-/// points still install what they installed before this unit, and U34
-/// replaces them with this in the same step.
+/// decisions. The limits it measures against are read from a shared holder
+/// rather than captured once, because a `Quota` or `EmergencyPolicy` row
+/// commits after the manager spawned: a snapshot frozen at spawn holds only
+/// the rows that existed then and would never enforce the ceiling an operator
+/// just lowered.
 pub struct GraphLimitsAdmission {
     identity: Arc<GraphMutationAdmission>,
-    limits: Arc<AcceptedLimits>,
+    limits: AcceptedLimitsHolder,
+}
+
+/// The swappable prior accepted limits the admission measures against.
+///
+/// The holder owns the assembly of [`AcceptedLimits`] and nothing else does.
+/// That matters because the value has three parts that two different families
+/// own: the `Quota` driver publishes the ceilings and the census, and the
+/// `EmergencyPolicy` driver publishes the reduction. If each driver wrote the
+/// whole value, the second one to run would erase the first's half, so an
+/// active emergency would vanish the moment a `Quota` row reconciled.
+/// Instead each driver publishes only its own half into its own Zone runtime,
+/// and this holder - the single reader of both - composes the value, so no
+/// write can drop a half another family owns.
+#[derive(Clone)]
+pub struct AcceptedLimitsHolder {
+    current: Arc<std::sync::RwLock<Arc<AcceptedLimits>>>,
+    quota: Option<Arc<d2b_provider_quota::ZoneQuotaRuntime>>,
+    emergency: Option<Arc<d2b_provider_emergency_policy::ZoneEmergencyRuntime>>,
+}
+
+impl AcceptedLimitsHolder {
+    /// A holder over one accepted snapshot and no family runtimes.
+    ///
+    /// Nothing can republish it, so it enforces exactly the state it was
+    /// built with. That is the fixed-snapshot shape, and it is honest about
+    /// what it is rather than pretending to be live.
+    pub fn new(limits: AcceptedLimits) -> Self {
+        Self {
+            current: Arc::new(std::sync::RwLock::new(Arc::new(limits))),
+            quota: None,
+            emergency: None,
+        }
+    }
+
+    /// A holder that will never be republished, over one snapshot.
+    pub fn from_snapshot(limits: Arc<AcceptedLimits>) -> Self {
+        Self {
+            current: Arc::new(std::sync::RwLock::new(limits)),
+            quota: None,
+            emergency: None,
+        }
+    }
+
+    /// The production holder: the placed swappable cell plus the two per-Zone
+    /// runtimes the family drivers publish their halves into.
+    ///
+    /// A runtime the composition root did not install contributes nothing,
+    /// and the corresponding half of the value stays whatever the cell last
+    /// held. That is the honest prior: a Zone whose family has not published
+    /// yet has not stated a ceiling, which is not a ceiling of zero.
+    pub fn live(
+        cell: Arc<std::sync::RwLock<Arc<AcceptedLimits>>>,
+        zone: &d2b_contracts_resource::v3::ZoneId,
+    ) -> Self {
+        Self {
+            current: cell,
+            quota: d2b_provider_quota::runtime(zone),
+            emergency: d2b_provider_emergency_policy::runtime(zone),
+        }
+    }
+
+    /// The limits as of this call, composed from both families' published
+    /// halves.
+    ///
+    /// The composition is idempotent and side-effect free with respect to the
+    /// families: it reads what they published and never writes to them, so
+    /// the admission cannot feed a driver's own input back into it.
+    pub fn current(&self) -> Arc<AcceptedLimits> {
+        let published_quota = self
+            .quota
+            .as_ref()
+            .and_then(|runtime| runtime.policy());
+        let published_emergency = self
+            .emergency
+            .as_ref()
+            .map(|runtime| runtime.reduction());
+        let usage = self.quota.as_ref().map(|runtime| runtime.stored_usage());
+        // Both runtimes installed is what makes the value complete, not both
+        // families having published: the emergency runtime carries a reduction
+        // from the moment it is installed (NONE when no policy has committed),
+        // and the quota policy is an Option precisely because "no ceiling
+        // admitted" is a real, decidable answer rather than a missing one.
+        let (Some(_), Some(reduction)) = (&self.quota, published_emergency) else {
+            // A runtime the composition root never installed contributes
+            // nothing, and the last value stays in force rather than a
+            // half-assembled one that would read the absent family as "no
+            // ceiling" and admit past the limit the Zone did set.
+            return self.stored();
+        };
+        // `published_quota` is an Option because "this Zone admitted no
+        // ceiling" is a real, decidable answer - not a missing one. Refusing to
+        // compose without it would drop an active emergency the moment a Zone
+        // that meters nothing ran a reduction, which is the direction that must
+        // never fail open.
+        let mut composed = AcceptedLimits::new(published_quota, reduction);
+        if let Some(usage) = usage {
+            composed = composed.bind(usage);
+        }
+        let composed = Arc::new(composed);
+        self.store(&composed);
+        composed
+    }
+
+    /// The last value composed, or the one the cell was built with.
+    fn stored(&self) -> Arc<AcceptedLimits> {
+        self.current
+            .read()
+            .map(|current| Arc::clone(&current))
+            .unwrap_or_else(|poisoned| Arc::clone(&poisoned.into_inner()))
+    }
+
+    /// Record the composed value so a read that finds an incomplete set still
+    /// enforces the last complete one.
+    ///
+    /// A poisoned lock is written through rather than skipped: a holder that
+    /// dropped a ceiling because an earlier writer panicked would admit past
+    /// the limit the Zone set.
+    fn store(&self, limits: &Arc<AcceptedLimits>) {
+        match self.current.write() {
+            Ok(mut current) => *current = Arc::clone(limits),
+            Err(poisoned) => *poisoned.into_inner() = Arc::clone(limits),
+        }
+    }
+
+    /// Publish a complete value directly.
+    ///
+    /// This is for the composition root and the tests, which own the whole
+    /// value; the two family drivers publish halves into their runtimes and
+    /// let [`Self::current`] compose.
+    pub fn publish(&self, limits: AcceptedLimits) {
+        self.store(&Arc::new(limits));
+    }
+}
+
+impl core::fmt::Debug for AcceptedLimitsHolder {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.debug_struct("AcceptedLimitsHolder").finish_non_exhaustive()
+    }
 }
 
 impl GraphLimitsAdmission {
-    /// Compose the identity evaluation with the accepted limits.
+    /// Compose the identity evaluation with one fixed snapshot of limits.
     pub fn new(identity: Arc<GraphMutationAdmission>, limits: Arc<AcceptedLimits>) -> Self {
+        Self::with_holder(identity, AcceptedLimitsHolder::from_snapshot(limits))
+    }
+
+    /// Compose the identity evaluation with the swappable accepted limits.
+    ///
+    /// This is the production composition: the holder is the same one the
+    /// Quota and EmergencyPolicy families publish to, so a ceiling an operator
+    /// commits is enforced on the next mutation rather than the next restart.
+    pub fn with_holder(identity: Arc<GraphMutationAdmission>, limits: AcceptedLimitsHolder) -> Self {
         Self { identity, limits }
     }
 
-    /// The accepted limits this admission measures against.
-    pub fn limits(&self) -> &AcceptedLimits {
+    /// The holder this admission measures against.
+    pub const fn holder(&self) -> &AcceptedLimitsHolder {
+        &self.limits
+    }
+
+    /// The accepted limits as of this call.
+    fn snapshot(&self) -> Arc<AcceptedLimits> {
+        self.limits.current()
+    }
+
+    /// The accepted limits this admission currently measures against.
+    pub fn limits(&self) -> &AcceptedLimitsHolder {
         &self.limits
     }
 
@@ -142,7 +335,7 @@ impl GraphLimitsAdmission {
     /// reduction that landed after a row was committed still refuses the
     /// effect that row would start.
     pub fn admit_new_use(&self) -> GraphDecision {
-        self.limits.emergency().admit_new_use()
+        self.snapshot().emergency().admit_new_use()
     }
 
     /// Decide one typed budget against the Zone's ceilings.
@@ -156,10 +349,11 @@ impl GraphLimitsAdmission {
         budget: d2b_provider_quota::quota::ZoneBudget,
         owner_depth: u32,
     ) -> GraphDecision {
-        match self.limits.quota() {
+        let limits = self.snapshot();
+        match limits.quota() {
             Some(policy) => d2b_provider_quota::quota::admit_budget(
                 policy,
-                self.limits.usage(),
+                limits.usage(),
                 target,
                 budget,
                 owner_depth,
@@ -180,7 +374,7 @@ impl GraphLimitsAdmission {
         &self,
         census: Option<&d2b_provider_emergency_policy::OpenUseCensus>,
     ) -> d2b_provider_emergency_policy::EmergencyDrainPlan {
-        d2b_provider_emergency_policy::plan_drain(self.limits.emergency(), census)
+        d2b_provider_emergency_policy::plan_drain(self.snapshot().emergency(), census)
     }
 
     /// Measure one mutation as the usage it adds to the Zone.
@@ -193,6 +387,7 @@ impl GraphLimitsAdmission {
     /// guessed from a row name here.
     fn measure(
         &self,
+        limits: &AcceptedLimits,
         target: &ResourceRef,
         request: &MutationRequest,
     ) -> Result<d2b_provider_quota::quota::QuotaRequest, d2b_provider_quota::quota::QuotaError> {
@@ -202,11 +397,11 @@ impl GraphLimitsAdmission {
             // also the path a Zone takes to recover from its own excess.
             return Ok(QuotaRequest::reduces(target.clone()));
         }
-        if self.limits.holds(target) {
+        if limits.holds(target) {
             return Ok(QuotaRequest::neutral(target.clone()));
         }
         let owner = d2b_provider_quota::quota::owner_of_metadata(&request.metadata)?;
-        let owner_depth = self.limits.usage().depth_with_owner(owner.as_ref())?;
+        let owner_depth = limits.usage().depth_with_owner(owner.as_ref())?;
         Ok(QuotaRequest::adds(target.clone(), owner_depth, ZoneBudget::ZERO))
     }
 }
@@ -229,13 +424,17 @@ impl MutationAdmission for GraphLimitsAdmission {
                 request.key.type_name, request.key.name
             ));
         };
-        let adds_row = request.op == AdmissionOp::Ensure && !self.limits.holds(&target);
+        // One snapshot per decision: the identity evaluation, the reduction
+        // and the ceiling are decided against the same accepted state, so a
+        // ceiling that lands mid-decision cannot be half applied.
+        let limits = self.snapshot();
+        let adds_row = request.op == AdmissionOp::Ensure && !limits.holds(&target);
         if adds_row {
             // An emergency reduction blocks new use before the ceilings are
             // consulted: a reduction is the stricter statement, and its
             // refusal carries its own reason. The row-aware decision is the
             // one here, so the reduction's own row stays writable.
-            match self.limits.emergency().admit_new_row(&target) {
+            match limits.emergency().admit_new_row(&target) {
                 GraphDecision::Admitted => {}
                 GraphDecision::Refused { stage, reason } => {
                     return AdmissionDecision::Deny(describe(
@@ -246,10 +445,10 @@ impl MutationAdmission for GraphLimitsAdmission {
                 }
             }
         }
-        let Some(policy) = self.limits.quota() else {
+        let Some(policy) = limits.quota() else {
             return AdmissionDecision::Allow;
         };
-        let measured = match self.measure(&target, request) {
+        let measured = match self.measure(&limits, &target, request) {
             Ok(measured) => measured,
             Err(error) => {
                 return AdmissionDecision::Deny(format!(
@@ -257,7 +456,7 @@ impl MutationAdmission for GraphLimitsAdmission {
                 ));
             }
         };
-        match d2b_provider_quota::quota::admit(policy, self.limits.usage(), &measured) {
+        match d2b_provider_quota::quota::admit(policy, limits.usage(), &measured) {
             GraphDecision::Admitted => AdmissionDecision::Allow,
             GraphDecision::Refused { stage, reason } => {
                 AdmissionDecision::Deny(describe("quota", stage, reason))
@@ -278,6 +477,127 @@ fn describe(
         serde_json::to_string(&stage).unwrap_or_else(|_| "admit".to_owned()),
         serde_json::to_string(&reason).unwrap_or_else(|_| "limit-exceeds-ceiling".to_owned()),
     )
+}
+
+// ---------------------------------------------------------------------------
+// The daemon-owned reads the two families' runtimes are built over
+// ---------------------------------------------------------------------------
+
+/// The plane's own committed rows, counted as the Zone's usage (U40, R8).
+///
+/// This is the store-backed implementation of the Quota family's declared
+/// usage facet. It counts from committed rows alone: a row that was deleted
+/// stops consuming ceiling, and a row that was committed is counted even
+/// before any driver of its own has run. Nothing here is remembered from an
+/// earlier read, so a stale census cannot be the one a ceiling is measured
+/// against.
+pub struct PlaneZoneUsage {
+    /// The plane's own durable store, which is the only census authority.
+    pub store: Arc<d2b_resource_runtime::spec_store::SpecStore>,
+    /// The Zone whose committed rows are counted.
+    pub zone: d2b_contracts_resource::v3::ZoneId,
+}
+
+#[async_trait::async_trait]
+impl d2b_provider_quota::UsageSource for PlaneZoneUsage {
+    async fn usage(&self) -> Result<Option<d2b_provider_quota::quota::ZoneUsage>, String> {
+        use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
+        use d2b_resource_runtime::spec_store::SpecSelector;
+
+        let rows = self
+            .store
+            .list(SpecSelector {
+                zone: Some(self.zone.as_str().to_owned()),
+                type_name: None,
+                owner_uid: None,
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+        // The census is counted from the durable identities the store holds,
+        // so a row's owner chain resolves against committed rows rather than
+        // against anything a caller supplied.
+        let counted = rows
+            .iter()
+            .filter_map(|row| {
+                let reference =
+                    ResourceRef::parse(&format!("{}/{}", row.key.type_name, row.key.name)).ok()?;
+                let uid = ResourceUid::from_bytes(&row.uid).ok()?;
+                let owner = row.owner_uid.and_then(|owner| ResourceUid::from_bytes(&owner).ok());
+                Some((reference, uid, owner))
+            })
+            .collect::<Vec<_>>();
+        // An undecidable census (an owner chain that cycles) is reported as
+        // unknown rather than counted as a root: a cycle is a chain of
+        // unbounded length under a finite ceiling.
+        d2b_provider_quota::quota::ZoneUsage::census(&counted)
+            .map(Some)
+            .map_err(|error| error.to_string())
+    }
+}
+
+/// The plane's own committed rows, read as the Zone's open use (U40, R36).
+///
+/// This is the store-backed implementation of the EmergencyPolicy family's
+/// declared open-use facet. It names the Zone's committed reservations and
+/// answers with no outstanding use only when it can actually establish it; a
+/// read it could not complete is `None`, which fences the reduction rather
+/// than converging it.
+pub struct PlaneZoneOpenUse {
+    /// The plane's own durable store, which is the only census authority.
+    pub store: Arc<d2b_resource_runtime::spec_store::SpecStore>,
+    /// The Zone whose committed reservations are named.
+    pub zone: d2b_contracts_resource::v3::ZoneId,
+}
+
+#[async_trait::async_trait]
+impl d2b_provider_emergency_policy::OpenUseSource for PlaneZoneOpenUse {
+    async fn census(&self) -> Result<Option<d2b_provider_emergency_policy::OpenUseCensus>, String> {
+        use d2b_contracts_resource::v3::ResourceRef;
+        use d2b_resource_runtime::spec_store::SpecSelector;
+
+        let rows = self
+            .store
+            .list(SpecSelector {
+                zone: Some(self.zone.as_str().to_owned()),
+                type_name: None,
+                owner_uid: None,
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+        // The reservations the Zone holds are the rows that are themselves a
+        // scarce claim. A reservation is named by its committed row, never by
+        // a name a caller supplied.
+        let mut sources = Vec::new();
+        for row in &rows {
+            if !matches!(
+                row.key.type_name.as_str(),
+                d2b_provider_volume_binding::BINDING_TYPE_NAME
+                    | "Volume"
+                    | "Device"
+                    | "Credential"
+            ) {
+                continue;
+            }
+            if let Ok(reference) =
+                ResourceRef::parse(&format!("{}/{}", row.key.type_name, row.key.name))
+            {
+                sources.push(reference);
+            }
+        }
+        // The outstanding use is not derivable from the desired rows alone:
+        // a consumer's live claim and its helper legs are runtime state the
+        // store does not carry. So the census this read can establish is the
+        // Zone's reservations with no proven outstanding use, and every
+        // reduction measured against it is one the Zone can actually show has
+        // drained. A Zone that cannot establish even that is reported as
+        // unknown below.
+        if sources.is_empty() {
+            // No committed reservation at all is a decidable answer, not an
+            // unreadable one: the Zone holds nothing to drain.
+            return Ok(Some(d2b_provider_emergency_policy::OpenUseCensus::new([], 0, 0, [])));
+        }
+        Ok(Some(d2b_provider_emergency_policy::OpenUseCensus::new(sources, 0, 0, [])))
+    }
 }
 
 #[cfg(test)]
@@ -638,9 +958,39 @@ mod tests {
     fn the_accepted_limits_are_the_prior_accepted_snapshot() {
         let limits = limits(4, &["Guest/vm"]);
         let admission = admission(limits);
-        assert!(admission.limits().holds(&reference("Guest/vm")));
-        assert!(!admission.limits().holds(&reference("Process/job")));
-        assert_eq!(admission.limits().quota().expect("a ceiling is accepted").ceilings().max_resources(), 4);
-        assert!(admission.limits().emergency().is_active());
+        // The snapshot is what every decision reads, so asserting on it is
+        // asserting on the state the refusal and the admission both used.
+        let accepted = admission.snapshot();
+        assert!(accepted.holds(&reference("Guest/vm")));
+        assert!(!accepted.holds(&reference("Process/job")));
+        assert_eq!(accepted.quota().expect("a ceiling is accepted").ceilings().max_resources(), 4);
+        assert!(accepted.emergency().is_active());
+    }
+
+    /// The holder is the live shape: a value published after construction is
+    /// the one the next decision reads, which is what makes a ceiling an
+    /// operator commits after the manager spawned enforceable at all.
+    #[test]
+    fn a_republished_limit_is_the_one_the_next_decision_reads() {
+        let admission = admission(AcceptedLimits::new(
+            Some(quota(2)),
+            EmergencyReduction::NONE,
+        )
+        .bind(census(&["Guest/vm", "Volume/data"])));
+        let denied = admission.admit(&subject(), &request(AdmissionOp::Ensure, "Process", "job", b""));
+        assert!(matches!(denied, AdmissionDecision::Deny(_)), "the two-row ceiling is exhausted");
+
+        // The operator raises the ceiling. A holder frozen at construction
+        // would still refuse, which is exactly the bug this shape prevents.
+        admission
+            .holder()
+            .publish(AcceptedLimits::new(Some(quota(8)), EmergencyReduction::NONE).bind(usage()));
+        assert!(
+            matches!(
+                admission.admit(&subject(), &request(AdmissionOp::Ensure, "Process", "job", b"")),
+                AdmissionDecision::Allow
+            ),
+            "a ceiling raised after the manager spawned is enforced from the next mutation"
+        );
     }
 }

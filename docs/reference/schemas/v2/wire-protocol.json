@@ -2146,6 +2146,63 @@
               "$ref": "#/definitions/EnvelopeInvokeRequest"
             }
           }
+        },
+        {
+          "description": "Re-read what one consumer principal actually has on ONE exact host endpoint (U18, R23).\n\nThe three endpoint-access variants share ONE request struct and ONE resolution path, and the verb is the only thing that tells them apart: they differ in the host effect they perform, not in the admission they are admitted under. A consumer that is admitted one exact endpoint gets an answer about that endpoint and nothing else - the reply carries the pinned `(dev, ino)` the broker resolved, the kernel's effective rights on it, whether every ancestor directory applies a traverse bit, and whether the containing directory is listable (which is the directory authority R23 removed).\n\nThe request names no path anywhere. See [`EndpointAccessRequest`].",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "EndpointObserve"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/EndpointAccessRequest"
+            }
+          }
+        },
+        {
+          "description": "Apply the exact-endpoint grant: the consumer principal's entry on ONE endpoint socket plus traverse on the ancestor directories, and no listing authority on any of them.\n\nThe broker resolves the socket inside a directory it derives from its own serve-time configuration, so the grant lands on the inode it resolved and on no other. See [`EndpointAccessRequest`].",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "EndpointGrantAccess"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/EndpointAccessRequest"
+            }
+          }
+        },
+        {
+          "description": "Remove the exact-endpoint grant: the consumer principal's own entry on that one socket, leaving the ancestor traversal grants - which sibling endpoints and the producer's own helpers also depend on - in place.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "EndpointRevokeAccess"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/EndpointAccessRequest"
+            }
+          }
         }
       ]
     },
@@ -2535,6 +2592,25 @@
             },
             "payload": {
               "$ref": "#/definitions/EnvelopeInvokeResponse"
+            }
+          }
+        },
+        {
+          "description": "The broker's answer to one exact-endpoint access request.\n\nThe three endpoint-access verbs answer with the same body, because they answer the same question - what this consumer principal has on this one exact endpoint - at three different points in the effect's life. A revoke answers with the inode it removed the entry from, so a retry can tell a removal that landed from one that did not.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "EndpointAccess"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/EndpointAccessResponse"
             }
           }
         }
@@ -3257,6 +3333,184 @@
         "rootInvocationId": {
           "description": "The invocation identifier every leg of the chain shares.",
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EndpointAccessRequest": {
+      "description": "One exact-endpoint ACL request for one admitted endpoint/consumer pair.\n\nThe struct names the exact endpoint, the exact committed consumer, and the socket's NAME inside a directory the broker resolves from its own serve-time configuration. There is no path field here, and that is the whole security property: `socket` is a [`BoundedToken`], whose `^[a-z][a-z0-9-]*$` grammar admits no `/`, no `.`, and no `..`, so the only filesystem object a request can ever select is a direct child of the directory the broker itself resolved. An alternate absolute socket, a `..` escape, and the containing directory are therefore not refusals this dispatch has to detect - they are values this wire cannot represent.",
+      "type": "object",
+      "required": [
+        "authorityKey",
+        "consumerRef",
+        "endpointRef",
+        "socket",
+        "socketRights",
+        "zoneUid"
+      ],
+      "properties": {
+        "authorityKey": {
+          "description": "The broker-recomputed binding this request must reproduce, from [`endpoint_access_authority_binding`].",
+          "type": "string"
+        },
+        "claimedPrincipal": {
+          "description": "A claim about the consumer's numeric principal.\n\nThe claim is a check, never a source: the broker re-derives the principal from the verified bundle and refuses a claim that does not reproduce it, and the reply always carries the derived numbers.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/EndpointPrincipalClaim"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "consumerRef": {
+          "description": "The committed `Process` / `EphemeralProcess` row the effect acts for.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            }
+          ]
+        },
+        "endpointRef": {
+          "description": "The exact `Endpoint` row the relationship is admitted against.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            }
+          ]
+        },
+        "socket": {
+          "description": "The socket's name inside the broker's own endpoint directory.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/BoundedToken"
+            }
+          ]
+        },
+        "socketRights": {
+          "description": "The POSIX permission bits the grant asks for on the socket (`1..=7`).",
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "tracingSpanId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "zoneUid": {
+          "description": "The Zone self-resource uid whose verified bundle declares that row.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "EndpointAccessResponse": {
+      "description": "What one exact endpoint actually answers for one consumer principal.\n\nThe `(device, inode)` pair is the identity the broker PINNED - read from the descriptor it held while the answer was taken - and is never recomputed by the reader. A producer that replaced its socket therefore shows up as a different inode here, which is how a relationship prepared against the old one can tell it is stale.",
+      "type": "object",
+      "required": [
+        "ancestorsTraversable",
+        "consumerGid",
+        "consumerRef",
+        "consumerUid",
+        "endpointRef",
+        "parentListable",
+        "socket",
+        "socketDevice",
+        "socketEffectiveRights",
+        "socketInode"
+      ],
+      "properties": {
+        "ancestorsTraversable": {
+          "description": "Whether every ancestor directory applies a traverse bit to the consumer, which is what makes the socket reachable at all.",
+          "type": "boolean"
+        },
+        "consumerGid": {
+          "description": "The gid the verified bundle derived for the consumer row.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "consumerRef": {
+          "description": "The committed consumer the answer is for.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            }
+          ]
+        },
+        "consumerUid": {
+          "description": "The uid the verified bundle derived for the consumer row. This is the derived number even when the request carried a claim.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "endpointRef": {
+          "description": "The exact endpoint this answer is about.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            }
+          ]
+        },
+        "parentListable": {
+          "description": "Whether the consumer may enumerate the socket's parent directory. Traverse is what a consumer needs; listing is the directory authority R23 removed, so a correct grant answers `false` here.",
+          "type": "boolean"
+        },
+        "socket": {
+          "description": "The socket name the broker resolved (never a path).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/BoundedToken"
+            }
+          ]
+        },
+        "socketDevice": {
+          "description": "The device the pinned endpoint socket lives on.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "socketEffectiveRights": {
+          "description": "The permission the KERNEL applies to the consumer on the socket, not the mode the broker asked for.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "socketInode": {
+          "description": "The inode the pinned endpoint socket resolved to.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "EndpointPrincipalClaim": {
+      "description": "A claimed numeric principal for one committed consumer row.\n\nA number a caller can construct is exactly why this is a claim and not an input: nothing downstream reads it, whether it agrees or not.",
+      "type": "object",
+      "required": [
+        "gid",
+        "uid"
+      ],
+      "properties": {
+        "gid": {
+          "description": "The claimed host gid.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "uid": {
+          "description": "The claimed host uid.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
         }
       },
       "additionalProperties": false
@@ -7641,7 +7895,7 @@
           "type": "string",
           "maxLength": 81,
           "minLength": 6,
-          "pattern": "^(Zone|ZoneLink|Provider|Role|RoleBinding|Quota|EmergencyPolicy|Host|Guest|Process|EphemeralProcess|Volume|VolumeBinding|Network|Device|CredentialBinding|DeviceBinding|User|Credential|Endpoint|ResourceExport|ResourceImport|Operation|SeccompProfile|ExecutionPolicy)/[a-z][a-z0-9-]{0,62}$"
+          "pattern": "^(Zone|ZoneLink|Provider|Role|RoleBinding|Quota|EmergencyPolicy|Host|Guest|Process|EphemeralProcess|Volume|VolumeBinding|Network|Device|CredentialBinding|DeviceBinding|User|Credential|Endpoint|ResourceExport|ResourceImport|Operation|SeccompProfile|EndpointBinding|ExecutionPolicy)/[a-z][a-z0-9-]{0,62}$"
         },
         {
           "type": "string",
@@ -7650,6 +7904,12 @@
           "pattern": "^[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$"
         }
       ]
+    },
+    "ResourceUid": {
+      "type": "string",
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
     "RuntimeDisplayCapabilities": {
       "description": "Display-side operations exposed by a runtime provider.",

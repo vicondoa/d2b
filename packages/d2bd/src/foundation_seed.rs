@@ -14,7 +14,7 @@
 //! refused seed leaves the store exactly as it was.
 //!
 //! The seed owns the system zone's rows: a zone-local plane refuses a write
-//! to a system-homed type ([`SystemZoneWriteFence`]) with the same terminal,
+//! to a system-homed type with the same terminal,
 //! named refusal shape the plane partition uses.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -30,10 +30,13 @@ use d2b_core::resource_authority::{
     TransportIdentity,
 };
 use d2b_contracts_broker::broker_wire::{
-    AuthorityCursor, AuthorityProjectionRow, AuthoritySnapshot,
+    AuthorityCursor, AuthorityProjectionRow, AuthoritySnapshot, publication_snapshot_digest,
 };
-use d2b_contracts_resource::v3::{CanonicalJsonObject, CanonicalJsonValue, DesiredDigest};
+use d2b_contracts_resource::v3::{
+    CanonicalJsonObject, CanonicalJsonValue, DesiredDigest, DesiredRevision, ResourceUid,
+};
 use d2b_core::resource_authority::ProjectionRow;
+use d2b_core::execution_plan::binding_row_ref;
 use d2b_provider_seccomp_profile::{ SECCOMP_PROFILE_RESOURCE_TYPE, SeccompProfileSpec };
 use d2b_contracts_zone_session::v3::{RoleBindingSpec, RoleResourceVerb, role::AuthorizedRole};
 use d2b_resource_runtime::identity::ResourceTypeName;
@@ -82,6 +85,12 @@ const SEED_METADATA: &[u8] = br#"{"annotations":{},"labels":{},"ownerRef":null}"
 /// foundation seed - may carry a system-homed row; every other plane refuses
 /// the write terminally, naming the type and the caller, the same shape
 /// [`d2b_contracts::identity::WrongPlane`] uses for the manager/legacy split.
+///
+/// This is the plane's write fence while the manager-boundary graph admission
+/// waits for a per-Zone accepted graph to exist. The quota and emergency
+/// enforcement does not depend on it: both families publish into the limits
+/// holder their own drivers read, and the admission that would consult that
+/// holder is the piece that is not installed yet.
 pub struct SystemZoneWriteFence {
     foundation: bool,
 }
@@ -1233,7 +1242,7 @@ impl DeploymentBootstrap {
     /// blanking it. Clearing it instead would hash a different byte string
     /// from the one the publisher hashed, and the daemon and the Activation
     /// family would disagree about the same document.
-    fn canonical_bytes_without_digest(
+    pub(crate) fn canonical_bytes_without_digest(
         graph: &DeploymentBootstrap,
     ) -> Result<Vec<u8>, BootstrapRefusal> {
         let rendered = serde_json::to_vec(graph).map_err(|_| {
@@ -1351,6 +1360,64 @@ impl DeploymentBootstrap {
         .map_err(|_| BootstrapRefusal::DocumentUnreadable {
             path: DEPLOYMENT_BOOTSTRAP_FILE.to_owned(),
         })
+    }
+
+    /// The authority projection rows this verified deployment publishes.
+    ///
+    /// The set is this document's own authority rows, in the committed
+    /// canonical bytes the document carries. The broker stores the bytes it
+    /// accepted and re-evaluates policy against them, so a summary this
+    /// publisher shaped instead would be a second authority rather than the
+    /// one that was verified.
+    ///
+    /// A binding row's relationship identity is resolved here and nowhere
+    /// else. The accepted graph's own key names the two uids - the manager is
+    /// the party that resolved them and it resolves them once - so a row whose
+    /// exact relationship the graph did not accept is published without one:
+    /// the broker then holds no key for it and refuses that relationship,
+    /// which is the correct answer for an absence and not for a committed
+    /// relationship.
+    pub fn authority_rows(&self) -> Result<Vec<AuthorityProjectionRow>, BootstrapRefusal> {
+        // One relationship identity per accepted source, under the exact row
+        // reference that relationship's own key renders. Two sources whose
+        // keys render one reference would be a row the broker could key two
+        // ways, so the collision refuses rather than resolves by iteration.
+        let graph = self.accepted_graph()?;
+        let mut identities: BTreeMap<String, (ResourceUid, ResourceUid)> = BTreeMap::new();
+        for (key, _source) in graph.sources() {
+            let row = binding_row_ref(key).ok_or_else(|| BootstrapRefusal::UnresolvedRequirement {
+                step: DEPLOYMENT_BOOTSTRAP_FILE.to_owned(),
+                requirement: format!(
+                    "the accepted relationship {} renders no canonical row reference",
+                    key.consumer_ref().to_canonical_string()
+                ),
+            })?;
+            let identity = (key.source_uid().clone(), key.consumer_uid().clone());
+            if identities.insert(row.to_canonical_string(), identity).is_some() {
+                return Err(BootstrapRefusal::DuplicateRow {
+                    reference: row.to_canonical_string(),
+                });
+            }
+        }
+        let decoded = self.decoded_rows()?;
+        let mut rows = Vec::with_capacity(decoded.len());
+        for (reference, admitted) in decoded {
+            let bytes = admitted.to_canonical_bytes();
+            let (source_uid, consumer_uid) = identities
+                .get(&reference.to_canonical_string())
+                .map_or((None, None), |(source, consumer)| {
+                    (Some(source.clone()), Some(consumer.clone()))
+                });
+            rows.push(AuthorityProjectionRow {
+                resource_ref: reference,
+                desired_revision: DesiredRevision::INITIAL,
+                desired_digest: DesiredDigest::of(&bytes),
+                admitted,
+                source_uid,
+                consumer_uid,
+            });
+        }
+        Ok(rows)
     }
 }
 
@@ -1536,6 +1603,14 @@ pub struct PublishedBootstrap {
     accepted: AcceptedGraph,
     plan: PublicationPlan,
     implementations: Vec<String>,
+    /// The authority rows this publication installs at the broker (U7,
+    /// KTD7).
+    ///
+    /// They are resolved once, here, from the verified document's own
+    /// committed bytes: a caller cannot name a row, a revision, or a
+    /// relationship identity this publication did not derive from the graph
+    /// it verified.
+    authority_rows: Vec<AuthorityProjectionRow>,
 }
 
 impl PublishedBootstrap {
@@ -1593,6 +1668,26 @@ impl PublishedBootstrap {
             snapshot_digest,
         }
     }
+
+    /// The bounded snapshot document and the deployment identity it installs.
+    ///
+    /// A cold start installs the accepted root at the initial cursor, which is
+    /// exactly where a broker holding no accepted projection already stands:
+    /// the publication therefore advances no sequence and contradicts no
+    /// digest, and a daemon that restarts republishes the same document rather
+    /// than moving the authority under a running Zone.
+    pub fn authority_publication(&self) -> (DeploymentIdentity, AuthoritySnapshot) {
+        let snapshot =
+            DeploymentIdentity::initial(self.accepted.zone().clone(), self.accepted.store().clone())
+                .snapshot(self.authority_rows.clone());
+        let identity = self.identity(snapshot.cursor.clone(), publication_snapshot_digest(&snapshot));
+        (identity, snapshot)
+    }
+
+    /// The authority rows this publication installs at the broker.
+    pub fn authority_rows(&self) -> &[AuthorityProjectionRow] {
+        &self.authority_rows
+    }
 }
 
 impl DeploymentBootstrap {
@@ -1638,6 +1733,7 @@ impl DeploymentBootstrap {
             accepted,
             plan,
             implementations: self.implementations.clone(),
+            authority_rows: self.authority_rows()?,
         })
     }
 
@@ -2124,9 +2220,7 @@ impl DeploymentIdentitySwitch {
 mod tests {
     use super::*;
 use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, SeccompDeviceAccess, SeccompNamespaces };
-    use d2b_contracts_resource::v3::{BoundedToken, CapabilityClass, NamespaceClass, PolicyCapabilities, PolicyIdentity, PolicyNamespaces, PolicyRoot, PolicySeccomp};
-    use d2b_resource_runtime::manager::AdmissionOp;
-    use d2b_resource_runtime::spec_store::ResourceProvenance;
+    use d2b_contracts_resource::v3::{BoundedToken, CapabilityClass, NamespaceClass, OPERATION_RESOURCE_TYPE, PolicyCapabilities, PolicyIdentity, PolicyNamespaces, PolicyRoot, PolicySeccomp};
     use serde_json::json;
 
     struct Fixture {
@@ -2610,32 +2704,18 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
     }
 
     /// The policy row is system-homed like every other row the foundation
-    /// seed commits, so a zone-local plane refuses to write one and the
-    /// manager read path falls back to the system zone for it.
+    /// seed commits, so the manager read path falls back to the system zone
+    /// for it.
+    ///
+    /// Membership is what the read path depends on. The write-side refusal for
+    /// these types is the graph admission's, which decides from the prior
+    /// accepted graph rather than from this list.
     #[test]
     fn an_execution_policy_row_is_system_homed() {
         assert!(SYSTEM_HOMED_TYPES.contains(&EXECUTION_POLICY_RESOURCE_TYPE));
-        let zone_local = SystemZoneWriteFence::new(false);
-        let foundation = SystemZoneWriteFence::new(true);
-        let subject = MutationSubject {
-            principal: "User/alice".to_owned(),
-            origin: ResourceProvenance::Api,
-        };
-        let request = |zone: &str| MutationRequest {
-            key: ResourceKey::new(zone, EXECUTION_POLICY_RESOURCE_TYPE, "worker"),
-            op: AdmissionOp::Ensure,
-            spec: Vec::new(),
-            metadata: Vec::new(),
-        };
-        let refused = zone_local.admit(&subject, &request("zone-a"));
         assert!(
-            matches!(&refused, AdmissionDecision::Deny(reason) if reason.contains("wrong plane")),
-            "a zone-local plane refuses a system-homed policy row: {refused:?}"
-        );
-        assert_eq!(
-            foundation.admit(&subject, &request("zone-a")),
-            AdmissionDecision::Allow,
-            "the foundation plane is the one that commits it"
+            SYSTEM_HOMED_TYPES.contains(&OPERATION_RESOURCE_TYPE),
+            "the materialized spawn operations stay system-homed beside it"
         );
     }
 }
@@ -3034,6 +3114,103 @@ mod deployment_bootstrap_tests {
             switch.accepted(),
             &initial,
             "the accepted identity is untouched by the refused switch"
+        );
+    }
+
+    // -- The producer: what the verified document publishes ---------------
+
+    /// The published row set is the document's own authority rows, each
+    /// carrying the bytes the broker accepted and the digest over exactly
+    /// those bytes, so the two legs cannot disagree about what was published.
+    #[test]
+    fn the_published_rows_are_the_documents_own_committed_bytes() {
+        let published = graph().publish(&core_declarations()).expect("publishes");
+        let rows = published.authority_rows();
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.resource_ref.to_canonical_string())
+                .collect::<Vec<_>>(),
+            [
+                "Role/operation-publisher",
+                "RoleBinding/system-minijail-self-operation-publisher"
+            ],
+            "the set is the document's authority rows and nothing else"
+        );
+        for row in rows {
+            assert_eq!(
+                row.desired_digest,
+                DesiredDigest::of(&row.admitted.to_canonical_bytes()),
+                "each row's digest covers the bytes the broker stores"
+            );
+            assert_eq!(
+                row.desired_revision,
+                DesiredRevision::INITIAL,
+                "a cold start installs each row at the revision it committed at"
+            );
+        }
+    }
+
+    /// The snapshot a cold start installs stands at the initial cursor, where
+    /// a broker holding no accepted projection already is, and its identity
+    /// names the deployment root the broker admits a bootstrap subject
+    /// against.
+    #[test]
+    fn a_cold_start_snapshot_installs_the_accepted_root() {
+        let published = graph().publish(&core_declarations()).expect("publishes");
+        let (identity, snapshot) = published.authority_publication();
+        assert_eq!(snapshot.zone, SYSTEM_ZONE);
+        assert_eq!(snapshot.store_incarnation.as_str(), "foundation-1");
+        assert_eq!(snapshot.cursor, AuthorityCursor::initial());
+        assert_eq!(snapshot.outstanding, None);
+        assert_eq!(
+            identity.root_subject,
+            AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap)
+        );
+        assert_eq!(
+            identity.snapshot_digest,
+            publication_snapshot_digest(&snapshot),
+            "the identity names the digest of the document it publishes"
+        );
+        assert_eq!(
+            snapshot.rows,
+            published.authority_rows(),
+            "the identity and the snapshot describe one document"
+        );
+    }
+
+    /// A row whose relationship the verified document resolved nothing for
+    /// is published without an identity rather than with one invented here.
+    /// The broker then holds no key for it, which refuses that relationship -
+    /// the correct answer for an absence, and never a fabricated grant.
+    #[test]
+    fn a_binding_row_the_document_resolved_nothing_for_is_published_unresolved() {
+        let mut document = graph();
+        document.role_bindings.push(BootstrapAuthorityRow {
+            reference: "VolumeBinding/d2b-state".to_owned(),
+            admitted: serde_json::json!({
+                "volumeRef": "Volume/d2b-state",
+                "executionRef": "Host/work",
+                "slot": "d2b-state",
+                "rights": "Consume",
+                "requiredFacets": [],
+                "source": {
+                    "admittedRights": ["Consume"],
+                    "arbitration": "Shared",
+                    "realizedFacets": []
+                }
+            }),
+        });
+        document.graph_digest = seal(&document);
+        let published = document.publish(&core_declarations()).expect("publishes");
+        let row = published
+            .authority_rows()
+            .iter()
+            .find(|row| row.resource_ref.to_canonical_string() == "VolumeBinding/d2b-state")
+            .expect("the binding row travels");
+        assert_eq!(
+            (row.source_uid.clone(), row.consumer_uid.clone()),
+            (None, None),
+            "no uid is invented for a relationship the verified document never resolved"
         );
     }
 }

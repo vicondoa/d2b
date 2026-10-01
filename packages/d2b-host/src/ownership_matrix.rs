@@ -409,24 +409,24 @@ fn walk_children(root: &Path, expected: &Ownership, out: &mut Vec<OwnershipMisma
 // system store and a permission change on one name is a permission change
 // on every name.
 
-/// The mandatory ownership marker a d2b-managed host surface carries.
-/// The `# d2b managed: ` comment every d2b-managed host surface carries,
-/// exactly as the nftables and NetworkManager markers do.
-pub const OWNERSHIP_MARKER_PREFIX: &str = "# d2b managed: ";
-
-/// The delimiters that bracket a d2b-managed block.
-pub const OWNERSHIP_BLOCK_BEGIN: &str = "# d2b-managed begin";
-pub const OWNERSHIP_BLOCK_END: &str = "# d2b-managed end";
-
-/// The file at a deployment root that names its ownership id.
-pub const OWNERSHIP_MARKER_FILE: &str = "d2b-ownership";
-
-/// The bounded read for a deployment root ownership marker.
+/// The deployment-root-relative document that establishes a deployment
+/// root's ownership.
 ///
-/// A marker is one delimited block carrying one ownership id. A larger
-/// file is not a marker this release reads, so it is refused rather than
-/// scanned for something that happens to look like an id.
-pub const MAX_OWNERSHIP_MARKER_BYTES: usize = 4096;
+/// A d2b deployment root is identified by the one verified deployment
+/// document it publishes, re-exported from the shared contract so the
+/// broker's reset runner and this boundary read the same name. The proof is
+/// the document's own self-hash: an edit after verification changes the
+/// digest, and a directory that publishes no verifying document is not a
+/// d2b deployment root at all.
+pub const OWNERSHIP_DOCUMENT_FILE: &str = d2b_core::deployment_bootstrap::DEPLOYMENT_BOOTSTRAP_FILE;
+
+/// The bounded read for that document.
+///
+/// A document larger than this is not one this release reads, so it is
+/// refused rather than scanned for something that happens to look like a
+/// digest.
+pub const MAX_OWNERSHIP_DOCUMENT_BYTES: usize =
+    d2b_core::deployment_bootstrap::MAX_DEPLOYMENT_BOOTSTRAP_BYTES;
 
 /// How one owned path may be treated by the destructive reset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -556,10 +556,11 @@ pub struct ResetObservation {
     pub deployment_root: PathBuf,
     /// The `st_dev` of the deployment root itself.
     pub deployment_device: u64,
-    /// The ownership id the deployment root's marker must carry.
+    /// The ownership id this reset is bounded to: the self-hash of the
+    /// verified deployment document.
     pub ownership_id: String,
-    /// The marker body found at the deployment root, when it was read.
-    pub ownership_marker: Option<String>,
+    /// The document body found at the deployment root, when it was read.
+    pub ownership_document: Option<String>,
     /// The no-follow observation of every owned path.
     pub owned: Vec<OwnedObservation>,
 }
@@ -608,13 +609,13 @@ pub enum ResetRefusal {
     },
     /// An owned path could not be stat-ed at all.
     OwnershipStatFailed { path: PathBuf, detail: String },
-    /// The deployment root's ownership marker is missing, oversized, or
-    /// carries no managed ownership id, so ownership cannot be
+    /// The deployment document is missing, oversized, not readable as a
+    /// document, or carries no self-hash, so ownership cannot be
     /// established at all.
-    OwnershipMarkerUnreadable { path: PathBuf, detail: String },
-    /// The deployment root's ownership marker names a different owner. A
-    /// foreign marker is never an authorization to overwrite.
-    ForeignOwnershipMarker { path: PathBuf, marker: String },
+    OwnershipDocumentUnreadable { path: PathBuf, detail: String },
+    /// The deployment document names a different deployment. A document
+    /// edited after verification is never an authorization to overwrite.
+    ForeignOwnershipDocument { path: PathBuf, digest: String },
     /// An owned path is on another filesystem than the deployment root,
     /// so unlinking into it would delete a mounted foreign filesystem.
     ForeignFilesystem { path: PathBuf },
@@ -639,8 +640,8 @@ impl ResetRefusal {
             Self::SymlinkEscape { .. } => "reset-symlink-escape",
             Self::OwnershipKindMismatch { .. } => "reset-ownership-kind-mismatch",
             Self::OwnershipStatFailed { .. } => "reset-ownership-stat-failed",
-            Self::OwnershipMarkerUnreadable { .. } => "reset-ownership-marker-unreadable",
-            Self::ForeignOwnershipMarker { .. } => "reset-foreign-ownership-marker",
+            Self::OwnershipDocumentUnreadable { .. } => "reset-ownership-document-unreadable",
+            Self::ForeignOwnershipDocument { .. } => "reset-foreign-ownership-document",
             Self::ForeignFilesystem { .. } => "reset-foreign-filesystem",
             Self::ExternalSourceInsideOwnership { .. } => "reset-external-source-owned",
             Self::WorkloadLive { .. } => "reset-workload-live",
@@ -657,8 +658,8 @@ impl ResetRefusal {
             | Self::SymlinkEscape { path }
             | Self::OwnershipKindMismatch { path, .. }
             | Self::OwnershipStatFailed { path, .. }
-            | Self::OwnershipMarkerUnreadable { path, .. }
-            | Self::ForeignOwnershipMarker { path, .. }
+            | Self::OwnershipDocumentUnreadable { path, .. }
+            | Self::ForeignOwnershipDocument { path, .. }
             | Self::ForeignFilesystem { path }
             | Self::ExternalSourceInsideOwnership { path }
             | Self::WorkloadLive { path }
@@ -709,34 +710,22 @@ impl VerifiedResetOwnership {
     }
 }
 
-/// Read the ownership id out of a managed marker body.
+/// Read the ownership id out of a deployment document body.
 ///
-/// The body is the `# d2b-managed begin` / `# d2b-managed end` delimited
-/// block whose line is the mandatory `# d2b managed: <ownership-id>`
-/// comment. Anything else - a foreign comment, an unterminated block, a
-/// block with no id - is `None`, and the caller resolves that as a refusal
-/// rather than as an empty id that would match anything.
-pub fn parse_ownership_marker(body: &str) -> Option<&str> {
-    let begin = body.find(OWNERSHIP_BLOCK_BEGIN)?;
-    let rest = &body[begin + OWNERSHIP_BLOCK_BEGIN.len()..];
-    let end = rest.find(OWNERSHIP_BLOCK_END)?;
-    let block = &rest[..end];
-    for line in block.lines() {
-        if let Some(id) = line.trim().strip_prefix(OWNERSHIP_MARKER_PREFIX) {
-            let id = id.trim();
-            if !id.is_empty() {
-                return Some(id);
-            }
-        }
-    }
-    None
-}
-
-/// Render the managed ownership marker body for one id.
-pub fn render_ownership_marker(ownership_id: &str) -> String {
-    format!(
-        "{OWNERSHIP_BLOCK_BEGIN}\n{OWNERSHIP_MARKER_PREFIX}{ownership_id}\n{OWNERSHIP_BLOCK_END}\n"
-    )
+/// The id is the document's own `graphDigest`: the self-hash the publisher
+/// computed over the rest of the document. A body that is not a document,
+/// or a document that carries no self-hash, is `None`, and the caller
+/// resolves that as a refusal rather than as an empty id that would match
+/// anything. The bytes were already verified against that self-hash before
+/// the reset reached this boundary; reading the id here is what proves the
+/// document on disk is still the one that was admitted.
+pub fn parse_ownership_document(body: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()?
+        .get("graphDigest")?
+        .as_str()
+        .filter(|digest| !digest.is_empty())
+        .map(str::to_owned)
 }
 
 /// Observe one owned path without traversing a single symlink.
@@ -854,20 +843,20 @@ pub fn observe_reset(
         });
     }
     let deployment_device = root_meta.dev();
-    let marker_path = deployment_root.join(OWNERSHIP_MARKER_FILE);
-    let ownership_marker = match fs::read(&marker_path) {
+    let document_path = deployment_root.join(OWNERSHIP_DOCUMENT_FILE);
+    let ownership_document = match fs::read(&document_path) {
         Ok(bytes) => {
-            if bytes.len() > MAX_OWNERSHIP_MARKER_BYTES {
-                return Err(ResetRefusal::OwnershipMarkerUnreadable {
-                    path: marker_path,
-                    detail: "the ownership marker exceeds the bounded read".to_owned(),
+            if bytes.len() > MAX_OWNERSHIP_DOCUMENT_BYTES {
+                return Err(ResetRefusal::OwnershipDocumentUnreadable {
+                    path: document_path,
+                    detail: "the deployment document exceeds the bounded read".to_owned(),
                 });
             }
             String::from_utf8(bytes).ok()
         }
         Err(error) => {
-            return Err(ResetRefusal::OwnershipMarkerUnreadable {
-                path: marker_path,
+            return Err(ResetRefusal::OwnershipDocumentUnreadable {
+                path: document_path,
                 detail: error.to_string(),
             });
         }
@@ -880,39 +869,40 @@ pub fn observe_reset(
         deployment_root: deployment_root.to_path_buf(),
         deployment_device,
         ownership_id: ownership_id.to_owned(),
-        ownership_marker,
+        ownership_document,
         owned,
     })
 }
 
 /// Decide whether the observed ownership may be removed.
 ///
-/// Pure: no clock, no store, no I/O. It resolves the ownership marker,
-/// each owned path's declared kind, each owned path's filesystem, every
-/// external Volume source, and the live drain evidence.
+/// Pure: no clock, no store, no I/O. It resolves the deployment document
+/// that establishes this root's ownership, each owned path's declared kind,
+/// each owned path's filesystem, every external Volume source, and the live
+/// drain evidence.
 pub fn verify_reset(
     observation: &ResetObservation,
     ownership: &ResetOwnership,
     evidence: &DrainEvidence,
 ) -> Result<VerifiedResetOwnership, ResetRefusal> {
-    let marker_path = observation.deployment_root.join(OWNERSHIP_MARKER_FILE);
-    let marker = observation.ownership_marker.as_deref().ok_or_else(|| {
-        ResetRefusal::OwnershipMarkerUnreadable {
-            path: marker_path.clone(),
-            detail: "the ownership marker is not valid UTF-8".to_owned(),
+    let document_path = observation.deployment_root.join(OWNERSHIP_DOCUMENT_FILE);
+    let document = observation.ownership_document.as_deref().ok_or_else(|| {
+        ResetRefusal::OwnershipDocumentUnreadable {
+            path: document_path.clone(),
+            detail: "the deployment document is not valid UTF-8".to_owned(),
         }
     })?;
-    match parse_ownership_marker(marker) {
+    match parse_ownership_document(document) {
         None => {
-            return Err(ResetRefusal::OwnershipMarkerUnreadable {
-                path: marker_path,
-                detail: "the ownership marker carries no managed ownership id".to_owned(),
+            return Err(ResetRefusal::OwnershipDocumentUnreadable {
+                path: document_path,
+                detail: "the deployment document carries no self-hash".to_owned(),
             });
         }
-        Some(id) if id != observation.ownership_id => {
-            return Err(ResetRefusal::ForeignOwnershipMarker {
-                path: marker_path,
-                marker: id.to_owned(),
+        Some(digest) if digest != observation.ownership_id => {
+            return Err(ResetRefusal::ForeignOwnershipDocument {
+                path: document_path,
+                digest,
             });
         }
         Some(_) => {}
@@ -1397,15 +1387,21 @@ mod reset_tests {
     use std::fs as stdfs;
     use std::os::unix::fs::symlink;
 
-    const OWNERSHIP_ID: &str = "host:d2b";
+    const OWNERSHIP_ID: &str = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 
-    /// A deployment root with its ownership marker and the named entries.
+    /// A deployment root that publishes the verified deployment document,
+    /// and the named entries beneath it.
+    ///
+    /// Only the boundary's own question is set up here - is this document
+    /// the one this reset admitted? - so the body is a document carrying an
+    /// ownership id, and the full contract is verified by the reader that
+    /// admits the reset.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn deployment(root: &Path, owned: &[(&str, OwnedPathKind)]) -> ResetOwnership {
         stdfs::create_dir_all(root).unwrap();
         stdfs::write(
-            root.join(OWNERSHIP_MARKER_FILE),
-            render_ownership_marker(OWNERSHIP_ID),
+            root.join(OWNERSHIP_DOCUMENT_FILE),
+            format!("{{\"graphDigest\":\"{OWNERSHIP_ID}\"}}"),
         )
         .unwrap();
         ResetOwnership {
@@ -1434,24 +1430,22 @@ mod reset_tests {
     }
 
     #[test]
-    fn marker_round_trips_and_foreign_bodies_have_no_id() {
+    fn a_document_body_without_a_self_hash_has_no_ownership_id() {
         assert_eq!(
-            parse_ownership_marker(&render_ownership_marker(OWNERSHIP_ID)),
-            Some(OWNERSHIP_ID)
+            parse_ownership_document(&format!("{{\"graphDigest\":\"{OWNERSHIP_ID}\"}}")),
+            Some(OWNERSHIP_ID.to_owned())
         );
-        // An unterminated block is not a marker, so ownership cannot be
-        // established and the caller refuses rather than reading "" as an id.
-        assert_eq!(parse_ownership_marker("# d2b-managed begin\n"), None);
-        // Neither is a block that names nothing.
-        assert_eq!(
-            parse_ownership_marker("# d2b-managed begin\n# note\n# d2b-managed end\n"),
-            None
-        );
+        // A body that is not a document cannot establish ownership, so the
+        // caller refuses rather than reading an empty id that matches
+        // everything.
+        assert_eq!(parse_ownership_document("# d2b-managed begin\n"), None);
+        assert_eq!(parse_ownership_document("{\"graphDigest\":\"\"}"), None);
+        assert_eq!(parse_ownership_document("{\"graphDigest\":7}"), None);
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
-    fn matching_marker_verifies_the_exact_inventory() {
+    fn the_matching_document_verifies_the_exact_inventory() {
         let (tmp, ownership) = fixture(&[("zones", OwnedPathKind::Tree)]);
         stdfs::create_dir_all(tmp.path().join("zones/one")).unwrap();
         let observation = observed(tmp.path(), &ownership);
@@ -1462,36 +1456,39 @@ mod reset_tests {
         assert_eq!(verified.present_entries().count(), 1);
     }
 
+    /// A document edited between admission and removal names a different
+    /// deployment, so it is never an authorization to overwrite.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
-    fn a_foreign_marker_is_never_an_authorization_to_overwrite() {
+    fn a_document_edited_after_admission_is_never_an_authorization_to_overwrite() {
         let (tmp, ownership) = fixture(&[("zones", OwnedPathKind::Tree)]);
         stdfs::create_dir(tmp.path().join("zones")).unwrap();
+        let foreign = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
         stdfs::write(
-            tmp.path().join(OWNERSHIP_MARKER_FILE),
-            render_ownership_marker("host:somebody-else"),
+            tmp.path().join(OWNERSHIP_DOCUMENT_FILE),
+            format!("{{\"graphDigest\":\"{foreign}\"}}"),
         )
         .unwrap();
         let observation = observed(tmp.path(), &ownership);
         let refusal =
             verify_reset(&observation, &ownership, &DrainEvidence::default()).unwrap_err();
-        assert_eq!(refusal.code(), "reset-foreign-ownership-marker");
+        assert_eq!(refusal.code(), "reset-foreign-ownership-document");
         assert_eq!(
             refusal,
-            ResetRefusal::ForeignOwnershipMarker {
-                path: tmp.path().join(OWNERSHIP_MARKER_FILE),
-                marker: "host:somebody-else".to_owned(),
+            ResetRefusal::ForeignOwnershipDocument {
+                path: tmp.path().join(OWNERSHIP_DOCUMENT_FILE),
+                digest: foreign.to_owned(),
             }
         );
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
-    fn a_missing_marker_refuses_rather_than_treating_it_as_unowned() {
+    fn a_root_with_no_deployment_document_refuses_rather_than_treating_it_as_unowned() {
         let (tmp, ownership) = fixture(&[]);
-        stdfs::remove_file(tmp.path().join(OWNERSHIP_MARKER_FILE)).unwrap();
+        stdfs::remove_file(tmp.path().join(OWNERSHIP_DOCUMENT_FILE)).unwrap();
         let refusal = observe_reset(tmp.path(), OWNERSHIP_ID, &ownership).unwrap_err();
-        assert_eq!(refusal.code(), "reset-ownership-marker-unreadable");
+        assert_eq!(refusal.code(), "reset-ownership-document-unreadable");
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]

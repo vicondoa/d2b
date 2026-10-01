@@ -1109,6 +1109,14 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
             ),
         ),
         (
+            "EndpointBinding",
+            dto_resource_schema::<d2b_contracts_resource::v3::EndpointBindingSpec>(
+                "EndpointBinding",
+                "One exact endpoint socket delivered to one consumer.",
+                true,
+            ),
+        ),
+        (
             "Network",
             dto_resource_schema::<d2b_contracts_resource::v3::network::NetworkSpec>(
                 "Network",

@@ -124,6 +124,7 @@ exports_files([
     "nixos-modules/components/usbip.nix",
     "nixos-modules/components/video/guest.nix",
     "nixos-modules/default.nix",
+    "nixos-modules/deployment-bootstrap.nix",
     "nixos-modules/generated/options-zones-Zone.nix",
     "nixos-modules/generated/options-zones-ZoneLink.nix",
     "nixos-modules/component-session.nix",

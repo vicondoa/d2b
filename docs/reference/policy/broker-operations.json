@@ -1675,6 +1675,120 @@
       }
     },
     {
+      "operation": "EndpointObserve",
+      "wireVariant": "EndpointObserve",
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "exact-endpoint ACL wire (U18/R23): the broker resolves one socket NAME inside the runtime root it derives from its own private socket's parent, derives the consumer's principal from the verified Zone bundle, and applies or re-reads the exact endpoint's ACL entry; the request carries no path, so an alternate absolute socket, a `..` escape, and the containing directory are unrepresentable rather than merely refused; no resource family owns the ACL primitive, the endpoint family only declares which endpoint a relationship is admitted against",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "endpoint-binding",
+        "scope": "per-endpoint/per-consumer",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "EndpointGrantAccess",
+      "wireVariant": "EndpointGrantAccess",
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "exact-endpoint ACL wire (U18/R23): the broker resolves one socket NAME inside the runtime root it derives from its own private socket's parent, derives the consumer's principal from the verified Zone bundle, and applies or re-reads the exact endpoint's ACL entry; the request carries no path, so an alternate absolute socket, a `..` escape, and the containing directory are unrepresentable rather than merely refused; no resource family owns the ACL primitive, the endpoint family only declares which endpoint a relationship is admitted against",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "endpoint-binding",
+        "scope": "per-endpoint/per-consumer",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "EndpointRevokeAccess",
+      "wireVariant": "EndpointRevokeAccess",
+      "owner": "broker-generic",
+      "family": null,
+      "declaringProvider": null,
+      "justification": "exact-endpoint ACL wire (U18/R23): the broker resolves one socket NAME inside the runtime root it derives from its own private socket's parent, derives the consumer's principal from the verified Zone bundle, and applies or re-reads the exact endpoint's ACL entry; the request carries no path, so an alternate absolute socket, a `..` escape, and the containing directory are unrepresentable rather than merely refused; no resource family owns the ACL primitive, the endpoint family only declares which endpoint a relationship is admitted against",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "endpoint-binding",
+        "scope": "per-endpoint/per-consumer",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "wire",
+        "schema": null
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
       "operation": "open-pidfd",
       "owner": "broker-generic",
       "family": null,

@@ -40,11 +40,13 @@
 
 use std::sync::Arc;
 
-use d2b_contracts_resource::v3::{ CanonicalJsonObject, ChildSupportCeiling, ResourceRef, ResourceSpec };
-use crate::binding::EndpointBindingError;
+use d2b_contracts_resource::v3::{
+    CanonicalJsonObject, ChildSupportCeiling, ResourceRef, ResourceSpec, ZoneId,
+};
+use crate::binding::{ ENDPOINT_BINDING_TYPE_NAME, EndpointBindingError };
 use crate::endpoint::{ EndpointClass, EndpointLifecyclePolicy, EndpointLocality, EndpointSpec, EndpointTransport,
         EndpointVisibility, };
-use d2b_resource_runtime::context::{ResourceContext, SpecDecoder, typed_spec_decoder};
+use d2b_resource_runtime::context::{ChildEnsure, ResourceContext, SpecDecoder, typed_spec_decoder};
 use d2b_resource_runtime::driver::{
     DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriver, ResourceDriverFactory,
 };
@@ -421,6 +423,89 @@ impl EndpointDriver {
         }
         Ok(())
     }
+
+    /// Commit the `EndpointBinding` rows this committed `Endpoint` row owns
+    /// and retire the ones it no longer derives.
+    ///
+    /// The derivation is the family's own: the endpoint's own consumer policy
+    /// names the consumers it publishes the exact endpoint to, the endpoint's
+    /// own operation allowlist and attachment capacity decide how each of them
+    /// reaches it, and the committed slot is a function of the endpoint's own
+    /// identity. Nothing a consumer supplied reaches any of that, so a row
+    /// cannot widen its own relationship by asking for a different slot, a
+    /// different operation, or a different endpoint.
+    ///
+    /// The pass is idempotent in both directions: the derived names are a
+    /// function of the committed identities, so re-ensuring unchanged bytes is
+    /// the manager's `Unchanged` answer rather than a second row, and a
+    /// derived set that shrank retires every row this source owns that it no
+    /// longer derives. The mutation is scoped to the one type relationships
+    /// live in, so any other child the endpoint row owns is untouched.
+    async fn reconcile_binding_children(
+        &self,
+        ctx: &mut ResourceContext,
+        spec: &EndpointSpec,
+        op: DriverOp,
+    ) -> Result<(), EndpointDriverError> {
+        let zone = ZoneId::parse(ctx.key().zone.as_str())
+            .map_err(|_| EndpointDriverError::new(EndpointDriverErrorKind::SpecInvalid, op))?;
+        let endpoint_ref = key_ref(ctx.key())
+            .map_err(|_| EndpointDriverError::new(EndpointDriverErrorKind::SpecInvalid, op))?;
+        let deliveries = crate::binding::declared_endpoint_bindings(&zone, spec, &endpoint_ref)
+            .map_err(|refusal| {
+                EndpointDriverError::new(EndpointDriverErrorKind::SpecInvalid, op).with_detail(
+                    FailureDetail::at("bindings/declared").comparison(
+                        FailureComparison::new("endpoint.deliveries", "declared", format!("{refusal}")),
+                    ),
+                )
+            })?;
+        let derived = crate::binding::canonical_binding_rows(
+            &zone,
+            spec,
+            &endpoint_ref,
+            &deliveries,
+        )
+        .map_err(|refusal| {
+            EndpointDriverError::new(EndpointDriverErrorKind::SpecInvalid, op).with_detail(
+                FailureDetail::at("bindings/derive").comparison(
+                    FailureComparison::new("endpoint.bindingRows", "derived", format!("{refusal}")),
+                ),
+            )
+        })?;
+        for row in &derived {
+            ctx.ensure_child(ChildEnsure {
+                type_name: ResourceTypeName::new(ENDPOINT_BINDING_TYPE_NAME),
+                name: row.name().as_str().to_owned(),
+                spec: row.spec().to_vec(),
+                metadata: Vec::new(),
+            })
+            .await
+            .map_err(|_| {
+                EndpointDriverError::new(EndpointDriverErrorKind::DrainPending, op)
+            })?;
+        }
+        for row in ctx
+            .children()
+            .await
+            .map_err(|_| EndpointDriverError::new(EndpointDriverErrorKind::DrainPending, op))?
+        {
+            if row.key.type_name != ENDPOINT_BINDING_TYPE_NAME {
+                continue;
+            }
+            let still_derived = derived.iter().any(|child| child.name().as_str() == row.key.name);
+            if !still_derived && !row.deleting {
+                // Obsolete relationship: the manager retires it and owns its
+                // own teardown (R9/F3). A row already marked deleting is
+                // skipped, because the manager refuses a second delete.
+                ctx.delete(&row.key)
+                    .await
+                    .map_err(|_| {
+                        EndpointDriverError::new(EndpointDriverErrorKind::DrainPending, op)
+                    })?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -468,12 +553,19 @@ impl ResourceDriver for EndpointDriver {
         }
     }
 
-    /// One reconcile pass: the socket present converges; otherwise the
+    /// One reconcile pass: the committed `EndpointBinding` relationships
+    /// converge first, then the socket present converges; otherwise the
     /// realization effect spawns as a long effect (the mailbox never blocks
     /// on it).
     async fn reconcile(&mut self, ctx: &mut ResourceContext) -> Result<ReconcileOutcome, Self::Error> {
         let spec = self.decoded_spec(ctx, DriverOp::Reconcile)?;
         self.check_shape(&spec, DriverOp::Reconcile)?;
+        // The committed relationship is the graph's statement of what this row
+        // delivers, so it is reconciled before the socket is: a socket that is
+        // not bound yet still has consumers admitted to it, and a consumer
+        // whose row is going away still has a relationship to withdraw.
+        self.reconcile_binding_children(ctx, &spec, DriverOp::Reconcile)
+            .await?;
         if self
             .effects
             .socket_present(spec.producer_ref(), spec.purpose().as_str())
@@ -615,6 +707,20 @@ pub fn endpoint_descriptor(args: EndpointDriverArgs) -> DriverDescriptor {
 // Tests: driver unit tests over a scripted socket port (ordering and
 // idempotence observed through the recorded calls).
 // ---------------------------------------------------------------------------
+
+/// The typed reference one committed row's store-assigned key names.
+///
+/// The key is the authority the manager reports the row under, so the
+/// reference this builds is the row's own committed identity and never a
+/// string this crate assembled from a declaration.
+fn key_ref(key: &ResourceKey) -> Result<ResourceRef, EndpointBindingError> {
+    ResourceRef::parse(&format!(
+        "{}/{}",
+        key.type_name.as_str(),
+        key.name
+    ))
+    .map_err(|_| EndpointBindingError::WrongResourceType)
+}
 
 #[cfg(test)]
 mod tests {
@@ -873,7 +979,12 @@ use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumer
                 visibility: EndpointVisibility::Provider,
             },
             (false, 0),
-            &["Provider/volume-virtiofs"],
+            // No named consumer: these cases drive the socket realization
+            // leg, and an endpoint that names nobody derives no relationship
+            // row, so the child seam stays out of what they observe. The
+            // relationship leg is driven end to end in
+            // `tests/endpoint_delivery.rs`, over a manager that really commits.
+            &[],
             &[],
             &[EndpointOperation::Resolve, EndpointOperation::Observe],
         )
@@ -1383,3 +1494,4 @@ use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumer
         }
     }
 }
+

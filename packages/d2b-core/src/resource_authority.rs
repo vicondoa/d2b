@@ -45,7 +45,8 @@ use d2b_contracts_resource::v3::endpoint_binding::EndpointBindingSpec;
 use d2b_contracts_resource::v3::network_binding::NetworkBindingSpec;
 use d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec;
 use d2b_contracts_resource::v3::{
-    admit_binding_request, AdmissionDecision, AdmissionStage, AuthoritySubject, BindingAdmission,
+    admit_binding_request, AdmissionDecision, AdmissionStage, AuthoritySubject,
+    AuthoritySubjectKind, BindingAdmission,
     BindingAuthorization, BindingKey, BindingRefusal, BindingRealizationFacet,
     BindingRealizationSupport, CanonicalJsonObject, FreshnessTuple, RefusalReason, RequestedRights,
     ResourceRef, ResourceUid, SourceAdmission, StoreIncarnation, ZoneId,
@@ -672,10 +673,17 @@ impl GraphAuthority {
             );
         }
         let subject = request.subject().initiating();
-        if subject.is_bootstrap_class() {
-            // Bootstrap has a fixed trust root, not a configurable exception:
-            // only the exact identity the verified deployment graph established
-            // is admitted, and only against that graph's own prior state.
+        if subject.kind() == AuthoritySubjectKind::Bootstrap {
+            // The verified deployment document is the one fixed trust root:
+            // only that exact identity is admitted without a grant, and only
+            // against the graph whose deployment root is that identity.
+            //
+            // Explicit local operator authority is deliberately NOT in this
+            // arm. It is a one-shot ownership action, not a root: a graph
+            // rooted at `Operator` would admit whatever its caller asked for
+            // and the check could never fail, so a caller that built its own
+            // graph would have granted itself everything. Operator authority
+            // is decided by the accepted grants below like any other subject.
             return if accepted.is_root(subject) {
                 AdmissionDecision::Admitted
             } else {
@@ -686,10 +694,13 @@ impl GraphAuthority {
             };
         }
         let Some(initiating) = subject.resource_ref() else {
-            // Only the verified deployment graph and explicit local operator
-            // authority are unresourced. Everything else arrives naming the
-            // resource it acts as; a subject that names none - which is what a
-            // bare privileged transport would leave behind - grants nothing.
+            // Only the verified deployment graph is admitted without naming
+            // a resource. Every other subject arrives naming the resource it
+            // acts as, and a grant is decided by comparing that reference
+            // against the subjects an accepted RoleBinding names. An
+            // unresourced local operator names nothing, so it matches no
+            // grant: the identity that holds a deployment's authority is the
+            // one its accepted rows name, not the transport it arrived on.
             return AdmissionDecision::refuse(
                 AdmissionStage::Authorize,
                 RefusalReason::IdentityNotAuthorized,
@@ -1021,6 +1032,94 @@ mod tests {
                 RefusalReason::IdentityNotAuthorized
             )
         );
+    }
+
+    /// The acceptance case the deployment-root shape has to express: one
+    /// graph, one bound subject, and a second, different subject that the
+    /// same rows do not name.
+    ///
+    /// Both sides are read from the same prior accepted graph, and neither
+    /// is the root, so the decision is the grants themselves. A test whose
+    /// two identities were the same value would pass whatever the grants
+    /// said; this one only passes if the binding's subject list is compared.
+    #[test]
+    fn a_bound_identity_is_admitted_and_a_different_identity_is_refused() {
+        let request = |subject: AuthoritySubject| {
+            GraphMutation::new(
+                zone(),
+                MutationSubjectEvidence::new(subject, TransportIdentity::OperatorConsole),
+                MutationKind::Create,
+                reference("VolumeBinding/state"),
+            )
+        };
+        assert_eq!(
+            GraphAuthority::admit_mutation(
+                &request(AuthoritySubject::named(
+                    AuthoritySubjectKind::User,
+                    reference("User/operator"),
+                )),
+                &graph()
+            ),
+            AdmissionDecision::Admitted,
+            "the identity the accepted RoleBinding names is admitted"
+        );
+        for stranger in ["User/somebody-else", "User/operators", "User/operator-other"] {
+            assert_eq!(
+                GraphAuthority::admit_mutation(
+                    &request(AuthoritySubject::named(
+                        AuthoritySubjectKind::User,
+                        reference(stranger),
+                    )),
+                    &graph()
+                ),
+                AdmissionDecision::refuse(
+                    AdmissionStage::Authorize,
+                    RefusalReason::IdentityNotAuthorized
+                ),
+                "{stranger} holds no grant, so it is refused"
+            );
+        }
+    }
+
+    /// The shape that made an ownership-bounded reset's admission
+    /// unfalsifiable: a graph rooted at explicit local operator authority
+    /// admitted that same unresourced operator for anything, so a caller
+    /// that built its own graph had already granted itself the reset.
+    ///
+    /// Operator authority is a one-shot action decided by grants, never a
+    /// deployment root: the unresourced operator that names no resource
+    /// matches no accepted grant, so a graph rooted there admits neither
+    /// itself nor the document's trust root.
+    #[test]
+    fn a_graph_rooted_at_local_operator_authority_admits_no_unresourced_subject() {
+        let operator_rooted = AcceptedGraph::new(
+            zone(),
+            StoreIncarnation::parse("store-1").unwrap(),
+            AuthoritySubject::unresourced(AuthoritySubjectKind::Operator),
+        )
+        .with_role(reference("Role/volume-operator"), role())
+        .with_role_binding(reference("RoleBinding/operators"), binding());
+        let request = |subject: AuthoritySubject| {
+            GraphMutation::new(
+                zone(),
+                MutationSubjectEvidence::new(subject, TransportIdentity::OperatorConsole),
+                MutationKind::Create,
+                reference("VolumeBinding/state"),
+            )
+        };
+        for subject in [
+            AuthoritySubject::unresourced(AuthoritySubjectKind::Operator),
+            AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap),
+        ] {
+            assert_eq!(
+                GraphAuthority::admit_mutation(&request(subject.clone()), &operator_rooted),
+                AdmissionDecision::refuse(
+                    AdmissionStage::Authorize,
+                    RefusalReason::IdentityNotAuthorized
+                ),
+                "{subject:?} is not the deployment trust root and holds no grant"
+            );
+        }
     }
 
     #[test]

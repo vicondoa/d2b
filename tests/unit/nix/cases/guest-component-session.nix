@@ -27,6 +27,10 @@ let
       type = lib.types.listOf lib.types.package;
       default = [ ];
     };
+    options.environment.etc = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+    };
     options.systemd.services = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = { };
@@ -40,6 +44,32 @@ let
       default = { };
     };
   };
+  # The Guest image's own Zone deployment graph, as an inert stand-in: what
+  # this case asserts is where the image puts the store object it is given,
+  # not what is inside it. The bytes a real image delivers are the
+  # per-Zone variant of the Host's document, verified by the guest daemon
+  # against its own Zone before it serves anything.
+  deploymentGraph = pkgs.writeText "d2b-guest-deployment-bootstrap-work.json"
+    "{\"graphDigest\":\"sha256:3e0db4853b89f2126441dc58f15e3255cae072e2f7e66466afb06fb62966c787\",\"zone\":\"work\"}";
+  withGraph = (mkGuestEval {
+    modules = [
+      optionSinks
+      componentSessionModule
+      {
+        d2b.componentSession = {
+          enable = true;
+          guestConfigPath = null;
+          zone = "work";
+          deploymentBootstrap = deploymentGraph;
+        };
+      }
+    ];
+    specialArgs = {
+      d2bInputs = { };
+      d2bHostTools = hostTools;
+      name = "guest";
+    };
+  }).config;
   hostTools = {
     inherit d2bd broker;
   };
@@ -159,6 +189,28 @@ in
       package = false;
       service = false;
       credential = false;
+    };
+  };
+
+  "guest-component-session/delivers-its-zone-deployment-graph-in-the-image" = {
+    expr =
+      let
+        key = "d2b/deployment/deployment-bootstrap.json";
+      in {
+        # The Guest daemon reads its graph from one fixed deployment root;
+        # the image materializes the store object the image was given at
+        # exactly that path, so what the daemon reads is what the image
+        # closure carries.
+        root = "${withGraph.d2b.componentSession.deploymentRoot}/deployment-bootstrap.json";
+        source = toString (withGraph.environment.etc.${key}.source or "");
+        # An image configured with no graph delivers none: the Guest then has
+        # nothing to verify and refuses to serve.
+        deliveredWithoutGraph = builtins.hasAttr key evaluated.environment.etc;
+      };
+    expected = {
+      root = "/etc/d2b/deployment/deployment-bootstrap.json";
+      source = "${deploymentGraph}";
+      deliveredWithoutGraph = false;
     };
   };
 }

@@ -296,91 +296,14 @@ let
   # compiled set and there is no separate configurable allowlist anywhere on
   # either side of the boundary.
   #
-  # The authority rows are the fixed foundation vocabulary: the publisher
-  # Role and the Process provider's self-binding. They are ordinary graph
-  # rows with canonical admitted bytes, evaluated by the one admission
-  # evaluator, exactly as every other Role and RoleBinding is.
-  # The implementation identities this deployment publishes, read from the
-  # same per-crate `registrations.json` declarations the daemon's generated
-  # provider registration table is emitted from. Reading the declarations
-  # themselves rather than any projection-owner or catalog list is what
-  # keeps the two sides from drifting: there is no second inventory to
-  # maintain, and the two framework execution providers the foundation seed
-  # binds are added from their own crate declarations.
-  deploymentProviderCrates = builtins.filter
-    (name: lib.hasPrefix "d2b-provider-" name && builtins.pathExists (
-      ./../packages/${name}/registrations.json
-    ))
-    (builtins.attrNames (builtins.readDir ../packages));
-  deploymentRegistrations = builtins.map
-    (name:
-      (builtins.fromJSON (builtins.readFile (
-        ./../packages/${name}/registrations.json
-      ))).provider)
-    deploymentProviderCrates;
-  deploymentImplementations =
-    builtins.sort builtins.compareStrings deploymentRegistrations;
-
-  # The foundation's own process provider, taken from the generated Provider
-  # catalog's `fixedBootstrapProviders` rather than written here. That list is
-  # the declaration of which providers bootstrap this deployment, so the
-  # shared module never names a provider identity of its own: it reads the
-  # generated one and constructs the resource reference the foundation
-  # self-binding is committed under. `noBinaryBootstrapProvider` is the
-  # catalog's own non-binary member, so the remaining entry is the process
-  # provider whose self-binding authorizes materialization.
-  providerCatalogShape = import ./generated/provider-catalog-shape.nix;
-  foundationProcessProvider = lib.head (lib.filter
-    (name: name != providerCatalogShape.noBinaryBootstrapProvider)
-    providerCatalogShape.fixedBootstrapProviders);
-  publisherRole = {
-    rules = [
-      {
-        resourceTypes = [ "Operation" ];
-        verbs = [ "create" ];
-        subresources = [ ];
-        resourceNames = [ ];
-        zones = [ ];
-        executionRefs = [ ];
-        sessionVerbs = [ ];
-      }
-    ];
-    operationRefs = [ ];
-  };
-  foundationAuthorityRows = [
-    {
-      reference = "Role/operation-publisher";
-      admitted = publisherRole;
-    }
-    {
-      reference = "RoleBinding/${foundationProcessProvider}-self-operation-publisher";
-      admitted = {
-        roleRef = "Role/operation-publisher";
-        subjects = [ "Provider/${foundationProcessProvider}" ];
-      };
-    }
-  ];
-  deploymentBootstrapPreimage = {
-    schemaVersion = "d2b-deployment-bootstrap/1";
-    zone = "system";
-    storeIncarnation = "foundation-1";
-    stateVolume = "Volume/d2b-state";
-    implementations = deploymentImplementations;
-    roles = builtins.filter (row: builtins.match "^Role/" row.reference != null)
-      foundationAuthorityRows;
-    roleBindings =
-      builtins.filter (row: builtins.match "^RoleBinding/" row.reference != null)
-        foundationAuthorityRows;
-  };
-  deploymentBootstrapPreimageJson =
-    builtins.toJSON (resourcesBundle.canonical deploymentBootstrapPreimage);
-  deploymentBootstrapDigest = "sha256:${resourcesBundle.framedDigest
-    "d2b:v3:deployment-bootstrap" deploymentBootstrapPreimageJson}";
-  deploymentBootstrapDocument = deploymentBootstrapPreimage // {
-    graphDigest = deploymentBootstrapDigest;
-  };
-  deploymentBootstrapJson =
-    builtins.toJSON (resourcesBundle.canonical deploymentBootstrapDocument);
+  # The constructor itself, and the per-Zone variant every Guest publishes
+  # from its own image closure, live in `deployment-bootstrap.nix`: one
+  # constructor, so the Host graph and a Guest's graph cannot drift apart in
+  # schema, canonical encoding, or framed-digest domain. The Host publishes
+  # the copy that names the system Zone.
+  deploymentBootstrapLibrary = import ./deployment-bootstrap.nix { inherit lib; };
+  deploymentBootstrap = deploymentBootstrapLibrary.documentFor
+    deploymentBootstrapLibrary.systemZone;
 in
 {
   options.d2b._bundle.deploymentBootstrap = lib.mkOption {
@@ -409,11 +332,6 @@ in
     # foundation vocabulary to publish. It is internal and non-secret - it
     # carries no credential - and the daemon and broker both re-verify its
     # self-hash before reading a row out of it.
-    d2b._bundle.deploymentBootstrap = {
-      path = "deployment-bootstrap.json";
-      inherit (deploymentBootstrapDocument) graphDigest;
-      preimageJson = deploymentBootstrapPreimageJson;
-      documentJson = deploymentBootstrapJson;
-    };
+    d2b._bundle.deploymentBootstrap = deploymentBootstrap;
   };
 }

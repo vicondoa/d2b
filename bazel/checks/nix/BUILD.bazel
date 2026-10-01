@@ -36,6 +36,7 @@ _SURFACES = {
     "component-session": {
         "cases": ["gateway-component-session", "guest-component-session"],
         "files": [
+            "nixos-modules/deployment-bootstrap.nix",
             "nixos-modules/vm-evaluator.nix",
         ],
         "modules": [
@@ -89,6 +90,7 @@ _SURFACES = {
             "nixos-modules/generated/provider-projections.nix",
             "nixos-modules/generated/resource-inventories.nix",
             "nixos-modules/generated/resource-types.nix",
+            "nixos-modules/deployment-bootstrap.nix",
             "nixos-modules/generated/zone-spec-canonical.nix",
             "nixos-modules/resources-bundle.nix",
             "nixos-modules/resources.nix",
@@ -132,6 +134,7 @@ _SURFACES = {
             "nixos-modules/generated/provider-projections.nix",
             "nixos-modules/generated/resource-inventories.nix",
             "nixos-modules/generated/resource-types.nix",
+            "nixos-modules/deployment-bootstrap.nix",
             "nixos-modules/generated/zone-spec-canonical.nix",
             "nixos-modules/resources-bundle.nix",
             "nixos-modules/resources.nix",

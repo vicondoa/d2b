@@ -108,6 +108,7 @@
     "DeviceBinding" = "core.d2bus.org_DeviceBinding.schema.json";
     "EmergencyPolicy" = "core.d2bus.org_EmergencyPolicy.schema.json";
     "Endpoint" = "core.d2bus.org_Endpoint.schema.json";
+    "EndpointBinding" = "core.d2bus.org_EndpointBinding.schema.json";
     "EphemeralProcess" = "core.d2bus.org_EphemeralProcess.schema.json";
     "ExecutionPolicy" = "core.d2bus.org_ExecutionPolicy.schema.json";
     "Guest" = "core.d2bus.org_Guest.schema.json";

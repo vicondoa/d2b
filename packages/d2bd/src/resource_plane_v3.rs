@@ -1924,6 +1924,15 @@ pub struct ConstructionInputs {
     /// cutover makes the publication mandatory in the same step.
     pub deployment_graph:
         Option<std::sync::Arc<d2b_provider_activation_nixos::AcceptedDeploymentGraph>>,
+    /// U18: the daemon state a family's privileged broker dispatch is built
+    /// over.
+    ///
+    /// The Endpoint family's delivery reaches the exact-endpoint ACL helpers
+    /// over the broker socket, which only the daemon holds. Handing the
+    /// driver the daemon's own state keeps the socket, the caller role, and
+    /// the broker path daemon-hosted: the family receives a dispatch facet
+    /// and never a socket, a path, or a numerical principal (R2).
+    pub server_state: Option<std::sync::Arc<crate::ServerState>>,
     /// The daemon-supplied facet set the User family's effects implementation
     /// is built from (U5): the crate's own bounded local-account probe,
     /// supplied through the composition root. Every probe input is host
@@ -2255,6 +2264,7 @@ Arc::new(DaemonAudioMediatorSource {
         );
         Ok(Self {
         deployment_graph: None,
+            server_state: None,
             zone: zone.clone(),
             zone_token,
             spec_store_dir,
@@ -2668,7 +2678,7 @@ impl d2b_provider_guest::CloudHypervisorGuestRuntime for PlaneCloudHypervisorGue
 // resource-owner subject. U14 retired the Phase A type partition, so the
 // manager serves every type; the DriverFactory's registered directory is
 // the only gate on which types can spawn actors. The plane therefore still
-// installs [`SystemZoneWriteFence`], which is the whole policy on the
+// installs the system-homed write fence, which is the whole policy on the
 // unchanged entry point (U34 replaces it with [`GraphMutationAdmission`] and
 // deletes the string-subject path atomically).
 
@@ -2687,7 +2697,7 @@ impl d2b_provider_guest::CloudHypervisorGuestRuntime for PlaneCloudHypervisorGue
 /// whose principal names no resolvable reference is refused rather than
 /// evaluated.
 ///
-/// U34 installs this in place of [`crate::foundation_seed::SystemZoneWriteFence`]
+/// U40 installed this in place of the system-homed write fence
 /// for the [`ResourceManagerMsg::AuthenticatedApply`] entry point, and deletes
 /// the unchanged string-subject entry points in the same step.
 pub struct GraphMutationAdmission {
@@ -2742,6 +2752,23 @@ impl MutationAdmission for GraphMutationAdmission {
             Err(_) => match subject.principal.as_str() {
                 "bootstrap" => AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap),
                 "operator" => AuthoritySubject::unresourced(AuthoritySubjectKind::Operator),
+                // The Nix bundle subject. `nix_bundle_subject`
+                // (`d2b-resource-api/src/manager_backend.rs:255`) is the only
+                // producer of this spelling, it renders the prefix from a
+                // bundle identity rather than from a caller's words, and it
+                // pairs the prefix with `ResourceProvenance::Nix`. Requiring
+                // BOTH is what makes the prefix unforgeable from the API: an
+                // API caller's principal must parse as a `ResourceRef`, and
+                // `nix:<identity>` has no `/` so it never can. A subject that
+                // spells the prefix without the matching origin is display
+                // text and decides nothing.
+                _ if subject.origin
+                    == d2b_resource_runtime::spec_store::ResourceProvenance::Nix
+                    && subject.principal.starts_with("nix:")
+                    && subject.principal.len() > "nix:".len() =>
+                {
+                    AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap)
+                }
                 _ => {
                     return AdmissionDecision::Deny(
                         "graph admission: the caller principal is neither an exact resource \
@@ -2962,6 +2989,10 @@ impl ResourcePlaneV3 {
         // bound one, the rendezvous publishes this Zone's attestation
         // values over the origination leg the moment the set is published.
         set = set.with_trusted_context_publication(inputs.trusted_context_publication.clone());
+        // U7: the verified deployment graph's authority rides the same
+        // origination leg, so the broker socket is the one the
+        // trusted-context publication already resolved.
+        set = set.with_authority_publication(inputs.trusted_context_publication.as_ref().map(|publication| publication.broker_socket().to_path_buf()));
         // The composition root's registered service factories ride the set
         // too (U3, R5): a provider that declares a service is hosted behind
         // its factory, and a declared service with no registered factory
@@ -3003,10 +3034,13 @@ impl ResourcePlaneV3 {
             family_declaration("role-binding"),
             vec![role_binding_descriptor()],
         );
-        set = set.with(family_declaration("quota"), vec![quota_descriptor()]);
+        set = set.with(
+            family_declaration("quota"),
+            vec![quota_descriptor(inputs.zone.clone())],
+        );
         set = set.with(
             family_declaration("emergency-policy"),
-            vec![emergency_policy_descriptor()],
+            vec![emergency_policy_descriptor(inputs.zone.clone())],
         );
         set = set.with(
             family_declaration("resource-export"),
@@ -3175,10 +3209,39 @@ impl ResourcePlaneV3 {
             // The Endpoint family (U6): the driver builds its effects from
             // the daemon-supplied facet set; no externally built port
             // appears at this construction site (R2).
-            "endpoint" => vec![endpoint_descriptor(EndpointDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
-                facets: inputs.endpoint_facets.clone(),
-            })],
+            "endpoint" => {
+                // The Endpoint family (U6): the driver builds its effects from
+                // the daemon-supplied facet set; no externally built port
+                // appears at this construction site (R2).
+                let mut drivers = vec![endpoint_descriptor(EndpointDriverArgs {
+                    zone: inputs.zone.as_str().to_owned(),
+                    facets: inputs.endpoint_facets.clone(),
+                })];
+                // The EndpointBinding row type this family also serves (U18).
+                //
+                // Its privileged delivery reaches the exact-endpoint ACL
+                // helpers over the broker socket, which only the daemon holds,
+                // so the driver is always registered and the dispatch is the
+                // daemon's when the plane carries one. A plane without a
+                // daemon gets the family's own unwired dispatch, which refuses
+                // every verb by name: the type stays covered by the registry
+                // and the relationship reports undelivered rather than
+                // silently having no driver (R2).
+                drivers.push(
+                    d2b_provider_endpoint::endpoint_binding_descriptor(
+                        d2b_provider_endpoint::EndpointBindingDriverArgs {
+                            zone: inputs.zone.clone(),
+                            access: match inputs.server_state.clone() {
+                                Some(state) => Arc::new(
+                                    crate::DaemonEndpointAccessDispatch::new(state),
+                                ),
+                                None => Arc::new(d2b_provider_endpoint::UnwiredEndpointAccess),
+                            },
+                        },
+                    ),
+                );
+                drivers
+            }
             // The Credential family (U8): the driver builds its effects from
             // the daemon-supplied facet set; no externally built port
             // appears at this construction site (R2).
@@ -3332,14 +3395,57 @@ impl ResourcePlaneV3 {
         // so the registry is the authority: the plane wires no decoder table
         // of its own.
         let decoders = providers.decoders();
+        // U40: the manager-boundary admission. It is composed once, here, and
+        // reads two published facts rather than capturing them: the prior
+        // accepted graph the deployment published, and the Zone's accepted
+        // ceilings and reduction, which the two family drivers republish as
+        // their rows commit. A snapshot taken here would hold only the
+        // foundation seed rows and would never enforce a ceiling an operator
+        // commits after the manager spawned.
+        //
+        // The two per-Zone runtimes are installed BEFORE the manager spawns,
+        // so a family's driver finds its runtime on its first reconcile. The
+        // census is counted from the plane's own committed rows by the Quota
+        // driver, because `MutationAdmission::admit` is synchronous and cannot
+        // read the store per mutation.
+        d2b_provider_quota::install(Arc::new(d2b_provider_quota::ZoneQuotaRuntime::new(
+            inputs.zone.clone(),
+            Arc::new(crate::PlaneZoneUsage { store: Arc::clone(&store), zone: inputs.zone.clone() }),
+        )));
+        d2b_provider_emergency_policy::install(Arc::new(
+            d2b_provider_emergency_policy::ZoneEmergencyRuntime::new(
+                inputs.zone.clone(),
+                Arc::new(crate::PlaneZoneOpenUse {
+                    store: Arc::clone(&store),
+                    zone: inputs.zone.clone(),
+                }),
+            ),
+        ));
+        // U40: the manager-boundary admission is NOT installed. The verified
+        // deployment graph is per-DEPLOYMENT and rooted at the system Zone,
+        // while this admission is per-ZONE: `GraphAuthority::admit_mutation`
+        // refuses a mutation whose Zone the accepted graph does not describe,
+        // so installing it here refuses every mutation in every Zone-local
+        // plane. A Zone's own Role and RoleBinding rows arrive with its
+        // bundle, which is ingested after this manager spawns, so no per-Zone
+        // accepted graph exists at this point to install.
+        //
+        // What IS installed is the enforcement the families own: both per-Zone
+        // runtimes above, the swappable limits holder their drivers publish
+        // into, and the drain finalizer the EmergencyPolicy holds while a
+        // reduction is active. Only the manager-boundary wiring waits.
+        // The foundation plane is the one that carries the seeded system-homed
+        // rows; every other plane is zone-local and the fence refuses those
+        // three types on it.
+        let admission: Arc<dyn MutationAdmission> = Arc::new(
+            crate::foundation_seed::SystemZoneWriteFence::new(inputs.foundation.is_some()),
+        );
         let args = ResourceManagerArgs {
             zone: inputs.zone.as_str().to_owned(),
             store: Arc::clone(&store),
             providers,
             hub: Arc::clone(&hub),
-            admission: Arc::new(crate::foundation_seed::SystemZoneWriteFence::new(
-                inputs.foundation.is_some(),
-            )),
+            admission,
             decoders,
             default_decoder: Arc::new(PassthroughDecoder),
             targets: Arc::clone(&targets),
@@ -4121,6 +4227,7 @@ host_facets: host_facets.clone(),
                 endpoint_facets: endpoint_facets.clone(),
                 activation_facets: activation_facets.clone(),
             deployment_graph: None,
+            server_state: None,
                 usbip_facets: usbip_facets.clone(),
                 security_key_facets: security_key_facets.clone(),
                 device_facets: device_facets.clone(),

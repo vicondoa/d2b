@@ -44,23 +44,13 @@ use d2b_contracts_resource::v3::{
     AdmissionDecision, AdmissionStage, RefusalReason, ResourceRef,
 };
 use d2b_contracts_zone_session::v3::emergency_policy::{
-    EMERGENCY_DRAIN_FINALIZER, EmergencyPolicySpec, EmergencyScope, effective_scope,
+    EmergencyPolicySpec, EmergencyScope, effective_scope,
 };
-use d2b_resource_types::metadata_descriptor;
-use d2b_resource_types::{DriverDescriptor, WellKnownType};
 
-/// The `EmergencyPolicy` type's driver declaration.
-pub fn emergency_policy_descriptor() -> DriverDescriptor {
-    metadata_descriptor(WellKnownType::EMERGENCY_POLICY)
-}
-
-/// The Core finalizer an active emergency reduction holds while it drains.
-///
-/// The name is the contract's own, so the finalizer a driver writes and the
-/// finalizer the teardown waits for cannot drift apart.
-pub const fn emergency_drain_finalizer() -> &'static str {
-    EMERGENCY_DRAIN_FINALIZER
-}
+// The Core finalizer an active emergency reduction holds while it drains is
+// `crate::emergency_drain_finalizer`, defined at the crate root next to the
+// driver that holds it, so the name the driver gates on and the name the
+// teardown waits for are one definition.
 
 /// The Zone's effective emergency reduction.
 ///
@@ -705,6 +695,7 @@ mod tests {
 
     #[test]
     fn the_drain_finalizer_is_the_contract_s_own_name() {
-        assert_eq!(emergency_drain_finalizer(), "core.emergency-drain");
+        assert_eq!(crate::emergency_drain_finalizer(), "core.emergency-drain");
+        assert_eq!(crate::held_drain_finalizer(), crate::emergency_drain_finalizer());
     }
 }

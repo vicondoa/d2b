@@ -23,6 +23,12 @@ let
   cfg = config.d2b;
   d2bLib = import ./lib.nix { inherit lib pkgs; };
   guestHostTools = d2bHostTools;
+  # The verified deployment graph constructor. A Guest image is evaluated
+  # on its own, without the Host module set in scope, so it reads the same
+  # constructor file the Host publication reads rather than a projection of
+  # a Host option: the per-Zone graph a Guest is given is built from the
+  # repository's own declarations, not handed down from the Host.
+  deploymentBootstrap = import ./deployment-bootstrap.nix { inherit lib; };
 
   # Build a per-VM NixOS evaluation using the host's nixpkgs path.
   # `nixos/lib/eval-config.nix` is the standard NixOS eval entrypoint -
@@ -94,6 +100,18 @@ let
         d2b.componentSession = {
           enable = componentSessionEnable;
           inherit guestConfigPath zone;
+          # U31: this Guest image carries its own Zone's verified
+          # deployment graph. The document is produced by the same
+          # constructor the Host publication uses and differs from it only
+          # in the Zone it names, and it is a store object inside the image
+          # closure, so it reaches the Guest through the same verified
+          # closure the broker StoreSyncs rather than through anything
+          # written into the Guest at spawn time. `d2bd guest` reads it from
+          # `deploymentRoot` and re-verifies its self-hash before it serves
+          # anything.
+          deploymentBootstrap = pkgs.writeText
+            "d2b-guest-deployment-bootstrap-${zone}.json"
+            (deploymentBootstrap.documentFor zone).documentJson;
         };
         d2b.vms.${name}.runner = {
           vsock.cid = lib.mkDefault cid;

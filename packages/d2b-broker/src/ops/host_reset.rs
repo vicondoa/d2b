@@ -6,25 +6,52 @@
 //! state. This runner is how that happens: `d2b host reset` invokes it
 //! offline, without a running daemon and without ever opening the previous
 //! release's SpecStore. Nothing here reads a desired row, replays a policy,
-//! or imports a record. The only inputs are the verified new deployment
-//! graph and live evidence read off this host.
+//! or imports a record. The only inputs are the verified deployment
+//! document the deployment published and live evidence read off this host.
+//!
+//! # One document, one schema, one digest domain
+//!
+//! The document this runner verifies is `deployment-bootstrap.json` with
+//! schema `d2b-deployment-bootstrap/1` and self-hash domain
+//! `d2b:v3:deployment-bootstrap`: the same document, schema, and domain
+//! `nixos-modules/deployment-bootstrap.nix` publishes and the daemon
+//! verifies. It is decoded through [`d2b_core::deployment_bootstrap`], the
+//! shared contract, so the runner cannot disagree with the daemon about
+//! which bytes are authorized. A second deployment-graph document describing
+//! the same deployment would be a second answer to "what is deployed", and
+//! nothing would write it.
+//!
+//! # What the runner deletes, and who says so
+//!
+//! Two independent inputs, neither of them the caller:
+//!
+//! 1. The verified document establishes the deployment root's identity (its
+//!    self-hash) and supplies the accepted authority rows.
+//! 2. [`OWNED_DEPLOYMENT_ENTRIES`] declares the deployment-root-relative
+//!    surfaces this release owns. It is a code-owned narrowing, not a
+//!    caller-supplied list: a path nobody named here is never unlinked, and
+//!    a document that could widen the list would make the boundary
+//!    attacker-controlled. It names deployment-root surfaces only; a
+//!    family-owned subtree is the family's to retire, and its absence from
+//!    this list is what keeps the boundary from widening.
 //!
 //! # Why this file never mentions a SpecStore
 //!
 //! Reading the old store to learn what to delete would be migration, and
 //! migration is exactly what the clean break removed. The deletion
-//! inventory is therefore derived from one thing only: the exact ownership
-//! description the verified new deployment graph carries. An old store
-//! that is unreadable, in an old format, or absent changes nothing about
-//! what this runner deletes, because the runner never looks.
+//! inventory is therefore derived from the owned set above and live
+//! evidence, never from a prior store. An old store that is unreadable, in
+//! an old format, or absent changes nothing about what this runner
+//! deletes, because the runner never looks.
 //!
 //! # The order of operations is the safety property
 //!
-//! 1. Verify the new deployment graph (self-hash). A tampered graph is
-//!    refused before anything is read from the host.
-//! 2. Admit the reset Operation against the prior accepted graph built
-//!    from that document's canonical authority rows, under the exact
-//!    local operator authority. One evaluator, no bypass.
+//! 1. Verify the deployment document (schema and self-hash). A tampered or
+//!    foreign document is refused before anything is read from the host.
+//! 2. Admit the reset Operation through the one evaluator, against the
+//!    prior accepted graph built from that document's own canonical rows
+//!    and rooted at the document rather than at the request. One
+//!    evaluator, no bypass.
 //! 3. Observe the deployment root no-follow and decide the ownership
 //!    boundary plus the drain proof. Any unresolved question is a refusal.
 //! 4. Only then unlink, strictly inside the verified inventory.
@@ -35,40 +62,33 @@
 //!
 //! A store-view farm shares inodes with the system store. A chmod or
 //! chown there is a permission change on every name of that inode, so the
-//! inventory is unlink-only and a hardlink farm is never descended into.
+//! inventory is unlink-only and no traversal ever re-resolves a link.
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use d2b_contracts_resource::v3::{
-    AdmissionDecision, AdmissionStage, AuthoritySubject, AuthoritySubjectKind, CanonicalJsonObject,
-    ResourceRef, StoreIncarnation, ZoneId, canonical_digest, canonical_json_bytes,
-};
+use d2b_core::deployment_bootstrap::{DEPLOYMENT_BOOTSTRAP_FILE, DeploymentBootstrap};
 use d2b_core::resource_authority::{
-    AcceptedGraph, AcceptedGraphError, GraphAuthority, GraphMutation, MutationKind,
-    MutationSubjectEvidence, ProjectionRow, TransportIdentity,
+    AcceptedGraph, GraphAuthority, GraphMutation, MutationKind, MutationSubjectEvidence,
+    TransportIdentity,
+};
+use d2b_contracts_resource::v3::{
+    AdmissionDecision, AdmissionStage, AuthoritySubject, ResourceRef, StoreIncarnation, ZoneId,
+    canonical_digest, canonical_json_bytes,
 };
 use d2b_host::ownership_matrix::{
-    DrainEvidence, OwnedPath, ResetOwnership, ResetRefusal, VerifiedResetOwnership,
-    observe_reset, render_ownership_marker, verify_reset, OWNERSHIP_MARKER_FILE,
+    DrainEvidence, OwnedPath, OwnedPathKind, ResetOwnership, ResetRefusal, VerifiedResetOwnership,
+    observe_reset, verify_reset,
 };
 use serde::{Deserialize, Serialize};
-
-/// The deployment-root-relative name of the verified new deployment graph.
-///
-/// It lives at the deployment root beside the ownership marker and is
-/// deliberately outside every owned entry: reset reads it to learn what it
-/// may remove, then rewrites it with the new incarnation.
-pub const DEPLOYMENT_GRAPH_FILE: &str = "deployment-graph.json";
 
 /// The deployment-root-relative name of the fresh-incarnation record reset
 /// establishes after the removal.
 pub const INCARNATION_FILE: &str = "incarnation.json";
 
 /// The broker projection state directory: the projection cursor and
-/// digest, the prepared fences, the effect journal, and the reservation
-/// journal.
+/// digest, and the prepared fences.
 pub const AUTHORITY_STATE_DIR: &str = "authority";
 
 /// The broker's durable declared state cells, including the binding
@@ -78,194 +98,175 @@ pub const STATE_CELLS_DIR: &str = "state-cells";
 /// The broker's host-generation handoff journal.
 pub const HOST_GENERATION_JOURNAL_DIR: &str = "host-generation-handoffs";
 
-/// The bounded read for the deployment graph document.
-pub const MAX_DEPLOYMENT_GRAPH_BYTES: usize = 64 * 1024;
-
-/// The domain separator for the deployment graph self-hash.
-pub const DEPLOYMENT_GRAPH_DIGEST_DOMAIN: &str = "d2b:v3:deployment-graph";
-
-/// The reset Operation the graph declares and this runner admits.
+/// The reset Operation the deployment document grants and this runner
+/// admits.
+///
+/// The target is pinned to this exact reference, so a caller cannot
+/// redirect the reset at another resource even if it could reach the
+/// evaluator.
 pub const RESET_OPERATION_REF: &str = "Operation/local-reset";
 
 /// The domain separator for the fresh-incarnation record.
 pub const INCARNATION_DIGEST_DOMAIN: &str = "d2b:v3:deployment-incarnation";
 
+/// The exact owned surfaces beneath a deployment root, in declaration
+/// order, with the treatment the reset may use.
+///
+/// Every entry is a directory the deployment root itself creates: the
+/// broker's and the daemon's own runtime state, the guest-side state the
+/// guest daemon and broker share, and the per-Guest and per-Zone roots the
+/// deployment declares. The names are the ones `nixos-modules/host-daemon.nix`,
+/// `nixos-modules/host-broker.nix`, and the broker's own state constants
+/// declare.
+///
+/// Family-owned subtrees are deliberately absent. A subtree belongs to the
+/// provider that owns it, the broker is pinned provider-free, and a shared
+/// crate may not carry a family's name; `packages/d2bd/src/shared_provider_effects.rs`
+/// and `packages/d2b-broker/src/ops/swtpm_identity.rs` hold such names only
+/// as entries on a ratchet that is meant to shrink. The absence narrows:
+/// a surface this list does not name is never unlinked and shows up in the
+/// report as untouched. A family that must retire one of its own subtrees
+/// does it through its own typed operation with its own ownership proof.
+const OWNED_DEPLOYMENT_ENTRIES: &[(&str, OwnedPathKind)] = &[
+    ("audit", OwnedPathKind::Tree),
+    (AUTHORITY_STATE_DIR, OwnedPathKind::Tree),
+    ("component-session", OwnedPathKind::Tree),
+    ("current-bundle", OwnedPathKind::Tree),
+    ("daemon-state", OwnedPathKind::Tree),
+    ("guest-audit", OwnedPathKind::Tree),
+    ("guest-broker", OwnedPathKind::Tree),
+    ("guest-state", OwnedPathKind::Tree),
+    ("host-generation", OwnedPathKind::Tree),
+    (HOST_GENERATION_JOURNAL_DIR, OwnedPathKind::Tree),
+    ("images", OwnedPathKind::Tree),
+    ("keys", OwnedPathKind::Tree),
+    ("locks", OwnedPathKind::Tree),
+    ("runtime", OwnedPathKind::Tree),
+    (STATE_CELLS_DIR, OwnedPathKind::Tree),
+    ("tmp", OwnedPathKind::Tree),
+    ("validated", OwnedPathKind::Tree),
+    ("vms", OwnedPathKind::Tree),
+    ("zones", OwnedPathKind::Tree),
+];
+
 // ---------------------------------------------------------------------------
-// The verified new deployment graph
+// The verified deployment document
 // ---------------------------------------------------------------------------
 
-/// One owned path as the deployment graph declares it.
+/// The exact ownership description this reset is bounded to.
 ///
-/// The paths are absolute and, by construction, strictly beneath the
-/// deployment root: a graph that names anything else describes an
-/// ownership this reset does not have.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DeclaredOwnedPath {
-    /// Absolute path beneath the deployment root.
-    pub path: PathBuf,
-    /// The treatment the reset may use: `tree`, `file`, or
-    /// `hardlinkFarm`.
-    pub kind: String,
-}
-
-/// The verified new deployment graph, as published beside the deployment
-/// root.
-///
-/// The document is self-hashed: `graphDigest` covers the canonical bytes
-/// of everything else in it, so a graph whose ownership description was
-/// edited after verification fails closed before a single path is read.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DeploymentGraph {
-    /// The document's own schema tag.
-    pub schema_version: String,
-    /// The Zone the graph describes.
-    pub zone: ZoneId,
-    /// The store incarnation the new deployment is verified in.
-    pub store_incarnation: StoreIncarnation,
-    /// The ownership id the deployment root's marker must carry.
-    pub ownership_id: String,
-    /// The exact owned path inventory, in declaration order.
-    pub owned: Vec<DeclaredOwnedPath>,
-    /// Volume sources the operator owns outside the deployment root.
-    pub external_sources: Vec<PathBuf>,
-    /// The accepted `Role` rows, as canonical bytes.
-    pub roles: Vec<GraphAuthorityRow>,
-    /// The accepted `RoleBinding` rows, as canonical bytes.
-    pub role_bindings: Vec<GraphAuthorityRow>,
-    /// `sha256:` over the canonical bytes of this document without
-    /// `graphDigest`.
-    pub graph_digest: String,
-}
-
-/// One accepted authority row of the deployment graph.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GraphAuthorityRow {
-    /// The exact resource reference the row was accepted for.
-    pub reference: String,
-    /// The row's canonical admitted bytes.
-    pub admitted: serde_json::Value,
-}
-
-/// The document schema tag this runner verifies.
-pub const DEPLOYMENT_GRAPH_SCHEMA: &str = "d2b-deployment-graph/1";
-
-impl DeploymentGraph {
-    /// The exact ownership description this graph declares.
-    ///
-    /// An unknown treatment is a refusal rather than a default: a graph
-    /// that cannot say how a path may be touched does not get to have it
-    /// touched.
-    pub fn ownership(&self) -> Result<ResetOwnership, ResetFailure> {
-        let mut owned = Vec::with_capacity(self.owned.len());
-        for entry in &self.owned {
-            let kind = match entry.kind.as_str() {
-                "tree" => d2b_host::ownership_matrix::OwnedPathKind::Tree,
-                "file" => d2b_host::ownership_matrix::OwnedPathKind::File,
-                "hardlinkFarm" => d2b_host::ownership_matrix::OwnedPathKind::HardlinkFarm,
-                other => {
-                    return Err(ResetFailure::Ownership(
-                        ResetRefusal::OwnershipKindMismatch {
-                            path: entry.path.clone(),
-                            expected: "tree | file | hardlinkFarm".to_owned(),
-                            observed: other.to_owned(),
-                        },
-                    ));
-                }
-            };
-            owned.push(OwnedPath {
-                path: entry.path.clone(),
-                kind,
-            });
-        }
-        Ok(ResetOwnership {
-            owned,
-            external_sources: self.external_sources.clone(),
-        })
-    }
-
-    /// Verify the document's self-hash over its own canonical bytes.
-    pub fn verify_digest(&self) -> Result<(), ResetFailure> {
-        let mut without_digest = self.clone();
-        without_digest.graph_digest = String::new();
-        let bytes = canonical_json_bytes(&without_digest)
-            .map_err(|error| ResetFailure::Graph(format!("graph-canonical-bytes: {error}")))?;
-        if canonical_digest(DEPLOYMENT_GRAPH_DIGEST_DOMAIN, &bytes) != self.graph_digest {
-            return Err(ResetFailure::Graph("deployment-graph-digest-mismatch".to_owned()));
-        }
-        Ok(())
+/// Every path is absolute and, by construction, strictly beneath the
+/// deployment root: an entry that named anything else would describe an
+/// ownership this reset does not have, and the no-follow observation
+/// refuses it.
+fn declared_ownership(deployment_root: &Path) -> ResetOwnership {
+    ResetOwnership {
+        owned: OWNED_DEPLOYMENT_ENTRIES
+            .iter()
+            .map(|(relative, kind)| OwnedPath {
+                path: deployment_root.join(relative),
+                kind: *kind,
+            })
+            .collect(),
+        external_sources: Vec::new(),
     }
 }
 
-/// The prior accepted graph the reset Operation is admitted against.
+/// Read and verify the deployment document published at the deployment
+/// root, bounded and no-follow.
 ///
-/// Built from the deployment graph's own canonical rows through
-/// [`AcceptedGraph::from_canonical_rows`], so it decides exactly what the
-/// same rows decide anywhere else. The deployment root subject is the
-/// exact local operator authority this invocation presents: the admission
-/// is an exact-identity one-shot, not a bootstrap class that admits
-/// whatever a future caller names.
-fn prior_accepted_graph(graph: &DeploymentGraph) -> Result<AcceptedGraph, ResetFailure> {
-    let root = AuthoritySubject::unresourced(AuthoritySubjectKind::Operator);
-    // The decoded rows are collected first so the borrowed projections
-    // below all outlive the call, rather than pointing at a `reference`
-    // that a loop iteration already dropped.
-    let mut decoded: Vec<(ResourceRef, CanonicalJsonObject)> =
-        Vec::with_capacity(graph.roles.len() + graph.role_bindings.len());
-    for rows in [&graph.roles, &graph.role_bindings] {
-        for row in rows {
-            let reference = ResourceRef::parse(row.reference.as_str()).map_err(|error| {
-                ResetFailure::Graph(format!("graph-row-reference: {error}"))
-            })?;
-            let admitted = serde_json::from_value::<CanonicalJsonObject>(row.admitted.clone())
-                .map_err(|error| ResetFailure::Graph(format!("graph-row-bytes: {error}")))?;
-            decoded.push((reference, admitted));
-        }
+/// The read is the contract the daemon verifies: the schema tag must be
+/// this release's, the self-hash must cover the document's own canonical
+/// bytes with `graphDigest` removed, and a symlink or an oversized body is
+/// refused rather than scanned. A root that publishes no verifying document
+/// is not a d2b deployment root, and this is what keeps an offline reset
+/// from being pointed at somebody else's directory.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+fn read_deployment_bootstrap(deployment_root: &Path) -> Result<DeploymentBootstrap, ResetFailure> {
+    let path = deployment_root.join(DEPLOYMENT_BOOTSTRAP_FILE);
+    let meta = fs::symlink_metadata(&path).map_err(|error| ResetFailure::Io {
+        path: path.clone(),
+        detail: error.to_string(),
+    })?;
+    if meta.file_type().is_symlink() {
+        return Err(ResetFailure::Io {
+            path,
+            detail: "the deployment document is a symlink".to_owned(),
+        });
     }
-    let rows = decoded
-        .iter()
-        .map(|(reference, admitted)| ProjectionRow::new(reference, admitted));
-    AcceptedGraph::from_canonical_rows(
-        graph.zone.clone(),
-        graph.store_incarnation.clone(),
-        root,
-        rows,
-    )
-    .map_err(|error: AcceptedGraphError| ResetFailure::Graph(format!("graph-rows: {error}")))
+    if meta.len() as usize > d2b_core::deployment_bootstrap::MAX_DEPLOYMENT_BOOTSTRAP_BYTES {
+        return Err(ResetFailure::Io {
+            path,
+            detail: "the deployment document exceeds the bounded read".to_owned(),
+        });
+    }
+    let bytes = fs::read(&path).map_err(|error| ResetFailure::Io {
+        path: path.clone(),
+        detail: error.to_string(),
+    })?;
+    DeploymentBootstrap::decode(&bytes, DEPLOYMENT_BOOTSTRAP_FILE)
+        .map_err(|error| ResetFailure::Document(error.to_string()))
 }
 
 /// Admit the reset Operation through the one evaluator.
 ///
-/// The target is the exact `Operation` reference the deployment graph
-/// declares, so a caller cannot redirect the reset at another resource,
-/// and the initiating subject is unresourced explicit local operator
-/// authority, which the evaluator admits only against a graph whose
-/// deployment root is that exact subject.
-fn admit_reset(graph: &DeploymentGraph, accepted: &AcceptedGraph) -> Result<(), ResetFailure> {
+/// The target is the exact `Operation` reference this runner is, so a caller
+/// cannot redirect the reset at another resource. The initiating subject is
+/// resolved from the document's own accepted `RoleBinding` rows while the
+/// graph is rooted at the document, so the two sides of the decision come
+/// from different places: the root is never the request's own subject, and a
+/// subject the deployment's rows do not name is refused.
+fn admit_reset(
+    bootstrap: &DeploymentBootstrap,
+    accepted: &AcceptedGraph,
+) -> Result<AuthoritySubject, ResetFailure> {
     let target = ResourceRef::parse(RESET_OPERATION_REF)
-        .map_err(|error| ResetFailure::Graph(format!("reset-operation-ref: {error}")))?;
-    let request = GraphMutation::new(
-        graph.zone.clone(),
-        MutationSubjectEvidence::new(
-            AuthoritySubject::unresourced(AuthoritySubjectKind::Operator),
-            TransportIdentity::OperatorConsole,
-        ),
-        MutationKind::Delete,
-        target,
-    );
-    match GraphAuthority::admit_mutation(&request, accepted) {
-        AdmissionDecision::Admitted => Ok(()),
-        AdmissionDecision::Refused { stage, reason } => Err(ResetFailure::Admission {
-            stage,
-            // `RefusalReason` is a closed kebab-case contract enum, so its
-            // serialized spelling is the stable label; the runtime never
-            // carries caller text inside one.
-            reason: serde_json::to_value(reason)
-                .ok()
-                .and_then(|value| value.as_str().map(str::to_owned))
-                .unwrap_or_else(|| "refusal-reason-unrenderable".to_owned()),
+        .map_err(|error| ResetFailure::Document(format!("reset-operation-ref: {error}")))?;
+    let mut admitted: Option<AuthoritySubject> = None;
+    let mut refusal: Option<ResetFailure> = None;
+    for subject in bootstrap
+        .bound_subjects()
+        .map_err(|error| ResetFailure::Document(error.to_string()))?
+    {
+        let request = GraphMutation::new(
+            bootstrap.zone.clone(),
+            MutationSubjectEvidence::new(subject.clone(), TransportIdentity::OperatorConsole),
+            MutationKind::Create,
+            target.clone(),
+        );
+        match GraphAuthority::admit_mutation(&request, accepted) {
+            AdmissionDecision::Admitted => {
+                if admitted.is_some() {
+                    // Two identities may publish this Operation. Which one an
+                    // offline reset acts as is a deployment decision, so an
+                    // ambiguous deployment is refused rather than guessed at.
+                    return Err(ResetFailure::Admission {
+                        stage: AdmissionStage::Authorize,
+                        reason: "reset-operation-publisher-ambiguous".to_owned(),
+                    });
+                }
+                admitted = Some(subject);
+            }
+            AdmissionDecision::Refused { stage, reason } => {
+                // `RefusalReason` is a closed kebab-case contract enum, so
+                // its serialized spelling is the stable label; the runtime
+                // never carries caller text inside one.
+                refusal.get_or_insert(ResetFailure::Admission {
+                    stage,
+                    reason: serde_json::to_value(reason)
+                        .ok()
+                        .and_then(|value| value.as_str().map(str::to_owned))
+                        .unwrap_or_else(|| "refusal-reason-unrenderable".to_owned()),
+                });
+            }
+        }
+    }
+    match (admitted, refusal) {
+        (Some(subject), _) => Ok(subject),
+        (None, Some(failure)) => Err(failure),
+        (None, None) => Err(ResetFailure::Admission {
+            stage: AdmissionStage::Authorize,
+            reason: "the deployment document grants the reset Operation to nobody".to_owned(),
         }),
     }
 }
@@ -533,20 +534,22 @@ pub struct ResetReport {
     pub ok: bool,
     /// `"inspect"` or `"apply"`.
     pub mode: &'static str,
-    /// The Zone the verified graph describes.
+    /// The Zone the verified deployment document describes.
     pub zone: String,
     /// The store incarnation this reset establishes.
     pub store_incarnation: String,
-    /// The ownership id the deployment root's marker carried.
+    /// The self-hash of the verified deployment document this reset
+    /// admitted against and removed for.
     pub ownership_id: String,
+    /// The identity the deployment document's accepted grants admitted the
+    /// reset Operation for.
+    pub admitted_subject: String,
     /// The verified deployment root.
     pub deployment_root: PathBuf,
     /// The complete unlink inventory, in declaration order. An entry with
     /// `present: false` is already gone, which is what makes a repeated
     /// completed reset safe.
     pub inventory: Vec<ResetInventoryEntry>,
-    /// External Volume sources the reset proved it leaves alone.
-    pub external_sources: Vec<PathBuf>,
     /// The fresh incarnation record, in apply mode only.
     pub incarnation: Option<IncarnationRecord>,
 }
@@ -573,13 +576,12 @@ pub struct IncarnationRecord {
     pub schema_version: String,
     /// The Zone the fresh root describes.
     pub zone: ZoneId,
-    /// The new store incarnation. It differs from the verified graph's,
+    /// The new store incarnation. It differs from the verified document's,
     /// so the next boot initializes instead of resynchronizing.
     pub store_incarnation: StoreIncarnation,
-    /// The ownership id the fresh root carries.
-    pub ownership_id: String,
-    /// The verified deployment graph's digest this incarnation followed.
-    pub previous_graph_digest: String,
+    /// The self-hash of the verified deployment document this incarnation
+    /// followed.
+    pub previous_bootstrap_digest: String,
     /// `sha256:` over the canonical bytes of this record without
     /// `incarnation_digest`.
     pub incarnation_digest: String,
@@ -590,30 +592,37 @@ pub const INCARNATION_SCHEMA: &str = "d2b-deployment-incarnation/1";
 
 /// Why a reset invocation failed.
 ///
-/// A refusal and a graph failure are different things: a refusal is the
-/// ownership or drain boundary declining to act, a graph failure is the
-/// verified new deployment graph refusing to be used at all. Neither
-/// ever means "carry on with what could be read".
+/// A refusal and a document failure are different things: a refusal is the
+/// ownership or drain boundary declining to act, a document failure is the
+/// verified deployment document refusing to be used at all. Neither ever
+/// means "carry on with what could be read".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResetFailure {
     /// The ownership or drain boundary refused.
     Ownership(ResetRefusal),
-    /// The verified deployment graph could not be used.
-    Graph(String),
+    /// The deployment document could not be used.
+    Document(String),
     /// The reset Operation was not admitted.
     Admission {
+        /// The stage the evaluator refused at.
         stage: AdmissionStage,
+        /// The stable refusal reason.
         reason: String,
     },
     /// The deployment root could not be read.
-    Io { path: PathBuf, detail: String },
+    Io {
+        /// The path the read failed on.
+        path: PathBuf,
+        /// The underlying detail.
+        detail: String,
+    },
 }
 
 impl core::fmt::Display for ResetFailure {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Ownership(refusal) => write!(formatter, "{}", refusal.code()),
-            Self::Graph(detail) => write!(formatter, "reset-graph: {detail}"),
+            Self::Document(detail) => write!(formatter, "reset-document: {detail}"),
             Self::Admission { stage, reason } => {
                 write!(formatter, "reset-admission: {stage:?}:{reason}")
             }
@@ -623,6 +632,7 @@ impl core::fmt::Display for ResetFailure {
         }
     }
 }
+
 
 impl std::error::Error for ResetFailure {}
 
@@ -650,7 +660,7 @@ impl ResetFailure {
                 let path = refusal.path().map(Path::to_path_buf);
                 (refusal.code().to_owned(), path, refusal.code().to_owned())
             }
-            Self::Graph(detail) => ("reset-graph-invalid".to_owned(), None, detail.clone()),
+            Self::Document(detail) => ("reset-document-invalid".to_owned(), None, detail.clone()),
             Self::Admission { stage, reason } => (
                 "reset-not-admitted".to_owned(),
                 None,
@@ -684,18 +694,23 @@ pub const RESET_REFUSAL_EXIT: u8 = 78;
 /// Run one reset: verify, decide, and (only when asked) remove.
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn run_owned_reset(request: &ResetRequest) -> Result<ResetReport, ResetFailure> {
-    // 1. The verified new deployment graph, read self-hashed and bounded.
-    let graph = read_deployment_graph(&request.deployment_root)?;
-    graph.verify_digest()?;
+    // 1. The verified deployment document, read self-hashed and bounded.
+    let bootstrap = read_deployment_bootstrap(&request.deployment_root)?;
 
-    // 2. Admit the reset Operation against the graph's own prior state.
-    let accepted = prior_accepted_graph(&graph)?;
-    admit_reset(&graph, &accepted)?;
+    // 2. Admit the reset Operation against the document's own prior state,
+    //    under an identity that document's accepted grants name.
+    let accepted = bootstrap
+        .accepted_graph()
+        .map_err(|error| ResetFailure::Document(error.to_string()))?;
+    let subject = admit_reset(&bootstrap, &accepted)?;
 
-    // 3. The exact ownership boundary plus the live drain proof.
-    let ownership = graph.ownership()?;
-    let observation = observe_reset(&request.deployment_root, &graph.ownership_id, &ownership)
-        .map_err(ResetFailure::Ownership)?;
+    // 3. The exact ownership boundary plus the live drain proof. The
+    //    ownership id is the document's self-hash, so the boundary also
+    //    proves the document on disk is still the one that was admitted.
+    let ownership = declared_ownership(&request.deployment_root);
+    let observation =
+        observe_reset(&request.deployment_root, &bootstrap.graph_digest, &ownership)
+            .map_err(ResetFailure::Ownership)?;
     let probes = DrainProbes::under(&request.deployment_root, request.cgroup_root.clone());
     let evidence = collect_drain_evidence(&probes);
     let verified = verify_reset(&observation, &ownership, &evidence)
@@ -716,12 +731,12 @@ pub fn run_owned_reset(request: &ResetRequest) -> Result<ResetReport, ResetFailu
         return Ok(ResetReport {
             ok: true,
             mode: "inspect",
-            zone: graph.zone.as_str().to_owned(),
-            store_incarnation: graph.store_incarnation.as_str().to_owned(),
+            zone: bootstrap.zone.as_str().to_owned(),
+            store_incarnation: bootstrap.store_incarnation.as_str().to_owned(),
             ownership_id: verified.ownership_id.clone(),
+            admitted_subject: render_subject(&subject),
             deployment_root: verified.deployment_root.clone(),
             inventory,
-            external_sources: verified.external_sources.clone(),
             incarnation: None,
         });
     }
@@ -741,56 +756,44 @@ pub fn run_owned_reset(request: &ResetRequest) -> Result<ResetReport, ResetFailu
         .collect();
 
     // 5. The fresh deployment root and a NEW incarnation.
-    let incarnation = establish_fresh_root(&verified, &graph)?;
+    let incarnation = establish_fresh_root(&verified, &bootstrap)?;
 
     Ok(ResetReport {
         ok: true,
         mode: "apply",
-        zone: graph.zone.as_str().to_owned(),
+        zone: bootstrap.zone.as_str().to_owned(),
         store_incarnation: incarnation.store_incarnation.as_str().to_owned(),
         ownership_id: verified.ownership_id.clone(),
+        admitted_subject: render_subject(&subject),
         deployment_root: verified.deployment_root.clone(),
         inventory,
-        external_sources: verified.external_sources.clone(),
         incarnation: Some(incarnation),
     })
 }
 
 /// The stable treatment label one inventory line carries.
-const fn owned_path_kind_str(kind: d2b_host::ownership_matrix::OwnedPathKind) -> &'static str {
+const fn owned_path_kind_str(kind: OwnedPathKind) -> &'static str {
     match kind {
-        d2b_host::ownership_matrix::OwnedPathKind::Tree => "tree",
-        d2b_host::ownership_matrix::OwnedPathKind::File => "file",
-        d2b_host::ownership_matrix::OwnedPathKind::HardlinkFarm => "hardlinkFarm",
+        OwnedPathKind::Tree => "tree",
+        OwnedPathKind::File => "file",
+        OwnedPathKind::HardlinkFarm => "hardlinkFarm",
     }
 }
 
-/// Read and decode the verified deployment graph, bounded and no-follow.
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn read_deployment_graph(deployment_root: &Path) -> Result<DeploymentGraph, ResetFailure> {
-    let path = deployment_root.join(DEPLOYMENT_GRAPH_FILE);
-    let meta = fs::symlink_metadata(&path).map_err(|error| ResetFailure::Io {
-        path: path.clone(),
-        detail: error.to_string(),
-    })?;
-    if meta.file_type().is_symlink() {
-        return Err(ResetFailure::Io {
-            path,
-            detail: "the deployment graph is a symlink".to_owned(),
-        });
+/// The stable label one admitted identity renders in the report.
+///
+/// The subject class is the contract's own kebab-case spelling and the
+/// reference is its canonical string, so the label says which accepted
+/// grant admitted the reset rather than that one happened to.
+fn render_subject(subject: &AuthoritySubject) -> String {
+    let kind = serde_json::to_value(subject.kind())
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "unknown".to_owned());
+    match subject.resource_ref() {
+        Some(reference) => format!("{kind}:{}", reference.to_canonical_string()),
+        None => kind,
     }
-    if meta.len() as usize > MAX_DEPLOYMENT_GRAPH_BYTES {
-        return Err(ResetFailure::Io {
-            path,
-            detail: "the deployment graph exceeds the bounded read".to_owned(),
-        });
-    }
-    let bytes = fs::read(&path).map_err(|error| ResetFailure::Io {
-        path: path.clone(),
-        detail: error.to_string(),
-    })?;
-    serde_json::from_slice(&bytes)
-        .map_err(|error| ResetFailure::Graph(format!("deployment-graph-parse: {error}")))
 }
 
 /// Unlink exactly the verified inventory, nothing else.
@@ -893,35 +896,36 @@ fn remove_shallow(path: &Path) -> Result<(), String> {
 
 /// Re-establish the deployment root and write a NEW incarnation.
 ///
-/// The new incarnation is derived from the verified graph's, never from
-/// the store that just went away: it is the new model's first identity,
-/// so the next boot initializes instead of resynchronizing a rollback.
+/// The new incarnation is derived from the verified document's, never from
+/// the store that just went away: it is the new model's first identity, so
+/// the next boot initializes instead of resynchronizing a rollback.
+///
+/// The deployment document itself is left in place and byte for byte as it
+/// was: it is the installation's published artifact, not runtime state, and
+/// the next boot has to verify the same document this reset admitted.
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn establish_fresh_root(
     verified: &VerifiedResetOwnership,
-    graph: &DeploymentGraph,
+    bootstrap: &DeploymentBootstrap,
 ) -> Result<IncarnationRecord, ResetFailure> {
     let root = &verified.deployment_root;
     fs::create_dir_all(root).map_err(|error| ResetFailure::Io {
         path: root.clone(),
         detail: error.to_string(),
     })?;
-    let marker = root.join(OWNERSHIP_MARKER_FILE);
-    write_atomic(&marker, render_ownership_marker(&verified.ownership_id).as_bytes())?;
 
     let mut incarnation = IncarnationRecord {
         schema_version: INCARNATION_SCHEMA.to_owned(),
-        zone: graph.zone.clone(),
-        store_incarnation: next_incarnation(graph)?,
-        ownership_id: verified.ownership_id.clone(),
-        previous_graph_digest: graph.graph_digest.clone(),
+        zone: bootstrap.zone.clone(),
+        store_incarnation: next_incarnation(bootstrap)?,
+        previous_bootstrap_digest: bootstrap.graph_digest.clone(),
         incarnation_digest: String::new(),
     };
     let bytes = canonical_json_bytes(&incarnation)
-        .map_err(|error| ResetFailure::Graph(format!("incarnation-bytes: {error}")))?;
+        .map_err(|error| ResetFailure::Document(format!("incarnation-bytes: {error}")))?;
     incarnation.incarnation_digest = canonical_digest(INCARNATION_DIGEST_DOMAIN, &bytes);
     let rendered = serde_json::to_vec_pretty(&incarnation)
-        .map_err(|error| ResetFailure::Graph(format!("incarnation-json: {error}")))?;
+        .map_err(|error| ResetFailure::Document(format!("incarnation-json: {error}")))?;
     write_atomic(&root.join(INCARNATION_FILE), &rendered)?;
     Ok(incarnation)
 }
@@ -929,10 +933,11 @@ fn establish_fresh_root(
 /// The incarnation the fresh root is established in.
 ///
 /// An identity, not a counter: the new incarnation is derived from the
-/// verified graph's own identity, so two resets of the same graph produce
-/// the same one and a graph that was never verified produces none.
-fn next_incarnation(graph: &DeploymentGraph) -> Result<StoreIncarnation, ResetFailure> {
-    let current = graph.store_incarnation.as_str();
+/// verified document's own identity, so two resets of the same document
+/// produce the same one and a document that was never verified produces
+/// none.
+fn next_incarnation(bootstrap: &DeploymentBootstrap) -> Result<StoreIncarnation, ResetFailure> {
+    let current = bootstrap.store_incarnation.as_str();
     let suffix = current
         .rsplit_once('-')
         .and_then(|(_, tail)| tail.parse::<u64>().ok());
@@ -945,7 +950,7 @@ fn next_incarnation(graph: &DeploymentGraph) -> Result<StoreIncarnation, ResetFa
         None => current,
     };
     StoreIncarnation::parse(format!("{base}-{next}"))
-        .map_err(|error| ResetFailure::Graph(format!("incarnation-token: {error}")))
+        .map_err(|error| ResetFailure::Document(format!("incarnation-token: {error}")))
 }
 
 /// Write one bounded document, replacing atomically.

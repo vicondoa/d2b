@@ -45,7 +45,10 @@ pub mod graph_limits_admission;
 /// construction production will install, rather than a test-local imitation of
 /// it. U34 removes this export together with the construction it names.
 pub use provider_lifecycle::AuthorityPublication;
-pub use graph_limits_admission::{AcceptedLimits, GraphLimitsAdmission};
+pub use graph_limits_admission::{
+    AcceptedLimits, AcceptedLimitsHolder, GraphLimitsAdmission, PlaneZoneOpenUse, PlaneZoneUsage,
+    UnestablishedAuthority,
+};
 pub use resource_plane_v3::GraphMutationAdmission;
 
 include!("composition.rs");

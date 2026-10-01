@@ -3153,6 +3153,26 @@ fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
             "tracingSpanIdPresent": req.tracing_span_id.is_some(),
         }));
     }
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    if let BrokerRequest::EndpointObserve(req)
+    | BrokerRequest::EndpointGrantAccess(req)
+    | BrokerRequest::EndpointRevokeAccess(req) = request
+    {
+        // The three endpoint variants project the same bounded field set.
+        // There is nothing path-shaped to redact because the request has no
+        // path: the socket is a NAME, the principals are numbers the broker
+        // derived, and the authority key is a digest. The projection reports
+        // the claim's PRESENCE and never its value, so a forged principal is
+        // not echoed into the audit log.
+        return Ok(serde_json::json!({
+            "endpointRef": req.endpoint_ref.to_canonical_string(),
+            "consumerRef": req.consumer_ref.to_canonical_string(),
+            "socket": req.socket.as_str(),
+            "socketRightsProvided": true,
+            "principalClaimProvided": req.claimed_principal.is_some(),
+            "tracingSpanIdPresent": req.tracing_span_id.is_some(),
+        }));
+    }
     let mut value = serde_json::to_value(request)
         .map_err(|err| BrokerError::Protocol(format!("serialize request fields: {err}")))?;
     match &mut value {
@@ -3550,10 +3570,7 @@ fn prepare_runner_launch_identity(
                 host_gid_for_zero: spec.host_gid_for_zero,
             }),
     );
-    let runtime_root = config
-        .socket_path
-        .parent()
-        .unwrap_or_else(|| Path::new(DEFAULT_BROKER_RUNTIME_DIR));
+    let runtime_root = broker_runtime_root(config);
     if posture.is_serving_worker() {
         // The served view root is named by the launch argv, so it is bounded
         // by the same trusted declaration the live spawn kernel resolves:
@@ -3580,6 +3597,22 @@ fn prepare_runner_launch_identity(
     // behind (`live_handlers::DeviceWorkerSocketGrant`).
     Ok((uid, gid, user_namespace))
 }
+
+/// The broker runtime root: the directory the private broker socket lives in.
+///
+/// The daemon derives a runner's own socket paths from the configured broker
+/// socket's parent, and every per-Guest and per-endpoint socket tree this
+/// broker opens is bounded by it, so it is the broker's own serve-time trusted
+/// tree. No request names it: a request names a socket NAME, and the broker
+/// joins that onto a directory derived from here.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn broker_runtime_root(config: &ServerConfig) -> &Path {
+    config
+        .socket_path
+        .parent()
+        .unwrap_or_else(|| Path::new(DEFAULT_BROKER_RUNTIME_DIR))
+}
+
 
 /// Real-wire dispatch. Matches the opaque-ID
 /// `d2b_contracts_broker::broker_wire::BrokerRequest` tuple-newtype shape and
@@ -5505,6 +5538,67 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 },
             )?;
             Ok(DispatchResult::no_fds(ack_response("DiskInit")))
+        }
+        // The three exact-endpoint ACL variants (U18, R23). They share one
+        // request struct and one resolution path, so one arm body serves all
+        // three and the verb comes from the variant the request arrived as.
+        //
+        // `write_success_op_record!` is a `macro_rules!` declared inside this
+        // function, so a free helper cannot reach it; the record is written
+        // through the same caller-id writer the refusal path uses, and the
+        // operations declare no typed `OperationFields` shape (their rows'
+        // audit field sets stay empty, the same marker `OwnershipMatrixCheck`
+        // and `PollChildReaped` carry). The socket name and both committed
+        // references ride the audit CONTEXT, which `request_fields_value`
+        // projects without a path.
+        request @ (RealBrokerRequest::EndpointObserve(_)
+        | RealBrokerRequest::EndpointGrantAccess(_)
+        | RealBrokerRequest::EndpointRevokeAccess(_)) => {
+            let resolver = require_resolver(resolver)?;
+            let operation = request.op_name();
+            let access = match &request {
+                RealBrokerRequest::EndpointObserve(req)
+                | RealBrokerRequest::EndpointGrantAccess(req)
+                | RealBrokerRequest::EndpointRevokeAccess(req) => req,
+                _ => unreachable!("the arm binds exactly the three endpoint variants"),
+            };
+            let target = crate::ops::endpoint_access::audit_target(access);
+            let response = match crate::ops::endpoint_access::accept_endpoint_access(
+                &request,
+                broker_runtime_root(config),
+                resolver.as_ref(),
+            ) {
+                Ok(response) => response,
+                Err(error) => {
+                    // A refusal is recorded before it is reported, and the
+                    // closed code is the whole outcome field: no host path,
+                    // no socket name, and no claimed principal reach the log.
+                    audit_log
+                        .write_entry_with_caller_ids(
+                            operation,
+                            caller_uid,
+                            caller_gid,
+                            "refused",
+                            &target,
+                            error.code(),
+                        )
+                        .map_err(|err| BrokerError::Protocol(err.to_string()))?;
+                    return Err(BrokerError::LiveHandler(error.to_string()));
+                }
+            };
+            audit_log
+                .write_entry_with_caller_ids(
+                    operation,
+                    caller_uid,
+                    caller_gid,
+                    "allowed",
+                    &target,
+                    "granted",
+                )
+                .map_err(|err| BrokerError::Protocol(err.to_string()))?;
+            Ok(DispatchResult::no_fds(BrokerResponse::EndpointAccess(
+                response,
+            )))
         }
         // Every remaining variant is a reserved stub. One table arm serves
         // them all, so the arm count follows the committed dispositions rather
@@ -7615,11 +7709,7 @@ fn install_live_operation_envelope(
     };
     let kernels = crate::kernel_ops::kernel_table(crate::kernel_ops::KernelConfig {
         state_dir: config.state_dir.clone(),
-        runtime_root: config
-            .socket_path
-            .parent()
-            .unwrap_or_else(|| Path::new(DEFAULT_BROKER_RUNTIME_DIR))
-            .to_path_buf(),
+        runtime_root: broker_runtime_root(config).to_path_buf(),
         daemon_uid: config.d2bd_uid,
         daemon_gid: config.d2bd_gid,
         bundle_path: config.bundle_path.clone(),
@@ -13159,6 +13249,12 @@ mod tests {
             "ApplyHostGenerationHandoff",
             "DelegateCgroupV2",
             "DiskInit",
+            // U18's exact-endpoint ACL wire: one arm body serves the observe,
+            // grant, and revoke variants over their shared request struct, so
+            // all three are dispatched rather than deferred.
+            "EndpointGrantAccess",
+            "EndpointObserve",
+            "EndpointRevokeAccess",
             "EnvelopeInvoke",
             "ExportBrokerAudit",
             "Hello",
@@ -13258,6 +13354,14 @@ mod tests {
                 // record is the named operation's record - the transport
                 // variant itself carries no typed audit shape of its own.
                 "EnvelopeInvoke",
+                // The exact-endpoint ACL wire (U18): the three variants share
+                // one arm and one record shape - the committed endpoint the
+                // effect acted on, its disposition, and the closed refusal
+                // code - so the closed audit vocabulary does not widen by
+                // three names to describe one shared answer.
+                "EndpointObserve",
+                "EndpointGrantAccess",
+                "EndpointRevokeAccess",
             ];
             for name in crate::catalog::WIRE_VARIANTS {
                 if crate::catalog::stub_target(name).is_some() || UNAUDITED.contains(name) {

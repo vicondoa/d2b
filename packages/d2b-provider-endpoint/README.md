@@ -49,6 +49,10 @@ outside it decodes at validate.
 `*.d2bus.org.*Service` types, so an endpoint is never an export subject. The
 declaration carries `exportable: false`.
 
+`EndpointBinding` is the second exported type and is not exportable either: a
+relationship delivers one exact endpoint to one consumer, so exporting it would
+export the delivery rather than the endpoint.
+
 ## Controllers / services / workers / binaries
 
 The crate ships one driver factory, not a standalone process. The driver
@@ -80,6 +84,39 @@ does not admit is refused rather than committed. `binding_row_name` mints the
 deterministic row name from the KTD3 slot address rather than a declaration
 position, so one relationship keeps one identity across restarts.
 
+The endpoint's own consumer policy is the source of the deliveries: a
+subject the policy names is a consumer this row publishes the endpoint to, and
+the endpoint's own operation allowlist and attachment capacity decide how that
+consumer reaches it. `declared_endpoint_bindings` reads both off the committed
+row, so nothing a consumer supplied reaches any of it.
+
+`EndpointBindingDriverFactory` serves the committed rows. `validate` and
+`reconcile` re-run every check the derivation performs - the row's derived
+name, the committed decision, the owning `Endpoint` row behind its owner fence,
+that row's own policy at its CURRENT generation, and the named consumer - and
+then build the typed wire request in `endpoint_access_request`: the socket is
+the row's own committed slot, the permission is the socket's own read/write
+triple for the admitted right, and the authority binding is the wire's own
+digest over the endpoint, the consumer, the Zone identity, the socket name, and
+the VERB.
+
+The delivery rides the declared `EndpointAccessDispatch` facet, which the
+daemon implements over its authenticated broker socket. The pinned
+`(device, inode)` and the effective rights that come back are the broker's own
+answers, read from the kernel through the descriptor it held while it applied
+or read the grant, and the driver reconciles against them rather than
+recomputing either locally: a relationship short of the admitted right, an
+ancestor that no longer applies a traverse bit, or a parent the consumer may
+enumerate is refused rather than reported delivered, and an inode that changed
+under a standing grant is reported as `EndpointReplaced` rather than as the
+access that used to be there. A standing grant is observed before it is
+re-applied, so a replaced inode and a nullified ACL mask are visible at all.
+
+The delivery slot is derived from the endpoint's own committed identity rather
+than from a caller or a label: it is the token the broker joins onto its own
+endpoint directory, so one endpoint is one socket name and two endpoints in one
+Zone can never collide on one socket.
+
 ## Placement and dependencies
 
 `Endpoint` names no placement anchor, so an endpoint row is reconciled on its
@@ -88,8 +125,11 @@ guest-owned worker Process, or the Guest itself for `guest-control`); the
 driver reaches that row through the declared facets and the manager, never
 through its own placement.
 
-The crate depends on `d2b-contracts-resource`, `d2b-resource-runtime`,
-`d2b-resource-types`, and `d2b-provider-toolkit`. The purpose derivations
+The crate depends on `d2b-contracts-resource`, `d2b-contracts-broker`,
+`d2b-resource-runtime`, `d2b-resource-types`, and `d2b-provider-toolkit`. The
+broker wire dependency is the typed exact-endpoint request and answer only: the
+crate builds the request and reconciles the reply, and no privileged dispatch,
+socket, or path lives in it. The purpose derivations
 read the declaring providers' own vocabularies, so the crate also depends on
 `d2b-provider-guest-cloud-hypervisor` (the child roles that declare the
 guest-runtime control purposes) and `d2b-provider-device-tpm` (the declared

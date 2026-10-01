@@ -148,6 +148,7 @@ const COMMITTED_V3_ORDER: &[&str] = &[
     "Volume",
     "VolumeBinding",
     "Endpoint",
+    "EndpointBinding",
     "Host",
     "User",
     "activation-nixos.d2bus.org.NixosGeneration",

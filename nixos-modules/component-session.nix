@@ -52,6 +52,15 @@ let
   # signed session schema before a Guest can establish a live session.
   schemaFingerprintDefault =
     "sha256:${builtins.hashString "sha256" "d2b-guest-component-session-v3"}";
+  # The deployment-root-relative document name, read from the same
+  # constructor that produced the bytes.
+  bootstrapFileName =
+    (import ./deployment-bootstrap.nix { inherit lib; }).fileName;
+  # The /etc-relative destination of the delivered graph. `environment.etc`
+  # owns the `/etc` prefix, so the key is the deployment root the Guest
+  # reads from without it.
+  deploymentBootstrapEtcKey = lib.removePrefix "/etc/"
+    (cfg.deploymentRoot + "/" + bootstrapFileName);
   runtimePath = value:
     builtins.isString value
     && lib.hasPrefix "/" value
@@ -161,6 +170,28 @@ in
       internal = true;
     };
 
+    # This Guest's own verified deployment graph, as the store object the
+    # Guest image closure delivers. `d2bd guest` reads it from
+    # `GUEST_DEPLOYMENT_ROOT` and re-verifies its self-hash before it serves
+    # anything; the path here is only how the image hands the bytes over.
+    deploymentBootstrap = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      internal = true;
+      description = ''
+        Store object carrying this Guest's own Zone's verified deployment
+        graph. Absent means the image delivers no graph, and the Guest
+        refuses to serve rather than serving under any default authority.
+      '';
+    };
+
+    # The in-image path `d2bd guest` reads the delivered graph from.
+    deploymentRoot = lib.mkOption {
+      type = lib.types.str;
+      default = "/etc/d2b/deployment";
+      internal = true;
+    };
+
     localPrivateKeyPath = lib.mkOption {
       type = lib.types.str;
       default = "/var/lib/d2b/component-session/guest.key";
@@ -189,9 +220,27 @@ in
           paths outside /nix/store.
         '';
       }
+      {
+        assertion = lib.hasPrefix "/etc/" cfg.deploymentRoot;
+        message = ''
+          d2b.componentSession.deploymentRoot must be under /etc: the
+          delivered deployment graph is image closure content, not writable
+          per-boot Guest state.
+        '';
+      }
     ];
 
     environment.systemPackages = [ d2bdPackage ];
+
+    # U31: the Guest's own Zone deployment graph rides in the image closure
+    # and is materialized at the path `d2bd guest` reads it from. This is the
+    # delivery the ComponentSession keys already use: store content the
+    # broker StoreSyncs into the Guest, never a per-boot write into Guest
+    # state. The Guest re-verifies the document's own self-hash before it
+    # reads a row out of it, so being handed it grants nothing.
+    environment.etc = lib.mkIf (cfg.enable && cfg.deploymentBootstrap != null) {
+      "${deploymentBootstrapEtcKey}".source = cfg.deploymentBootstrap;
+    };
 
     systemd.services = {
       d2bd-guest = lib.mkIf cfg.enable {

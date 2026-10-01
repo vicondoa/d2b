@@ -123,22 +123,22 @@
     },
     {
       "file": "packages/d2b-broker/src/runtime.rs",
-      "line": 8764,
+      "line": 8854,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-broker/src/runtime.rs",
-      "line": 8831,
+      "line": 8921,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-broker/src/runtime.rs",
-      "line": 9048,
+      "line": 9138,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-broker/src/runtime.rs",
-      "line": 9125,
+      "line": 9215,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
@@ -873,22 +873,22 @@
     },
     {
       "file": "packages/d2bd/src/composition.rs",
-      "line": 10947,
+      "line": 11013,
       "reason": "awaited through tokio::time::timeout"
     },
     {
       "file": "packages/d2bd/src/composition.rs",
-      "line": 26864,
+      "line": 27186,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/composition.rs",
-      "line": 27261,
+      "line": 27583,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/resource_plane_v3.rs",
-      "line": 6951,
+      "line": 7058,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {

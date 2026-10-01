@@ -10,6 +10,7 @@ import ../helpers/surface.nix {
       "guest-component-session/uses-guest-broker-and-no-public-socket"
       "guest-component-session/binds-enrollment-inputs-at-start"
       "guest-component-session/does-not-install-retired-guest-agent"
+      "guest-component-session/delivers-its-zone-deployment-graph-in-the-image"
     ];
   } {
     path = ../cases/gateway-component-session.nix;

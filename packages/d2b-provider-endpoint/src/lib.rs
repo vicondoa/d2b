@@ -44,18 +44,26 @@ pub use effects_service::{
     device_worker_endpoint_class, device_worker_purpose, guest_control_producer,
     guest_control_purpose,
 };
-pub use facets::{DeviceWorkerEvidenceSource, EndpointEffectFacets, EndpointSocketSource, GuestVmmEvidenceSource};
+pub use facets::{
+    DeviceWorkerEvidenceSource, EndpointAccessDispatch, EndpointAccessDispatchError,
+    UnwiredEndpointAccess,
+    EndpointEffectFacets, EndpointSocketSource, GuestVmmEvidenceSource,
+};
 
 pub use binding::{
-    AdmittedEndpointBinding, BindingReadiness, DeclaredEndpointBinding, DeliveryFenceViolation,
-    DeliveryForm, EndpointAccessObservation, EndpointBindingAdmission, EndpointBindingError,
-    EndpointBindingRegistry, EndpointBindingRow, EndpointConsumerTarget, EndpointDelivery,
-    EndpointProvenance, EndpointSocketIdentity, EndpointSourceKey, EndpointTeardown,
-    ParentInputOutcome, binding_row_name, canonical_binding_row, canonical_binding_rows,
-    declared_delivery_form, endpoint_binding_support, endpoint_binding_support_ceiling,
-    endpoint_grants_observe, ensure_realizable, fence_delivery_environment,
-    fence_delivery_environment_all, fence_delivery_payload, fence_delivery_payload_all,
-    required_right_bits,
+    ENDPOINT_BINDING_TYPE_NAME, AdmittedEndpointBinding, BindingReadiness,
+    DeclaredEndpointBinding, DeliveryFenceViolation, DeliveryForm, EndpointAccessObservation,
+    EndpointBindingAdmission, EndpointBindingDriver, EndpointBindingDriverArgs,
+    EndpointBindingDriverError, EndpointBindingDriverFactory, EndpointBindingDriverStatus,
+    EndpointBindingError, EndpointBindingRegistry, EndpointBindingRow, EndpointConsumerTarget,
+    EndpointDelivery, EndpointDeliveryRefusal, EndpointProvenance, EndpointSocketIdentity,
+    EndpointSourceKey, EndpointTeardown, ParentInputOutcome, binding_row_name,
+    canonical_binding_row, canonical_binding_rows, declared_attachment, declared_delivery_form,
+    declared_endpoint_bindings, endpoint_access_request, endpoint_binding_descriptor,
+    endpoint_binding_spec_decoder, endpoint_binding_support,
+    endpoint_binding_support_ceiling, endpoint_delivery_slot, endpoint_grants_observe,
+    ensure_realizable, fence_delivery_environment, fence_delivery_environment_all,
+    fence_delivery_payload, fence_delivery_payload_all, required_right_bits,
 };
 
 /// The Endpoint ResourceType spec and status shapes owned by this crate.

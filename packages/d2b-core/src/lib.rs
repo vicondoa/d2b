@@ -7,6 +7,9 @@ pub mod bundle_resolver;
 pub mod closures;
 pub mod console_ring;
 pub mod host;
+/// The one verified deployment bootstrap document (U31, KTD7).
+pub mod deployment_bootstrap;
+
 pub mod host_generation;
 pub mod host_w3;
 pub mod kernel_seat;

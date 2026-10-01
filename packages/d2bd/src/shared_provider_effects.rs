@@ -3586,6 +3586,7 @@ mod tests {
             dir,
             crate::resource_plane_v3::ConstructionInputs {
                 deployment_graph: None,
+            server_state: None,
                 zone: zone.clone(),
                 zone_token: d2b_contracts_resource::v3::execution_policy::BoundedToken::parse(
                     zone.as_str().to_owned(),
