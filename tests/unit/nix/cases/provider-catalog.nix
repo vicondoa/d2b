@@ -730,7 +730,7 @@ in
     ];
   };
 
-  "provider-catalog/closed-27-row-matrix" = {
+  "provider-catalog/closed-26-row-matrix" = {
     expr = {
       rowCount = builtins.length shape.providerMatrix;
       idCount = builtins.length shape.providerIds;
@@ -745,8 +745,8 @@ in
       layout = shape.artifactLayout;
     };
     expected = {
-      rowCount = 27;
-      idCount = 27;
+      rowCount = 26;
+      idCount = 26;
       idsMatchRows = true;
       rowsUnique = true;
       bootstrapIds = [ "system-core" "system-minijail" ];
@@ -843,7 +843,7 @@ in
   };
 
   "provider-catalog/extra-provider-id-fails-closed" = {
-    expr = lib.hasInfix "outside the closed 27-row"
+    expr = lib.hasInfix "outside the closed 26-row"
       (matrixFailure {
         extra-provider = {
           artifactId = "not-in-the-provider-matrix";
@@ -879,7 +879,7 @@ in
           (failure:
             !failure.assertion
             && lib.hasInfix
-              "outside the closed 27-row"
+              "outside the closed 26-row"
               failure.message)
           catalogCfg.assertions;
       in {

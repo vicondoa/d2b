@@ -175,9 +175,9 @@ let
   controlDiffers = catalogA != catalogDifferent;
   nonEmpty = catalogA != "" && lib.hasInfix "provider-wayland" catalogA;
   matrixClosed =
-    builtins.length providerMatrix == 27
+    builtins.length providerMatrix == 26
     && providerMatrixIds == shape.providerIds
-    && builtins.length (lib.unique providerMatrixIds) == 27
+    && builtins.length (lib.unique providerMatrixIds) == 26
     && shape.fixedBootstrapProviderIds == [ "system-core" "system-minijail" ];
 
   failures =

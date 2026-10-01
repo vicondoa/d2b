@@ -399,22 +399,22 @@
       bootstrap = false;
     }
     {
-      provider = "transport-vsock";
-      package = "d2b-provider-transport-vsock";
-      source = "packages/d2b-provider-transport-vsock/src/service.rs";
-      test = "packages/d2b-provider-transport-vsock/tests/service.rs";
-      dossier = "docs/specs/providers/ADR-046-provider-transport-vsock.md";
-      bazelTarget = "//packages/d2b-provider-transport-vsock:all-tests";
-      unit = "U11";
-      bootstrap = false;
-    }
-    {
       provider = "transport-azure-relay";
       package = "d2b-provider-transport-azure-relay";
       source = "packages/d2b-provider-transport-azure-relay/src/relay_transport.rs";
       test = "packages/d2b-provider-transport-azure-relay/tests/fake_relay_transport.rs";
       dossier = "docs/specs/providers/ADR-046-provider-transport-azure-relay.md";
       bazelTarget = "//packages/d2b-provider-transport-azure-relay:all-tests";
+      unit = "U11";
+      bootstrap = false;
+    }
+    {
+      provider = "transport-vsock";
+      package = "d2b-provider-transport-vsock";
+      source = "packages/d2b-provider-transport-vsock/src/service.rs";
+      test = "packages/d2b-provider-transport-vsock/tests/service.rs";
+      dossier = "docs/specs/providers/ADR-046-provider-transport-vsock.md";
+      bazelTarget = "//packages/d2b-provider-transport-vsock:all-tests";
       unit = "U11";
       bootstrap = false;
     }
