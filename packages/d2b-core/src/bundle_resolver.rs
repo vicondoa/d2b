@@ -82,8 +82,9 @@ use crate::site::SiteJson;
 use crate::storage::StorageJson;
 use d2b_contracts::launcher::RealmWorkloadsLauncherV2Json;
 use d2b_contracts_resource::v3::{
-    IfName, MountAccess, MountSpec, NetworkIfRole, NetworkProvenance, ResourceRef, ResourceUid,
-    ZoneId, derive_network_ifname, derive_network_route_name,
+    PROCESS_RESOURCE_TYPE as PROCESS_RESOURCE_TYPE_NAME, IfName, MountAccess, MountSpec,
+    NetworkIfRole, NetworkProvenance, ResourceRef, ResourceUid, ZoneId,
+    derive_network_ifname, derive_network_route_name,
     network::{Ipv4Cidr, NetworkSpec},
     resource_schema::{CanonicalJsonValue, framed_canonical_digest},
     storage::ZoneStoreStorageRow,
@@ -5201,6 +5202,40 @@ const TPM_STATE_OWNER_SUFFIX: &str = "-swtpm";
 /// (`d2b-<zone>-<device>-swtpm-flush`).
 const TPM_FLUSH_OWNER_SUFFIX: &str = "-swtpm-flush";
 
+/// The declared Device GPU worker row prefix (`Process/gpu-<device>`) and the
+/// video decode sidecar's (`Process/video-<device>`), both declared by the
+/// Device GPU Provider's Nix projection
+/// (`packages/d2b-provider-device-gpu/nix/default.nix`). Neither is in the
+/// device-tpm vocabulary module, so they are spelled here for the same reason:
+/// a Provider crate cannot be a dependency of this one.
+const GPU_WORKER_ROW_PREFIX: &str = "gpu-";
+const VIDEO_WORKER_ROW_PREFIX: &str = "video-";
+/// The principal-account suffixes those two rows carry
+/// (`d2b-<zone>-<device>-gpu` and its `-video` sibling).
+const GPU_WORKER_OWNER_SUFFIX: &str = "-gpu";
+const VIDEO_WORKER_OWNER_SUFFIX: &str = "-video";
+
+/// The principal-account suffix the binding-owned virtiofsd serving worker
+/// carries (`d2b-<zone>-virtiofsd`).
+const SERVING_WORKER_OWNER_SUFFIX: &str = "-virtiofsd";
+/// The static Provider controller template prefix
+/// (`static_controller_template_name`, `packages/d2b-resource-compiler`):
+/// every controller row the compiler projects declares a template under it,
+/// either spelled out (`controller-<artifact>-<component>`) or hashed.
+const CONTROLLER_TEMPLATE_PREFIX: &str = "controller-";
+/// The segment a Provider controller's account carries, between the Zone and
+/// the owning Provider's name.
+const CONTROLLER_ACCOUNT_SEGMENT: &str = "controller";
+/// The ResourceType prefix every Provider-owned template binding carries as
+/// its owner reference.
+const PROVIDER_OWNER_PREFIX: &str = "Provider/";
+/// The longest account name the host account database carries, mirroring the
+/// daemon's own principal-name grammar (`valid_principal_name`,
+/// `packages/d2bd/src/principal_allocation.rs`). A Zone or Provider name long
+/// enough to push a composed name past it has no account to resolve through,
+/// so the row is refused rather than truncated into a different identity.
+const MAX_ACCOUNT_NAME_BYTES: usize = 63;
+
 /// The closed reason one template-bound row's principal cannot be resolved to
 /// a real host account.
 ///
@@ -5238,18 +5273,48 @@ impl fmt::Display for TemplatePrincipalError {
 /// The host account one template-bound row runs as, or the refusal for a row
 /// class the host layer provisions no account for.
 ///
-/// The Device TPM worker rows are the rows the host layer provisions:
-/// `nixos-modules/lib.nix` (`deviceTpmPrincipals`) derives
-/// `d2b-<zone>-<device>-swtpm` and its `-flush` sibling from the same trusted
-/// rows the bundle commits and `host-users.nix` materializes them, and the TPM
-/// Provider's state Volume grants that very account by name
-/// (`packages/d2b-provider-device-tpm/src/resources.rs`). The launch identity,
-/// the ACL entry and the account are therefore one host identity.
+/// The account is composed from facts both sides of the boundary already
+/// hold - the declaring Zone, the binding's own owner reference, its declared
+/// row name, and its template - never from a hash of the binding triple. The
+/// resource compiler emits those facts from the same trusted Zone rows the
+/// host layer reads, so the two sides are two evaluators of one rule over one
+/// input rather than two naming schemes that have to be kept in agreement by
+/// hand:
 ///
-/// Every other template row has no provisioned account. That is a
+/// | row class | owner | account |
+/// |---|---|---|
+/// | Device TPM worker | `Provider/device-tpm`, `Process/swtpm-<device>` | `d2b-<zone>-<device>-swtpm` |
+/// | its one-shot flush | `Provider/device-tpm`, `EphemeralProcess/swtpm-flush-<device>` | `d2b-<zone>-<device>-swtpm-flush` |
+/// | Device GPU worker | `Provider/device-gpu`, `Process/gpu-<device>` | `d2b-<zone>-<device>-gpu` |
+/// | video decode sidecar | `Provider/device-gpu`, `Process/video-<device>` | `d2b-<zone>-<device>-video` |
+/// | Provider controllers | `Provider/<provider>`, a `controller-*` template | `d2b-<zone>-controller-<provider>` |
+/// | serving worker | `Provider/volume-virtiofs`, `virtiofsd-worker` | `d2b-<zone>-virtiofsd` |
+///
+/// The granularity each row class carries is the privilege boundary it holds,
+/// not convenience. A Device worker owns one physical function, so each Device
+/// and each of its two families is its own account - the GPU Provider's
+/// authority admission refuses a video principal equal to the GPU principal
+/// (`PrincipalNotSeparated`), and a shared account would hand one Device's
+/// worker another Device's identity. A Provider's controllers all come from one
+/// signed artifact published under one key, so the Provider, not the hashed
+/// per-component row name, is the trust boundary that separates them, and the
+/// Zone keeps one Zone's controllers off another's. The serving worker is a
+/// single row per Zone whose launch ticket has two path trees opened to its
+/// principal, so it does not share its Provider's controller account either.
+///
+/// A row outside that vocabulary has no provisioned account. That is a
 /// provisioning gap, and it refuses here rather than becoming a number of our
 /// own: a number invented for an account the host does not hold answers every
-/// ACL request for a principal no process holds.
+/// ACL request for a principal no process holds. Naming one more family here
+/// would also be a shared-crate family-knowledge violation (the credential
+/// agent a `Credential` controller adopts is the one that rule refuses), so a
+/// family this crate may not name is provisioned by the family crate and
+/// refused here until it is.
+///
+/// `nixos-modules/lib.nix` (`templateWorkerAccounts`) derives the same names
+/// from the same Zone rows and `host-users.nix` materializes them, so a
+/// composed name the host cannot carry is a refusal on both sides rather than
+/// a truncated identity.
 fn template_account(
     zone: &str,
     binding: &ProcessTemplateBinding,
@@ -5258,30 +5323,72 @@ fn template_account(
         row: binding.process_ref().to_canonical_string(),
     };
     let row = binding.process_ref();
-    let (device, suffix) = match (
-        binding.owner_ref().to_canonical_string().as_str(),
-        row.resource_type().as_str(),
-    ) {
-        (DEVICE_TPM_PROVIDER_REF, "Process") => (
-            row.name()
-                .as_str()
-                .strip_prefix(TPM_WORKER_ROW_PREFIX)
-                .ok_or_else(unprovisioned)?,
+    let owner = binding.owner_ref().to_canonical_string();
+    let template = binding.template().as_str();
+    let row_name = row.name().as_str();
+    let row_type = row.resource_type().as_str();
+    let account = match (owner.as_str(), row_type) {
+        (DEVICE_TPM_PROVIDER_REF, "Process") => device_worker_account(
+            zone,
+            row_name,
+            TPM_WORKER_ROW_PREFIX,
             TPM_STATE_OWNER_SUFFIX,
         ),
-        (DEVICE_TPM_PROVIDER_REF, "EphemeralProcess") => (
-            row.name()
-                .as_str()
-                .strip_prefix(TPM_FLUSH_ROW_PREFIX)
-                .ok_or_else(unprovisioned)?,
+        (DEVICE_TPM_PROVIDER_REF, "EphemeralProcess") => device_worker_account(
+            zone,
+            row_name,
+            TPM_FLUSH_ROW_PREFIX,
             TPM_FLUSH_OWNER_SUFFIX,
         ),
-        _ => return Err(unprovisioned()),
+        (DEVICE_GPU_PROVIDER_REF, "Process") => device_worker_account(
+            zone,
+            row_name,
+            GPU_WORKER_ROW_PREFIX,
+            GPU_WORKER_OWNER_SUFFIX,
+        )
+        .or_else(|| {
+            device_worker_account(
+                zone,
+                row_name,
+                VIDEO_WORKER_ROW_PREFIX,
+                VIDEO_WORKER_OWNER_SUFFIX,
+            )
+        }),
+        (SERVING_WORKER_PROVIDER_REF, "Process") if template == SERVING_WORKER_TEMPLATE => {
+            Some(format!("d2b-{zone}{SERVING_WORKER_OWNER_SUFFIX}"))
+        }
+        _ if row_type == PROCESS_RESOURCE_TYPE_NAME
+            && template.starts_with(CONTROLLER_TEMPLATE_PREFIX) =>
+        {
+            owner
+                .strip_prefix(PROVIDER_OWNER_PREFIX)
+                .filter(|provider| !provider.is_empty())
+                .map(|provider| {
+                    format!("d2b-{zone}-{CONTROLLER_ACCOUNT_SEGMENT}-{provider}")
+                })
+        }
+        _ => None,
     };
-    if device.is_empty() {
+    let account = account.ok_or_else(unprovisioned)?;
+    if account.is_empty() || account.len() > MAX_ACCOUNT_NAME_BYTES {
         return Err(unprovisioned());
     }
-    Ok(format!("d2b-{zone}-{device}{suffix}"))
+    Ok(account)
+}
+
+/// `d2b-<zone>-<device><suffix>`, or `None` when the declared row name is not
+/// the family's own vocabulary.
+fn device_worker_account(
+    zone: &str,
+    row_name: &str,
+    row_prefix: &str,
+    suffix: &str,
+) -> Option<String> {
+    let device = row_name.strip_prefix(row_prefix)?;
+    if device.is_empty() {
+        return None;
+    }
+    Some(format!("d2b-{zone}-{device}{suffix}"))
 }
 
 /// Why the host account database could not answer for one account.
@@ -7048,10 +7155,12 @@ mod tests {
         .expect("the committed private template binding");
         assert_eq!(
             mint_template_intent("dev", &binding, TemplateIntentShape::of(&binding)).err(),
-            Some(TemplatePrincipalError::Unprovisioned {
-                row: "Process/controller-test".to_owned()
+            Some(TemplatePrincipalError::AccountAbsent {
+                account: "d2b-dev-controller-runtime-cloud-hypervisor".to_owned(),
+                row: "Process/controller-test".to_owned(),
             }),
-            "a controller row the host provisions no account for is refused by name"
+            "a controller row the host has not provisioned is refused by the \
+             account it runs as, so a reader learns which account to create"
         );
         assert_eq!(
             resolver.consumer_principal("dev", &process_ref),
@@ -7237,17 +7346,17 @@ mod tests {
         };
 
         // (owner ref, template, the serving-worker verdict, the refusal slug
-        // the mint answers with where the host provisions no account for the
-        // row). The Device TPM pair composes the family's account name, so it
-        // reaches the account database and is refused for the account being
-        // absent; every other pair is a row class the host provisions
-        // nothing for.
+        // the mint answers with on a host that has provisioned none of these
+        // accounts). A pair that composes an account name reaches the account
+        // database and is refused for the account being absent; a pair outside
+        // the provisioned row classes has no account to look for at all and is
+        // refused as unprovisioned.
         let cases = [
             (
                 SERVING_WORKER_PROVIDER_REF,
                 SERVING_WORKER_TEMPLATE,
                 true,
-                "template-principal-unprovisioned",
+                "template-principal-account-absent",
             ),
             // The serving provider without the serving template.
             (
@@ -7263,7 +7372,16 @@ mod tests {
                 false,
                 "template-principal-unprovisioned",
             ),
-            // An ordinary signed Provider controller template.
+            // A signed Provider controller template: the owning Provider names
+            // the account, so this reaches the account database.
+            (
+                "Provider/runtime-cloud-hypervisor",
+                "controller-1e72453ef8a8321a",
+                false,
+                "template-principal-account-absent",
+            ),
+            // The same Provider under a template outside the controller
+            // vocabulary: no provisioned account names it.
             (
                 "Provider/runtime-cloud-hypervisor",
                 "runtime-cloud-hypervisor-controller",
@@ -7401,6 +7519,122 @@ mod tests {
                  provisioned account, so it is refused rather than guessed at"
             );
         }
+    }
+
+    /// Every template row class the host provisions composes exactly one
+    /// account name, and the name is a function of facts both sides of the
+    /// boundary already hold.
+    ///
+    /// These are the same strings `nixos-modules/lib.nix`
+    /// (`templateWorkerPrincipals`) derives from the same Zone rows, so a host
+    /// that materializes them resolves these rows and a host that does not is
+    /// refused by the account it would need. The four Device families are per
+    /// Device and per family; the Provider controller rows are per owning
+    /// Provider, because one Provider is one signed artifact and the hashed
+    /// per-component row name is not a boundary; the two families with a
+    /// single row per Zone carry their own account rather than their Provider's
+    /// controller account.
+    #[test]
+    fn every_provisioned_row_class_composes_its_host_account_name() {
+        let zone = "work";
+        for (row, owner, template, account) in [
+            (
+                "Process/swtpm-tpm0",
+                DEVICE_TPM_PROVIDER_REF,
+                "swtpm-socket",
+                "d2b-work-tpm0-swtpm",
+            ),
+            (
+                "EphemeralProcess/swtpm-flush-tpm0",
+                DEVICE_TPM_PROVIDER_REF,
+                "swtpm-init-flush",
+                "d2b-work-tpm0-swtpm-flush",
+            ),
+            (
+                "Process/gpu-gpu0",
+                DEVICE_GPU_PROVIDER_REF,
+                "gpu-worker",
+                "d2b-work-gpu0-gpu",
+            ),
+            (
+                "Process/gpu-gpu1",
+                DEVICE_GPU_PROVIDER_REF,
+                "gpu-render-node",
+                "d2b-work-gpu1-gpu",
+            ),
+            (
+                "Process/video-gpu0",
+                DEVICE_GPU_PROVIDER_REF,
+                "video-worker",
+                "d2b-work-gpu0-video",
+            ),
+            (
+                "Process/controller-1e72453ef8a8321aa56602fcf7beb107",
+                "Provider/runtime-cloud-hypervisor",
+                "controller-runtime-cloud-hypervisor-cloud-hypervisor-controller",
+                "d2b-work-controller-runtime-cloud-hypervisor",
+            ),
+            (
+                "Process/controller-0f5c9d0a1b2c3d4e",
+                "Provider/volume-local",
+                "controller-volume-acceptance-provider-volume-controller",
+                "d2b-work-controller-volume-local",
+            ),
+            (
+                "Process/virtiofsd-worker-template-9c568763b46745cfe2fdab47",
+                SERVING_WORKER_PROVIDER_REF,
+                SERVING_WORKER_TEMPLATE,
+                "d2b-work-virtiofsd",
+            ),
+        ] {
+            let binding = declared_binding(row, owner, template);
+            assert_eq!(
+                template_account(zone, &binding),
+                Ok(account.to_owned()),
+                "{row}: the account the host provisions for this row class"
+            );
+        }
+
+        // The GPU authority admission refuses a video principal equal to the
+        // GPU principal (`PrincipalNotSeparated`), so one Device's two
+        // families stay two accounts: a shared one would make that refusal
+        // unreachable.
+        let gpu = declared_binding("Process/gpu-gpu0", DEVICE_GPU_PROVIDER_REF, "gpu-worker");
+        let video =
+            declared_binding("Process/video-gpu0", DEVICE_GPU_PROVIDER_REF, "video-worker");
+        assert_ne!(
+            template_account(zone, &gpu),
+            template_account(zone, &video),
+            "the GPU worker and its video sidecar are separated accounts"
+        );
+
+        for row in ["Process/gpu-", "Process/video-"] {
+            let binding = declared_binding(row, DEVICE_GPU_PROVIDER_REF, "gpu-worker");
+            assert_eq!(
+                template_account(zone, &binding),
+                Err(TemplatePrincipalError::Unprovisioned {
+                    row: row.to_owned()
+                }),
+                "{row}: an empty Device is not the family's vocabulary, so it has \
+                 no provisioned account"
+            );
+        }
+
+        // A composed name the host account database could not carry has no
+        // account to resolve through. It refuses instead of being truncated
+        // into a different identity than the one the host would hold.
+        let long_zone = "workzone-with-a-deliberately-long-name";
+        let row = "Process/controller-0f5c9d0a1b2c3d4e";
+        let binding = declared_binding(row, "Provider/provider-with-a-long-name", CONTROLLER_TEMPLATE_PREFIX);
+        let account = format!("d2b-{long_zone}-controller-provider-with-a-long-name");
+        assert!(account.len() > MAX_ACCOUNT_NAME_BYTES);
+        assert_eq!(
+            template_account(long_zone, &binding),
+            Err(TemplatePrincipalError::Unprovisioned {
+                row: row.to_owned()
+            }),
+            "a name past the account-database bound has no provisioned account"
+        );
     }
 
     /// A template principal that does not resolve to a real host account is

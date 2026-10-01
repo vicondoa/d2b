@@ -606,9 +606,10 @@ fn host_users_module(
          # the allocation, so an account cannot pin a colliding or host-specific id\n\
          # and a re-seed cannot renumber a live principal.\n\
          #\n\
-         # The per-Device TPM accounts are not in the allocation: their names are\n\
-         # derived per Zone from the trusted bundle rows (`d2bLib.deviceTpmPrincipals`),\n\
-         # so they stay config-derived here.\n\
+         # The template-bound row accounts are not in the allocation: their\n\
+         # names are derived per Zone from the same trusted Zone rows\n\
+         # `d2b-core`'s `template_account` composes them from\n\
+         # (`d2bLib.templateWorkerAccounts`), so they stay config-derived here.\n\
          {{ config, lib, ... }}:\n\n\
          let\n\
          \x20 cfg = config.d2b;\n\
@@ -653,27 +654,44 @@ fn host_users_module(
          \x20 # The host lifecycle users the site declares: the accounts exist outside\n\
          \x20 # this module, membership of the `d2b` admission group is what it grants.\n\
          \x20 lifecycleUsers = lib.unique (cfg.site.adminUsers ++ cfg.site.launcherUsers);\n\
-         \x20 tpmPrincipals = d2bLib.deviceTpmPrincipals cfg;\n\
-         \x20 tpmAccountRows = map\n\
-         \x20   (row: {\n\
-         \x20     name = row.account;\n\
-         \x20     uid = row.ownerUid;\n\
-         \x20     gid = row.ownerUid;\n\
-         \x20     description = \"d2b Device TPM state owner\";\n\
-         \x20   })\n\
-         \x20   tpmPrincipals;\n\
-         \x20 tpmFlushRows = map\n\
-         \x20   (row: {\n\
-         \x20     name = row.flushAccount;\n\
-         \x20     uid = row.flushUid;\n\
-         \x20     gid = row.flushUid;\n\
-         \x20     description = \"d2b Device TPM pre-start flush principal\";\n\
-         \x20   })\n\
-         \x20   tpmPrincipals;\n\
-         \x20 rows = accountRows ++ tpmAccountRows ++ tpmFlushRows;\n\n\
+         \x20 # The accounts every template-bound row class runs as, derived per Zone\n\
+         \x20 # from the same trusted Zone rows `d2b-core`'s `template_account`\n\
+         \x20 # composes its names from.\n\
+         \x20 templateAccounts = d2bLib.templateWorkerAccounts cfg;\n\
+         \x20 rows = accountRows ++ templateAccounts;\n\n\
          \x20 rowOf = name: lib.findFirst (row: row.name == name) null rows;\n\
+         \x20 # The allocated identities and the derived per-Zone identities are two\n\
+         \x20 # independent derivations, so a collision between them is checked here\n\
+         \x20 # rather than assumed away.\n\
+         \x20 distinct = f:\n\
+         \x20   builtins.length (builtins.attrNames (builtins.listToAttrs\n\
+         \x20     (map (row: { name = f row; value = true; }) rows)));\n\
          in\n\
          {\n\
+         \x20 assertions = [\n\
+         \x20   {\n\
+         \x20     assertion = distinct (row: row.name) == builtins.length rows;\n\
+         \x20     message = \"d2b host accounts: two provisioned rows compose the same\n\
+         \x20       account name. Rename the Zone, Device or Provider they are derived\n\
+         \x20       from; two row classes cannot share one identity.\";\n\
+         \x20   }\n\
+         \x20   {\n\
+         \x20     assertion = distinct (row: toString row.uid) == builtins.length rows;\n\
+         \x20     message = \"d2b host accounts: two provisioned accounts collide on a uid.\n\
+         \x20       The allocated identities and the derived per-Zone identities are two\n\
+         \x20       independent derivations, so rename the Zone, Device or Provider they\n\
+         \x20       are derived from.\";\n\
+         \x20   }\n\
+         \x20   {\n\
+         \x20     assertion = builtins.all\n\
+         \x20       (row: builtins.stringLength row.name <= 63)\n\
+         \x20       rows;\n\
+         \x20     message = \"d2b host accounts: a provisioned account name is longer than\n\
+         \x20       the 63 bytes the host account database carries. Shorten the Zone,\n\
+         \x20       Device or Provider it is derived from; a name the host cannot hold is\n\
+         \x20       refused by the resolver rather than truncated into another identity.\";\n\
+         \x20   }\n\
+         \x20 ];\n\n\
          \x20 users.groups = {\n\
          \x20   # Membership grants admission to the root daemon public socket. Object\n\
          \x20   # authorization remains the daemon's SO_PEERCRED and Zone policy check.\n\

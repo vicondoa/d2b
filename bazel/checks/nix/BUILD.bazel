@@ -4,7 +4,7 @@ package(default_visibility = ["//visibility:public"])
 
 _SURFACES = {
     "daemon": {
-        "cases": [],
+        "cases": ["host-worker-accounts"],
         "modules": [
             "nixos-modules/host-broker.nix",
             "nixos-modules/host-daemon.nix",
