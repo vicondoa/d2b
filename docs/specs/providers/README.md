@@ -96,7 +96,6 @@ Providers carry ZoneLink sessions and own no Zone ResourceType.
 | `Provider/system-minijail` | `Process`, `EphemeralProcess` | fixed bootstrap Process controller (not a Process) | [system-minijail](ADR-046-provider-system-minijail.md) |
 | `Provider/system-systemd` | `Process`, `EphemeralProcess` | systemd-backed Process/scope controller | [system-systemd](ADR-046-provider-system-systemd.md) |
 | `Provider/transport-azure-relay` | transport-only (none) | ZoneLink Azure Relay transport | [transport-azure-relay](ADR-046-provider-transport-azure-relay.md) |
-| `Provider/transport-unix` | transport-only (none) | ZoneLink Unix transport | [transport-unix](ADR-046-provider-transport-unix.md) |
 | `Provider/transport-vsock` | transport-only (none) | ZoneLink/delegation vsock controller | [transport-vsock](ADR-046-provider-transport-vsock.md) |
 | `Provider/volume-local` | `Volume` | controller (Host source-side storage, ACL/quota/marker) | [volume-local](ADR-046-provider-volume-local.md) |
 | `Provider/volume-virtiofs` | `VolumeBinding` (does not own `Volume`; fenced serving status projection, bindings minted by the Volume side) | controller + virtiofsd Process (Guest-side mount) | [volume-virtiofs](ADR-046-provider-volume-virtiofs.md) |

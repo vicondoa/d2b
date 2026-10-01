@@ -213,8 +213,7 @@
       "seccompClasses": [],
       "deviceClasses": [],
       "capabilityGrants": [],
-      "providerRef": "Provider/transport-vsock",
-      "description": "vsock relay sidecar."
+      "description": "vsock relay sidecar. The relay is a guest socat process the process Provider serves; no transport Provider owns the role."
     },
     {
       "name": "OtelHostBridge",

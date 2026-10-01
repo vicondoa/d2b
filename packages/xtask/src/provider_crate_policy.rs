@@ -272,12 +272,12 @@ pub(crate) const PROVIDER_MATRIX: &[ProviderMatrixRow] = &[
         bootstrap: false,
     },
     ProviderMatrixRow {
-        identity: "transport-unix",
-        crate_name: "d2b-provider-transport-unix",
-        source_path: "packages/d2b-provider-transport-unix/src/portal.rs",
-        test_path: "packages/d2b-provider-transport-unix/tests/transport.rs",
-        dossier_path: "docs/specs/providers/ADR-046-provider-transport-unix.md",
-        bazel_target: "//packages/d2b-provider-transport-unix:all-tests",
+        identity: "transport-azure-relay",
+        crate_name: "d2b-provider-transport-azure-relay",
+        source_path: "packages/d2b-provider-transport-azure-relay/src/relay_transport.rs",
+        test_path: "packages/d2b-provider-transport-azure-relay/tests/fake_relay_transport.rs",
+        dossier_path: "docs/specs/providers/ADR-046-provider-transport-azure-relay.md",
+        bazel_target: "//packages/d2b-provider-transport-azure-relay:all-tests",
         unit: "U11",
         bootstrap: false,
     },
@@ -288,16 +288,6 @@ pub(crate) const PROVIDER_MATRIX: &[ProviderMatrixRow] = &[
         test_path: "packages/d2b-provider-transport-vsock/tests/service.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-transport-vsock.md",
         bazel_target: "//packages/d2b-provider-transport-vsock:all-tests",
-        unit: "U11",
-        bootstrap: false,
-    },
-    ProviderMatrixRow {
-        identity: "transport-azure-relay",
-        crate_name: "d2b-provider-transport-azure-relay",
-        source_path: "packages/d2b-provider-transport-azure-relay/src/relay_transport.rs",
-        test_path: "packages/d2b-provider-transport-azure-relay/tests/fake_relay_transport.rs",
-        dossier_path: "docs/specs/providers/ADR-046-provider-transport-azure-relay.md",
-        bazel_target: "//packages/d2b-provider-transport-azure-relay:all-tests",
         unit: "U11",
         bootstrap: false,
     },
@@ -344,7 +334,6 @@ const README_ONLY_INTEGRATION_RATCHET: &[&str] = &[
     "d2b-provider-guest-cloud-hypervisor",
     "d2b-provider-system-core",
     "d2b-provider-transport-azure-relay",
-    "d2b-provider-transport-unix",
     "d2b-provider-volume-virtiofs",
 ];
 
@@ -940,10 +929,6 @@ const FAMILY_KNOWLEDGE_TOKENS: &[FamilyToken] = &[
         family: "credential-managed-identity",
     },
     FamilyToken {
-        token: "transport_unix",
-        family: "transport-unix",
-    },
-    FamilyToken {
         token: "transport_vsock",
         family: "transport-vsock",
     },
@@ -1537,18 +1522,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         token: "system_systemd",
         family: "system-systemd",
         retires_with: "U12 systemd step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/exec_reconcile.rs",
-        token: "transport_unix",
-        family: "transport-unix",
-        retires_with: "U10-U12 family rollout (transport-unix)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/store_sync.rs",
-        token: "transport_unix",
-        family: "transport-unix",
-        retires_with: "U10-U12 family rollout (transport-unix)",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/live_handlers.rs",
@@ -5590,12 +5563,6 @@ const SHARED_STRUCTURAL_KNOWLEDGE_RATCHET: &[SharedStructuralKnowledgeExemption]
     SharedStructuralKnowledgeExemption {
         module: "nixos-modules/assertions.nix",
         class: "provider-id",
-        symbol: "Provider/transport-unix",
-        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
-    },
-    SharedStructuralKnowledgeExemption {
-        module: "nixos-modules/assertions.nix",
-        class: "provider-id",
         symbol: "Provider/transport-vsock",
         retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
     },
@@ -5657,12 +5624,6 @@ const SHARED_STRUCTURAL_KNOWLEDGE_RATCHET: &[SharedStructuralKnowledgeExemption]
         module: "nixos-modules/provider-runtime-contracts.nix",
         class: "provider-id",
         symbol: "Provider/transport-azure-relay",
-        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
-    },
-    SharedStructuralKnowledgeExemption {
-        module: "nixos-modules/provider-runtime-contracts.nix",
-        class: "provider-id",
-        symbol: "Provider/transport-unix",
         retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
     },
     SharedStructuralKnowledgeExemption {
@@ -8888,8 +8849,6 @@ const COMMITTED_SCOPE: &[CommittedScopeEntry] = &[
         reason: "the plan's provider crate class; a family or per-type provider crate" },
     CommittedScopeEntry { crate_name: "d2b-provider-transport-azure-relay", class: CommittedScopeClass::Provider,
         reason: "the plan's provider crate class; a family or per-type provider crate" },
-    CommittedScopeEntry { crate_name: "d2b-provider-transport-unix", class: CommittedScopeClass::Provider,
-        reason: "the plan's provider crate class; a family or per-type provider crate" },
     CommittedScopeEntry { crate_name: "d2b-provider-transport-vsock", class: CommittedScopeClass::Provider,
         reason: "the plan's provider crate class; a family or per-type provider crate" },
     CommittedScopeEntry { crate_name: "d2b-process-conformance", class: CommittedScopeClass::Shared,
@@ -9600,7 +9559,7 @@ mod tests {
 
     #[test]
     fn the_provider_matrix_is_closed_and_has_two_bootstrap_rows() {
-        assert_eq!(PROVIDER_MATRIX.len(), 27);
+        assert_eq!(PROVIDER_MATRIX.len(), 26);
 
         let identities: BTreeSet<_> = PROVIDER_MATRIX.iter().map(|row| row.identity).collect();
         let crates: BTreeSet<_> = PROVIDER_MATRIX.iter().map(|row| row.crate_name).collect();
@@ -9855,7 +9814,6 @@ mod tests {
             "d2b-provider-guest-cloud-hypervisor",
             "d2b-provider-system-core",
             "d2b-provider-transport-azure-relay",
-            "d2b-provider-transport-unix",
             "d2b-provider-volume-virtiofs",
         ];
         assert_eq!(
@@ -10482,7 +10440,6 @@ mod tests {
             "systemd",
             "tpm",
             "transport_azure_relay",
-            "transport_unix",
             "transport_vsock",
             "usbip",
             "virtiofs",

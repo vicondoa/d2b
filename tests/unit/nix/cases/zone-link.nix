@@ -29,8 +29,8 @@ let
         package = providerPackage "runtime-azure-container-apps";
         type = "provider";
       };
-      transport-unix = {
-        package = providerPackage "transport-unix";
+      transport-vsock = {
+        package = providerPackage "transport-vsock";
         type = "provider";
       };
       transport-azure-relay = {
@@ -81,10 +81,10 @@ let
             };
           };
         };
-        transport-unix = {
+        transport-vsock = {
           type = "Provider";
           spec = {
-            artifactId = "transport-unix";
+            artifactId = "transport-vsock";
             config = {
               executionRef = "Host/host";
             };
@@ -102,9 +102,11 @@ let
               reconnectWindowSecs = 300;
             };
             transportCredentials = [ ];
-            transportProviderRef = "Provider/transport-unix";
+            transportProviderRef = "Provider/transport-vsock";
             transportSettings = {
-              socketKind = "seqpacket";
+              guestRef = "Guest/gateway";
+              portClass = "d2b-link";
+              connectTimeoutSeconds = 30;
             };
           };
         };
@@ -331,7 +333,7 @@ in
         local = {
           childZoneName = localLink.spec.childZoneName;
           provider = localLink.spec.transportProviderRef;
-          settings = localLink.spec.transportSettings.socketKind;
+          settings = localLink.spec.transportSettings.guestRef;
         };
         gateway = {
           childZoneName = gatewayLink.spec.childZoneName;
@@ -355,8 +357,8 @@ in
       expected = {
         local = {
           childZoneName = "local-zone";
-          provider = "Provider/transport-unix";
-          settings = "seqpacket";
+          provider = "Provider/transport-vsock";
+          settings = "Guest/gateway";
         };
         gateway = {
           childZoneName = "gateway-zone";
@@ -422,7 +424,7 @@ in
   "zone-link/cross-zone-transport-provider-refuses" = {
     expr = hasFailure "same-Zone transport Provider ref" {
       d2b.zones.gateway-zone.resources.gateway-uplink.spec.transportProviderRef =
-        lib.mkForce "Provider/transport-unix";
+        lib.mkForce "Provider/transport-vsock";
     };
     expected = true;
   };

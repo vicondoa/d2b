@@ -211,7 +211,6 @@ let
     "Provider/runtime-azure-virtual-machine"
     "Provider/runtime-cloud-hypervisor"
     "Provider/transport-azure-relay"
-    "Provider/transport-unix"
     "Provider/transport-vsock"
   ];
 
@@ -356,12 +355,6 @@ let
           message = "${row.path}.spec.config.networkRef must resolve to a Network.";
         }
       ] else [ ])
-      ++ (if providerRef == "Provider/transport-unix" then [
-        {
-          assertion = resolvesAs row "Host" (providerConfig.executionRef or null);
-          message = "${row.path}.spec.config.executionRef must resolve to a Host.";
-        }
-      ] else [ ])
       ++ (if providerRef == "Provider/transport-vsock" then [
         {
           assertion = resolvesAs row "Host" (providerConfig.executionRef or null)
@@ -463,8 +456,6 @@ let
       then providerConfig.gatewayExecutionRef or null
       else if providerRef == "Provider/transport-azure-relay"
       then providerConfig.executionRef or null
-      else if providerRef == "Provider/transport-unix"
-      then providerConfig.executionRef or null
       else if providerRef == "Provider/transport-vsock"
       then providerConfig.executionRef or null
       else providerConfig.controllerExecutionRef or null;
@@ -539,7 +530,6 @@ let
         "relayEntityId"
         "relayNamespaceId"
       ];
-      unixSettings = [ "socketKind" ];
       vsockSettings = [
         "connectTimeoutSeconds"
         "guestRef"
@@ -588,18 +578,6 @@ let
         {
           assertion = lib.all credentialBoundaryMatches credentialRows;
           message = "${row.path}.spec.transportCredentials must use supported credential Providers, acquire-token, and the Relay consumerRef.";
-        }
-      ]
-      ++ lib.optionals (providerRef == "Provider/transport-unix") [
-        {
-          assertion = lib.all (key: builtins.elem key unixSettings) (lib.attrNames settings)
-            && (!builtins.hasAttr "socketKind" settings
-              || builtins.elem settings.socketKind [ "seqpacket" "stream" ]);
-          message = "${row.path}.spec.transportSettings for Provider/transport-unix accepts only socketKind=seqpacket or socketKind=stream.";
-        }
-        {
-          assertion = credentialRefs == [ ];
-          message = "${row.path}.spec.transportCredentials must be empty for Provider/transport-unix.";
         }
       ]
       ++ lib.optionals (providerRef == "Provider/transport-vsock") [

@@ -585,8 +585,8 @@ fn typed_transport_descriptor_requires_only_the_carriage_methods() {
             .expect("typed transport methods");
     let descriptor = ProviderDescriptor::new_transport(
         work.clone(),
-        provider_ref("transport-unix"),
-        ProviderImplementationId::parse("transport-unix").unwrap(),
+        provider_ref("transport-vsock"),
+        ProviderImplementationId::parse("transport-vsock").unwrap(),
         generation(1),
         provider_generation(1),
         capabilities,
@@ -606,8 +606,8 @@ fn typed_transport_descriptor_requires_only_the_carriage_methods() {
     assert_eq!(
         ProviderDescriptor::new_transport(
             work,
-            provider_ref("transport-unix"),
-            ProviderImplementationId::parse("transport-unix").unwrap(),
+            provider_ref("transport-vsock"),
+            ProviderImplementationId::parse("transport-vsock").unwrap(),
             generation(1),
             provider_generation(1),
             wrong,

@@ -1169,7 +1169,7 @@ impl GuestMountSource for PlaneGuestMountSource {
     }
 }
 
-/// Production Endpoint socket surface (transport-unix virtiofsd case):
+/// Production Endpoint socket surface (the local Unix virtiofsd case):
 /// the daemon's host socket facet the Endpoint family's effects service
 /// drives (U6). The worker Process child binds the private socket; the
 /// facet's `ensure` waits a bounded budget for the bind and reports a

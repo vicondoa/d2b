@@ -33,7 +33,6 @@ members = [
     "packages/d2b-provider-guest-qemu-media",
     "packages/d2b-provider-shell-terminal",
     "packages/d2b-provider-transport-azure-relay",
-    "packages/d2b-provider-transport-unix",
     "packages/d2b-provider-transport-vsock",
     "packages/d2b-process-conformance",
     "packages/d2b-provider-system-core",

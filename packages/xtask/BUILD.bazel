@@ -330,6 +330,7 @@ d2b_rust_test(
         "//packages/d2b-provider-process-systemd:BUILD.bazel",
         "//packages/d2b-provider-toolkit:BUILD.bazel",
         "//packages/d2b-provider-transport-azure-relay:BUILD.bazel",
+        "//packages/d2b-provider-transport-vsock:BUILD.bazel",
         "//packages/d2b-provider-volume-local:BUILD.bazel",
         "//packages/d2b-provider-volume-virtiofs:BUILD.bazel",
         "//packages/d2b-resource-api:BUILD.bazel",

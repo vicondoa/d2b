@@ -1765,7 +1765,7 @@ mod zone_link_gateway_composition_tests {
     #[test]
     fn non_relay_provider_is_refused_before_gateway_composition() {
         let mut link = link_resource();
-        link["spec"]["transportProviderRef"] = Value::String("Provider/transport-unix".to_owned());
+        link["spec"]["transportProviderRef"] = Value::String("Provider/transport-vsock".to_owned());
         assert!(!is_gateway_zone_link(&link));
         let error = ZoneLinkGatewayComposition::from_committed_resources(
             ZoneId::parse("child").unwrap(),

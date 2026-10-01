@@ -399,16 +399,6 @@
       bootstrap = false;
     }
     {
-      provider = "transport-unix";
-      package = "d2b-provider-transport-unix";
-      source = "packages/d2b-provider-transport-unix/src/portal.rs";
-      test = "packages/d2b-provider-transport-unix/tests/transport.rs";
-      dossier = "docs/specs/providers/ADR-046-provider-transport-unix.md";
-      bazelTarget = "//packages/d2b-provider-transport-unix:all-tests";
-      unit = "U11";
-      bootstrap = false;
-    }
-    {
       provider = "transport-vsock";
       package = "d2b-provider-transport-vsock";
       source = "packages/d2b-provider-transport-vsock/src/service.rs";
@@ -473,9 +463,8 @@
     "credential-secret-service"
     "credential-entra"
     "credential-managed-identity"
-    "transport-unix"
-    "transport-vsock"
     "transport-azure-relay"
+    "transport-vsock"
     "observability-otel"
     "activation-nixos"
   ];

@@ -361,7 +361,7 @@ let
       {
         assertion = unknown == [ ];
         message = ''
-          d2b.providerCatalog contains an identity outside the closed 27-row
+          d2b.providerCatalog contains an identity outside the closed 26-row
           Provider matrix: ${lib.concatStringsSep ", " (map
             (row: row.name) unknown)}.
         '';

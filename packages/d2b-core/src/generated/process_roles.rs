@@ -40,7 +40,7 @@ pub enum ProcessRole {
     /// target-local process Provider resolves this role from the trusted
     /// bundle.
     ActivationNixosRunner,
-    /// vsock relay sidecar.
+    /// vsock relay sidecar. The relay is a guest socat process the process Provider serves; no transport Provider owns the role.
     VsockRelay,
     /// Host-to-observability-VM OTLP bridge.
     OtelHostBridge,

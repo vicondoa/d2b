@@ -4,7 +4,7 @@
 //! The driver covers the endpoint shapes the v3 plane realizes, per
 //! preserved behavior:
 //!
-//! - the transport-unix / purpose `virtiofsd` socket (the binding-owned
+//! - the local Unix socket for purpose `virtiofsd` (the binding-owned
 //!   virtiofsd socket): recover probes the socket on the host target,
 //!   reconcile realizes the socket through the provider port as a long
 //!   effect, and delete participates in the preserved endpoint-first teardown
@@ -309,7 +309,7 @@ pub trait EndpointDriverEffects: EndpointPurposeVocabulary {
     /// Whether the endpoint's socket is currently realized and observable.
     async fn socket_present(&self, producer_ref: &ResourceRef, purpose: &str) -> bool;
 
-    /// Realize the endpoint's socket (transport-unix virtiofsd case).
+    /// Realize the endpoint's socket (the local Unix virtiofsd case).
     async fn ensure_socket(&self, producer_ref: &ResourceRef, purpose: &str)
         -> Result<(), String>;
 

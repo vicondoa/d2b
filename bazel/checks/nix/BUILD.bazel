@@ -18,7 +18,7 @@ _SURFACES = {
         "files": [
             "bazel/checks/fixtures/BUILD.bazel",
             "docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json",
-            "docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json",
+    "docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json",
             "flake.nix",
             "Makefile",
             "nixos-modules/rust-host-tools.nix",
