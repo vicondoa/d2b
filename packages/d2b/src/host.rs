@@ -61,8 +61,7 @@ pub(crate) struct HostValidateArgs {
     pub(crate) operator_signature: Option<String>,
 }
 
-/// `d2b host reset`: the offline, ownership-bounded clean break (U32,
-/// KTD15).
+/// `d2b host reset`: the offline, ownership-bounded clean break.
 ///
 /// The verb resolves no Zone and opens no daemon socket. It runs the
 /// one-shot broker ownership runner, which admits the reset Operation from
@@ -236,7 +235,7 @@ pub(crate) fn run(
     }
 }
 
-/// Run the offline ownership-bounded reset (U32, KTD15).
+/// Run the offline ownership-bounded reset.
 ///
 /// `d2b host reset` resolves no Zone and opens no daemon socket: it
 /// spawns the one-shot broker ownership runner, which admits the reset

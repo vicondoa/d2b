@@ -67,3 +67,30 @@ replace. Production schema and generation output are unchanged by this entry.
   as an ordinary typed `VolumeBinding` request, so the QMP and serial sockets
   reach the runner through an admitted relationship rather than a mount the
   `Process` contract hard-coded.
+
+### Fixed
+
+- A Guest image that runs the target agent now delivers its own Zone's
+  verified deployment graph. `serve_guest` publishes the Guest's target-local
+  authority before it binds its ComponentSession listener and refuses to serve
+  without one, but the host-integration `guest-shell-service` node enabled that
+  agent without setting `d2b.componentSession.deploymentBootstrap`, so nothing
+  materialized `/etc/d2b/deployment/deployment-bootstrap.json` and the unit
+  restart-looped on `deployment bootstrap refused: deployment-bootstrap.json is
+  absent, unreadable, or over the read bound`. The node now builds the document
+  from the one verified-graph constructor the production `evalGuest` path uses.
+- The binding-owned virtiofsd `Endpoint` no longer names a Provider as its
+  consumer. `EndpointConsumerTarget` admits only `Host`, `Guest`, `Process`,
+  and `EphemeralProcess` as an execution target, so a `Provider/...` subject
+  refused the whole row at its delivery derivation with `endpoint-spec-invalid`
+  and the status `the request names an endpoint this Zone does not own`. That
+  failure is terminal, so the socket was never realized, the owning
+  `VolumeBinding` never reported ready, and every Guest that mounts a shared
+  Volume stayed unmounted. The endpoint publishes to nobody: the binding
+  resolves the socket from its own row and the worker binds it.
+- The host-integration `virtiofsd-volume-runtime` realize wait asserts the
+  consumer-side destination through the presentation `VolumeBindingSpec`
+  actually commits. It read a top-level `spec.mountPath`, which that contract
+  has never carried since the destination moved into the closed `presentation`
+  vocabulary, so the wait could not succeed against any row. It now asserts the
+  committed `spec.presentation` instead, with the same destination.

@@ -293,6 +293,16 @@ fn volume_realized() -> String {
 /// The VolumeBinding realize wait, the fixture's own command text: exactly
 /// one child of the Volume, at the deterministic identity, `Ready` and
 /// settled, carrying the attachment tuple it was derived from.
+///
+/// The consumer-side destination is asserted through the presentation
+/// `VolumeBindingSpec` actually commits. That spec has no top-level
+/// `mountPath`: the destination is the `filesystem` variant of the closed
+/// `presentation` vocabulary, which serializes as
+/// `{"presentation":"filesystem","destination":"/state"}` (see
+/// `d2b-contracts-resource`'s `spec_serializes_and_round_trips_strictly`).
+/// Reading a field the contract does not carry is a wait that can never
+/// succeed, so the assertion names the committed shape and stays exactly as
+/// strict about the destination it checks.
 fn binding_realized() -> String {
     format!(
         concat!(
@@ -310,7 +320,8 @@ fn binding_realized() -> String {
             ".spec.executionRef == \"Guest/acceptance-guest\" and ",
             ".spec.view == \"controller\" and ",
             ".spec.access == \"read-only\" and ",
-            ".spec.mountPath == \"/state\"))' ",
+            ".spec.presentation.presentation == \"filesystem\" and ",
+            ".spec.presentation.destination == \"/state\"))' ",
             "/run/d2b-binding-realized.json",
         ),
         list_binding = d2b("list VolumeBinding", "/run/d2b-binding-realized.json"),

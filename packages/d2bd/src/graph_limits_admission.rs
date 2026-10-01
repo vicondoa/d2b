@@ -1,49 +1,24 @@
-//! The new-graph limit and emergency admission (U40, KTD4/KTD6-KTD10; R8, R36).
-//!
-//! This is the composition's whole contribution to a limit decision, and it
-//! holds no limit of its own. It names the prior accepted ceiling policy, the
-//! prior accepted emergency reduction, and the census of committed rows, and
-//! defers every rule to the two owning provider crates:
-//!
-//! - `d2b_provider_quota` decides whether a candidate fits the Zone's
-//!   accepted ceilings, and from which boundary a budget is measured;
-//! - `d2b_provider_emergency_policy` decides what an accepted reduction
-//!   refuses and the ordered typed release it drives existing use through.
-//!
-//! The daemon composes those two decisions behind the one identity
-//! evaluation of [`GraphMutationAdmission`], in the order the graph requires:
-//! who is asking, then whether the Zone's emergency reduction admits new use,
-//! then whether the candidate fits the Zone's ceilings. A refusal at any
-//! stage is a refusal of the whole request, and it happens *before* the
-//! manager persists anything, so a refused candidate leaves no desired row
-//! behind (KTD6).
-//!
-//! # A policy row is never measured against its own policy
-//!
-//! An operator must always be able to change or clear the `Quota` and
-//! `EmergencyPolicy` rows; a limit that refused its own type would leave a
-//! Zone permanently unable to recover. Each owning provider therefore
-//! remembers the type its accepted policy was read from and exempts that
-//! type, and this composition passes the target through untouched, so the
-//! exemption stays with the provider that owns the type name rather than
-//! being spelled out here.
+//! The new-graph limit and emergency admission.
 //!
 //! # The prior accepted values, not the live ones
 //!
 //! [`AcceptedLimits`] is a snapshot: the ceilings, the reduction, and the
-//! census as they were accepted before the request arrived. The plane swaps
-//! the whole snapshot when the broker acknowledges a new accepted graph
-//! (KTD6-KTD7); nothing here reads a live store, so the decision at this
-//! boundary and the decision at the broker's boundary are the same decision
-//! over the same input.
+//! census as they were accepted before the request arrived. The holder swaps
+//! the whole snapshot when the families publish a new one; nothing here reads
+//! a live store, so the decision at this boundary and the decision at the
+//! broker's boundary are the same decision over the same input.
 //!
-//! This is the admission the plane installs. It replaced the plane-ownership
-//! fence it used to install in the same step, so exactly one admission is
-//! live: the identity evaluation decides who is asking, the emergency
-//! reduction decides whether new use is admitted, and the Zone's ceilings
-//! decide whether the candidate fits.
+//! # The plane does not install this admission yet
 //!
-//! # A Zone with no verified deployment graph admits nothing
+//! The plane still installs the zone-local write fence, so no committed
+//! ceiling or reduction is enforced against a mutation today. This admission
+//! exists, is proven, and is what the install will replace the fence with;
+//! the install is held because the identity arm needs a per-Zone accepted
+//! graph and the only graph the daemon verifies today is scoped to the
+//! deployment. Installing it before that exists would refuse every mutation
+//! in every Zone-local plane.
+//!
+//! # A Zone with no verified deployment graph would admit nothing
 //!
 //! The identity arm is the prior accepted graph, and a Zone whose authority
 //! nothing established has no accepted graph. Installing an empty one there

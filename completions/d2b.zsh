@@ -4869,7 +4869,7 @@ _d2b__subcmd__host_commands() {
 'doctor:' \
 'reconcile:' \
 'validate:' \
-'reset:\`d2b host reset\`\: the offline, ownership-bounded clean break (U32, KTD15)' \
+'reset:\`d2b host reset\`\: the offline, ownership-bounded clean break' \
     )
     _describe -t commands 'd2b host commands' commands "$@"
 }

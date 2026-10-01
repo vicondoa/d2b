@@ -315,6 +315,16 @@ rec {
   d2bGuestShellServiceNode =
     { lib, pkgs, ... }:
     let
+      # The Zone this node's Guest is started for. One spelling: the graph
+      # the image delivers names it and `d2bd guest --zone` is handed it, so
+      # the Guest's own Zone gate compares the document against the same
+      # string rather than a restatement of it.
+      guestZone = "local";
+      # The one verified-graph constructor both publications use, imported
+      # here rather than reached through a Host-side publication, so this
+      # node reads the same bytes a production Guest image does.
+      deploymentBootstrap = import ../../nixos-modules/deployment-bootstrap.nix { inherit lib; };
+
       fixtureKeys = pkgs.runCommand "guest-shell-component-session-keys" { } ''
         mkdir -p "$out"
         printf '\001\002\003\004\005\006\007\010\011\012\013\014\015\016\017\020\021\022\023\024\025\026\027\030\031\032\033\034\035\036\037\040' > "$out/guest.key"
@@ -375,6 +385,18 @@ rec {
             d2b.componentSession = {
               enable = lib.mkForce true;
               guestConfigPath = lib.mkForce null;
+              zone = lib.mkForce guestZone;
+
+              # U31: `d2bd guest` publishes its own target-local authority
+              # before it serves anything, and refuses to serve under any
+              # default authority when its image closure carries no verified
+              # graph naming its own Zone. This is the document
+              # `vm-evaluator.nix`'s `evalGuest` hands a real Guest, from the
+              # one constructor both publications use, so the Guest reads
+              # exactly the bytes a production Guest image delivers.
+              deploymentBootstrap = pkgs.writeText
+                "d2b-guest-deployment-bootstrap-${guestZone}.json"
+                (deploymentBootstrap.documentFor guestZone).documentJson;
             };
 
             # The Guest target agent binds an AF_VSOCK ComponentSession listener.

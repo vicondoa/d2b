@@ -459,7 +459,7 @@ mod tests {
     fn child_name_and_transport_provider_are_closed() {
         let spec = ZoneLinkSpec::new(
             ZoneId::parse("guest").unwrap(),
-            provider("transport-unix"),
+            provider("transport-vsock"),
             CanonicalJsonObject::empty(),
             Vec::new(),
             false,

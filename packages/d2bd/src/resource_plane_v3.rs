@@ -3463,10 +3463,11 @@ impl ResourcePlaneV3 {
         // bundle, which is ingested after this manager spawns, so no per-Zone
         // accepted graph exists at this point to install.
         //
-        // What IS installed is the enforcement the families own: both per-Zone
-        // runtimes above, the swappable limits holder their drivers publish
-        // into, and the drain finalizer the EmergencyPolicy holds while a
-        // reduction is active. Only the manager-boundary wiring waits.
+        // What IS installed is only the fence below. The per-Zone runtimes
+        // and the drain finalizer the families drive are real and wired, but
+        // no committed ceiling or reduction reaches a mutation until the
+        // admission that reads them is installed, so nothing here should be
+        // read as enforcement that is live today.
         // The foundation plane is the one that carries the seeded system-homed
         // rows; every other plane is zone-local and the fence refuses those
         // three types on it.

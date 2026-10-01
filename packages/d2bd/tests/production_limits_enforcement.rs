@@ -1,10 +1,13 @@
 //! Production limit and emergency enforcement (U40, R8, R36).
 //!
-//! These cases drive the admission the PLANE INSTALLS. The manager is built
-//! with the production driver factories and the production admission
-//! composition - the same [`d2bd::AcceptedLimitsHolder::live`] the plane's
-//! admission site calls - and the rows are committed through the manager, so
-//! the limit is reached only by the path production reaches it.
+//! These cases drive the admission the PLANE WILL INSTALL once a per-Zone
+//! accepted graph exists. The manager is built with the production driver
+//! factories and the production admission composition, and the rows are
+//! committed through the manager, so what they prove is that the wiring is
+//! correct end to end - NOT that a mutation is currently limited, because the
+//! plane installs the zone-local write fence today. When the install lands,
+//! this suite becomes the proof that the installed path limits; until then it
+//! proves the path is ready.
 //!
 //! The evaluator's own coverage in `graph_limits_and_emergency.rs` proves the
 //! decisions. This suite proves the wiring: that a `Quota` row committed

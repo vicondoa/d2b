@@ -799,8 +799,21 @@ impl BindingDriver {
                 "supported": false,
                 "maxAttachments": 0
             },
+            // This Endpoint is the realization record for the worker's own
+            // private serving socket, and nothing consumes that socket
+            // through a derived `EndpointBinding` relationship: the binding
+            // resolves it from its own row, the worker binds it, and the
+            // guest's launch identity names the binding rather than an
+            // endpoint. So the endpoint publishes to nobody - the allowlist
+            // is empty, which is what derives no relationship row - and the
+            // named Provider is deliberately absent: a `Provider` is not one
+            // of the typed execution targets the Endpoint family admits as a
+            // consumer, and naming one refuses the whole row at its
+            // delivery derivation with `endpoint-spec-invalid` /
+            // "the request names an endpoint this Zone does not own", which
+            // never reaches the socket realization at all.
             "consumerPolicy": {
-                "allowedSubjects": [BINDING_PROVIDER_REF],
+                "allowedSubjects": [],
                 "allowedOperations": ["resolve", "observe"]
             },
             "lifecyclePolicy": "recycle-with-producer"
