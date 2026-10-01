@@ -77,7 +77,6 @@ test_suite(
         "//packages/d2b-provider-telemetry-binding:all-tests",
         "//packages/d2b-provider-volume:all-tests",
         "//packages/d2b-provider-volume-binding:all-tests",
-        "//packages/d2b-provider-test-controller:controller",
         "//packages/d2b-provider-credential-binding:all-tests",
         "//packages/d2b-provider-network-binding:all-tests",
         "//packages/d2b-provider-endpoint-binding:all-tests",

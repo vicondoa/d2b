@@ -13164,6 +13164,12 @@ mod tests {
             intent.view().as_str(),
             intent.access(),
             intent.mount_path(),
+            d2b_contracts_resource::v3::BindingSourceDecision::new(
+                vec![d2b_contracts_resource::v3::RequestedRights::Consume],
+                d2b_contracts_resource::v3::binding::BindingArbitration::Shared,
+                vec![d2b_contracts_resource::v3::BindingRealizationFacet::FilesystemPresentation],
+            )
+            .expect("decision validates"),
         )
         .expect("admitted spec");
         assert!(ZoneResourceRuntime::binding_admitted_by_volume_spec(
@@ -13177,6 +13183,12 @@ mod tests {
             intent.view().as_str(),
             intent.access(),
             intent.mount_path(),
+            d2b_contracts_resource::v3::BindingSourceDecision::new(
+                vec![d2b_contracts_resource::v3::RequestedRights::Consume],
+                d2b_contracts_resource::v3::binding::BindingArbitration::Shared,
+                vec![d2b_contracts_resource::v3::BindingRealizationFacet::FilesystemPresentation],
+            )
+            .expect("decision validates"),
         )
         .expect("forged spec");
         assert!(!ZoneResourceRuntime::binding_admitted_by_volume_spec(

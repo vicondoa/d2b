@@ -100,6 +100,10 @@ fn row(name: &str) -> AuthorityProjectionRow {
         desired_revision: DesiredRevision::INITIAL.try_next().expect("room"),
         desired_digest: DesiredDigest::of(&admitted.to_canonical_bytes()),
         admitted,
+        // A non-binding row resolves no relationship identity, so it publishes
+        // none and contributes no accepted source.
+        source_uid: None,
+        consumer_uid: None,
     }
 }
 

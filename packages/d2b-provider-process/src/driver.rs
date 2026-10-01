@@ -2803,6 +2803,11 @@ mod tests {
                 "view": "root",
                 "access": "read-only",
                 "mountPath": "/mnt/data",
+                "source": {
+                    "admittedRights": ["consume"],
+                    "arbitration": "shared",
+                    "realizedFacets": ["filesystem-presentation"]
+                },
             })
             .to_string()
             .into_bytes(),
