@@ -140,7 +140,6 @@ use d2b_provider_process_systemd::effects_service::{
     PROCESS_SYSTEMD_EFFECTS_SERVICE, SystemdEffectsServiceFactory,
 };
 use crate::shared_provider_effects::ProductionSharedProviderEffects;
-use d2b_provider_command::command_descriptor;
 use d2b_provider_emergency_policy::emergency_policy_descriptor;
 use d2b_provider_operation::operation_descriptor;
 use d2b_provider_provider::{
@@ -3020,7 +3019,6 @@ impl ResourcePlaneV3 {
         // The policy types are declared with their drivers; their rows commit
         // with the committed policy rows, and the presence obligation is what
         // keeps a plane from opening without their drivers.
-        set = set.with(family_declaration("command"), vec![command_descriptor()]);
         set = set.with(
             family_declaration("operation"),
             vec![operation_descriptor()],
@@ -5471,7 +5469,6 @@ HOST_EFFECTS_SERVICE.id,
             "emergency-policy",
             "resource-export",
             "resource-import",
-            "command",
             "operation",
             "seccomp-profile",
             "execution-policy",
@@ -6147,19 +6144,23 @@ HOST_EFFECTS_SERVICE.id,
        .expect("child envelope")
     }
     /// A system-homed policy row as a caller would submit it.
-    fn command_desired(zone: &str, name: &str) -> DesiredResource {
+    fn operation_desired(zone: &str, name: &str) -> DesiredResource {
         let spec = d2b_contracts_resource::v3::canonical_json_bytes(&serde_json::json!({
-            "exec": "/usr/lib/d2b/libexec/virtiofsd",
-            "argv": ["--socket-path", "{socketPath}"],
-            "params": {
+            "ownerRef": "Role/worker",
+            "payloadSchema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": { "socketPath": { "type": "string" } }
             },
-            "roleRef": "Role/worker",
-            "intent": { "grammar": "<zone>/<name>", "mint": "per-bundle-entry" }
+            "secretAccess": "None",
+            "audit": {
+                "enabled": false,
+                "reasons": [],
+                "retentionDays": 0,
+                "fields": []
+            }
         }))
-       .expect("canonical command spec");
+       .expect("canonical operation spec");
         let metadata = serde_json::to_vec(&serde_json::json!({
             "annotations": {},
             "labels": {},
@@ -6167,7 +6168,7 @@ HOST_EFFECTS_SERVICE.id,
         }))
        .expect("metadata");
         DesiredResource {
-            key: ResourceKey::new(zone, "Command", name),
+            key: ResourceKey::new(zone, "Operation", name),
             spec,
             metadata,
             provenance: d2b_resource_runtime::spec_store::ResourceProvenance::Api,
@@ -6191,7 +6192,7 @@ HOST_EFFECTS_SERVICE.id,
 
         let error = plane
            .client()
-           .apply(api_subject("User/alice"), command_desired("test", "worker"))
+           .apply(api_subject("User/alice"), operation_desired("test", "worker"))
            .await
            .expect_err("a system-homed write is refused");
         assert!(
@@ -6201,7 +6202,7 @@ HOST_EFFECTS_SERVICE.id,
                     type_name,
                     principal,
                    ..
-                } if type_name == "Command" && principal == "User/alice"
+                } if type_name == "Operation" && principal == "User/alice"
             ),
             "unexpected refusal: {error:?}"
         );
@@ -6249,51 +6250,9 @@ HOST_EFFECTS_SERVICE.id,
         // The system-homed write is admitted on this plane.
         plane
            .client()
-           .apply(api_subject("User/alice"), command_desired("system", "worker"))
+           .apply(api_subject("User/alice"), operation_desired("system", "worker"))
            .await
            .expect("the foundation plane admits the write");
-    }
-
-    /// The one declared spawn command, under the seed's publisher role.
-    fn seeded_command(name: &str) -> crate::foundation_seed::SeedCommand {
-        let spec = d2b_contracts_resource::v3::canonical_json_bytes(&serde_json::json!({
-            "exec": "/usr/lib/d2b/libexec/virtiofsd",
-            "argv": ["--socket-path", "{socketPath}"],
-            "params": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": { "socketPath": { "type": "string" } }
-            },
-            "roleRef": "Role/operation-publisher",
-            "intent": { "grammar": "<zone>/<name>", "mint": "per-bundle-entry" }
-        }))
-       .expect("canonical command spec");
-        crate::foundation_seed::SeedCommand {
-            name: name.to_owned(),
-            spec: serde_json::from_slice(&spec).expect("command spec"),
-        }
-    }
-
-    /// The seed's own vocabulary, plus one declared command so the controller
-    /// materializes an `Operation` row to resolve.
-    fn seeded_declarations(command: &str) -> crate::foundation_seed::FoundationDeclarations {
-        let mut declarations = crate::foundation_seed::core_declarations();
-        let command = seeded_command(command);
-        declarations.roles[0].spec = serde_json::from_value(serde_json::json!({
-            "rules": [{
-                "resourceTypes": ["Operation"],
-                "verbs": ["create"],
-                "subresources": [],
-                "resourceNames": [],
-                "zones": [],
-                "executionRefs": [],
-                "sessionVerbs": []
-            }],
-            "commandRefs": [format!("Command/{}", command.name)],
-        }))
-       .expect("publisher role scoped to the declared command");
-        declarations.commands = vec![command];
-        declarations
     }
 
     /// The `Provider` row the seeded self-binding's subject resolves through.
@@ -6375,7 +6334,6 @@ HOST_EFFECTS_SERVICE.id,
             ResourceVerb,
         };
 
-        let command = "virtiofsd-worker";
         let (_dir, mut inputs, _readiness) = test_inputs();
         // The readers resolve the Zone the seed homes its rows under: two
         // declarations of the reserved name would put the commit and the read
@@ -6385,7 +6343,7 @@ HOST_EFFECTS_SERVICE.id,
             d2b_contracts::identity::SYSTEM_ZONE_NAME,
             "the seed homes its rows in the Zone the readers select",
         );
-        let declarations = seeded_declarations(command);
+        let declarations = crate::foundation_seed::core_declarations();
         let provider_ref = declarations
            .providers
            .first()
@@ -6432,20 +6390,6 @@ HOST_EFFECTS_SERVICE.id,
                    .collect::<Vec<_>>(),
             );
         }
-        // The declared command and the operation it materialized are read back
-        // by reference, the shape an invocation resolves them in.
-        let declared = [
-            format!("Command/{command}"),
-            format!("Operation/process-run-{command}"),
-        ];
-        for reference in &declared {
-            let target = ResourceRef::parse(reference).expect("resource reference");
-            let row = crate::resource_runtime::bridge_manager_row(&view, &target)
-               .await
-               .expect("row read")
-               .unwrap_or_else(|| panic!("the read path resolves {reference}"));
-            assert_eq!(row.zone.as_str(), crate::foundation_seed::SYSTEM_ZONE);
-        }
         // The self-binding's subject resolves through the same read, so the
         // binding is not dropped as unresolved.
         let fingerprints =
@@ -6464,7 +6408,8 @@ HOST_EFFECTS_SERVICE.id,
         );
 
         // The compiled policy installs the grant the chain exists for: the
-        // self-bound provider creates the operation its command materialized.
+        // self-bound provider creates Operation rows. The seeded role narrows
+        // the grant to the `create` subresource and names no resource.
         let snapshot = d2bd_runtime::resource_runtime_support::initial_policy_snapshot()
            .expect("bootstrap snapshot");
         let (policy, state) =
@@ -6489,12 +6434,9 @@ HOST_EFFECTS_SERVICE.id,
                         "Operation".to_owned(),
                     )
                    .expect("operation type"),
-                    resource_name: Some(
-                        ResourceName::parse(format!("process-run-{command}"))
-                           .expect("operation name"),
-                    ),
+                    resource_name: None,
                     verb: ResourceVerb::Create,
-                    subresource: None,
+                    subresource: Some("create".to_owned()),
                     execution_ref: None,
                 }],
             },

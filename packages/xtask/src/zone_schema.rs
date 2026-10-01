@@ -1214,14 +1214,6 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
             ),
         ),
         (
-            "Command",
-            dto_resource_schema::<d2b_provider_command::command::CommandSpec>(
-                "Command",
-                "Declared launch shape: executable, argv placeholder slots, parameters, worker role, and intent.",
-                true,
-            ),
-        ),
-        (
             "Operation",
             dto_resource_schema::<d2b_provider_operation::operation::OperationSpec>(
                 "Operation",

@@ -27,7 +27,6 @@
   "Endpoint"
   "ResourceExport"
   "ResourceImport"
-  "Command"
   "Operation"
   "SeccompProfile"
   "ExecutionPolicy"

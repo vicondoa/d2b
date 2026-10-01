@@ -9015,8 +9015,6 @@ const COMMITTED_SCOPE: &[CommittedScopeEntry] = &[
         reason: "the plan's provider crate class; a family or per-type provider crate" },
     CommittedScopeEntry { crate_name: "d2b-provider-resource-import", class: CommittedScopeClass::Provider,
         reason: "the plan's provider crate class; a family or per-type provider crate" },
-    CommittedScopeEntry { crate_name: "d2b-provider-command", class: CommittedScopeClass::Provider,
-        reason: "the plan's provider crate class; a family or per-type provider crate" },
     CommittedScopeEntry { crate_name: "d2b-provider-operation", class: CommittedScopeClass::Provider,
         reason: "the plan's provider crate class; a family or per-type provider crate" },
     CommittedScopeEntry { crate_name: "d2b-provider-seccomp-profile", class: CommittedScopeClass::Provider,

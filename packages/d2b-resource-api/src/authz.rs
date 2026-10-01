@@ -18,8 +18,8 @@ use d2b_contracts_resource::v3::{
     ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
 };
 use d2b_contracts_zone_session::v3::{
-    RoleBindingSpec, RoleResourceVerb, RoleRule, RoleSessionVerb, RoleSpec,
-    role_binding::MAX_ROLE_BINDING_RESOURCE_REFS,
+    RoleBindingSpec, RoleResourceVerb, RoleRule, RoleSessionVerb,
+    role::AuthorizedRole, role_binding::MAX_ROLE_BINDING_RESOURCE_REFS,
 };
 use d2b_core_controller::controller_assignment::{
     AssignmentError, AssignmentIdentity, AssignmentTarget, ScopedResourceMutation,
@@ -378,7 +378,7 @@ pub fn published_policy_revision(bundle_generation: u64, durable_policy_rows: us
 }
 
 /// Parse one durable Role row's evaluator input from its canonical envelope.
-fn durable_role_spec(row: &DurablePolicyRow) -> Result<RoleSpec, AuthorizationPolicyError> {
+fn durable_role(row: &DurablePolicyRow) -> Result<AuthorizedRole, AuthorizationPolicyError> {
     let value = d2b_contracts_resource::v3::CanonicalJsonValue::parse(&row.canonical_json)
         .map_err(|_| AuthorizationPolicyError::RoleSchema)?;
     let spec = value
@@ -440,7 +440,7 @@ pub fn compile_authorization_facts(
     for row in rows {
         match row.resource_ref.resource_type().as_str() {
             "Role" => {
-                let spec = durable_role_spec(row)?;
+                let spec = durable_role(row)?;
                 roles.push(CompiledRole::from_spec(
                     row.resource_ref.clone(),
                     &spec,
@@ -816,7 +816,7 @@ impl CompiledRole {
     /// Compile a public Role resource.
     pub fn from_spec(
         role_ref: ResourceRef,
-        spec: &RoleSpec,
+        spec: &AuthorizedRole,
         catalog: &ApiCatalog,
         core_controller_generated: bool,
     ) -> Result<Self, AuthorizationPolicyError> {
