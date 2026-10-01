@@ -214,9 +214,11 @@ pub struct OriginationPublicationLink {
 impl OriginationPublicationLink {
     /// Bind the link to one broker socket and one round-trip budget.
     ///
-    /// The budget bounds the connect; the control lane's own budget bounds the
-    /// whole exchange, and a budget that runs out keeps the fence rather than
-    /// thawing the Zone.
+    /// The budget bounds the connect AND the exchange: it is applied as the
+    /// socket's read and write deadline for the duration of the round trip, so
+    /// a broker that accepts and then stalls cannot park the single worker
+    /// thread. A budget that runs out keeps the fence rather than thawing the
+    /// Zone.
     pub fn new(socket_path: impl Into<PathBuf>, budget: Duration) -> Self {
         Self {
             socket_path: socket_path.into(),
@@ -284,6 +286,11 @@ impl AuthorityPublicationLink for OriginationPublicationLink {
 /// on the coordinator's own single bounded worker, reached by a oneshot reply.
 /// The caller of this function is the async coordinator, which awaits the reply;
 /// only the worker thread itself blocks.
+///
+/// The budget bounds the whole exchange and not only the connect: it rides on
+/// the connected socket as that socket's own read and write deadline, so a
+/// broker that accepts and then stops answering returns a typed error to this
+/// worker instead of parking it.
 async fn round_trip_on_worker<T, F>(
     socket_path: PathBuf,
     budget: Option<Duration>,
@@ -299,7 +306,12 @@ where
             let result =
                 d2bd_runtime::unix_transport::connect_seqpacket_with_timeout(&socket_path, budget)
                     .map_err(|error| error.to_string())
-                    .and_then(|socket| exchange(&socket));
+                    .and_then(|socket| {
+                        let socket = socket2::Socket::from(socket);
+                        let bounded = install_exchange_budget(&socket, budget);
+                        let fd: std::os::fd::OwnedFd = socket.into();
+                        bounded.and(exchange(&fd))
+                    });
             let _ = reply_tx.send(result);
         }))
         .map_err(|_| "the publication worker is unavailable".to_owned())?;
@@ -309,6 +321,30 @@ where
     reply_rx
         .await
         .map_err(|_| "the publication worker dropped the exchange".to_owned())?
+}
+
+/// Install `budget` as the connected broker socket's own read and write
+/// deadline, so the blocking exchange inside the round trip is bounded by the
+/// same budget as the connect.
+///
+/// A failure here refuses the round trip instead of running it unbounded. The
+/// accept loop's own frame deadline is deliberately best-effort because it has
+/// a handler slot per peer to lose, but there is exactly one publication
+/// worker here: a socket that entered the exchange without a deadline is the
+/// one condition that wedges every publication the daemon ever makes.
+fn install_exchange_budget(
+    socket: &socket2::Socket,
+    budget: Option<Duration>,
+) -> Result<(), String> {
+    let Some(budget) = budget else {
+        return Ok(());
+    };
+    socket
+        .set_read_timeout(Some(budget))
+        .and_then(|()| socket.set_write_timeout(Some(budget)))
+        .map_err(|error| {
+            format!("the publication budget could not be installed on the broker socket: {error}")
+        })
 }
 
 /// One owned bounded worker for the coordinator's blocking publication I/O.
@@ -955,3 +991,163 @@ impl AuthorityPublicationCoordinator {
     }
 }
 
+#[cfg(test)]
+mod stall_regression_tests {
+    use super::*;
+
+    /// The budget the stalled round trip carries.
+    const BUDGET: Duration = Duration::from_millis(200);
+    /// How long the stalled peer holds the accepted connection before it gives
+    /// up and closes it.
+    ///
+    /// A peer that closed immediately would end the unbounded exchange too,
+    /// and a budget that outran this hold could not tell the two apart.
+    const STALL_HOLD: Duration = Duration::from_secs(2);
+    /// The most a budget-bounded exchange may take.
+    ///
+    /// Five budgets of headroom for a loaded machine, and half the peer's
+    /// hold, so an unbounded exchange is a failed assertion rather than a
+    /// timeout.
+    const BOUNDED_BY: Duration = Duration::from_secs(1);
+    /// The most the fake broker may wait for a connection before it gives up.
+    ///
+    /// A hang is a worse failure signal than a failed assertion, so nothing in
+    /// this harness may block without a bound of its own.
+    const ACCEPT_WITHIN: Duration = Duration::from_secs(20);
+    /// What the answering peer sends back.
+    const ANSWER: &[u8] = b"accepted";
+
+    /// One fake broker socket: it stalls the first publication and answers the
+    /// next.
+    ///
+    /// The listener is `SOCK_SEQPACKET` because that is the family the daemon's
+    /// broker link speaks. An `AF_UNIX` connect from a seqpacket socket to a
+    /// stream listener is refused with `EPROTOTYPE`, so a stream listener would
+    /// refuse the exchange before the budget was ever reached and the test
+    /// would pass for the wrong reason.
+    struct FakeBroker {
+        socket_path: PathBuf,
+        peer: std::thread::JoinHandle<()>,
+    }
+
+    impl FakeBroker {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn start(test_name: &str) -> Self {
+            let dir = std::env::temp_dir()
+                .join(format!("d2b-publication-stall-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("create the stall harness scratch");
+            let socket_path = dir.join(format!("{test_name}.sock"));
+            let listener =
+                socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::SEQPACKET, None)
+                    .expect("create the fake broker listener");
+            listener
+                .set_read_timeout(Some(ACCEPT_WITHIN))
+                .expect("bound the fake broker accept");
+            listener
+                .bind(&socket2::SockAddr::unix(&socket_path).expect("the broker socket address"))
+                .expect("bind the fake broker socket");
+            listener.listen(16).expect("listen on the fake broker socket");
+            let peer = std::thread::spawn(move || {
+                // Both publications are accepted before the stall is
+                // released: the budget is what ends the first exchange, not
+                // this peer, so the second one arrives while the first is
+                // still unanswered.
+                let stalled = accept(&listener);
+                let answered = accept(&listener);
+                d2bd_runtime::unix_transport::read_frame(&answered)
+                    .expect("read the answering peer's request");
+                d2bd_runtime::unix_transport::write_frame(&answered, ANSWER)
+                    .expect("answer the publication exchange");
+                // The stall outlives the exchange it stalls, so an unbounded
+                // exchange still ends - as a failed assertion rather than a
+                // worker parked for good.
+                std::thread::sleep(STALL_HOLD);
+                drop(answered);
+                drop(stalled);
+            });
+            Self {
+                socket_path,
+                peer,
+            }
+        }
+
+        /// Join the peer thread and take its socket away.
+        fn finish(self) {
+            self.peer.join().expect("the fake broker completes");
+            let _ = std::fs::remove_file(&self.socket_path);
+            if let Some(dir) = self.socket_path.parent() {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
+    }
+
+    /// Accept one peer, bounded by the listener's own accept deadline.
+    fn accept(listener: &socket2::Socket) -> socket2::Socket {
+        let (peer, _) = listener.accept().expect("accept a fake broker peer");
+        peer
+    }
+
+    /// A broker that accepts the connection and then stops answering must not
+    /// park the publication worker, and the exchange behind it must still run.
+    ///
+    /// There is exactly one worker thread, so one stalled peer would otherwise
+    /// wedge every later publication: nothing behind it would ever drain, and
+    /// once the queue filled the link would refuse by name. The round trip
+    /// carries its budget as the socket's own deadline for exactly this reason.
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn a_stalled_broker_does_not_wedge_the_round_trip() {
+        let broker = FakeBroker::start("stalled-publication");
+
+        let started = std::time::Instant::now();
+        let stalled = round_trip_on_worker::<(), _>(
+            broker.socket_path.clone(),
+            Some(BUDGET),
+            |socket| {
+                d2bd_runtime::unix_transport::write_frame(socket, b"open")
+                    .map_err(|error| error.to_string())?;
+                d2bd_runtime::unix_transport::read_frame(socket)
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            },
+        )
+        .await;
+        let stalled_for = started.elapsed();
+
+        assert!(
+            stalled_for < BOUNDED_BY,
+            "the stalled exchange waited for the peer's {STALL_HOLD:?} hold instead of giving up \
+             on its {BUDGET:?} budget (took {stalled_for:?})"
+        );
+        assert!(
+            stalled.is_err(),
+            "a broker that accepts and never answers must not produce a successful round trip"
+        );
+
+        let started = std::time::Instant::now();
+        let answered = round_trip_on_worker::<Vec<u8>, _>(
+            broker.socket_path.clone(),
+            Some(BUDGET),
+            |socket| {
+                d2bd_runtime::unix_transport::write_frame(socket, b"serve")
+                    .map_err(|error| error.to_string())?;
+                d2bd_runtime::unix_transport::read_frame(socket)
+                    .map_err(|error| error.to_string())
+            },
+        )
+        .await;
+        let answered_for = started.elapsed();
+
+        assert_eq!(
+            answered.as_deref().ok(),
+            Some(ANSWER),
+            "the exchange behind a stalled peer still reaches the broker"
+        );
+        assert!(
+            answered_for < BOUNDED_BY,
+            "the exchange behind a stalled peer was held behind it (took {answered_for:?})"
+        );
+
+        broker.finish();
+    }
+}

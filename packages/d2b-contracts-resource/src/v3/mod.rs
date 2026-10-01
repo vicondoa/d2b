@@ -4,6 +4,8 @@ pub mod activation_nixos;
 pub mod artifact;
 pub mod authority;
 pub mod binding;
+pub mod binding_lifecycle;
+pub mod binding_slot;
 pub mod bridge;
 pub mod credential_binding;
 pub mod device;

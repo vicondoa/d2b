@@ -983,6 +983,17 @@
         };
         fixtureBundlePath = pkgs.writeText "d2b-fixture-bundle.json"
           (builtins.toJSON fixtureBundle);
+        # The per-Zone verified deployment graph a Guest image carries, as the
+        # one constructor renders it. The Rust contract tests decode these
+        # bytes with the daemon's own verifier, so the fixture is the Nix-Rust
+        # boundary itself rather than a copy of it: a producer change that the
+        # verifier does not accept fails there, and a verifier that stops
+        # accepting what the producer renders fails with it.
+        fixtureDeploymentBootstrap = import
+          ./nixos-modules/deployment-bootstrap.nix { lib = nixpkgs.lib; };
+        fixtureGuestDeploymentGraph = pkgs.writeText
+          "d2b-fixture-deployment-bootstrap-work.json"
+          (fixtureDeploymentBootstrap.documentFor "work").documentJson;
         smokeFixture = let
           bundle = smokeEval.config.d2b._bundle;
         in pkgs.runCommand "d2b-fixture-smoke" { } ''
@@ -996,6 +1007,7 @@
           cp ${fixtureBundlePath} $out/bundle.json
           cp ${bundle.zoneResourceBundles.local-root.path} $out/zones/local-root/resource-bundle.json
           cp ${bundle.extraArtifacts."zoneStorage-local-root".path} $out/zones/local-root/storage.json
+          cp ${fixtureGuestDeploymentGraph} $out/deployment-bootstrap-work.json
         '';
         evalFixtureData = {
           minimal = renderEvalFixture {

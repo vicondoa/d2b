@@ -547,10 +547,12 @@ d2b_rust_test(
     data = [
         ":cargo_workspace_sources",
         ":d2bd",
+        "//bazel/checks/fixtures:fixture_smoke",
         "//tests/fixtures:deny-unknown/host-valid.json",
     ],
     env = {
         "CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)",
+        "D2B_FIXTURES": "$(rootpath //bazel/checks/fixtures:fixture_smoke)",
         "D2BD_HOST_FIXTURE": "$(rootpath //tests/fixtures:deny-unknown/host-valid.json)",
     },
     env_inherit = ["PATH"],

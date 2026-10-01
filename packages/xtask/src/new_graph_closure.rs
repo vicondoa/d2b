@@ -49,6 +49,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::authority_common::{declaration_paths, provider_crates, Declaration};
+
 use d2b_contracts_provider::v3::projection::GRAPH_PROJECTION_CONTRACT_VERSION;
 use d2b_contracts_resource::v3::canonical_digest;
 use serde::Serialize;
@@ -378,7 +380,9 @@ fn render_json<T: Serialize>(value: &T) -> Result<String, String> {
 /// authority loaders, so the declaration-only claim is a property of this
 /// struct rather than a property of a call graph.
 struct DeclaredProviders {
-    /// Every provider crate that declares at least one kind, in name order.
+    /// Every provider crate in the tree, in name order: a crate that declares
+    /// nothing of its own still gets a graph-policy row, stated with the empty
+    /// vocabularies its recorded absences imply.
     declaring: Vec<String>,
     types: BTreeMap<String, TypeDeclarationFile>,
     operations: BTreeMap<String, OperationDeclarationFile>,
@@ -514,63 +518,32 @@ struct ServiceCatalogFile {
 
 impl DeclaredProviders {
     /// Read every provider crate's declarations, refusing a file that names
-    /// a crate other than the directory it lives in.
+    /// a crate other than the directory it lives in and a crate that carries
+    /// no declaration of a kind it is not recorded as owning none of.
+    ///
+    /// The crate set is [`declaration_paths`]' rather than a per-kind
+    /// optional read: an absent file and a renamed one look the same on disk,
+    /// and a loader that skips what it cannot find would render a partial
+    /// graph - with every gate comparing it against the same partial input.
     #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
     fn load(repo_root: &Path) -> Result<Self, String> {
-        let packages = repo_root.join("packages");
-        let mut crates: Vec<(String, PathBuf)> = fs::read_dir(&packages)
-            .map_err(|error| format!("cannot read {}: {error}", packages.display()))?
-            .map(|entry| entry.map(|entry| entry.path()))
-            .collect::<Result<Vec<PathBuf>, _>>()
-            .map_err(|error| format!("cannot read a packages entry: {error}"))?
-            .into_iter()
-            .filter_map(|path| {
-                let crate_name = path.file_name()?.to_string_lossy().into_owned();
-                crate_name
-                    .starts_with("d2b-provider-")
-                    .then_some((crate_name, path))
-            })
-            .collect();
-        crates.sort();
-        let mut loaded = Self {
+        let crates = provider_crates(repo_root)?;
+        Ok(Self {
             declaring: crates.iter().map(|(name, _)| name.clone()).collect(),
-            types: BTreeMap::new(),
-            operations: BTreeMap::new(),
-            registrations: BTreeMap::new(),
-            catalogs: BTreeMap::new(),
-        };
-        for (crate_name, crate_dir) in crates {
-            if let Some(file) =
-                read_optional_declaration(&crate_dir, "resource-types.json", &crate_name)?
-            {
-                loaded.types.insert(crate_name.clone(), file);
-            }
-            if let Some(file) =
-                read_optional_declaration(&crate_dir, "operations.json", &crate_name)?
-            {
-                loaded.operations.insert(crate_name.clone(), file);
-            }
-            if let Some(file) =
-                read_optional_declaration(&crate_dir, "registrations.json", &crate_name)?
-            {
-                loaded.registrations.insert(crate_name.clone(), file);
-            }
-            if let Some(file) =
-                read_optional_declaration(&crate_dir, "service-catalog.json", &crate_name)?
-            {
-                loaded.catalogs.insert(crate_name.clone(), file);
-            }
-        }
-        Ok(loaded)
+            types: load_kind(repo_root, Declaration::ResourceTypes)?,
+            operations: load_kind(repo_root, Declaration::Operations)?,
+            registrations: load_kind(repo_root, Declaration::Registrations)?,
+            catalogs: load_kind(repo_root, Declaration::ServiceCatalog)?,
+        })
     }
 
-    /// Every crate that declares at least one of the four kinds, in name
-    /// order.
+    /// Every provider crate in the tree, in name order.
     ///
-    /// A crate declares only the kinds it needs: a provider that serves no
+    /// A crate declares only the kinds it owns: a provider that serves no
     /// operation row and owns no ResourceType has no `operations.json` and no
     /// `resource-types.json`, and the graph policy states it with empty
-    /// vocabularies rather than a second invented file.
+    /// vocabularies rather than a second invented file. Every such absence is
+    /// recorded in the shared absence table the loader gates on.
     fn crate_names(&self) -> Vec<&str> {
         self.declaring.iter().map(String::as_str).collect()
     }
@@ -664,21 +637,6 @@ impl DeclaredProviders {
     }
 }
 
-/// Read one optional declaration file, or `None` when the crate declares
-/// none of that kind.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn read_optional_declaration<T: serde::de::DeserializeOwned>(
-    crate_dir: &Path,
-    file_name: &str,
-    crate_name: &str,
-) -> Result<Option<T>, String> {
-    let path = crate_dir.join(file_name);
-    if !path.is_file() {
-        return Ok(None);
-    }
-    read_parsed(&path, crate_name).map(Some)
-}
-
 /// Parse one declaration file, refusing a file whose `crate` field names a
 /// different crate than the directory holding it.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
@@ -697,6 +655,19 @@ fn read_parsed<T: serde::de::DeserializeOwned>(path: &Path, crate_name: &str) ->
     }
     serde_json::from_value(value)
         .map_err(|error| format!("cannot parse {}: {error}", path.display()))
+}
+
+/// Read one declaration kind from every provider crate that carries it.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn load_kind<T: serde::de::DeserializeOwned>(
+    repo_root: &Path,
+    declaration: Declaration,
+) -> Result<BTreeMap<String, T>, String> {
+    let mut out = BTreeMap::new();
+    for (crate_name, path) in declaration_paths(repo_root, declaration)? {
+        out.insert(crate_name.clone(), read_parsed(&path, &crate_name)?);
+    }
+    Ok(out)
 }
 
 /// What one crate's own compiled sources publish to the graph.
@@ -1083,13 +1054,20 @@ mod tests {
         /// source that registers its handler and service identities.
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn write_crate(&self, crate_name: &str, method: &str, service: &str) {
+            self.write_crate_declarations(crate_name, method, service);
+            self.write_resource_types(crate_name);
+        }
+
+        /// Every declaration a crate carries except its resource-type
+        /// vocabulary, beside the descriptor source that registers its
+        /// handler and service identities.
+        ///
+        /// The negative fixtures plant a crate through this and then write
+        /// their own `resource-types.json`, so the only thing wrong with the
+        /// tree is the one declaration under test.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn write_crate_declarations(&self, crate_name: &str, method: &str, service: &str) {
             let family = crate_name.strip_prefix("d2b-provider-").unwrap_or(crate_name);
-            self.write(
-                &format!("packages/{crate_name}/resource-types.json"),
-                &format!(
-                    "{{\n  \"crate\": \"{crate_name}\",\n  \"types\": [\n    {{\n      \"resourceType\": \"Fixture{family}\",\n      \"allowedSources\": [\"builtin\"],\n      \"verbs\": [\"get\", \"create\", \"delete\"],\n      \"execution\": [\"host\"],\n      \"exportable\": true,\n      \"reads\": [\"Volume\"]\n    }}\n  ],\n  \"provides\": [],\n  \"roles\": [],\n  \"principals\": []\n}}\n"
-                ),
-            );
             self.write(
                 &format!("packages/{crate_name}/operations.json"),
                 &format!(
@@ -1121,6 +1099,18 @@ mod tests {
                      \n\
                      pub fn descriptor() {{\n    let _ = ResourceRef::parse(\"Operation/{method}\");\n    let _ = &[{upper}_SERVICE];\n}}\n",
                     upper = method.to_ascii_uppercase(),
+                ),
+            );
+        }
+
+        /// One crate's ResourceType vocabulary declaration.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn write_resource_types(&self, crate_name: &str) {
+            let family = crate_name.strip_prefix("d2b-provider-").unwrap_or(crate_name);
+            self.write(
+                &format!("packages/{crate_name}/resource-types.json"),
+                &format!(
+                    "{{\n  \"crate\": \"{crate_name}\",\n  \"types\": [\n    {{\n      \"resourceType\": \"Fixture{family}\",\n      \"allowedSources\": [\"builtin\"],\n      \"verbs\": [\"get\", \"create\", \"delete\"],\n      \"execution\": [\"host\"],\n      \"exportable\": true,\n      \"reads\": [\"Volume\"]\n    }}\n  ],\n  \"provides\": [],\n  \"roles\": [],\n  \"principals\": []\n}}\n"
                 ),
             );
         }
@@ -1182,18 +1172,46 @@ mod tests {
         }
     }
 
-    /// Scenario 2, isolation half, the negative: a tree that drops a
-    /// declaration fails instead of rendering a partial graph.
+    /// Scenario 2, isolation half, the malformed half: a declaration that is
+    /// present but unparseable fails on the parse, naming the file.
+    ///
+    /// The orphan carries every other declaration, so the only thing wrong
+    /// with the tree is the file under test and the refusal can be one
+    /// reason rather than a disjunction.
+    #[test]
+    fn a_malformed_resource_type_declaration_is_refused() {
+        let fixture = Fixture::new("malformed-types");
+        fixture.write_bootstrap_provider();
+        fixture.write_crate("d2b-provider-fixture", "export", "fixture.d2bus.org/export");
+        fixture.write_crate_declarations("d2b-provider-orphan", "import", "orphan.d2bus.org/import");
+        fixture.write("packages/d2b-provider-orphan/resource-types.json", "not json");
+        let error = render_composition(&fixture.root).expect_err("a broken declaration fails");
+        assert!(
+            error.starts_with("malformed declaration")
+                && error.contains("packages/d2b-provider-orphan/resource-types.json"),
+            "the refusal names the unparseable declaration: {error}"
+        );
+    }
+
+    /// Scenario 2, isolation half, the absent half: a crate with no
+    /// `resource-types.json` at all fails instead of being dropped from the
+    /// graph.
+    ///
+    /// An absent file and a renamed one look the same on disk, so the loader
+    /// has to refuse this tree rather than render a partial composition the
+    /// every gate would then compare against itself.
     #[test]
     fn a_crate_without_a_resource_type_declaration_is_refused() {
         let fixture = Fixture::new("missing-types");
         fixture.write_bootstrap_provider();
         fixture.write_crate("d2b-provider-fixture", "export", "fixture.d2bus.org/export");
-        fixture.write("packages/d2b-provider-orphan/resource-types.json", "not json");
-        let error = render_composition(&fixture.root).expect_err("a broken declaration fails");
-        assert!(
-            error.contains("d2b-provider-orphan") || error.contains("cannot parse"),
-            "the refusal names the broken declaration: {error}"
+        fixture.write_crate_declarations("d2b-provider-orphan", "import", "orphan.d2bus.org/import");
+        let error = render_composition(&fixture.root)
+            .expect_err("a crate with no resource-types.json is refused");
+        assert_eq!(
+            error,
+            "missing-declaration: crate d2b-provider-orphan has no packages/d2b-provider-orphan/resource-types.json; a provider crate carries every declaration file, or has a row in authority_common::DECLARATION_ABSENCES naming why it owns none",
+            "the refusal names the crate and the declaration it lost"
         );
     }
 

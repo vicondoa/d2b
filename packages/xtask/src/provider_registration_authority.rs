@@ -30,15 +30,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::authority_common::{collect_rs_files, verify_committed};
+use crate::authority_common::{collect_rs_files, declaration_paths, verify_committed, Declaration};
 #[cfg(test)]
 use d2b_contracts_provider::v3::projection::PrivatePlanProjection;
 use serde::Deserialize;
 
 /// The directory-glob root the per-crate declarations live under.
 const PACKAGES_DIR: &str = "packages";
+
+/// The directory-name prefix that marks a package as a provider crate.
 const PROVIDER_PREFIX: &str = "d2b-provider-";
-const DECLARATION_FILE: &str = "registrations.json";
 
 /// The repository-relative generated artifact path (relative to the source
 /// file that `include!`s it, so `include!("generated/...")` resolves it).
@@ -316,28 +317,15 @@ fn descriptor_service_ids(text: &str, consts: &BTreeMap<String, String>) -> BTre
 
 /// Read every declaring crate's registration declaration into a
 /// crate-keyed map, in crate-name order.
+///
+/// The crate set is [`declaration_paths`]', which refuses a provider crate
+/// carrying no declaration rather than dropping it: a renamed
+/// `registrations.json` would otherwise remove its family from the composed
+/// registration table with the drift gate still green over the smaller input.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn load_declarations(repo_root: &Path) -> Result<BTreeMap<String, RegistrationDeclaration>, String> {
-    let packages = repo_root.join(PACKAGES_DIR);
-    let entries = fs::read_dir(&packages)
-        .map_err(|error| format!("cannot read {}: {error}", packages.display()))?;
     let mut out = BTreeMap::new();
-    for entry in entries {
-        let entry = entry.map_err(|error| format!("cannot read a package entry: {error}"))?;
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if !name.starts_with(PROVIDER_PREFIX) {
-            continue;
-        }
-        let declaration_path = path.join(DECLARATION_FILE);
-        if !declaration_path.is_file() {
-            continue;
-        }
+    for (name, declaration_path) in declaration_paths(repo_root, Declaration::Registrations)? {
         let text = fs::read_to_string(&declaration_path).map_err(|error| {
             format!("cannot read {}: {error}", declaration_path.display())
         })?;
@@ -351,7 +339,7 @@ fn load_declarations(repo_root: &Path) -> Result<BTreeMap<String, RegistrationDe
                 declaration.crate_name
             ));
         }
-        out.insert(name.to_owned(), declaration);
+        out.insert(name, declaration);
     }
     Ok(out)
 }

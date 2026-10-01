@@ -6,18 +6,18 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::authority_common::{declaration_paths, Declaration};
+
 #[cfg(test)]
 use d2b_contracts_provider::v3::projection::PrivatePlanProjection;
 use serde::Deserialize;
 
-/// The directory-glob root the per-crate declarations live under.
-const PACKAGES_DIR: &str = "packages";
-const PROVIDER_PREFIX: &str = "d2b-provider-";
-const DECLARATION_FILE: &str = "service-catalog.json";
-
 /// The repository-relative generated artifact path.
 pub(crate) const GENERATED_ARTIFACT: &str =
     "packages/d2b-contracts-zone-session/src/generated/service_provider_catalog.rs";
+
+/// The directory-name prefix that marks a package as a provider crate.
+const PROVIDER_PREFIX: &str = "d2b-provider-";
 
 /// One provider crate's service-catalog declaration.
 
@@ -150,24 +150,17 @@ pub fn regenerate(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 /// Read every provider crate's declaration file into a crate-keyed map.
+///
+/// The crate set is [`declaration_paths`]', which refuses a provider crate
+/// carrying no catalog rather than dropping it: a renamed
+/// `service-catalog.json` would otherwise remove its crate's service packages
+/// from the generated catalog with the drift gate still green over the
+/// smaller input.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn load(repo_root: &Path) -> Result<CatalogRegistry, String> {
-    let packages_dir = repo_root.join(PACKAGES_DIR);
     let mut out = CatalogRegistry::new();
-    let entries = fs::read_dir(&packages_dir).map_err(|error| {
-        format!("cannot read {}: {error}", packages_dir.display())
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|error| format!("cannot read a packages entry: {error}"))?;
-        let crate_name = entry.file_name().to_string_lossy().into_owned();
-        if !crate_name.starts_with(PROVIDER_PREFIX) {
-
-            continue;
-        }
-        let declaration_path = entry.path().join(DECLARATION_FILE);
-        if !declaration_path.is_file() {
-            continue;
-        }
+    for (crate_name, declaration_path) in declaration_paths(repo_root, Declaration::ServiceCatalog)?
+    {
         let text = fs::read_to_string(&declaration_path).map_err(|error| {
             format!("cannot read the declaration {}: {error}", declaration_path.display())
         })?;

@@ -45,7 +45,7 @@ use d2b_broker::live_handlers::{
     exact_endpoint_access, grant_exact_endpoint_access, revoke_exact_endpoint_access,
 };
 use d2b_broker::ops::endpoint_access::{
-    EndpointAccessError, accept_endpoint_access, endpoint_socket_path,
+    EndpointAccessError, accept_endpoint_access, ensure_endpoint_socket_dir, endpoint_socket_path,
 };
 use d2b_broker::ops::spawn_runner::{PresentationBindSpec, PresentationRealization};
 use d2b_broker::sys::pidfd_sys::{RunnerIsolationSpec, UserNamespaceSpec, clone3_spawn_runner};
@@ -1432,6 +1432,124 @@ fn an_alternate_absolute_socket_a_relative_escape_and_the_runtime_directory_cann
         "the alternate absolute socket must live outside the broker's runtime root"
     );
     assert_eq!(tree.live_endpoints(), 3);
+}
+
+/// The broker creates its own endpoint directory at serve time, so the
+/// exact-endpoint surface is reachable rather than wired and inert.
+///
+/// The dispatch arm is production-wired, so the only thing that could keep it
+/// from ever answering is the directory it resolves socket names inside. The
+/// broker owns its runtime root and therefore owns that one directory: it
+/// creates it once, before any connection is accepted, and NOT from a request.
+/// The absent-directory refusal stays exactly as it was - a request never
+/// invents the tree its own effect would run against - so the case proves both
+/// halves against the production path and never against a harness that made
+/// the directory itself.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[test]
+fn the_broker_provisions_its_own_endpoint_directory_before_it_serves() {
+    let scratch = tempfile::Builder::new()
+        .prefix("d2b-endpoint-serve-")
+        .tempdir_in(world_traversable_root())
+        .expect("serve-path tempdir");
+    let runtime = scratch.path().join("runtime");
+    fs::create_dir_all(&runtime).expect("the broker's runtime root");
+    // The production shape of the runtime root: private, traversable, never
+    // listable, and carrying a non-zero GROUP class so the named traverse
+    // entry the grant installs below stays effective (the AE19 trap).
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o750))
+        .expect("posture the broker runtime root");
+    fs::set_permissions(scratch.path(), fs::Permissions::from_mode(0o711))
+        .expect("posture the scratch root");
+    assert_ancestors_are_traversable(&runtime);
+
+    let resolver = accept_resolver();
+    let endpoints = runtime.join(BROKER_ENDPOINT_DIR);
+    assert!(
+        !endpoints.exists(),
+        "the case starts from a runtime root nothing has provisioned under"
+    );
+
+    // Absent is a refusal by name, for every verb, and nothing is created by
+    // asking: a request does not get to invent the tree.
+    for verb in [
+        EndpointAccessVerb::Observe,
+        EndpointAccessVerb::Grant,
+        EndpointAccessVerb::Revoke,
+    ] {
+        let error = accept_endpoint_access(
+            &across_the_wire(&access_request_variant(verb)),
+            &runtime,
+            &resolver,
+        )
+        .expect_err("an unprovisioned broker refuses the exact-endpoint surface by name");
+        assert_eq!(error, EndpointAccessError::EndpointDirectoryAbsent, "{verb:?}");
+        assert_eq!(
+            error.code(),
+            "endpoint-access-directory-absent",
+            "{verb:?} carries the closed slug"
+        );
+        assert!(
+            !endpoints.exists(),
+            "{verb:?} must not have created the directory it resolves into"
+        );
+    }
+
+    // The broker's own serve-time provisioning makes it exist, and only it.
+    let provisioned =
+        ensure_endpoint_socket_dir(&runtime).expect("the broker provisions the directory it owns");
+    assert_eq!(provisioned, endpoints);
+    let mode = fs::metadata(&endpoints)
+        .expect("stat the endpoint directory")
+        .permissions()
+        .mode()
+        & 0o7777;
+    assert_eq!(
+        mode & 0o070,
+        0o010,
+        "the endpoint directory must keep a non-zero group class: POSIX rewrites the ACL \
+         mask from the group bits on every chmod, so a 0700 directory nullifies the named \
+         traverse entry the moment anything re-asserts its mode"
+    );
+    assert_eq!(
+        mode & 0o004,
+        0,
+        "the endpoint directory must never be listable by anyone outside the broker"
+    );
+
+    // With the broker's own directory in place, the surface answers: the grant
+    // lands on the exact endpoint and the read-back is the kernel's effective
+    // rights, cross-checked through getfacl rather than the broker's parser.
+    let admitted = endpoints.join(ADMITTED);
+    let _socket = UnixListener::bind(&admitted).expect("bind the admitted endpoint");
+    fs::set_permissions(&admitted, fs::Permissions::from_mode(0o660))
+        .expect("posture the admitted endpoint");
+
+    let granted = accept_endpoint_access(
+        &across_the_wire(&access_request_variant(EndpointAccessVerb::Grant)),
+        &runtime,
+        &resolver,
+    )
+    .expect("the committed relationship is granted once the broker owns its directory");
+    assert_eq!(granted.socket_effective_rights, 0o6);
+    assert!(
+        granted.ancestors_traversable,
+        "the consumer can walk to the socket the broker granted"
+    );
+    assert!(
+        !granted.parent_listable,
+        "the containing directory stays unlistable: listing it is the authority R23 withdrew"
+    );
+    assert_eq!(
+        effective_permission(&admitted, granted.consumer_uid),
+        Some(0o6),
+        "the kernel must apply the grant on the exact endpoint"
+    );
+    assert_eq!(
+        effective_permission(&endpoints, granted.consumer_uid),
+        Some(0o1),
+        "the broker's endpoint directory is traversable and nothing more"
+    );
 }
 
 /// AE7: the grant the broker applies lands on the exact endpoint and nowhere

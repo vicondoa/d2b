@@ -14,15 +14,21 @@
 //! # One worker serializes the whole Zone
 //!
 //! `PrepareChange`, `CommitChange`, cancellation and recovery, and `BeginEffect`
-//! all run on one dedicated bounded worker per broker process, in channel
-//! order. Channel order is decision order, which is what makes the
+//! all run on one dedicated bounded worker per broker process. Ordinary
+//! messages are served in channel order, which is what makes the
 //! pending-launch race decidable: the child's exec-release gate and the fence
 //! are processed by the same worker, so exactly one of them happened first and
 //! the outcome is a property of the serialized order rather than of a race.
+//! Control actions reach the same worker over a SECOND, separately bounded
+//! channel that it drains first, so the fence's way out cannot queue behind
+//! the ordinary backlog; there is still exactly one writer over the durable
+//! state, so the order between lanes is that worker's pick rather than a race
+//! between two of them.
 //!
-//! Nothing on the worker blocks. A child's I/O and reap waits happen outside
-//! its mailbox and report a completion message, so the worker stays able to
-//! service control and handshake messages while a child finishes.
+//! Nothing on the worker blocks on a child. A child's I/O and reap waits
+//! happen outside its mailbox and report a completion message, so the worker
+//! stays able to service control and handshake messages while a child
+//! finishes.
 //!
 //! # A fence blocks new use, not the way out
 //!
@@ -748,8 +754,34 @@ fn refuse_session(
 // ---------------------------------------------------------------------------
 
 /// The caller-side handle of the single writer.
+///
+/// Two lanes reach that one writer, and they are separate channels rather
+/// than one queue carrying a priority flag: the ordinary lane is bounded at
+/// [`AuthorityProjection::WORKER_QUEUE_DEPTH`] and the control lane at
+/// [`AuthorityProjection::CONTROL_QUEUE_DEPTH`], so a saturated ordinary
+/// lane can neither refuse a control action at admission nor hold it behind
+/// its own backlog. Both are drained by the same thread over the same
+/// durable state - there is exactly one writer, so the order between lanes
+/// is that thread's pick and never a race between two of them.
 struct ProjectionWriter {
+    /// The ordinary lane: every message that can accept new authority.
     commands: mpsc::Sender<ProjectionCommand>,
+    /// The control lane, drained first: only messages that can reduce use or
+    /// recover known state.
+    controls: mpsc::Sender<ProjectionCommand>,
+}
+
+/// Whether one publication message belongs on the bounded control lane.
+///
+/// A control action is the fence's way out of a Zone whose ordinary traffic is
+/// backed up: it is admitted only when the transaction is one this broker
+/// durably holds and the effect is one in its journal, so answering it ahead
+/// of the ordinary backlog can refuse it early but can never grant anything
+/// the ordinary order would not have granted. Every other message can accept
+/// new authority or move the accepted cursor, so it stays in arrival order on
+/// the ordinary lane.
+fn is_control_action(request: &AuthorityPublicationRequest) -> bool {
+    matches!(request, AuthorityPublicationRequest::ControlAction(_))
 }
 
 /// One serialized command the authority worker executes in channel order.
@@ -798,15 +830,19 @@ impl AuthorityProjection {
     /// in.
     const STATE_DIR: &'static str = "authority";
 
-    /// The bound on admitted-but-unstarted publication commands.
+    /// The bound on admitted-but-unstarted ordinary publication commands.
+    ///
+    /// Everything that can accept new authority or move the accepted cursor
+    /// arrives here and stays in arrival order.
     const WORKER_QUEUE_DEPTH: usize = MAX_PUBLICATION_QUEUE;
 
     /// The bound on admitted-but-unstarted control commands.
     ///
-    /// The control lane is the fence's way out, so it is bounded separately
-    /// and stays serviceable when the ordinary lane is saturated: every control
-    /// command can only reduce use or recover known state, so admitting fewer
-    /// of them grants nothing.
+    /// The control lane is the fence's way out, so it is a separate channel at
+    /// a separate depth that the worker drains FIRST: a control action can
+    /// never be refused at admission by a full ordinary lane, and never waits
+    /// behind one. Admitting fewer of them costs nothing, because every one
+    /// of them can only reduce use or recover known state.
     const CONTROL_QUEUE_DEPTH: usize = MAX_PUBLICATION_CONTROL_QUEUE;
 
     /// Open the projection under `root` from a synchronous caller.
@@ -817,15 +853,10 @@ impl AuthorityProjection {
     #[cfg(test)]
     pub fn open(root: impl Into<PathBuf>) -> Reply<Self> {
         let root = root.into();
-        let (commands, receiver) = mpsc::channel::<ProjectionCommand>(Self::WORKER_QUEUE_DEPTH);
-        std::thread::Builder::new()
-            .name("d2b-broker-authority".to_owned())
-            .spawn(move || projection_worker_loop(receiver))
-            .map_err(|error| {
-                AuthorityProjectionError::io(format!("spawn authority worker: {error}"))
-            })?;
+        let writer = spawn_authority_worker()?;
         let (reply_tx, reply_rx) = oneshot::channel();
-        commands
+        writer
+            .commands
             .blocking_send(ProjectionCommand::Bootstrap {
                 root: root.clone(),
                 reply: reply_tx,
@@ -836,23 +867,16 @@ impl AuthorityProjection {
         reply_rx.blocking_recv().map_err(|_| {
             AuthorityProjectionError::io("authority worker unavailable".to_owned())
         })??;
-        Ok(Self {
-            writer: ProjectionWriter { commands },
-        })
+        Ok(Self { writer })
     }
 
     /// Open the projection under `root` from an async caller.
     pub async fn open_async(root: impl Into<PathBuf>) -> Reply<Self> {
         let root = root.into();
-        let (commands, receiver) = mpsc::channel::<ProjectionCommand>(Self::WORKER_QUEUE_DEPTH);
-        std::thread::Builder::new()
-            .name("d2b-broker-authority".to_owned())
-            .spawn(move || projection_worker_loop(receiver))
-            .map_err(|error| {
-                AuthorityProjectionError::io(format!("spawn authority worker: {error}"))
-            })?;
+        let writer = spawn_authority_worker()?;
         let (reply_tx, reply_rx) = oneshot::channel();
-        commands
+        writer
+            .commands
             .send(ProjectionCommand::Bootstrap {
                 root: root.clone(),
                 reply: reply_tx,
@@ -862,9 +886,7 @@ impl AuthorityProjection {
         reply_rx
             .await
             .map_err(|_| AuthorityProjectionError::io("authority worker unavailable".to_owned()))??;
-        Ok(Self {
-            writer: ProjectionWriter { commands },
-        })
+        Ok(Self { writer })
     }
 
     /// The epoch this projection is currently minting sessions under.
@@ -946,21 +968,27 @@ impl AuthorityProjection {
     /// Serve one publication message.
     ///
     /// The single entry every message family uses, so the session check, the
-    /// per-message decision, and the durable commit all run on the one worker
-    /// in channel order.
+    /// per-message decision, and the durable commit all run on the one worker.
+    /// The lane is the message's own: a control action goes on the bounded
+    /// control lane, everything else in arrival order on the ordinary one, and
+    /// the worker drains the control lane first.
     pub async fn serve(
         &self,
         envelope: &AuthorityPublicationEnvelope,
     ) -> Reply<AuthorityPublicationResponse> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.writer
-            .commands
-            .send(ProjectionCommand::Publication {
-                zone: envelope.zone.clone(),
-                session: envelope.session.clone(),
-                request: envelope.request.clone(),
-                reply: reply_tx,
-            })
+        let command = ProjectionCommand::Publication {
+            zone: envelope.zone.clone(),
+            session: envelope.session.clone(),
+            request: envelope.request.clone(),
+            reply: reply_tx,
+        };
+        let lane = if is_control_action(&envelope.request) {
+            &self.writer.controls
+        } else {
+            &self.writer.commands
+        };
+        lane.send(command)
             .await
             .map_err(|_| AuthorityProjectionError::io("authority worker unavailable".to_owned()))?;
         reply_rx
@@ -984,8 +1012,47 @@ impl Drop for AuthorityProjection {
     }
 }
 
-fn projection_worker_loop(mut receiver: mpsc::Receiver<ProjectionCommand>) {
-    let Some(ProjectionCommand::Bootstrap { root, reply }) = receiver.blocking_recv() else {
+/// Open the two lanes and start the one worker that drains them.
+///
+/// The bound belongs to the channel, not to the worker: each lane is admitted
+/// only up to its own depth, so the control lane is serviceable no matter how
+/// deep the ordinary lane is, and neither is a second writer.
+fn spawn_authority_worker() -> Reply<ProjectionWriter> {
+    let (controls, control_receiver) =
+        mpsc::channel::<ProjectionCommand>(AuthorityProjection::CONTROL_QUEUE_DEPTH);
+    let (commands, ordinary_receiver) =
+        mpsc::channel::<ProjectionCommand>(AuthorityProjection::WORKER_QUEUE_DEPTH);
+    std::thread::Builder::new()
+        .name("d2b-broker-authority".to_owned())
+        .spawn(move || projection_worker_loop(control_receiver, ordinary_receiver))
+        .map_err(|error| {
+            AuthorityProjectionError::io(format!("spawn authority worker: {error}"))
+        })?;
+    Ok(ProjectionWriter {
+        commands,
+        controls,
+    })
+}
+
+/// The one dedicated bounded worker: the single writer over the durable
+/// projection, serving both lanes of its mailbox.
+///
+/// The control lane is drained first on every iteration, so a control action
+/// is never queued behind the ordinary backlog. The wait is a `select` over
+/// BOTH lanes rather than a blocking receive on one of them, because blocking
+/// on either receiver alone would leave the other unserviceable for as long
+/// as this lane stayed idle - which is exactly the head-of-line stall the
+/// separate bound exists to prevent. `mpsc::Receiver::recv` is cancel-safe,
+/// so a losing branch loses nothing.
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
+fn projection_worker_loop(
+    mut controls: mpsc::Receiver<ProjectionCommand>,
+    mut commands: mpsc::Receiver<ProjectionCommand>,
+) {
+    // The open barrier arrives on the ordinary lane and its reply gates the
+    // handle, so no control action can be served before the durable state is
+    // loaded and every known Zone is fenced for reconciliation.
+    let Some(ProjectionCommand::Bootstrap { root, reply }) = commands.blocking_recv() else {
         return;
     };
     let mut state = match projection_bootstrap(&root) {
@@ -996,38 +1063,89 @@ fn projection_worker_loop(mut receiver: mpsc::Receiver<ProjectionCommand>) {
         }
     };
     let _ = reply.send(Ok(()));
-    while let Some(command) = receiver.blocking_recv() {
-        match command {
-            ProjectionCommand::OpenSession { open, reply } => {
-                let result = open_session_locked(&mut state, &open);
-                let _ = reply.send(result);
-            }
-            ProjectionCommand::Publication {
-                zone,
-                session,
-                request,
-                reply,
-            } => {
-                let result = serve_locked(&mut state, &zone, &session, &request);
-                let _ = reply.send(result);
-            }
-            ProjectionCommand::Status { zone, reply } => {
-                let _ = reply.send(state.public_state(&zone));
-            }
-            ProjectionCommand::AcceptedGraph { zone, reply } => {
-                let _ = reply.send(state.accepted_graph(&zone));
-            }
-            ProjectionCommand::Epoch { reply } => {
-                let _ = reply.send(state.durable.epoch);
-            }
-            ProjectionCommand::Shutdown { exited } => {
-                drop(state);
-                let _ = exited.send(());
+    // A current-thread runtime for this one thread, and no other task on it:
+    // it is the smallest thing that can wait on two receivers at once, and the
+    // durable `persist` below is this thread's own blocking fsync either way.
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread().build() else {
+        return;
+    };
+    runtime.block_on(async {
+        let mut control_lane_open = true;
+        let mut ordinary_lane_open = true;
+        loop {
+            let command = match (control_lane_open, ordinary_lane_open) {
+                (true, true) => tokio::select! {
+                    // `biased`: the control lane is bounded independently and
+                    // stays serviceable when the ordinary lane is saturated.
+                    biased;
+                    command = controls.recv() => {
+                        control_lane_open = command.is_some();
+                        command
+                    }
+                    command = commands.recv() => {
+                        ordinary_lane_open = command.is_some();
+                        command
+                    }
+                },
+                (true, false) => {
+                    let command = controls.recv().await;
+                    control_lane_open = command.is_some();
+                    command
+                }
+                (false, true) => {
+                    let command = commands.recv().await;
+                    ordinary_lane_open = command.is_some();
+                    command
+                }
+                // Both lanes closed: the handle is gone and the worker is done.
+                (false, false) => return,
+            };
+            let Some(command) = command else {
+                continue;
+            };
+            if !execute_projection_command(&mut state, command) {
                 return;
             }
-            ProjectionCommand::Bootstrap { .. } => {}
         }
+    });
+}
+
+/// Execute one command on the single writer. Returns whether the worker keeps
+/// running.
+fn execute_projection_command(
+    state: &mut ProjectionWorkerState,
+    command: ProjectionCommand,
+) -> bool {
+    match command {
+        ProjectionCommand::OpenSession { open, reply } => {
+            let result = open_session_locked(state, &open);
+            let _ = reply.send(result);
+        }
+        ProjectionCommand::Publication {
+            zone,
+            session,
+            request,
+            reply,
+        } => {
+            let result = serve_locked(state, &zone, &session, &request);
+            let _ = reply.send(result);
+        }
+        ProjectionCommand::Status { zone, reply } => {
+            let _ = reply.send(state.public_state(&zone));
+        }
+        ProjectionCommand::AcceptedGraph { zone, reply } => {
+            let _ = reply.send(state.accepted_graph(&zone));
+        }
+        ProjectionCommand::Epoch { reply } => {
+            let _ = reply.send(state.durable.epoch);
+        }
+        ProjectionCommand::Shutdown { exited } => {
+            let _ = exited.send(());
+            return false;
+        }
+        ProjectionCommand::Bootstrap { .. } => {}
     }
+    true
 }
 
 /// The open barrier: load, strictly bump the epoch, fence every known Zone for
@@ -1849,8 +1967,18 @@ fn commit_change_locked(
         for reference in &request.removed {
             zone_state.rows.remove(&reference.to_canonical_string());
         }
+        // Only a SETTLED record moves with the accepted revision. A settled
+        // one is historical: it names the transaction its release or exit
+        // evidence was accounted under, and rewriting that would restate a
+        // proof the gate has already read. An unsettled one - admitted, or
+        // cancelled but not yet reported gone - is still in flight, and its
+        // only completion message carries the transaction its `BeginEffect`
+        // named, so moving it would refuse `EffectExit` by name and leave a
+        // child the reducing-commit gate will not stop waiting for.
         for effect in zone_state.effects.values_mut() {
-            effect.transaction = request.transaction.clone();
+            if effect.phase.is_settled() {
+                effect.transaction = request.transaction.clone();
+            }
         }
         zone_state.posture = PersistedPosture::Unfenced;
         reducing

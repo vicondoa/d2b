@@ -35,6 +35,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::authority_common::{declaration_paths, Declaration};
 use serde::{Deserialize, Serialize};
 
 /// The committed operation rows.
@@ -51,7 +52,6 @@ const CATALOG_OUT: &str = "packages/d2b-broker/src/generated/broker_operation_ca
 const TRIAGE_OUT: &str = "docs/reference/broker-operation-triage.md";
 /// The directory-glob root the per-crate declarations live under.
 const PACKAGES_DIR: &str = "packages";
-const PROVIDER_PREFIX: &str = "d2b-provider-";
 /// The per-crate operation declaration file (KTD3/U2).
 const DECLARATION_FILE: &str = "operations.json";
 
@@ -633,26 +633,19 @@ fn validate_row_ids(rows: &[Row], source: &str) -> Result<(), Box<dyn std::error
 
 /// Read every declaring crate's operation declaration file into
 /// (crate-name, declared rows) pairs, in crate order.
+///
+/// The crate set is [`declaration_paths`]', which refuses a provider crate
+/// carrying no declaration rather than dropping it: a renamed
+/// `operations.json` would otherwise remove its crate's rows from the merged
+/// catalog with the drift gate still green over the smaller input.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn load_declarations(
     repo_root: &Path,
 ) -> Result<DeclaringCrates, Box<dyn std::error::Error>> {
-    let packages_dir = repo_root.join(PACKAGES_DIR);
-    let mut entries: Vec<_> = fs::read_dir(&packages_dir)
-        .map_err(|error| render_error(format!("read {}: {error}", packages_dir.display())))?
-        .collect::<Result<_, _>>()
-        .map_err(|error| render_error(format!("read a packages entry: {error}")))?;
-    entries.sort_by_key(|entry| entry.file_name());
     let mut crates = Vec::new();
-    for entry in entries {
-        let crate_name = entry.file_name().to_string_lossy().into_owned();
-        if !crate_name.starts_with(PROVIDER_PREFIX) {
-            continue;
-        }
-        let declaration_path = entry.path().join(DECLARATION_FILE);
-        if !declaration_path.is_file() {
-            continue;
-        }
+    let declared = declaration_paths(repo_root, Declaration::Operations)
+        .map_err(render_error)?;
+    for (crate_name, declaration_path) in declared {
         let text = fs::read_to_string(&declaration_path).map_err(|error| {
             render_error(format!("read {}: {error}", declaration_path.display()))
         })?;

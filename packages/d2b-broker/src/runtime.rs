@@ -1659,6 +1659,33 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
     #[cfg(not(feature = "layer1-bootstrap"))]
     install_live_admitted_effects(&audit_log)?;
 
+    // Create the broker's own endpoint directory beside the rest of the
+    // serve-time provisioning, and before any connection is accepted. The
+    // exact-endpoint ACL surface resolves socket names inside this one
+    // directory, and a broker that never created it would refuse every verb
+    // by name for a reason of its own making - a surface that is wired,
+    // reachable, and inert. It is created HERE rather than lazily inside the
+    // grant path so a request never invents the tree its own effect runs
+    // against, and the refusal for an absent directory stays.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    // Provision the endpoint directory the exact-endpoint ACL surface resolves
+    // sockets inside, so that surface is reachable rather than inert.
+    //
+    // Failing to create it is NOT a reason to refuse to serve. The directory
+    // exists so one capability can work; if it cannot be created, the
+    // per-request `EndpointDirectoryAbsent` refusal is still the correct
+    // fail-closed answer for that capability, and every other broker operation
+    // is unaffected. Turning an absent directory into a boot failure would
+    // trade one unavailable capability for a whole unavailable daemon.
+    if let Err(error) = crate::ops::endpoint_access::ensure_endpoint_socket_dir(broker_runtime_root(&config))
+    {
+        tracing::warn!(
+            endpoint_directory = %broker_runtime_root(&config).display(),
+            error = %error,
+            "the exact-endpoint ACL surface will refuse every request until its              socket directory can be created; the broker serves everything else"
+        );
+    }
+
     // Signal systemd that the broker is ready to accept connections.
     // Called after the listener is established and the audit log is open,
     // before entering the accept loop.  No-op when NOTIFY_SOCKET is absent.
@@ -16816,6 +16843,103 @@ mod tests {
             error.message,
             redact_public_detail(admitted_effect_refusal_detail(UNACCEPTED_PROJECTION))
         );
+    }
+
+    /// Install the admitted-effect wiring the serve path installs, and
+    /// return it with the scratch audit root backing it.
+    ///
+    /// This reaches the process-lifetime wiring through the same
+    /// [`install_live_admitted_effects`] serve calls, so what a case below
+    /// observes is the table and the private values production resolved at
+    /// startup, not a table this module's tests assembled.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn production_admitted_effect_wiring(label: &str) -> (&'static AdmittedEffectWiring, PathBuf) {
+        let root = test_audit_dir(label);
+        fs::create_dir_all(&root).expect("create audit test dir");
+        let config = test_server_config(&root, &root.join("unused-bundle.json"));
+        let log = Arc::new(
+            AuditLog::open(
+                &config.audit_dir,
+                Gid::current().as_raw(),
+                true,
+                config.audit_retention_days,
+            )
+            .expect("open audit log"),
+        );
+        init_admitted_effects(&log);
+        (live_admitted_effects(), root)
+    }
+
+    /// The production install serves no admitted effect at all, and says so
+    /// by name.
+    ///
+    /// `install_live_admitted_effects` installs the empty table on purpose:
+    /// no declared `Operation` contract exists for an invocation to be
+    /// admitted against, and a table that served an invented handler would
+    /// be a second authority source. This drives the real admission over
+    /// the real installed wiring with a carrier that is well formed in every
+    /// other respect - it passes the screen, the Zone holds an accepted
+    /// graph, and it names a real `Operation` - so the `unknown-implementation`
+    /// refusal that comes back is the production table declining it and
+    /// nothing else. The moment a declared implementation is added to the
+    /// installed table, this case fails, because the answer stops being a
+    /// refusal.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[tokio::test]
+    async fn the_installed_admitted_effect_table_serves_no_operation() {
+        use crate::envelope::{AdmittedEffectAdmission, ProjectionPosture, UNKNOWN_IMPLEMENTATION};
+        use d2b_contracts_resource::v3::{
+            AdmissionStage, AuthoritySubject, AuthoritySubjectKind, RefusalReason,
+            StoreIncarnation, ZoneId,
+        };
+
+        let (wiring, root) = production_admitted_effect_wiring("admitted-effect-empty-table");
+        // A real accepted graph for the Zone the frame names, so the refusal
+        // below is not the projection gate answering first.
+        let accepted = d2b_core::resource_authority::AcceptedGraph::new(
+            ZoneId::parse("pubzone").expect("the fixture Zone is canonical"),
+            StoreIncarnation::parse("store-generation-1").expect("a bounded store generation"),
+            AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap),
+        );
+        assert_eq!(accepted.zone().as_str(), "pubzone");
+        let invocation = admit_effect_frame(&well_formed_admitted_effect_frame())
+            .expect("the carrier is well formed in every respect but the implementation");
+        assert_eq!(
+            invocation.operation().to_canonical_string(),
+            "Operation/spawn-process",
+        );
+        // The frame's own dependencies name the accepted Zone, so nothing
+        // downstream can blame the refusal on a mismatched Zone either.
+        assert!(
+            invocation
+                .expected_dependencies()
+                .iter()
+                .all(|dependency| dependency.zone() == accepted.zone()),
+            "the invocation's expected dependencies all name the accepted Zone",
+        );
+
+        let boundary = AdmittedEffectAdmission::new(
+            admitted_effect_ledger(),
+            &wiring.table,
+            Some(&wiring.chain_audit),
+        );
+        let refusal = boundary
+            .admit(
+                ProjectionPosture::Accepted,
+                accepted.zone().as_str(),
+                &accepted,
+                &wiring.values,
+                &invocation,
+                &[],
+            )
+            .await
+            .expect_err("the installed table serves no Operation");
+
+        assert_eq!(refusal.code, UNKNOWN_IMPLEMENTATION);
+        assert_eq!(refusal.stage, AdmissionStage::Authorize);
+        assert_eq!(refusal.reason, RefusalReason::UntrustedImplementation);
+        assert_eq!(refusal.operation.to_canonical_string(), "Operation/spawn-process");
+        let _ = tokio::fs::remove_dir_all(&root).await;
     }
 
     /// A raw launch posture is refused at the boundary with a named closed

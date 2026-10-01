@@ -14876,18 +14876,17 @@ mod guest_deployment_bootstrap_tests {
     use d2b_contracts_resource::v3::CanonicalJsonValue;
     use d2bd_runtime::target_runtime::AdmissionLimits;
 
-    /// The per-Zone deployment graph the Nix producer renders for Zone
-    /// `work`, byte for byte.
+    /// A transcription of the per-Zone deployment graph the Nix producer
+    /// renders for Zone `work`, used by the cases that need a document
+    /// without the Nix fixture in scope.
     ///
-    /// This is the document `nixos-modules/deployment-bootstrap.nix`
-    /// constructs for a Guest image, captured from that producer rather
-    /// than re-derived here, so what the Guest reads in these tests is what
-    /// the Guest image actually delivers. Re-render it with:
-    ///
-    /// ```text
-    /// nix eval --impure --raw --file nixos-modules/deployment-bootstrap.nix \
-    ///   --arg lib 'import <nixpkgs> {}.lib'
-    /// ```
+    /// This is a copy, so it cannot tell that the producer still renders
+    /// these bytes. `the_guest_boot_path_accepts_the_producers_own_zone_publication`
+    /// and its sibling below close that gap in the gated lane: they read the
+    /// constructor's own `documentFor "work"` output out of the fixture and
+    /// drive this same boot path over it, so a producer change that left
+    /// this copy stale fails there. Refresh it with the fixture's
+    /// `deployment-bootstrap-work.json`.
     const WORK_ZONE_DOCUMENT: &str = concat!(
     r#"{"graphDigest":"sha256:3e0db4853b89f2126441dc58f15e3255cae072e2f7e66466afb06fb62966c787","#,
     r#""implementations":["activation-nixos","audio-binding","audio-service","credential","device","device-security-key","device-usbip","endpoint","guest","host","network-local","process","process-systemd","shell-pool","shell-session","user","volume","volume-binding","wayland-policy","wayland-session"],"#,
@@ -15058,6 +15057,115 @@ mod guest_deployment_bootstrap_tests {
         assert!(
             !runtime.has_target_authority(),
             "a Guest with no delivered graph serves nothing",
+        );
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    /// The per-Zone publication the Nix producer itself renders, as bytes.
+    ///
+    /// `WORK_ZONE_DOCUMENT` above is a transcription of these bytes, and a
+    /// transcription cannot tell that the producer still renders them. The
+    /// fixture aggregate materializes the constructor's own output, so the
+    /// cases below verify and publish what a real Guest image closure
+    /// carries. Unset outside the gated lane, which is the only place the
+    /// fixture exists.
+    fn rendered_work_zone_document() -> Option<String> {
+        let root = std::env::var_os("D2B_FIXTURES")?;
+        let path = std::path::Path::new(&root).join("deployment-bootstrap-work.json");
+        Some(
+            std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display())),
+        )
+    }
+
+    /// The Guest boot path accepts the producer's own publication for the
+    /// Zone it names, and the implementations it publishes are exactly the
+    /// ones this build compiles.
+    ///
+    /// This is the cross-language claim the transcription cannot make: the
+    /// `implementations` the Nix constructor reads out of the per-crate
+    /// `registrations.json` declarations and the compiled registration table
+    /// the daemon generates from those same declarations are one list. If
+    /// either side gains or drops an identity, the publication stops
+    /// matching the build and this fails here rather than at a deployment
+    /// that publishes an implementation nothing implements.
+    #[tokio::test]
+    async fn the_guest_boot_path_accepts_the_producers_own_zone_publication() {
+        let Some(document) = rendered_work_zone_document() else {
+            eprintln!("SKIP: D2B_FIXTURES unset (not the gated fixture step)");
+            return;
+        };
+        let root = deployment_root("producer-work", Some(&document));
+        let runtime = guest_runtime("work").await;
+
+        publish_guest_target_authority(&root, &runtime)
+            .await
+            .expect("the producer's own Zone publication boots this Guest");
+
+        let graph = guest_deployment_bootstrap(&root, &ZoneId::parse("work").expect("Zone"))
+            .await
+            .expect("the same bytes verify for the Zone they name");
+        assert_eq!(
+            graph.implementations,
+            crate::foundation_seed::compiled_implementations()
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<String>>(),
+            "the publication names exactly the implementations this build compiles",
+        );
+
+        let authority = runtime
+            .require_target_authority()
+            .expect("a published Guest authority");
+        assert_eq!(authority.zone.as_str(), "work");
+        assert_eq!(
+            authority.bindings,
+            graph
+                .accepted_graph()
+                .expect("the rendered rows are accepted canonical rows")
+                .role_bindings()
+                .map(|(reference, _)| reference.to_canonical_string())
+                .collect::<Vec<_>>(),
+            "the Guest publishes the bindings the producer wrote and no host surface",
+        );
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    /// The producer's own bytes, with one authority row renamed after the
+    /// digest was stamped, are refused by name at the Guest boot path.
+    ///
+    /// The edit is the one an attacker with write access to the image would
+    /// make, and it is invisible to a reader that does not recompute the
+    /// self-hash: the document still parses, still carries this release's
+    /// schema tag, and still names a Zone the Guest accepts.
+    #[tokio::test]
+    async fn an_edited_producer_publication_is_refused_by_name_at_boot() {
+        let Some(document) = rendered_work_zone_document() else {
+            eprintln!("SKIP: D2B_FIXTURES unset (not the gated fixture step)");
+            return;
+        };
+        let edited = document.replace(
+            "\"reference\":\"Role/operation-publisher\"",
+            "\"reference\":\"Role/anything\"",
+        );
+        assert_ne!(
+            edited, document,
+            "the edit must land on the rendered document, not on a string it does not contain"
+        );
+        let root = deployment_root("producer-work-edited", Some(&edited));
+        let runtime = guest_runtime("work").await;
+
+        let refusal = publish_guest_target_authority(&root, &runtime)
+            .await
+            .expect_err("an authority row renamed after verification never publishes");
+
+        assert!(
+            refusal.contains("self-hash"),
+            "the refusal names the self-hash that no longer covers the bytes: {refusal}",
+        );
+        assert!(
+            !runtime.has_target_authority(),
+            "a refused graph leaves the Guest with no authority at all",
         );
         let _ = tokio::fs::remove_dir_all(&root).await;
     }

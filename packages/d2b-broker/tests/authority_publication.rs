@@ -14,6 +14,10 @@
 //! built with the contract constructors and serialized, so the graph the
 //! evaluator reads is decoded from the same bytes a store would commit.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::Duration;
+
 use d2b_broker::authority_projection::{AuthorityProjection, AuthorityProjectionError};
 use d2b_contracts::{decode_frame, encode_frame};
 use d2b_contracts_broker::broker_wire::{
@@ -25,7 +29,8 @@ use d2b_contracts_broker::broker_wire::{
     PublicationControlKind, PublicationEffectId, PublicationMutationKind, PublicationRefusal,
     PublicationSession, PublicationSessionBinding, PublicationTransactionId, ReleaseEffectRequest,
     ResynchronizeRequest, ZoneAuthorityState, MAX_PUBLICATION_CHUNK_BYTES,
-    MAX_PUBLICATION_ROWS, MAX_PUBLICATION_SNAPSHOT_BYTES, PUBLICATION_CONTROL_NOT_BOUND,
+    MAX_PUBLICATION_QUEUE, MAX_PUBLICATION_ROWS, MAX_PUBLICATION_SNAPSHOT_BYTES,
+    PUBLICATION_CONTROL_NOT_BOUND,
     PUBLICATION_DIGEST_MISMATCH, PUBLICATION_DUPLICATE_TRANSACTION, PUBLICATION_EFFECT_UNPROVEN,
     PUBLICATION_FENCE_HELD, PUBLICATION_RECONCILIATION_REQUIRED,
     PUBLICATION_SESSION_BOUND_ELSEWHERE, PUBLICATION_SESSION_INVALID, PUBLICATION_SNAPSHOT_INCOMPLETE,
@@ -1621,6 +1626,135 @@ async fn a_control_action_must_be_bound_to_a_known_identity() {
 }
 
 // ---------------------------------------------------------------------------
+// The control lane is a lane of its own
+// ---------------------------------------------------------------------------
+
+/// How many concurrent ordinary writers keep the ordinary mailbox busy.
+///
+/// More than `MAX_PUBLICATION_QUEUE`, so the ordinary lane's own bound is
+/// what admits each command rather than the number of senders: the mailbox
+/// stays held full while the control action arrives.
+const ORDINARY_WRITERS: usize = MAX_PUBLICATION_QUEUE + 32;
+
+/// The most ordinary commands a control action may be answered behind before
+/// this case calls it head-of-line blocked.
+///
+/// The ordinary load below is the slow kind: every one of those messages
+/// rewrites and fsyncs the durable projection, so the single writer is the
+/// bottleneck and only the command already in the writer when the control
+/// action lands is finished before it. Anything near the ordinary lane's own
+/// bound is the control action sitting in the ordinary queue instead.
+const HEAD_OF_LINE_BUDGET: usize = 8;
+
+/// A saturated ordinary mailbox does not starve the fence's way out.
+///
+/// The control lane is a second, separately bounded channel that the single
+/// writer drains first. A control action that shared the ordinary queue would
+/// instead sit behind every ordinary command already admitted - and because
+/// each of those rewrites and fsyncs the durable projection, it would sit
+/// behind a full bound of them. That is the shape a sustained snapshot chunk
+/// run or any other durable write flood produces, and it is why the control
+/// lane is bounded and drained separately rather than merely documented.
+///
+/// One runtime worker, so the window this measures is not scheduling noise:
+/// reading the completion counter and handing the control action to its lane
+/// are adjacent statements with no suspension point between them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn a_saturated_ordinary_lane_still_services_a_control_action() {
+    let mut harness = Harness::start().await;
+    harness.install_reader_grant().await;
+    let control = harness.envelope(AuthorityPublicationRequest::ControlAction(
+        harness.control(
+            TX_BOOTSTRAP,
+            None,
+            "Process/worker",
+            PublicationControlKind::Observe,
+        ),
+    ));
+    // Re-establishing the session is an ORDINARY message that rewrites and
+    // fsyncs the durable projection, so it is the slow kind of ordinary load.
+    // It is also idempotent: the binding it mints is a function of state it
+    // does not change, so the session this control action presents stays the
+    // one the broker holds.
+    let reopen = AuthorityPublicationOpen {
+        request: OpenPublicationSessionRequest {
+            zone: ZONE.to_owned(),
+            store_incarnation: incarnation(STORE),
+            broker_epoch: 0,
+            initiating_subject: bootstrap(),
+            accepted: AuthorityCursor::initial(),
+        },
+    };
+    let accepted = harness.status().await.accepted().cloned().unwrap();
+    let projection = Arc::new(harness.projection);
+
+    let completed = Arc::new(AtomicUsize::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
+    let writers: Vec<_> = (0..ORDINARY_WRITERS)
+        .map(|_| {
+            let projection = Arc::clone(&projection);
+            let completed = Arc::clone(&completed);
+            let stop = Arc::clone(&stop);
+            let reopen = reopen.clone();
+            let accepted = accepted.clone();
+            tokio::spawn(async move {
+                let mut reopen = reopen;
+                reopen.request.accepted = accepted;
+                while !stop.load(Ordering::SeqCst) {
+                    let _ = projection.open_session(reopen.clone()).await;
+                    completed.fetch_add(1, Ordering::SeqCst);
+                }
+            })
+        })
+        .collect();
+
+    // Wait until the writer has carried a whole ordinary bound's worth, which
+    // is what makes this a claim about a BUSY mailbox rather than about an
+    // idle one.
+    assert!(
+        wait_for_completions(&completed, MAX_PUBLICATION_QUEUE).await,
+        "the ordinary mailbox never became busy, so this case measured an idle writer"
+    );
+
+    let before = completed.load(Ordering::SeqCst);
+    let answer = projection
+        .serve(&control)
+        .await
+        .expect("the control action is serviced behind a busy ordinary mailbox");
+    let waited = completed.load(Ordering::SeqCst) - before;
+
+    stop.store(true, Ordering::SeqCst);
+    for writer in writers {
+        writer.await.expect("the ordinary writer joins");
+    }
+
+    assert!(
+        matches!(answer, AuthorityPublicationResponse::Progressed(_)),
+        "the control action is answered, not refused: {answer:?}"
+    );
+    assert!(
+        waited <= HEAD_OF_LINE_BUDGET,
+        "the control action was answered behind {waited} ordinary commands: it is queued on \
+         the ordinary lane rather than drained ahead of it, so a durable write flood \
+         would keep a fenced Zone fenced"
+    );
+}
+
+/// Wait, bounded, for the ordinary mailbox to have carried `at_least` commands.
+async fn wait_for_completions(completed: &AtomicUsize, at_least: usize) -> bool {
+    let deadline = Duration::from_secs(30);
+    let mut waited = Duration::ZERO;
+    while waited < deadline {
+        if completed.load(Ordering::SeqCst) >= at_least {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(2)).await;
+        waited += Duration::from_millis(2);
+    }
+    false
+}
+
+// ---------------------------------------------------------------------------
 // The exec-release gate and the reducing proof obligation
 // ---------------------------------------------------------------------------
 
@@ -1891,6 +2025,109 @@ async fn an_unmatched_completion_cannot_settle_a_reducing_commit() {
         RefusalReason::UnprovenEffect,
         true,
     );
+}
+
+/// An unrelated commit that does not reduce the Zone must not move an
+/// in-flight effect off the transaction it was admitted under.
+///
+/// The reduction proof obligation outlives any single revision: a child
+/// admitted under `TX_ONE` is unaccounted until its completion is reported,
+/// whatever else is accepted in between. If a commit rebinds that record, the
+/// completion is refused by name and the gate that was waiting for it never
+/// converges.
+#[tokio::test]
+async fn an_unrelated_commit_leaves_an_in_flight_effect_completable() {
+    let mut harness = unfenced_with_one_effect().await;
+
+    // An ordinary, non-reducing change lands while the child is still in
+    // flight. It adds authority rows and rewrites nothing accepted, so it
+    // moves the accepted cursor without owing anything about the child.
+    let prepared = harness
+        .prepare(harness.prepare_request(
+            TX_TWO,
+            cursor(2),
+            cursor(3),
+            PublicationMutationKind::Create,
+            vec![process_row("extra")],
+            Vec::new(),
+            shell(),
+        ))
+        .await;
+    assert!(
+        !prepared.reducing,
+        "adding a row is not a reducing change, so it owes nothing about the child"
+    );
+    let accepted = harness
+        .commit(harness.commit_request(
+            TX_TWO,
+            cursor(2),
+            cursor(3),
+            vec![process_row("extra")],
+            Vec::new(),
+        ))
+        .await;
+    assert_eq!(accepted.sequence, sequence(3));
+
+    // The guard still binds: a completion naming a transaction this broker
+    // did not admit the effect under proves nothing and is refused by name.
+    let error = harness
+        .serve(AuthorityPublicationRequest::EffectExit(EffectExitRequest {
+            effect: effect_id(EFFECT_ONE),
+            transaction: tx_id(TX_FOREIGN),
+            reached_exec: false,
+        }))
+        .await
+        .expect_err("a completion for another transaction proves nothing");
+    assert_refused(
+        &refusal(error),
+        PUBLICATION_CONTROL_NOT_BOUND,
+        AdmissionStage::Recover,
+        RefusalReason::UnprovenEffect,
+        false,
+    );
+
+    // The completion the caller actually holds - the one naming the
+    // transaction its `BeginEffect` did - is admitted, and settles the
+    // record, so the reducing gate that was blocked on it converges.
+    let outcome = harness
+        .serve(AuthorityPublicationRequest::EffectExit(EffectExitRequest {
+            effect: effect_id(EFFECT_ONE),
+            transaction: tx_id(TX_ONE),
+            reached_exec: false,
+        }))
+        .await
+        .expect("the completion under the admitted transaction is accepted");
+    assert!(
+        matches!(outcome, AuthorityPublicationResponse::Progressed(_)),
+        "a child that never exec'd is accounted, not converged: {outcome:?}"
+    );
+
+    harness
+        .prepare(harness.prepare_request(
+            TX_THREE,
+            cursor(3),
+            cursor(4),
+            PublicationMutationKind::Delete,
+            vec![process_row("extra")],
+            vec![reference("Process/extra")],
+            shell(),
+        ))
+        .await;
+    let accepted = harness
+        .commit(harness.commit_request(
+            TX_THREE,
+            cursor(3),
+            cursor(4),
+            vec![process_row("extra")],
+            vec![reference("Process/extra")],
+        ))
+        .await;
+    assert!(
+        accepted.reducing,
+        "the settled child is accounted, so the reducing change is accepted"
+    );
+    assert_eq!(accepted.sequence, sequence(4));
+    assert!(!harness.status().await.is_fenced(), "the Zone converges");
 }
 
 // ---------------------------------------------------------------------------

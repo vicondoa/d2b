@@ -1,11 +1,22 @@
 //! The broker's admitted-effect boundary (U10, KTD8).
 //!
 //! These cases drive the real [`AdmittedEffectAdmission`] over the real
-//! [`EffectLedger`] and the real in-process [`AdmittedEffectTable`]. The
+//! [`EffectLedger`] and a real in-process [`AdmittedEffectTable`]. The
 //! accepted graph is built with the contract constructors and the private
 //! execution table with the plan's own types, so the graph the evaluator
-//! reads and the values the plan resolves are the ones production reads and
-//! resolves.
+//! reads and the values the plan resolves are the ones the boundary's own
+//! types carry.
+//!
+//! The table and the private values are test-owned fixtures, not the wiring
+//! production installs: `install_live_admitted_effects` in
+//! `packages/d2b-broker/src/runtime.rs` installs an empty table and the
+//! empty private table, deliberately, because no declared `Operation`
+//! contract exists for an admitted invocation to be admitted against. So
+//! the cases below prove the boundary's rules over a table that serves an
+//! `Operation`; they do not claim to observe what production serves. The
+//! production install's own observable behaviour - that its empty live
+//! table refuses a well-formed carrier by name - is owned by a case in
+//! that module's `cfg(test)`, beside the construction it pins.
 //!
 //! The plan's four scenarios are covered here:
 //!

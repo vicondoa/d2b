@@ -59,15 +59,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::authority_common::{collect_rs_files, verify_committed};
+use crate::authority_common::{collect_rs_files, declaration_paths, verify_committed, Declaration};
 #[cfg(test)]
 use d2b_contracts_provider::v3::projection::PrivatePlanProjection;
 use serde::Deserialize;
 
 /// The directory-glob root the per-crate declarations live under.
 const PACKAGES_DIR: &str = "packages";
-const PROVIDER_PREFIX: &str = "d2b-provider-";
-const DECLARATION_FILE: &str = "resource-types.json";
 
 /// The repository-relative generated artifact path (relative to the source
 /// file that `include!`s it, so `include!("generated/...")` resolves it).
@@ -596,7 +594,7 @@ fn render_process_roles(registry: &AuthorityRegistry) -> Result<String, String> 
 /// registered descriptors from the tree.
 fn load(repo_root: &Path) -> Result<AuthorityRegistry, String> {
     let loaded = load_declarations(repo_root)?;
-    let sources = load_sources(repo_root)?;
+    let sources = load_sources(repo_root, &loaded.types)?;
     let descriptors = load_descriptors(repo_root, &sources)?;
     Ok(AuthorityRegistry {
         declarations: loaded.types,
@@ -617,28 +615,20 @@ struct LoadedDeclarations {
 /// Read every provider crate's declaration file, collecting the declared
 /// types and roles (U4).
 ///
+/// The set of crates is [`declaration_paths`]', which refuses a provider
+/// crate carrying no declaration rather than dropping it: a renamed
+/// `resource-types.json` would otherwise shrink the type authority, the Nix
+/// registry, and the new-graph projection together with every gate still
+/// green over the smaller input.
+///
 /// A crate source is a separate input, read by [`load_sources`] for the
 /// descriptor parity gate alone, so the declaration-only render neither
 /// needs a `src` tree in its sandbox nor reads one it would discard.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn load_declarations(repo_root: &Path) -> Result<LoadedDeclarations, String> {
-    let packages_dir = repo_root.join(PACKAGES_DIR);
     let mut types = BTreeMap::new();
     let mut roles = BTreeMap::new();
-    let entries = fs::read_dir(&packages_dir).map_err(|error| {
-        format!("cannot read {}: {error}", packages_dir.display())
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|error| format!("cannot read a packages entry: {error}"))?;
-        let crate_name = entry.file_name().to_string_lossy().into_owned();
-        if !crate_name.starts_with(PROVIDER_PREFIX) {
-
-            continue;
-        }
-        let declaration_path = entry.path().join(DECLARATION_FILE);
-        if !declaration_path.is_file() {
-            continue;
-        }
+    for (crate_name, declaration_path) in declaration_paths(repo_root, Declaration::ResourceTypes)? {
         let text = fs::read_to_string(&declaration_path).map_err(|error| {
             format!("cannot read the declaration {}: {error}", declaration_path.display())
         })?;
@@ -666,23 +656,18 @@ fn load_declarations(repo_root: &Path) -> Result<LoadedDeclarations, String> {
 
 /// Read the declaring crates' Rust sources, the input the descriptor parity
 /// gate compares a declaration against.
+///
+/// The crate set is the one [`load_declarations`] already proved complete, so
+/// there is no second enumeration here that could skip a crate whose
+/// declaration file is missing.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn load_sources(repo_root: &Path) -> Result<BTreeMap<String, String>, String> {
-    let packages_dir = repo_root.join(PACKAGES_DIR);
+fn load_sources(
+    repo_root: &Path,
+    declaring: &BTreeMap<String, BTreeSet<String>>,
+) -> Result<BTreeMap<String, String>, String> {
     let mut sources = BTreeMap::new();
-    let entries = fs::read_dir(&packages_dir).map_err(|error| {
-        format!("cannot read {}: {error}", packages_dir.display())
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|error| format!("cannot read a packages entry: {error}"))?;
-        let crate_name = entry.file_name().to_string_lossy().into_owned();
-        if !crate_name.starts_with(PROVIDER_PREFIX) {
-            continue;
-        }
-        if !entry.path().join(DECLARATION_FILE).is_file() {
-            continue;
-        }
-        let src_dir = packages_dir.join(&crate_name).join("src");
+    for crate_name in declaring.keys() {
+        let src_dir = repo_root.join(PACKAGES_DIR).join(crate_name).join("src");
         let mut source_text = String::new();
         for path in collect_rs_files(&src_dir)? {
             source_text.push_str(
@@ -692,7 +677,7 @@ fn load_sources(repo_root: &Path) -> Result<BTreeMap<String, String>, String> {
             );
             source_text.push('\n');
         }
-        sources.insert(crate_name, source_text);
+        sources.insert(crate_name.clone(), source_text);
     }
     Ok(sources)
 }

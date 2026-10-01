@@ -29,6 +29,8 @@ const VOLUME_UID: &str = "123e4567-e89b-42d3-a456-426614174000";
 const OTHER_VOLUME_UID: &str = "223e4567-e89b-42d3-a456-426614174001";
 const CONSUMER_UID: &str = "323e4567-e89b-42d3-a456-426614174002";
 const GUEST_UID: &str = "423e4567-e89b-42d3-a456-426614174003";
+const DEVICE_UID: &str = "523e4567-e89b-42d3-a456-426614174004";
+const PEER_CONSUMER_UID: &str = "623e4567-e89b-42d3-a456-426614174005";
 
 fn reference(value: &str) -> ResourceRef {
     ResourceRef::parse(value).expect("registered resource reference")
@@ -500,6 +502,44 @@ fn slot_identity_survives_a_rights_update_and_conflicts_are_refused() {
         .key(zone(OTHER_ZONE), uid(VOLUME_UID), uid(CONSUMER_UID))
         .expect("key");
     assert_ne!(read_only_key.address(), personal_key.address());
+
+    // The same token under a second consumer is that consumer's own slot, not
+    // a conflict with the first one's.
+    let peer_key = BindingKey::new(
+        zone(ZONE),
+        BindingKind::Volume,
+        reference("Volume/state"),
+        uid(VOLUME_UID),
+        reference("Process/other"),
+        uid(PEER_CONSUMER_UID),
+        slot("state"),
+    )
+    .expect("key");
+    assert_ne!(read_only_key.address(), peer_key.address());
+    assert_eq!(
+        index.declare(&peer_key, &read_only.fingerprint()),
+        Ok(BindingSlotDecision::Claimed),
+        "a second consumer's slot is not this slot's conflict"
+    );
+
+    // So is the same token under a second family for one consumer: the slot
+    // names a relationship of one kind, not a capability of any kind.
+    let device_key = BindingKey::new(
+        zone(ZONE),
+        BindingKind::Device,
+        reference("Device/tpm"),
+        uid(DEVICE_UID),
+        reference("Process/worker"),
+        uid(CONSUMER_UID),
+        slot("state"),
+    )
+    .expect("key");
+    assert_ne!(read_only_key.address(), device_key.address());
+    assert_eq!(
+        index.declare(&device_key, &read_only.fingerprint()),
+        Ok(BindingSlotDecision::Claimed),
+        "one consumer may name the same token for two families"
+    );
     assert!(!BindingLifecycleState::Unknown.admits_new_use());
     assert!(!BindingLifecycleState::Degraded.proves_effect());
 }

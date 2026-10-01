@@ -49,6 +49,7 @@ test_suite(
         "//packages/d2b:status_contract",
         "//packages/d2b:usb_contract",
         "//packages/d2b:usb_sk_contract",
+        "//packages/d2b-core:deployment_bootstrap_contract",
         "//packages/d2b-provider-guest-qemu-media:fixture_projection",
     ],
 )

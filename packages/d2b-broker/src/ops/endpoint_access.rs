@@ -32,6 +32,13 @@
 //! [`crate::live_handlers`], and every answer reports the KERNEL's effective
 //! rights on the pinned inode rather than the mode the broker asked for.
 //!
+//! The directory those names resolve inside is the broker's own, and the
+//! broker creates it: [`ensure_endpoint_socket_dir`] provisions it once at
+//! serve time, before any connection is accepted, at a mode whose group class
+//! keeps a grant's traverse entry effective. Nothing on the request path
+//! creates it, and an absent directory is still refused by name - a request
+//! never invents the tree its own effect would run against.
+//!
 //! Public arm: `tests/endpoint_delivery.rs` drives this resolution from
 //! outside the crate, for the same reason the arms above it are public - the
 //! integration test is what proves the boundary, and it can only reach the
@@ -98,10 +105,16 @@ pub enum EndpointAccessError {
     /// check is here so the property is structural rather than inherited.
     NotADirectChild,
     /// The broker's own endpoint directory is absent, so the effect has
-    /// nothing to act on. The broker does not create it here: the endpoint
-    /// owner prepares the endpoint, and a request never invents the tree the
-    /// effect runs against.
+    /// nothing to act on. The broker does not create it here: it is created
+    /// once at serve time by [`ensure_endpoint_socket_dir`], and the endpoint
+    /// owner prepares the endpoint inside it, because a request never invents
+    /// the tree the effect runs against.
     EndpointDirectoryAbsent,
+    /// The broker's own runtime root cannot host the endpoint directory it
+    /// owns, so this surface has nowhere to land. A serve-time failure, never
+    /// a request-time one: the broker creates that directory before it accepts
+    /// a connection, so a broker that could not does not serve it at all.
+    RuntimeRootUnusable { detail: String },
     /// No exact endpoint resolves at the broker's resolved path.
     EndpointAbsent,
     /// The consumer principal could not be derived, or a claimed principal
@@ -124,6 +137,7 @@ impl EndpointAccessError {
             Self::RuntimeRootInvalid => "endpoint-access-runtime-root-invalid",
             Self::NotADirectChild => "endpoint-access-not-a-direct-child",
             Self::EndpointDirectoryAbsent => "endpoint-access-directory-absent",
+            Self::RuntimeRootUnusable { .. } => "endpoint-access-runtime-root-unwritable",
             Self::EndpointAbsent => "endpoint-access-endpoint-absent",
             Self::ConsumerPrincipal { .. } => "endpoint-access-consumer-principal",
             Self::Effect { .. } => "endpoint-access-effect-failed",
@@ -153,6 +167,59 @@ pub fn endpoint_socket_directory(runtime_root: &Path) -> Result<PathBuf, Endpoin
     if !directory.starts_with(runtime_root) || directory == *runtime_root {
         return Err(EndpointAccessError::RuntimeRootInvalid);
     }
+    Ok(directory)
+}
+
+/// The mode the broker's own endpoint directory is created with.
+///
+/// `0710`: the owner may create, list and remove; everyone else gets the
+/// traverse bit and nothing more, so the directory is never listable by a
+/// principal the broker admits - listing it is the directory authority R23
+/// withdrew, and the traversal grant a verb installs on this ancestor
+/// deliberately carries no read bit.
+///
+/// The group class is load-bearing rather than incidental. POSIX rewrites an
+/// ACL mask from a file's GROUP bits on every `chmod`, so a mode with no
+/// group bits at all (`0700`) nullifies the named traverse entry
+/// [`crate::live_handlers::grant_exact_endpoint_access`] installs here the
+/// moment anything re-asserts the mode - the recorded failure in
+/// `docs/solutions/infrastructure/posix-acl-mask-nullified-by-chmod-on-mode-0700-directories.md`.
+/// A group bit of exactly `x` leaves the mask at `mask::--x`, so the named
+/// entry stays effective and no other principal gains anything.
+const ENDPOINT_SOCKET_DIR_MODE: u32 = 0o710;
+
+/// The broker's own endpoint directory, created once at serve time.
+///
+/// The broker owns its runtime root - it is the private socket's parent, and
+/// the per-Guest and per-endpoint socket trees below it are already the
+/// broker's to provision - so it owns the one directory this surface resolves
+/// socket names inside. Creating it here rather than inside the grant path is
+/// the point: a request never invents the tree its own effect runs against,
+/// and a lazily created leaf would be a request deciding the posture the ACL
+/// then lands on.
+///
+/// [`accept_endpoint_access`] still refuses an absent directory by name. This
+/// is the only thing that creates the leaf, it runs once before any
+/// connection is accepted, and a broker that could not create it does not
+/// serve a surface that would refuse every verb for a reason of its own
+/// making.
+///
+/// An existing directory keeps its own mode: re-asserting one would rewrite
+/// the ACL mask over whatever a live grant has already installed, which is
+/// the trap the recorded solution above is about.
+pub fn ensure_endpoint_socket_dir(
+    runtime_root: &Path,
+) -> Result<PathBuf, EndpointAccessError> {
+    let directory = endpoint_socket_directory(runtime_root)?;
+    crate::sys::path_safe::ensure_dir_preserve_existing(
+        &directory,
+        ENDPOINT_SOCKET_DIR_MODE,
+        None,
+        None,
+    )
+    .map_err(|error| EndpointAccessError::RuntimeRootUnusable {
+        detail: format!("create {}: {error}", directory.display()),
+    })?;
     Ok(directory)
 }
 
