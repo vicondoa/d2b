@@ -241,6 +241,24 @@ impl StoredBinding {
         }
     }
 
+    /// Bind the serving identity of one COMMITTED manager row (KTD3).
+    ///
+    /// A pass that just committed a canonical row holds the manager's own
+    /// handle for it - the durable uid, the row generation, and the exact
+    /// spec bytes it committed under - and this is how that handle becomes a
+    /// serving identity. The manager plane carries no Zone revision of its
+    /// own and maps the row generation onto the wire revision (KTD8), so the
+    /// fence's observation revision is exactly the committed generation; a
+    /// projection pinned to any other ordinal would either claim an
+    /// observation the row never held or fall behind the row it describes.
+    pub fn from_committed_row(
+        binding: VolumeBindingSpec,
+        uid: ResourceUid,
+        generation: ResourceGeneration,
+    ) -> Self {
+        Self::new(binding, uid, generation, ZoneRevision::new(generation.get()))
+    }
+
     /// Parse a stored VolumeBinding resource envelope.
     ///
     /// The envelope must be a `VolumeBinding` owned by an existing

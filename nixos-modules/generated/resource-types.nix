@@ -33,4 +33,5 @@
   "SeccompProfile"
   "EndpointBinding"
   "ExecutionPolicy"
+  "NetworkBinding"
 ]

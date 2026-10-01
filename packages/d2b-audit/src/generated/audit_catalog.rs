@@ -45,6 +45,7 @@ pub const RESOURCE_TYPES: &[&str] = &[
     "CredentialBinding",
     "DeviceBinding",
     "ExecutionPolicy",
+    "NetworkBinding",
     "vendor",
 ];
 /// The resource verbs that write an audit row, in contract order.

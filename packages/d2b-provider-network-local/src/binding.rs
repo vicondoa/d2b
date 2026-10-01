@@ -35,7 +35,7 @@
 //! nothing (AE31-AE33, R16).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use d2b_contracts_resource::v3::{
     BoundedToken, BindingArbitration, BindingAuthorization, BindingConsumerKind,
@@ -44,13 +44,26 @@ use d2b_contracts_resource::v3::{
     BindingRowError, BindingSlot, BindingSlotAddress, BindingSlotDecision, BindingSlotIndex,
     BindingSourceDecision, BindingSpecFingerprint, ChildSupportCeiling, CompletionCondition,
     FreshnessTuple, IfName, MAX_PORTS, NetworkBindingRequest, NetworkBindingSpec,
-    NetworkIfRole, NetworkPresentation, NetworkProvenance, NetworkSpec, PortProtocol, PortSpec,
+    NetworkIfRole, NetworkMembership, NetworkPresentation, NetworkProvenance, NetworkSpec,
+    PortProtocol, PortSpec,
     PrimitiveSpecError, RefusalReason, ReleaseOutcome, RequestedRights, ResourceGeneration,
     ResourceRef, ResourceUid, SourceAdmission, SourceReservation, ZoneId, admit_binding_request,
     canonical_json_bytes, derive_network_ifname, network_binding::NetworkExecutionParentInput,
 };
 
 use crate::controller::{NetworkAdmissionIntent, NetworkAdmissionProof};
+use d2b_resource_runtime::context::{
+    ResourceContext, RowLookup, SpecDecoder, WatchCondition, typed_spec_decoder,
+};
+use d2b_resource_runtime::driver::{
+    DynResourceDriver, ReconcileOutcome, RecoveryOutcome, ResourceDriver, ResourceDriverFactory,
+};
+use d2b_resource_runtime::error::{
+    DriverFailure, DriverOp, FailureClass, FailureComparison, FailureDetail, FailureKind,
+    FailureKinds,
+};
+use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
+use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
 use crate::nftables::{
     NetworkNftProjection, NftablesError, SharedNftTable, apply_projection, digest_bytes,
 };
@@ -330,9 +343,25 @@ pub fn membership_interface(
     provenance: &NetworkProvenance,
     consumer_uid: &ResourceUid,
 ) -> Result<IfName, NetworkBindingError> {
+    membership_interface_for(provenance.zone_uid(), provenance.network_uid(), consumer_uid)
+}
+
+/// Derive one consumer's interface from the fabric's committed identity alone.
+///
+/// The fabric is identified by the two store-assigned uids the host admission
+/// admitted, and that is all the interface name is a function of. A boundary
+/// that holds those two uids - a serving pass rebuilding the accepted graph
+/// from committed rows - therefore derives exactly the interface
+/// [`membership_interface`] derives from the complete provenance, so one
+/// consumer cannot reach two interfaces on one fabric.
+pub fn membership_interface_for(
+    zone_uid: &ResourceUid,
+    network_uid: &ResourceUid,
+    consumer_uid: &ResourceUid,
+) -> Result<IfName, NetworkBindingError> {
     derive_network_ifname(
-        provenance.zone_uid(),
-        provenance.network_uid(),
+        zone_uid,
+        network_uid,
         NetworkIfRole::WorkloadGuestTap,
         Some(consumer_uid),
     )
@@ -343,43 +372,51 @@ pub fn membership_interface(
 // Committed Network row -> committed NetworkBinding rows
 // ---------------------------------------------------------------------------
 
-/// One consumer the accepted graph admitted onto one Network's shared fabric.
+/// One committed `NetworkBinding` relationship the accepted graph admitted onto
+/// one Network's shared fabric.
 ///
 /// A committed `Network` row names the execution targets it attaches but
-/// cannot carry their store identities, so the derivation reads both halves:
-/// the row decides which consumers join its fabric, and this record supplies
-/// each one's identity and the presentation its own request declared. The
-/// firewall is the Network's one ownership slot, so a membership's traffic
-/// policy stays out of this record entirely - it is resolved against the
-/// source's admitted membership at realization time.
+/// cannot carry their traffic policy, so the derivation reads both halves: the
+/// row decides which consumers join its fabric, and this record supplies each
+/// one's identity and the exact typed request its own committed relationship
+/// declared. The record is therefore the single derivation the committed row
+/// and the rendered consumer policy are both read from, so they cannot name
+/// different consumers, slots, presentations, or traffic policy. What stays
+/// out of the derived row is the traffic policy: the firewall is the Network's
+/// one ownership slot, so the row states the relationship and the policy stays
+/// here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkAdmittedConsumer {
     target: NetworkFabricTarget,
     consumer_uid: ResourceUid,
-    presentation: NetworkPresentation,
+    request: NetworkBindingRequest,
 }
 
 impl NetworkAdmittedConsumer {
-    /// Record one admitted execution target and the presentation it asks for.
+    /// Record one admitted execution target and the request it declared.
     ///
     /// # Errors
     ///
-    /// Refuses a reference that is not an execution parent, a consumer kind
-    /// [`BindingKind::Network`] does not admit, and a presentation whose
-    /// required realization facet this provider does not declare.
+    /// Refuses a request whose consumer is not the execution target this
+    /// relationship names, a consumer kind [`BindingKind::Network`] does not
+    /// admit, and a presentation whose required realization facet this
+    /// provider does not declare.
     pub fn new(
         target: ResourceRef,
         consumer_uid: ResourceUid,
-        presentation: NetworkPresentation,
+        request: NetworkBindingRequest,
     ) -> Result<Self, NetworkBindingError> {
         let target = NetworkFabricTarget::new(target)?;
+        if request.consumer_ref() != target.reference() {
+            return Err(NetworkBindingError::WrongResourceType);
+        }
         let kind =
             BindingConsumerKind::from_resource_type(target.reference().resource_type().as_str())
                 .ok_or(NetworkBindingError::WrongResourceType)?;
         if !BindingKind::Network.admits_consumer(kind) {
             return Err(NetworkBindingError::WrongResourceType);
         }
-        if presentation
+        if request
             .required_facets()
             .iter()
             .any(|facet| !network_binding_support().realizes(*facet))
@@ -389,7 +426,7 @@ impl NetworkAdmittedConsumer {
         Ok(Self {
             target,
             consumer_uid,
-            presentation,
+            request,
         })
     }
 
@@ -403,25 +440,39 @@ impl NetworkAdmittedConsumer {
         &self.consumer_uid
     }
 
+    /// Borrow the consumer's exact committed request.
+    pub const fn request(&self) -> &NetworkBindingRequest {
+        &self.request
+    }
+
     /// Borrow the consumer-side presentation its own request declared.
     pub const fn presentation(&self) -> &NetworkPresentation {
-        &self.presentation
+        self.request.presentation()
     }
 }
 
 /// The committed `Network` row one binding derivation reads.
 ///
 /// Every field is a fact the source already holds: the row's own reference
-/// and Zone, the immutable identity tuple the root host admission admitted,
-/// the committed base spec whose attachments are the execution targets that
-/// join the fabric, and the consumers the accepted graph admitted onto it.
+/// and Zone, the two store-assigned uids the root host admission admitted for
+/// the Zone and for this Network, the committed base spec whose attachments
+/// are the execution targets that join the fabric, and the consumers the
+/// accepted graph admitted onto it.
+///
+/// The identity pair is deliberately narrower than the host effect
+/// provenance. The committed row's own facts - its name, its decision, and
+/// the interface each consumer holds - are functions of those two uids alone,
+/// so a boundary that holds committed identities and nothing else still
+/// derives byte-identical rows rather than a second spelling of them.
 pub struct NetworkBindingSource<'a> {
     /// The committed Network row's exact reference.
     pub network_ref: &'a ResourceRef,
     /// The Zone the relationships belong to.
     pub zone: &'a ZoneId,
-    /// The immutable identity tuple the host admission admitted.
-    pub provenance: &'a NetworkProvenance,
+    /// The Zone's store-assigned identity.
+    pub zone_uid: &'a ResourceUid,
+    /// The Network's store-assigned identity.
+    pub network_uid: &'a ResourceUid,
     /// The committed Network base spec, whose attachments are the execution
     /// targets that join the fabric.
     pub spec: &'a NetworkSpec,
@@ -437,7 +488,7 @@ impl core::fmt::Debug for NetworkBindingSource<'_> {
             .debug_struct("NetworkBindingSource")
             .field("network_ref", &self.network_ref)
             .field("zone", &self.zone)
-            .field("provenance", &self.provenance)
+            .field("network_uid", &self.network_uid)
             .field("attachment_count", &self.spec.attachments().len())
             .field("admitted_consumer_count", &self.consumers.len())
             .finish()
@@ -446,14 +497,18 @@ impl core::fmt::Debug for NetworkBindingSource<'_> {
 
 /// One canonical `NetworkBinding` row a committed `Network` row implies.
 ///
-/// The committed bytes are the neutral binding contract: the two rows this
+/// The row's spec is the neutral binding contract: the two rows this
 /// relationship joins, the presentation the consumer declared, and this
 /// provider's own decision about it. The row carries no port, egress, or
 /// other per-consumer traffic policy, so the Network's single firewall slot
-/// keeps its one owner.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// keeps its one owner. The request the row was derived from travels beside
+/// those bytes, so the relationship the graph reads back and the consumer
+/// policy the render writes are two views of ONE derivation rather than two
+/// descriptions that can drift apart.
+#[derive(Clone, PartialEq, Eq)]
 pub struct NetworkBindingRow {
     name: BoundedToken,
+    request: NetworkBindingRequest,
     spec: Vec<u8>,
     fabric_interface: IfName,
 }
@@ -464,6 +519,16 @@ impl NetworkBindingRow {
         &self.name
     }
 
+    /// Borrow the exact request this row was derived from.
+    ///
+    /// It is the request [`NetworkAdmissionIntent`] resolves the rendered
+    /// consumer policy against, so the consumer's declaration the source
+    /// admitted and the policy the live config carries cannot name different
+    /// consumers, slots, presentations, or traffic policy.
+    pub const fn request(&self) -> &NetworkBindingRequest {
+        &self.request
+    }
+
     /// Borrow the canonical desired bytes committed as the row's spec.
     pub fn spec(&self) -> &[u8] {
         &self.spec
@@ -472,6 +537,16 @@ impl NetworkBindingRow {
     /// Borrow the interface this membership holds on the shared fabric.
     pub const fn fabric_interface(&self) -> &IfName {
         &self.fabric_interface
+    }
+}
+
+impl core::fmt::Debug for NetworkBindingRow {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("NetworkBindingRow")
+            .field("name", &self.name)
+            .field("request", &self.request)
+            .finish_non_exhaustive()
     }
 }
 
@@ -490,7 +565,7 @@ impl NetworkBindingRow {
 /// Returns [`NetworkBindingError::NotAuthorized`] when a committed attachment
 /// names no admitted consumer, [`NetworkBindingError::SlotOccupied`] when
 /// two attachments claim one consumer slot, and any refusal
-/// [`canonical_binding_row`] raises for that relationship.
+/// the per-relationship row derivation raises for that relationship.
 pub fn canonical_binding_rows(
     source: &NetworkBindingSource<'_>,
 ) -> Result<Vec<NetworkBindingRow>, NetworkBindingError> {
@@ -539,7 +614,8 @@ fn canonical_binding_row(
     consumer: &NetworkAdmittedConsumer,
 ) -> Result<NetworkBindingRow, NetworkBindingError> {
     let right = network_membership_right()?;
-    let fabric_interface = membership_interface(source.provenance, consumer.consumer_uid())?;
+    let fabric_interface =
+        membership_interface_for(source.zone_uid, source.network_uid, consumer.consumer_uid())?;
     if let NetworkPresentation::NamespaceInterface { name } = consumer.presentation() {
         // A namespace presentation is realized by presenting the interface
         // the consumer named, so a name the kernel could never present is
@@ -558,11 +634,12 @@ fn canonical_binding_row(
     )?;
     let key = spec.key(
         source.zone.clone(),
-        source.provenance.network_uid().clone(),
+        source.network_uid.clone(),
         consumer.consumer_uid().clone(),
     )?;
     Ok(NetworkBindingRow {
         name: binding_row_name(&key)?,
+        request: consumer.request().clone(),
         spec: canonical_json_bytes(&spec).map_err(|_| NetworkBindingError::InvalidRequest)?,
         fabric_interface,
     })
@@ -613,6 +690,328 @@ pub fn binding_row_name(key: &BindingKey) -> Result<BoundedToken, NetworkBinding
     }
     BoundedToken::parse(name).map_err(|_| NetworkBindingError::InvalidRequest)
 }
+
+/// One attached consumer's store-assigned identity.
+///
+/// The committed `Network` row names WHICH execution targets join its fabric;
+/// the store is the only place a target's durable identity lives, so this is
+/// the one fact a producing pass reads that no spec can carry. It carries no
+/// policy: the slot, the presentation, the inbound ports, and the egress flag
+/// of every derived membership are read off the Network row itself, so a
+/// consumer cannot widen its own relationship by asking for more.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkConsumerIdentity {
+    target: ResourceRef,
+    uid: ResourceUid,
+}
+
+impl NetworkConsumerIdentity {
+    /// Record one execution target's store-assigned identity.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a reference that is not an execution parent: a fabric is
+    /// realized on a Host or a Guest, and a Process consumes one of those
+    /// rather than joining the fabric itself.
+    pub fn new(target: ResourceRef, uid: ResourceUid) -> Result<Self, NetworkBindingError> {
+        NetworkFabricTarget::new(target.clone())?;
+        Ok(Self { target, uid })
+    }
+
+    /// Borrow the execution target that joins the fabric.
+    pub const fn target(&self) -> &ResourceRef {
+        &self.target
+    }
+
+    /// Borrow the target's store-assigned identity.
+    pub const fn uid(&self) -> &ResourceUid {
+        &self.uid
+    }
+}
+
+/// Derive the admitted consumers one committed `Network` row implies.
+///
+/// The set is the row's own attachments: a source row implies a relationship
+/// for the execution targets it declares and for no other, so a committed row
+/// that attaches nothing admits nothing. Each consumer's exact request is
+/// read off that same row rather than supplied by a caller:
+///
+/// - the source and consumer references are the row's own reference and the
+///   attachment's own execution target;
+/// - the slot is the committed row contract's own slot, taken from the same
+///   key derivation the row name is a function of, so a rebuilt request and
+///   a committed row cannot name two relationships for one consumer;
+/// - the presentation is the shared fabric, the one facet this provider
+///   declares for a consumer that reaches the fabric it reserved for it;
+/// - the inbound port set is empty and egress is denied, because the
+///   committed Network row's own vocabulary declares no per-consumer inbound
+///   port and grants no consumer egress. An undeclared permission stays
+///   undeclared rather than becoming a default grant.
+///
+/// # Errors
+///
+/// Returns [`NetworkBindingError::NotAuthorized`] when a committed attachment
+/// names no store-assigned identity, [`NetworkBindingError::WrongResourceType`]
+/// when the row's own reference or a target is not one this kind admits, and
+/// any refusal the typed request, decision, or key constructors raise.
+/// Derive one attached consumer's admitted relationship.
+///
+/// This is the single derivation both halves read: the producing half reaches
+/// it through [`declared_network_consumers`] for every attachment the
+/// committed Network row declares, and the serving half reaches it for every
+/// committed relationship row it can prove belongs to this Network. A derived
+/// request and a committed row are therefore two views of ONE derivation, so
+/// they cannot name different consumers, slots, presentations, or traffic
+/// policy.
+///
+/// # Errors
+///
+/// Returns [`NetworkBindingError::WrongResourceType`] when the source or the
+/// target is not one this kind admits, and any refusal the typed decision,
+/// request, or key constructors raise for these identities.
+fn derived_consumer(
+    zone: &ZoneId,
+    network_ref: &ResourceRef,
+    network_uid: &ResourceUid,
+    target: &ResourceRef,
+    consumer_uid: &ResourceUid,
+    presentation: &NetworkPresentation,
+) -> Result<NetworkAdmittedConsumer, NetworkBindingError> {
+    let decision = BindingSourceDecision::new(
+        vec![network_membership_right()?],
+        NETWORK_MEMBERSHIP_ARBITRATION,
+        NETWORK_BINDING_FACETS.to_vec(),
+    )?;
+    // The consumer slot is read back off the committed row contract's own key
+    // derivation, the same derivation the row name is a function of, rather
+    // than spelled here: a rebuilt request and a committed row cannot name two
+    // relationships for one consumer.
+    let slot = NetworkBindingSpec::new(
+        network_ref.clone(),
+        target.clone(),
+        presentation.clone(),
+        decision,
+    )?
+    .key(
+        zone.clone(),
+        network_uid.clone(),
+        consumer_uid.clone(),
+    )
+    .map_err(|_| NetworkBindingError::InvalidRequest)?
+    .slot()
+    .clone();
+    NetworkAdmittedConsumer::new(
+        target.clone(),
+        consumer_uid.clone(),
+        NetworkBindingRequest::new(
+            network_ref.clone(),
+            target.clone(),
+            slot,
+            NetworkMembership::new(Vec::new(), false)?,
+            presentation.clone(),
+        )?,
+    )
+}
+
+/// Derive the admitted consumers one committed `Network` row implies.
+///
+/// The set is the row's own attachments: a source row implies a relationship
+/// for the execution targets it declares and for no other, so a committed row
+/// that attaches nothing admits nothing.
+///
+/// # Errors
+///
+/// Returns [`NetworkBindingError::NotAuthorized`] when a committed attachment
+/// names no store-assigned identity, [`NetworkBindingError::SlotOccupied`]
+/// when two attachments claim one consumer, and any refusal
+/// the per-relationship derivation raises for that relationship.
+pub fn declared_network_consumers(
+    zone: &ZoneId,
+    network_ref: &ResourceRef,
+    network_uid: &ResourceUid,
+    spec: &NetworkSpec,
+    identities: &[NetworkConsumerIdentity],
+) -> Result<Vec<NetworkAdmittedConsumer>, NetworkBindingError> {
+    let presentation = NetworkPresentation::shared_fabric();
+    let mut consumers = Vec::with_capacity(spec.attachments().len());
+    let mut claimed: BTreeSet<&ResourceRef> = BTreeSet::new();
+    for attachment in spec.attachments() {
+        let identity = identities
+            .iter()
+            .find(|candidate| candidate.target() == attachment.execution_ref())
+            .ok_or(NetworkBindingError::NotAuthorized)?;
+        if !claimed.insert(attachment.execution_ref()) {
+            return Err(NetworkBindingError::SlotOccupied);
+        }
+        consumers.push(derived_consumer(
+            zone,
+            network_ref,
+            network_uid,
+            attachment.execution_ref(),
+            identity.uid(),
+            &presentation,
+        )?);
+    }
+    Ok(consumers)
+}
+
+/// Derive the committed `NetworkBinding` rows one committed `Network` row
+/// implies, from that row alone.
+///
+/// This is the producing half's whole entry point. It admits the consumers the
+/// row's own attachments declare, derives their exact requests from that same
+/// row, and mints the committed rows through [`canonical_binding_rows`]. The
+/// pass is idempotent in both directions: every derived name is a function of
+/// committed identities, so re-ensuring unchanged bytes is the manager's own
+/// `Unchanged` answer rather than a second row, and a derived set that shrank
+/// names no row the source still owns, so the manager retires it.
+///
+/// # Errors
+///
+/// Returns every refusal [`declared_network_consumers`] and
+/// [`canonical_binding_rows`] name for the relationships this row implies.
+pub fn produce_binding_rows(
+    zone: &ZoneId,
+    zone_uid: &ResourceUid,
+    network_ref: &ResourceRef,
+    network_uid: &ResourceUid,
+    spec: &NetworkSpec,
+    identities: &[NetworkConsumerIdentity],
+) -> Result<Vec<NetworkBindingRow>, NetworkBindingError> {
+    let consumers =
+        declared_network_consumers(zone, network_ref, network_uid, spec, identities)?;
+    canonical_binding_rows(&NetworkBindingSource {
+        network_ref,
+        zone,
+        zone_uid,
+        network_uid,
+        spec,
+        consumers: &consumers,
+    })
+}
+
+/// One committed `NetworkBinding` row a boundary reads back.
+///
+/// The name, the committed desired bytes, and the consumer's store-assigned
+/// identity are the three facts a committed row of this type carries. The
+/// identity is read from the consumer's own committed row rather than from the
+/// relationship row, and [`served_network_consumers`] proves the pairing by
+/// re-deriving the row name from it: a mismatched identity yields a different
+/// name, and the row is refused rather than served under the wrong consumer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommittedNetworkBinding {
+    name: BoundedToken,
+    spec: Vec<u8>,
+    consumer_uid: ResourceUid,
+}
+
+impl CommittedNetworkBinding {
+    /// Record one committed relationship row and the identity of the consumer
+    /// whose own committed row this relationship names.
+    pub const fn new(name: BoundedToken, spec: Vec<u8>, consumer_uid: ResourceUid) -> Self {
+        Self {
+            name,
+            spec,
+            consumer_uid,
+        }
+    }
+
+    /// Borrow the committed row name.
+    pub const fn name(&self) -> &BoundedToken {
+        &self.name
+    }
+
+    /// Borrow the committed desired bytes.
+    pub fn spec(&self) -> &[u8] {
+        &self.spec
+    }
+
+    /// Borrow the consumer identity this row was read for.
+    pub const fn consumer_uid(&self) -> &ResourceUid {
+        &self.consumer_uid
+    }
+}
+
+/// Rebuild the admitted consumers one committed `Network` row's committed
+/// `NetworkBinding` rows state.
+///
+/// This is the serving half: a boundary that can read the committed rows reads
+/// back exactly the relationships the producing half derived, and nothing more.
+/// Each committed row is decoded as this family's own row contract, its name is
+/// re-derived from the committed identities, and its committed decision is
+/// compared against the decision this family's own admission applies. Its
+/// consumer request then comes from the same per-relationship derivation
+/// the producing half used, so a served relationship and the row it was
+/// derived from cannot describe different consumers.
+///
+/// A row whose committed bytes name a consumer the committed `Network` row does
+/// not attach yields no admitted consumer: a source row implies no
+/// relationship for a consumer it does not declare.
+///
+/// # Errors
+///
+/// Returns [`NetworkBindingError::InvalidRequest`] when a committed row is not
+/// canonical `NetworkBinding` bytes or its name is not the name this source
+/// derives for the identities it was read with,
+/// [`NetworkBindingError::SourcePolicyRefused`] when its committed decision
+/// names a right, arbitration, or facet this family would not commit, and
+/// [`NetworkBindingError::WrongResourceType`] when the row names a source or a
+/// consumer this kind does not admit.
+pub fn served_network_consumers(
+    zone: &ZoneId,
+    network_ref: &ResourceRef,
+    network_uid: &ResourceUid,
+    spec: &NetworkSpec,
+    rows: &[CommittedNetworkBinding],
+) -> Result<Vec<NetworkAdmittedConsumer>, NetworkBindingError> {
+    let committed_decision = BindingSourceDecision::new(
+        vec![network_membership_right()?],
+        NETWORK_MEMBERSHIP_ARBITRATION,
+        NETWORK_BINDING_FACETS.to_vec(),
+    )?;
+    let attached: BTreeSet<&ResourceRef> = spec
+        .attachments()
+        .iter()
+        .map(|attachment| attachment.execution_ref())
+        .collect();
+    let mut consumers = Vec::with_capacity(rows.len());
+    let mut seen: BTreeSet<&ResourceUid> = BTreeSet::new();
+    for row in rows {
+        let binding: NetworkBindingSpec = serde_json::from_slice(row.spec())
+            .map_err(|_| NetworkBindingError::InvalidRequest)?;
+        if binding.network_ref() != network_ref {
+            return Err(NetworkBindingError::WrongResourceType);
+        }
+        let key = binding
+            .key(zone.clone(), network_uid.clone(), row.consumer_uid().clone())
+            .map_err(NetworkBindingError::from)?;
+        if binding_row_name(&key)?.as_str() != row.name().as_str() {
+            return Err(NetworkBindingError::InvalidRequest);
+        }
+        if binding.source() != &committed_decision {
+            return Err(NetworkBindingError::SourcePolicyRefused);
+        }
+        if !attached.contains(binding.execution_ref()) {
+            // The row states a relationship this Network no longer attaches.
+            // It stays committed and unserved rather than becoming a
+            // membership the source row does not declare.
+            continue;
+        }
+        if !seen.insert(row.consumer_uid()) {
+            return Err(NetworkBindingError::SlotOccupied);
+        }
+        consumers.push(derived_consumer(
+            zone,
+            network_ref,
+            network_uid,
+            binding.execution_ref(),
+            row.consumer_uid(),
+            binding.presentation(),
+        )?);
+    }
+    Ok(consumers)
+}
+
 
 /// The NetworkManager unmanaged state observed for one Zone.
 ///
@@ -880,8 +1279,15 @@ impl MembershipPolicy {
         self.digest
     }
 
-    fn new(
-        key: &BindingKey,
+    /// Derive one consumer's policy from the committed relationship it names.
+    ///
+    /// The key's three identity fields are taken directly rather than as a
+    /// `BindingKey`, so the admission registry and the host admission intent
+    /// derive the same policy from the same relationship instead of two
+    /// constructors that could drift.
+    pub(crate) fn new(
+        consumer_ref: &ResourceRef,
+        slot: &BindingSlot,
         consumer_uid: &ResourceUid,
         fabric_provenance: &NetworkProvenance,
         fabric_marker: &str,
@@ -903,8 +1309,8 @@ impl MembershipPolicy {
         let mut digest_input = Vec::new();
         for part in [
             fabric_marker.as_bytes(),
-            key.consumer_uid().as_str().as_bytes(),
-            key.slot().as_str().as_bytes(),
+            consumer_uid.as_str().as_bytes(),
+            slot.as_str().as_bytes(),
             fabric_interface.as_str().as_bytes(),
             presented_interface.as_str().as_bytes(),
             egress_part,
@@ -916,8 +1322,8 @@ impl MembershipPolicy {
             push_digest(&mut digest_input, &port.port().to_be_bytes());
         }
         Ok(Self {
-            consumer_ref: key.consumer_ref().clone(),
-            slot: key.slot().clone(),
+            consumer_ref: consumer_ref.clone(),
+            slot: slot.clone(),
             presentation: request.presentation().clone(),
             fabric_interface,
             presented_interface,
@@ -1381,7 +1787,8 @@ impl NetworkBindingRegistry {
                     return Err(NetworkBindingError::StaleAuthority);
                 }
                 let policy = MembershipPolicy::new(
-                    &key,
+                    key.consumer_ref(),
+                    key.slot(),
                     &admission.consumer_uid,
                     record.realization.provenance(),
                     record.realization.ownership_marker(),
@@ -1392,7 +1799,8 @@ impl NetworkBindingRegistry {
             None => {
                 let realization = FabricRealization::new(provenance, intent);
                 let policy = MembershipPolicy::new(
-                    &key,
+                    key.consumer_ref(),
+                    key.slot(),
                     &admission.consumer_uid,
                     &realization.provenance,
                     realization.ownership_marker(),
@@ -1886,4 +2294,577 @@ fn protocol_token(protocol: PortProtocol) -> &'static [u8] {
 fn push_digest(input: &mut Vec<u8>, part: &[u8]) {
     input.extend_from_slice(&(part.len() as u64).to_be_bytes());
     input.extend_from_slice(part);
+}
+
+// ---------------------------------------------------------------------------
+// Serving one committed `NetworkBinding` row
+// ---------------------------------------------------------------------------
+
+/// The `NetworkBinding` ResourceType one committed relationship commits as.
+///
+/// The name is the contract's own constant rather than a second hand-written
+/// spelling, so the child type the producing pass ensures and the type this
+/// driver decodes cannot drift.
+const NETWORK_BINDING_TYPE: &str =
+    d2b_contracts_resource::v3::network_binding::NETWORK_BINDING_RESOURCE_TYPE;
+
+/// The `Network` ResourceType whose committed row is this relationship's
+/// source.
+const NETWORK_RESOURCE_TYPE: &str = d2b_contracts_resource::v3::network::NETWORK_RESOURCE_TYPE;
+
+/// The `Zone` ResourceType whose committed self row carries the uid the
+/// derived fabric identity is a function of.
+const ZONE_RESOURCE_TYPE: &str = "Zone";
+
+/// The execution domains the `NetworkBinding` type can be reconciled in.
+///
+/// A fabric membership is a host-side host effect realized once per `(Network,
+/// execution target)`, so the relationship is reconciled on the Host domain
+/// whichever Zone declares it.
+const NETWORK_BINDING_EXECUTION_DOMAINS: &[&str] = &["host"];
+
+/// The resource types the `NetworkBinding` realization reads while reconciling:
+/// the owning `Network` row whose attachments decide which consumers join the
+/// fabric, the committed consumer row it delivers to, and the `Zone` self row
+/// whose uid the derived fabric identity is a function of.
+const NETWORK_BINDING_READS: &[WellKnownType] = &[
+    WellKnownType::NETWORK,
+    WellKnownType::HOST,
+    WellKnownType::GUEST,
+    WellKnownType::ZONE,
+];
+
+/// Closed, field-free classifications of a serving failure on this row.
+///
+/// Every variant names a condition, never a material: a refusal carries no
+/// host path, no interface name, and no numerical principal, so it reads the
+/// same in a status, an audit record, and a log line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NetworkBindingDriverErrorKind {
+    /// The durable spec did not decode as the closed `NetworkBinding`
+    /// contract, or its committed name and decision are not this source's.
+    SpecInvalid,
+    /// The row's owner is not the `Network` row the relationship names.
+    OwnerMismatch,
+    /// The owning `Network` row, the named consumer row, or the `Zone` self row
+    /// is absent or unreadable, or the owning row no longer attaches this
+    /// consumer.
+    ParentUnavailable,
+}
+
+impl NetworkBindingDriverErrorKind {
+    /// The registered failure kind this classification reports.
+    const fn failure_kind(self) -> FailureKind {
+        match self {
+            Self::SpecInvalid => FailureKinds::BINDING_SPEC_INVALID,
+            Self::OwnerMismatch => FailureKinds::BINDING_OWNER_MISMATCH,
+            Self::ParentUnavailable => FailureKinds::BINDING_PARENT_UNAVAILABLE,
+        }
+    }
+
+    /// How the plane should classify a failure of this kind.
+    const fn failure_class(self) -> FailureClass {
+        match self {
+            Self::SpecInvalid | Self::OwnerMismatch => FailureClass::Terminal,
+            Self::ParentUnavailable => FailureClass::Retryable,
+        }
+    }
+}
+
+/// Typed serving failure for one committed `NetworkBinding` row.
+#[derive(Debug, Clone)]
+pub struct NetworkBindingDriverError {
+    kind: NetworkBindingDriverErrorKind,
+    op: DriverOp,
+    detail: FailureDetail,
+}
+
+impl NetworkBindingDriverError {
+    fn new(kind: NetworkBindingDriverErrorKind, op: DriverOp) -> Self {
+        Self {
+            kind,
+            op,
+            detail: FailureDetail::new(),
+        }
+    }
+
+    fn with_detail(mut self, detail: FailureDetail) -> Self {
+        self.detail = detail;
+        self
+    }
+}
+
+impl core::fmt::Display for NetworkBindingDriverError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self.kind {
+            NetworkBindingDriverErrorKind::SpecInvalid => "network-binding-spec-invalid",
+            NetworkBindingDriverErrorKind::OwnerMismatch => "network-binding-owner-mismatch",
+            NetworkBindingDriverErrorKind::ParentUnavailable => {
+                "network-binding-parent-unavailable"
+            }
+        })
+    }
+}
+
+impl std::error::Error for NetworkBindingDriverError {}
+
+/// The spec-store envelope for one `NetworkBinding` row, exactly as persisted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NetworkBindingSpecEnvelope {
+    base: d2b_contracts_resource::v3::CanonicalJsonObject,
+}
+
+/// The manager-wired decode hook for `NetworkBinding` rows.
+///
+/// The wire decoder is the row contract's own, so a stored row that is not
+/// canonical `NetworkBinding` bytes - an unknown field, a consumer this kind
+/// does not admit, a decision the family never commits - is refused here
+/// rather than half-read.
+pub fn network_binding_spec_decoder() -> Arc<dyn SpecDecoder> {
+    typed_spec_decoder(|bytes| {
+        serde_json::from_slice::<d2b_contracts_resource::v3::ResourceSpec>(bytes).map(|spec| {
+            NetworkBindingSpecEnvelope {
+                base: spec.base().clone(),
+            }
+        })
+    })
+}
+
+/// Everything the plane must construct to instantiate the `NetworkBinding`
+/// driver factory for one zone.
+pub struct NetworkBindingDriverArgs {
+    /// The zone this driver's rows live in.
+    pub zone: ZoneId,
+}
+
+/// [`ResourceDriverFactory`] for the `NetworkBinding` resource type.
+/// Construction is infallible by contract (R3).
+pub struct NetworkBindingDriverFactory {
+    types: [ResourceTypeName; 1],
+    args: NetworkBindingDriverArgs,
+}
+
+impl NetworkBindingDriverFactory {
+    /// Build the factory for one zone's plane.
+    pub fn new(args: NetworkBindingDriverArgs) -> Self {
+        Self {
+            types: [ResourceTypeName::new(NETWORK_BINDING_TYPE)],
+            args,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ResourceDriverFactory for NetworkBindingDriverFactory {
+    fn resource_types(&self) -> &[ResourceTypeName] {
+        &self.types
+    }
+
+    async fn create(&self, _key: &ResourceKey) -> Box<dyn DynResourceDriver> {
+        Box::new(NetworkBindingDriver {
+            zone: self.args.zone.clone(),
+            watched: Vec::new(),
+        })
+    }
+}
+
+/// One committed relationship a serving pass proved.
+struct NetworkBindingRelationship {
+    binding: NetworkBindingSpec,
+    fabric_interface: IfName,
+}
+
+/// One committed `NetworkBinding` row's driver.
+///
+/// The shared fabric is realized once per `(Network, execution target)` by the
+/// owning `Network` row, so this driver owns no host state of its own and holds
+/// no port, path, or numerical principal. What it owns is the relationship: it
+/// re-derives the committed row from the owning Network row and the consumer's
+/// own committed row, refuses a row that no longer matches them, and publishes
+/// the interface this consumer holds on the fabric. A boundary that reads the
+/// committed rows therefore learns the same relationship this source admitted.
+pub struct NetworkBindingDriver {
+    zone: ZoneId,
+    /// Rows this driver already registered a dependency watch on (R12/R17).
+    /// Runtime-only (R6/R11): one registration per target, so the dependency
+    /// edge that wakes this actor does not accumulate manager watch entries.
+    watched: Vec<ResourceKey>,
+}
+
+impl NetworkBindingDriver {
+    fn error(
+        &self,
+        kind: NetworkBindingDriverErrorKind,
+        op: DriverOp,
+    ) -> NetworkBindingDriverError {
+        NetworkBindingDriverError::new(kind, op)
+    }
+
+    /// Decode the stored envelope into the strict `NetworkBinding` contract.
+    fn decoded_binding(
+        &self,
+        ctx: &ResourceContext,
+        op: DriverOp,
+    ) -> Result<NetworkBindingSpec, NetworkBindingDriverError> {
+        let envelope = ctx
+            .spec::<NetworkBindingSpecEnvelope>()
+            .map_err(|_| self.error(NetworkBindingDriverErrorKind::SpecInvalid, op))?;
+        serde_json::from_slice::<NetworkBindingSpec>(&envelope.base.to_canonical_bytes())
+            .map_err(|_| self.error(NetworkBindingDriverErrorKind::SpecInvalid, op))
+    }
+
+    /// The row's own name must be the name this source derives.
+    ///
+    /// [`binding_row_name`] is a deterministic function of the identities the
+    /// row itself carries, so a committed row whose name is anything else was
+    /// not minted by this source's producing pass. Checking it here is what
+    /// makes the row a boundary reads back and the derivation that minted it
+    /// two views of ONE relationship.
+    fn check_row_name(
+        &self,
+        ctx: &ResourceContext,
+        binding: &NetworkBindingSpec,
+        network_uid: &ResourceUid,
+        consumer_uid: &ResourceUid,
+        op: DriverOp,
+    ) -> Result<(), NetworkBindingDriverError> {
+        let key = binding
+            .key(self.zone.clone(), network_uid.clone(), consumer_uid.clone())
+            .map_err(|_| self.error(NetworkBindingDriverErrorKind::SpecInvalid, op))?;
+        let derived = binding_row_name(&key)
+            .map_err(|_| self.error(NetworkBindingDriverErrorKind::SpecInvalid, op))?;
+        if derived.as_str() != ctx.key().name {
+            return Err(self
+                .error(NetworkBindingDriverErrorKind::SpecInvalid, op)
+                .with_detail(FailureDetail::at("spec/rowName").comparison(
+                    FailureComparison::new("binding.rowName", derived.as_str(), &ctx.key().name),
+                )));
+        }
+        Ok(())
+    }
+
+    /// The committed `BindingSourceDecision` must be the decision this family
+    /// commits.
+    ///
+    /// The row records what the source admitted when it minted it; this is the
+    /// second, independent half, derived from this family's own admission
+    /// rather than read back, so a row claiming a wider right, a wider
+    /// arbitration, or a facet this provider does not realize is refused.
+    fn check_committed_decision(
+        &self,
+        binding: &NetworkBindingSpec,
+        op: DriverOp,
+    ) -> Result<(), NetworkBindingDriverError> {
+        let refused = |field: &'static str| {
+            self.error(NetworkBindingDriverErrorKind::SpecInvalid, op).with_detail(
+                FailureDetail::at("spec/decision")
+                    .comparison(FailureComparison::new(field, "committed", "committed")),
+            )
+        };
+        let expected = BindingSourceDecision::new(
+            vec![network_membership_right().map_err(|_| {
+                self.error(NetworkBindingDriverErrorKind::SpecInvalid, op)
+            })?],
+            NETWORK_MEMBERSHIP_ARBITRATION,
+            NETWORK_BINDING_FACETS.to_vec(),
+        )
+        .map_err(|_| self.error(NetworkBindingDriverErrorKind::SpecInvalid, op))?;
+        if binding.source().admitted_rights() != expected.admitted_rights() {
+            return Err(refused("source.admittedRights"));
+        }
+        if binding.source().arbitration() != expected.arbitration() {
+            return Err(refused("source.arbitration"));
+        }
+        if binding.source().realized_facets() != expected.realized_facets() {
+            return Err(refused("source.realizedFacets"));
+        }
+        Ok(())
+    }
+
+    /// The owning `Network` row, behind the owner fence.
+    ///
+    /// The relationship's source is what mints it, so the row the manager
+    /// reports as this resource's owner is the row whose attachments decide
+    /// whether this consumer still joins the fabric.
+    async fn parent_network(
+        &self,
+        ctx: &mut ResourceContext,
+        binding: &NetworkBindingSpec,
+        op: DriverOp,
+    ) -> Result<(NetworkSpec, ResourceUid), NetworkBindingDriverError> {
+        let key = self.network_key(binding);
+        let row = match ctx.lookup(&key).await {
+            RowLookup::Present { row, .. } => row,
+            _ => {
+                return Err(self
+                    .error(NetworkBindingDriverErrorKind::ParentUnavailable, op)
+                    .with_detail(FailureDetail::at("parent/lookup").comparison(
+                        FailureComparison::new("parent.networkRef", "present", "absent"),
+                    )));
+            }
+        };
+        if let Some(owner) = ctx.owner()
+            && owner != &row.uid
+        {
+            return Err(self
+                .error(NetworkBindingDriverErrorKind::OwnerMismatch, op)
+                .with_detail(FailureDetail::at("parent/owner").comparison(
+                    FailureComparison::new("parent.ownerUid", "this row's owner", "another row"),
+                )));
+        }
+        let spec = decode_network_spec(&row.spec).ok_or_else(|| {
+            self.error(NetworkBindingDriverErrorKind::ParentUnavailable, op).with_detail(
+                FailureDetail::at("parent/decode").comparison(FailureComparison::new(
+                    "parent.spec",
+                    "a canonical Network row",
+                    "decode failed",
+                )),
+            )
+        })?;
+        let uid = ResourceUid::from_bytes(&row.uid)
+            .map_err(|_| self.error(NetworkBindingDriverErrorKind::ParentUnavailable, op))?;
+        Ok((spec, uid))
+    }
+
+    /// The Zone's own store-assigned identity, from its committed self row.
+    ///
+    /// The fabric's interface names are a function of the Zone uid, and the
+    /// store is the only place that identity lives, so a Zone whose self row is
+    /// absent defers the pass instead of answering with a number nothing
+    /// verified.
+    async fn zone_uid(
+        &self,
+        ctx: &mut ResourceContext,
+        op: DriverOp,
+    ) -> Result<ResourceUid, NetworkBindingDriverError> {
+        let key = ResourceKey::new(self.zone.as_str(), ZONE_RESOURCE_TYPE, self.zone.as_str());
+        match ctx.lookup(&key).await {
+            RowLookup::Present { row, .. } => ResourceUid::from_bytes(&row.uid)
+                .map_err(|_| self.error(NetworkBindingDriverErrorKind::ParentUnavailable, op)),
+            _ => Err(self
+                .error(NetworkBindingDriverErrorKind::ParentUnavailable, op)
+                .with_detail(FailureDetail::at("zone/lookup").comparison(
+                    FailureComparison::new("zone.uid", "the committed Zone self row", "absent"),
+                ))),
+        }
+    }
+
+    /// The consumer's own store-assigned identity.
+    ///
+    /// The identity is part of the relationship's key, so a consumer replaced
+    /// under the same name is a different relationship rather than a silent
+    /// continuation of the old one.
+    async fn consumer_uid(
+        &self,
+        ctx: &mut ResourceContext,
+        binding: &NetworkBindingSpec,
+        op: DriverOp,
+    ) -> Result<ResourceUid, NetworkBindingDriverError> {
+        match ctx.lookup(&self.consumer_key(binding)).await {
+            RowLookup::Present { row, .. } => ResourceUid::from_bytes(&row.uid)
+                .map_err(|_| self.error(NetworkBindingDriverErrorKind::ParentUnavailable, op)),
+            _ => Err(self
+                .error(NetworkBindingDriverErrorKind::ParentUnavailable, op)
+                .with_detail(FailureDetail::at("consumer/lookup").comparison(
+                    FailureComparison::new("consumer.executionRef", "present", "absent"),
+                ))),
+        }
+    }
+
+    /// Every check one serving pass runs: the wire decode, the derived row
+    /// name, the committed decision, the owning `Network` row behind its owner
+    /// fence, that row's own attachments at their current generation, and the
+    /// named consumer row.
+    ///
+    /// The owning row's attachments are the second, independent half of the
+    /// check. A relationship the source row no longer attaches is refused here
+    /// rather than served from a stale decision, which is what keeps an
+    /// unattached consumer's membership out of the rendered policy.
+    async fn structural(
+        &self,
+        ctx: &mut ResourceContext,
+        op: DriverOp,
+    ) -> Result<NetworkBindingRelationship, NetworkBindingDriverError> {
+        let binding = self.decoded_binding(ctx, op)?;
+        self.check_committed_decision(&binding, op)?;
+        let (spec, network_uid) = self.parent_network(ctx, &binding, op).await?;
+        if !spec
+            .attachments()
+            .iter()
+            .any(|attachment| attachment.execution_ref() == binding.execution_ref())
+        {
+            return Err(self
+                .error(NetworkBindingDriverErrorKind::ParentUnavailable, op)
+                .with_detail(FailureDetail::at("parent/attachments").comparison(
+                    FailureComparison::new(
+                        "network.attachments",
+                        binding.execution_ref().to_canonical_string(),
+                        "not attached",
+                    ),
+                )));
+        }
+        let consumer_uid = self.consumer_uid(ctx, &binding, op).await?;
+        self.check_row_name(ctx, &binding, &network_uid, &consumer_uid, op)?;
+        let zone_uid = self.zone_uid(ctx, op).await?;
+        let fabric_interface =
+            membership_interface_for(&zone_uid, &network_uid, &consumer_uid).map_err(|_| {
+                self.error(NetworkBindingDriverErrorKind::SpecInvalid, op)
+            })?;
+        Ok(NetworkBindingRelationship {
+            binding,
+            fabric_interface,
+        })
+    }
+
+    /// Register one dependency watch, at most once per target (R12/R17).
+    async fn watch_once(&mut self, ctx: &mut ResourceContext, target: ResourceKey) {
+        if self.watched.contains(&target) {
+            return;
+        }
+        if ctx
+            .watch(target.clone(), WatchCondition::Ready)
+            .await
+            .is_ok()
+        {
+            self.watched.push(target);
+        }
+    }
+
+    /// The consumer row's key, for the dependency edge.
+    fn consumer_key(&self, binding: &NetworkBindingSpec) -> ResourceKey {
+        ResourceKey::new(
+            self.zone.as_str(),
+            binding.execution_ref().resource_type().as_str(),
+            binding.execution_ref().name().as_str(),
+        )
+    }
+
+    /// The owning `Network` row's key, for the dependency edge.
+    fn network_key(&self, binding: &NetworkBindingSpec) -> ResourceKey {
+        ResourceKey::new(
+            self.zone.as_str(),
+            NETWORK_RESOURCE_TYPE,
+            binding.network_ref().name().as_str(),
+        )
+    }
+}
+
+#[async_trait::async_trait]
+impl ResourceDriver for NetworkBindingDriver {
+    type Error = NetworkBindingDriverError;
+
+    fn classify_error(&self, error: &NetworkBindingDriverError) -> DriverFailure {
+        DriverFailure::error(
+            error.op,
+            error.kind.failure_kind(),
+            error.kind.failure_class(),
+        )
+        .with_detail(error.detail.clone())
+    }
+
+    /// Structural validation: the wire decode, the derived row name, the
+    /// committed decision, the owning `Network` row behind its owner fence,
+    /// that row's own attachments, and the named consumer row.
+    async fn validate(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        self.structural(ctx, DriverOp::Validate).await?;
+        Ok(())
+    }
+
+    /// Adoption of the pre-restart incarnation (F2).
+    ///
+    /// A membership's realization is a tap on a fabric the owning `Network` row
+    /// creates and this driver does not pin, so it holds no durable record of
+    /// which interface it presented and cannot prove the pre-restart membership
+    /// still answers for the fabric that is there. A restart therefore reports
+    /// `Missing` and the next reconcile pass re-derives the relationship against
+    /// the committed rows as they are now, rather than adopting a membership
+    /// whose fabric nothing in this process witnessed.
+    async fn recover(&mut self, ctx: &mut ResourceContext) -> Result<RecoveryOutcome, Self::Error> {
+        self.structural(ctx, DriverOp::Recover).await?;
+        Ok(RecoveryOutcome::Missing)
+    }
+
+    /// One reconcile pass: re-derive the committed relationship against the
+    /// rows as they are now, then publish the interface this consumer holds.
+    ///
+    /// The pass re-derives rather than caches. The row name is a function of the
+    /// committed identities, the committed decision is compared against the
+    /// decision this family's own admission applies, and the owning Network
+    /// row's attachments are read at their current generation, so a consumer the
+    /// source row no longer attaches is refused rather than reported as a
+    /// membership nothing realizes (R41).
+    async fn reconcile(
+        &mut self,
+        ctx: &mut ResourceContext,
+    ) -> Result<ReconcileOutcome, Self::Error> {
+        let op = DriverOp::Reconcile;
+        let relationship = self.structural(ctx, op).await?;
+        // Dependency edges (R12/R17): the owning Network row and the consumer
+        // row both wake this actor when they change.
+        self.watch_once(ctx, self.network_key(&relationship.binding))
+            .await;
+        self.watch_once(ctx, self.consumer_key(&relationship.binding))
+            .await;
+        ctx.set_status_projection(serde_json::json!({
+            "consumerRef": relationship.binding.execution_ref().to_canonical_string(),
+            "presentation": &relationship.binding.presentation(),
+            "fabricInterface": relationship.fabric_interface.as_str(),
+        }));
+        // `Satisfied` is this driver's own convergence: the committed row was
+        // proved against the rows it is derived from and the relationship this
+        // consumer holds was published. The fabric itself is realized once by
+        // the owning `Network` row, so there is no second host effect here for
+        // the pass to be waiting on.
+        Ok(ReconcileOutcome::Satisfied)
+    }
+
+    /// Retiring a relationship retires the row; the fabric belongs to the
+    /// owning `Network` row, which owns its own teardown.
+    async fn finalize(&mut self, _ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    /// The consumer's membership is a row on a fabric the owning `Network` row
+    /// owns, so retiring this relationship touches no host state of its own.
+    async fn delete(&mut self, _ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+/// The `NetworkBinding` type's driver declaration.
+///
+/// `NetworkBinding` is `BUILTIN | STARTUP` (no RUNTIME bit): the plane cannot
+/// serve a committed fabric membership without it, so it must be registered
+/// before the plane opens. The type is not exportable: `ResourceExport` admits
+/// only qualified `*.d2bus.org.*Service` types, so a relationship can never be
+/// an export subject. The driver serves no broker operations, mints no
+/// children, contributes no startup steps, and declares no hosted effects
+/// service: a relationship joins one consumer to one fabric and owns nothing
+/// else, and a `ServiceDecl` with no host behind it would be a surface nothing
+/// can reach.
+pub fn network_binding_descriptor(args: NetworkBindingDriverArgs) -> DriverDescriptor {
+    DriverDescriptor {
+        resource_type: WellKnownType::NETWORK_BINDING,
+        allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
+        verbs: CONVERTED_TYPE_VERBS,
+        execution: NETWORK_BINDING_EXECUTION_DOMAINS,
+        exportable: false,
+        reads: NETWORK_BINDING_READS,
+        operations: &[],
+        creations: &[],
+        startup: &[],
+        services: &[],
+        decoder: network_binding_spec_decoder(),
+        factory: Arc::new(NetworkBindingDriverFactory::new(args)),
+    }
+}
+
+/// The typed `Network` contract of one committed row's stored spec.
+///
+/// The universal desired-state layer carries the Provider selection, so the
+/// row's base object is the typed Network contract; a row whose base is not
+/// canonical `Network` bytes decodes to nothing rather than to a partial spec.
+fn decode_network_spec(spec: &[u8]) -> Option<NetworkSpec> {
+    let envelope = serde_json::from_slice::<d2b_contracts_resource::v3::ResourceSpec>(spec).ok()?;
+    serde_json::from_slice::<NetworkSpec>(&envelope.base().to_canonical_bytes()).ok()
 }

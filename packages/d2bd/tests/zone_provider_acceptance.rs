@@ -541,6 +541,7 @@ fn network_input(
         ),
         spec.clone(),
         Vec::new(),
+        Vec::new(),
     )
     .unwrap()
     .proof();

@@ -295,6 +295,7 @@ fn same_named_networks_in_different_zones_have_distinct_admitted_kernel_names() 
         ),
         spec.clone(),
         vec![attachment.clone()],
+        Vec::new(),
     )
     .unwrap();
     let second = NetworkAdmissionIntent::new(
@@ -310,6 +311,7 @@ fn same_named_networks_in_different_zones_have_distinct_admitted_kernel_names() 
         ),
         spec,
         vec![attachment.clone()],
+        Vec::new(),
     )
     .unwrap();
     let first_bridge =
@@ -361,7 +363,7 @@ fn admission_intent_binds_zone_network_generations_and_bundle() {
         d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("net-vm-base").unwrap(),
     )
     .unwrap();
-    let intent = NetworkAdmissionIntent::new(key.clone(), spec, Vec::new()).unwrap();
+    let intent = NetworkAdmissionIntent::new(key.clone(), spec, Vec::new(), Vec::new()).unwrap();
     assert_eq!(intent.key(), &key);
     assert_eq!(intent.cidrs().len(), 2);
     assert!(!intent.ownership_marker().is_empty());

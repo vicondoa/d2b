@@ -1,5 +1,5 @@
 {
-  "$id": "https://d2bus.org/schemas/v3/core.d2bus.org_EndpointBinding.schema.json",
+  "$id": "https://d2bus.org/schemas/v3/core.d2bus.org_NetworkBinding.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "definitions": {
@@ -115,29 +115,49 @@
       "minLength": 1,
       "type": "string"
     },
-    "EndpointAttachmentKind": {
-      "description": "How one consumer reaches the exact endpoint.",
+    "NetworkPresentation": {
+      "description": "How one consumer's membership reaches it.",
       "oneOf": [
         {
-          "description": "The consumer opens the endpoint as a client.",
-          "enum": [
-            "connect"
+          "additionalProperties": false,
+          "description": "An interface with the requested name inside the consumer's own network namespace.",
+          "properties": {
+            "name": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/BoundedToken"
+                }
+              ],
+              "description": "The requested interface name inside the consumer."
+            },
+            "presentation": {
+              "enum": [
+                "namespace-interface"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "presentation"
           ],
-          "type": "string"
+          "type": "object"
         },
         {
-          "description": "The consumer accepts on the endpoint as a server.",
-          "enum": [
-            "listen"
+          "additionalProperties": false,
+          "description": "Membership through the provider-owned shared fabric realization.",
+          "properties": {
+            "presentation": {
+              "enum": [
+                "shared-fabric"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "presentation"
           ],
-          "type": "string"
-        },
-        {
-          "description": "The consumer attaches to the endpoint's device or stream.",
-          "enum": [
-            "attach"
-          ],
-          "type": "string"
+          "type": "object"
         }
       ]
     },
@@ -200,7 +220,7 @@
       "x-d2b-reference-scope": "same-zone"
     }
   },
-  "description": "One exact endpoint socket delivered to one consumer.",
+  "description": "One execution target attached to one Network's fabric.",
   "properties": {
     "apiVersion": {
       "const": "resources.d2bus.org/v3"
@@ -249,20 +269,20 @@
     },
     "spec": {
       "additionalProperties": false,
-      "description": "Strict base EndpointBinding specification.\n\nAn EndpointBinding row delivers exactly one named endpoint to one consumer. The consumer is whatever the kind admits - `Guest`, `Process`, or `EphemeralProcess`, never `Host`, because a provider's host-side delivery is an admitted realization leg of the binding whose consumer is that helper, not a binding whose consumer is the Host.\n\nThe row carries no purpose: the endpoint's own spec carries it and the admission path never reads it off the request, so a row that restated it would let the two drift.",
+      "description": "Strict base NetworkBinding specification.\n\nA NetworkBinding row is one consumer's membership in a shared fabric. It carries no ports, egress rules, or other per-consumer traffic policy: the firewall is the Network's single ownership slot, so a second per-consumer ruleset here would fork that authority. The membership policy is the source provider's admitted state and is resolved against the row, never restated by it.\n\nThe consumer is whatever the kind admits, which includes `Host`: a host consuming a fabric as its own parent is a distinct, live case.",
       "properties": {
-        "attachment": {
-          "$ref": "#/definitions/EndpointAttachmentKind"
-        },
-        "endpointRef": {
-          "$ref": "#/definitions/ResourceRef",
-          "x-d2b-reference-kind": "ResourceRef",
-          "x-d2b-reference-scope": "same-zone"
-        },
         "executionRef": {
           "$ref": "#/definitions/ResourceRef",
           "x-d2b-reference-kind": "ResourceRef",
           "x-d2b-reference-scope": "same-zone"
+        },
+        "networkRef": {
+          "$ref": "#/definitions/ResourceRef",
+          "x-d2b-reference-kind": "ResourceRef",
+          "x-d2b-reference-scope": "same-zone"
+        },
+        "presentation": {
+          "$ref": "#/definitions/NetworkPresentation"
         },
         "providerRef": {
           "pattern": "^Provider/[a-z][a-z0-9-]{0,62}$",
@@ -272,9 +292,6 @@
           ],
           "x-d2b-reference-kind": "ResourceRef",
           "x-d2b-reference-scope": "same-zone"
-        },
-        "slot": {
-          "$ref": "#/definitions/BoundedToken"
         },
         "source": {
           "$ref": "#/definitions/BindingSourceDecision"
@@ -296,17 +313,16 @@
         }
       },
       "required": [
-        "attachment",
-        "endpointRef",
         "executionRef",
-        "slot",
+        "networkRef",
+        "presentation",
         "source"
       ],
-      "title": "EndpointBindingSpec",
+      "title": "NetworkBindingSpec",
       "type": "object"
     },
     "type": {
-      "const": "EndpointBinding"
+      "const": "NetworkBinding"
     }
   },
   "required": [
@@ -315,7 +331,7 @@
     "spec",
     "type"
   ],
-  "title": "EndpointBinding",
+  "title": "NetworkBinding",
   "type": "object",
-  "x-d2b-resource-type": "EndpointBinding"
+  "x-d2b-resource-type": "NetworkBinding"
 }

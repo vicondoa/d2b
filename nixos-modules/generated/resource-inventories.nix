@@ -114,6 +114,7 @@
     "Guest" = "core.d2bus.org_Guest.schema.json";
     "Host" = "core.d2bus.org_Host.schema.json";
     "Network" = "core.d2bus.org_Network.schema.json";
+    "NetworkBinding" = "core.d2bus.org_NetworkBinding.schema.json";
     "Operation" = "core.d2bus.org_Operation.schema.json";
     "Process" = "core.d2bus.org_Process.schema.json";
     "Provider" = "core.d2bus.org_Provider.schema.json";

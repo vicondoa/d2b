@@ -31,7 +31,14 @@ use d2b_resource_types::{ServiceDecl, ServiceMethod};
 
 use crate::driver::VolumeDriverEffects;
 use crate::facets::{
-    BindingEvidenceAbsent, VolumeBindingAdmission, VolumeEffectFacets, VolumeRuntime,
+    BindingDelivery, BindingDeliveryReason, BindingEvidenceAbsent, CommittedBinding,
+    VolumeBindingAdmission, VolumeEffectFacets, VolumeRuntime, VolumeServingComposition,
+};
+use d2b_contracts_resource::v3::ZoneId;
+use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+use d2b_provider_volume_virtiofs::{
+    LaunchedWorker, VirtiofsBindingController, VirtiofsBindingError, VirtiofsBindingPort,
+    VirtiofsServingError,
 };
 
 /// The Volume family's declared effects service.
@@ -112,15 +119,47 @@ async fn serve_has_layout(
 /// observe the same runtime.
 pub struct VolumeEffectsService {
     runtime: Arc<dyn VolumeRuntime>,
+    /// The privileged virtiofs serving composition, resolved once at
+    /// construction: the composition root supplies it, and a runtime that
+    /// composes none leaves this `None` so the driver reports the absence
+    /// by name instead of calling a leg nobody holds.
+    serving: Option<VolumeServingComposition>,
 }
 
 impl VolumeEffectsService {
     /// Build the effects from one zone's daemon-supplied facet set (R2):
     /// every daemon-structural read rides the facets, never a daemon handle.
     pub fn new(facets: VolumeEffectFacets) -> Self {
+        let serving = facets.runtime.virtiofs_serving();
         Self {
             runtime: facets.runtime,
+            serving,
         }
+    }
+
+    /// The production virtiofs serving pass over one Zone's privileged
+    /// dispatch, or the named absence when the runtime composes none.
+    fn serving_pass(
+        &self,
+        zone: &ZoneId,
+    ) -> Result<
+        (
+            VirtiofsBindingController<VirtiofsBindingPort>,
+            u32,
+        ),
+        BindingDeliveryReason,
+    > {
+        let serving = self.serving.as_ref().ok_or_else(|| {
+            BindingDeliveryReason::Dispatch(VirtiofsServingError::Unavailable(
+                "this Zone's Volume runtime composes no virtiofs serving delivery".to_owned(),
+            ))
+        })?;
+        let zone = BoundedToken::parse(zone.as_str()).map_err(|_| {
+            BindingDeliveryReason::Serving(VirtiofsBindingError::InvalidBinding)
+        })?;
+        let controller = VirtiofsBindingPort::new(Arc::clone(&serving.dispatch), zone)
+            .into_controller(serving.runtime_root.clone());
+        Ok((controller, serving.vcpu_count))
     }
 }
 
@@ -159,6 +198,70 @@ impl VolumeDriverEffects for VolumeEffectsService {
         source: &VolumeBindingAdmission<'_>,
     ) -> Result<Vec<AdmittedVolumeBinding>, BindingEvidenceAbsent> {
         self.runtime.admit_bindings(source).await
+    }
+
+    fn serves_virtiofs_bindings(&self) -> bool {
+        self.serving.is_some()
+    }
+
+    /// The delivery is the virtiofs family's own serving pass (U15) over the
+    /// production port: this crate derives the committed row's plan, socket,
+    /// and fence, and the privileged leg answers with what it actually
+    /// observed. The verdict is the consumer's mount, never a config file
+    /// having been written.
+    async fn deliver_binding(
+        &self,
+        source: &VolumeBindingAdmission<'_>,
+        row: &CommittedBinding,
+    ) -> Result<BindingDelivery, BindingDeliveryReason> {
+        let (controller, vcpu_count) = self.serving_pass(source.zone())?;
+        let principal = row
+            .stored()
+            .worker_principal()
+            .map_err(BindingDeliveryReason::Serving)?;
+        let report = controller
+            .observe(
+                row.stored(),
+                source.spec(),
+                vcpu_count,
+                principal,
+            )
+            .await
+            .map_err(BindingDeliveryReason::Serving)?;
+        Ok(BindingDelivery::new(
+            row.name(),
+            report.phase,
+            report.source_prepared,
+            report.consumer_mount,
+            report.reason.map(BindingDeliveryReason::Serving),
+        ))
+    }
+
+    /// A withdrawn source takes its delivery with it: the worker is deleted
+    /// through the same dispatch it was launched through, and a mount the
+    /// consumer still reports blocks the withdrawal instead of being
+    /// force-cleared (KTD6).
+    async fn withdraw_binding(
+        &self,
+        source: &VolumeBindingAdmission<'_>,
+        row: &CommittedBinding,
+    ) -> Result<(), BindingDeliveryReason> {
+        let (controller, _) = self.serving_pass(source.zone())?;
+        let worker = LaunchedWorker {
+            process_ref: row
+                .stored()
+                .worker_process_ref()
+                .map_err(BindingDeliveryReason::Serving)?,
+            // The worker identity is DERIVED from the committed row, not
+            // remembered: a restart re-derives byte-identical output for
+            // the same relationship, so a withdrawal reaches the worker
+            // this row actually launched.
+            socket: row.stored().serving_socket(controller.zone()),
+        };
+        controller
+            .drain(row.stored(), &worker)
+            .await
+            .map_err(BindingDeliveryReason::Serving)
     }
 }
 

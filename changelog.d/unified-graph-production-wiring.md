@@ -14,13 +14,13 @@ area: daemon,broker
 - **`d2b host reset` could never succeed on a real host.** The broker's reset
   path read `deployment-graph.json` under schema `d2b-deployment-graph/1`, a
   document no production path authors, while the deployment installs
-  `deployment-bootstrap.json` under `d2b-deployment-bootstrap/1` — a different
+  `deployment-bootstrap.json` under `d2b-deployment-bootstrap/1` - a different
   name and a different contract. Reset now reads the one document the daemon and
   the broker both publish and verify.
 
 - **The host reset's admission could not fail.** The check presented
   `Operator` as both the request subject and the graph's root, so the bootstrap
-  class admitted it by construction — every production graph roots at
+  class admitted it by construction - every production graph roots at
   `Bootstrap`, which is why the reset had to fabricate its own root to be
   admitted at all. `Operator` is no longer lumped with `Bootstrap`, the root
   comes from the document, and the request subject comes from the document's own
@@ -30,9 +30,9 @@ area: daemon,broker
 - **The Nix bundle subject was refused as display text.** Bundle ingestion
   presents `nix:<bundle-identity>`, which does not parse as a `ResourceRef`, and
   the identity arm matched only `bootstrap` and `operator`. The plane's
-  admission now classifies that subject — requiring both the prefix and
+  admission now classifies that subject - requiring both the prefix and
   `ResourceProvenance::Nix`, which an API caller cannot supply, because a
-  caller's principal must parse as a `ResourceRef` — so a bundle-ingested row is
+  caller's principal must parse as a `ResourceRef` - so a bundle-ingested row is
   admitted by the graph arm rather than refused by name.
 
 ### Changed

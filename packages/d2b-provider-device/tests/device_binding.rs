@@ -13,23 +13,31 @@ use d2b_contracts_resource::v3::{
     AdmissionStage, BindingArbitration, BindingAuthorization, BindingContractError, BindingKind,
     BindingLifecycleState, BindingRealizationFacet, BindingRealizationSupport, BindingRefusal,
     BindingRowError, BindingSlot, DeviceArbitration, DeviceAuthorityArbitration, DeviceAuthorityKey,
-    DeviceBindingRequest, DeviceBindingSpec, DeviceClaimRequest, DeviceClass, DeviceEffectOperation,
-    DeviceFunction, DeviceSpec, DesiredDigest, DesiredRevision, FreshnessTuple, InventorySelector,
-    ControllerGeneration, InventorySpec, RefusalReason, RequestedRights, ResourceRef, ResourceUid,
-    StoreIncarnation, ZoneId, admit_binding_row_refs, execution_policy::BoundedToken,
+    DeviceAttachmentMode, DeviceBindingRequest, DeviceBindingSpec, DeviceClaimRequest, DeviceClass,
+    DeviceEffectOperation, DeviceFunction, DeviceSpec, DesiredDigest, DesiredRevision,
+    FreshnessTuple, InventorySelector, ControllerGeneration, InventorySpec, RefusalReason,
+    RequestedRights, ResourceRef, ResourceUid, StoreIncarnation, ZoneId,
+    admit_binding_row_refs, execution_policy::BoundedToken,
 };
 use d2b_provider_device::binding::{
     DeviceAdmissionGrant, DeviceAdmissionSource, DeviceBindingDerivationError, DeviceBindingFate,
-    DeviceHelperLeg, DeviceInventory, DeviceInventoryEntry, DevicePresence, DeviceUseOutcome,
-    LiveDeviceBinding, admit_device_request, binding_row_name, canonical_binding_rows,
-    decide_presence, device_attachment_support, device_binding_spec_decoder, leg_outcome,
+    DeviceBindingEvidence, DeviceHelperLeg, DeviceInventory, DeviceInventoryEntry, DevicePresence,
+    DeviceUseOutcome, LiveDeviceBinding, admit_device_request, binding_row_name,
+    canonical_binding_rows, decide_presence, device_attachment_support, device_binding_spec_decoder,
+    leg_outcome,
 };
-use d2b_provider_device::test_support::{RecordingInventory, RecordingRuntime, recording_facets};
+use d2b_provider_device::facets::{DeviceBindingAuthoritySource, DeviceInventorySource};
+use d2b_provider_device::test_support::{
+    RecordedAuthority, RecordingInventory, RecordingRuntime, device_facets, recording_facets,
+};
 use d2b_provider_device::{
     DeviceBindingDriverArgs, DeviceBindingDriverStatus, DeviceComponent, UnattachedReason,
     declared_device_functions, device_binding_descriptor,
 };
 use d2b_provider_toolkit::testing::fakes::{RecordingManagerEndpoint, RecordingRequeue};
+use d2b_provider_toolkit::shared_provider::{
+    SharedProviderEffectError, SharedProviderEffectRequest,
+};
 use d2b_resource_runtime::context::ResourceContext;
 use d2b_resource_runtime::driver::{
     DynResourceDriver, ReconcileOutcome, RecoveryOutcome,
@@ -1507,5 +1515,327 @@ async fn teardown_is_idempotent_and_claims_no_withdrawal() {
         }),
     );
     d.delete(&mut f.ctx).await.expect("a retried delete converges");
+}
+
+// ---------------------------------------------------------------------------
+// Presence decided on the serving pass (U16)
+// ---------------------------------------------------------------------------
+//
+// Everything below is driven through the production construction: the factory
+// builds its effects from the declared `DeviceEffectFacets`, so a test that
+// supplies its own inventory and authority facets is exercising the wiring the
+// daemon registers rather than a substituted port.
+//
+// The properties are the ones a security decision has to earn:
+//
+// 1. A committed row whose relationship the authority journal reports proven
+//    is delivered, naming the physical authority the inventory resolved.
+// 2. The same row whose effect cannot be proven is degraded, never delivered.
+// 3. The same row with no authority evidence at all is degraded: the family
+//    never mints its own device authorization.
+// 4. A capability the host no longer backs is revoked, not degraded.
+// 5. A different physical device answering the same capability name is
+//    reported as replaced rather than carried forward as delivered (R41).
+// 6. Evidence about another relationship is refused for this row.
+
+/// One bounded inventory resolving the row's named capability at one opaque
+/// authority.
+fn one_capability_inventory(authority: [u8; 32], presence: DevicePresence) -> DeviceInventory {
+    DeviceInventory::new(vec![DeviceInventoryEntry::new(
+        function("render-node"),
+        DeviceAuthorityKey::from_core(authority),
+        DeviceAuthorityArbitration::Exclusive,
+        presence,
+    )])
+    .expect("one resolved capability is a bounded inventory")
+}
+
+/// An inventory a test swaps between two passes of the SAME driver.
+///
+/// The authority digest is the only thing a device replacement shows up in, so
+/// a test has to change what the inventory resolves to between passes without
+/// rebuilding the driver. The lock is async and awaited: every reader and
+/// writer here is an async effect method, so no synchronous accessor forces a
+/// blocking lock.
+struct SwappableInventory {
+    current: tokio::sync::Mutex<DeviceInventory>,
+}
+
+impl SwappableInventory {
+    fn new(inventory: DeviceInventory) -> Arc<Self> {
+        Arc::new(Self { current: tokio::sync::Mutex::new(inventory) })
+    }
+
+    async fn serve(&self, inventory: DeviceInventory) {
+        let mut current = self.current.lock().await;
+        *current = inventory;
+    }
+}
+
+#[async_trait::async_trait]
+impl DeviceInventorySource for SwappableInventory {
+    async fn device_inventory(
+        &self,
+        _request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<DeviceInventory, SharedProviderEffectError> {
+        Ok(self.current.lock().await.clone())
+    }
+}
+
+/// An authority facet over one explicitly built evidence value.
+struct FixedAuthority(DeviceBindingEvidence);
+
+#[async_trait::async_trait]
+impl DeviceBindingAuthoritySource for FixedAuthority {
+    async fn binding_evidence(
+        &self,
+        _request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<DeviceBindingEvidence, SharedProviderEffectError> {
+        Ok(self.0.clone())
+    }
+}
+
+/// An authority facet with no journal behind it: it reports the evidence as
+/// unavailable rather than inventing an authorization.
+struct NoAuthority;
+
+#[async_trait::async_trait]
+impl DeviceBindingAuthoritySource for NoAuthority {
+    async fn binding_evidence(
+        &self,
+        _request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<DeviceBindingEvidence, SharedProviderEffectError> {
+        Err(SharedProviderEffectError::Unavailable)
+    }
+}
+
+/// The driver over one test's own facet observations.
+async fn binding_driver_over(
+    inventory: Arc<dyn DeviceInventorySource>,
+    authority: Arc<dyn DeviceBindingAuthoritySource>,
+) -> Box<dyn DynResourceDriver> {
+    device_binding_descriptor(DeviceBindingDriverArgs {
+        zone: ZoneId::parse(ZONE).expect("zone"),
+        controller_generation: ControllerGeneration::new(1).expect("controller generation"),
+        facets: device_facets(Arc::new(RecordingRuntime::default()), inventory, authority),
+    })
+    .factory
+    .create(&ResourceKey::new(ZONE, "DeviceBinding", "row"))
+    .await
+}
+
+/// One committed row's fixture over the parent's own row and its consumer.
+fn presence_fixture() -> Fixture {
+    binding_fixture(
+        committed_binding_row(
+            "dev-binding-row",
+            committed_decision(),
+            "render-node",
+            DeviceClaimRequest::Exclusive,
+        ),
+        serving_manager(),
+    )
+}
+
+/// A committed row whose relationship the authority journal reports proven is
+/// delivered, and the delivered state names the physical authority the
+/// trusted inventory resolved - not a literal this file minted.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn a_committed_row_with_a_proven_relationship_is_delivered() {
+    let inventory = Arc::new(RecordingInventory);
+    let resolved = inventory
+        .resolved_for(GPU_PROVIDER)
+        .expect("the recording inventory resolves the parent's declared selector");
+    let authority = resolved
+        .entries()
+        .iter()
+        .find(|entry| entry.function().as_str() == "render-node")
+        .map(|entry| entry.authority_key().clone())
+        .expect("the recording inventory resolves the named capability");
+    let mut f = presence_fixture();
+    let mut d = binding_driver_over(
+        inventory as Arc<dyn DeviceInventorySource>,
+        Arc::new(RecordedAuthority::active()),
+    )
+    .await;
+
+    assert_eq!(d.reconcile(&mut f.ctx).await.expect("reconcile"), ReconcileOutcome::Satisfied);
+    assert_eq!(
+        f.ctx.status::<DeviceBindingDriverStatus>(),
+        Some(&DeviceBindingDriverStatus::Admitted {
+            component: DeviceComponent::Gpu,
+            authority,
+        }),
+        "a proven relationship is delivered under the authority it was admitted against",
+    );
+}
+
+/// The same committed row, whose observed lifecycle proves no effective
+/// result, is degraded. Presence is a security decision: an unproven one is
+/// never reported as delivered use.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn a_committed_row_whose_effect_cannot_be_proven_is_degraded() {
+    for lifecycle in [
+        BindingLifecycleState::Requested,
+        BindingLifecycleState::Admitted,
+        BindingLifecycleState::Unknown,
+        BindingLifecycleState::Degraded,
+    ] {
+        let mut f = presence_fixture();
+        let mut d = binding_driver_over(
+            Arc::new(RecordingInventory),
+            Arc::new(RecordedAuthority::new(lifecycle)),
+        )
+        .await;
+
+        assert_eq!(d.reconcile(&mut f.ctx).await.expect("reconcile"), ReconcileOutcome::Satisfied);
+        assert_eq!(
+            f.ctx.status::<DeviceBindingDriverStatus>(),
+            Some(&DeviceBindingDriverStatus::Unattached {
+                reason: UnattachedReason::PresenceUnproven,
+            }),
+            "{lifecycle:?} proves no effective result, so use is degraded",
+        );
+    }
+}
+
+/// With no authority journal behind the seam there is no relationship to
+/// decide about, so the pass degrades. The family never grants itself the
+/// device authority `admit_device_request` refuses to take without one.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn a_committed_row_with_no_authority_evidence_is_degraded() {
+    let mut f = presence_fixture();
+    let mut d =
+        binding_driver_over(Arc::new(RecordingInventory), Arc::new(NoAuthority)).await;
+
+    assert_eq!(d.reconcile(&mut f.ctx).await.expect("reconcile"), ReconcileOutcome::Satisfied);
+    assert_eq!(
+        f.ctx.status::<DeviceBindingDriverStatus>(),
+        Some(&DeviceBindingDriverStatus::Unattached {
+            reason: UnattachedReason::PresenceUnproven,
+        }),
+        "absent authority evidence is uncertainty, not delivered use",
+    );
+}
+
+/// Evidence the journal holds for a DIFFERENT relationship is refused for this
+/// row. The committed row is the subject of the decision, so a neighbouring
+/// consumer's admission can never be read as this row's.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn evidence_for_another_relationship_is_refused() {
+    let other = DeviceBindingRequest::new(
+        reference("Device/gpu-zero"),
+        reference(OTHER_WORKER),
+        slot("gpu-render"),
+        function("render-node"),
+        DeviceClaimRequest::Exclusive,
+        DeviceAttachmentMode::Descriptor,
+    )
+    .expect("a second consumer's request is a well-formed device request");
+    let evidence = DeviceBindingEvidence::new(
+        other,
+        BindingAuthorization::granted(),
+        vec![freshness(&reference("Device/gpu-zero"), device_uid())],
+        BindingLifecycleState::Active,
+    );
+    let mut f = presence_fixture();
+    let mut d = binding_driver_over(
+        Arc::new(RecordingInventory),
+        Arc::new(FixedAuthority(evidence)),
+    )
+    .await;
+
+    assert_eq!(d.reconcile(&mut f.ctx).await.expect("reconcile"), ReconcileOutcome::Satisfied);
+    assert_eq!(
+        f.ctx.status::<DeviceBindingDriverStatus>(),
+        Some(&DeviceBindingDriverStatus::Unattached {
+            reason: UnattachedReason::PresenceUnproven,
+        }),
+        "another relationship's evidence is not this row's presence",
+    );
+}
+
+/// A capability the trusted inventory reports as gone is REVOKED, which is a
+/// different answer from a degraded one: the use must stop rather than stop
+/// being provable.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn a_capability_the_host_no_longer_backs_is_revoked() {
+    let mut f = presence_fixture();
+    let mut d = binding_driver_over(
+        Arc::new(d2b_provider_device::test_support::FixedInventory::new(
+            one_capability_inventory([9; 32], DevicePresence::Absent),
+        )),
+        Arc::new(RecordedAuthority::active()),
+    )
+    .await;
+
+    assert_eq!(d.reconcile(&mut f.ctx).await.expect("reconcile"), ReconcileOutcome::Satisfied);
+    assert_eq!(
+        f.ctx.status::<DeviceBindingDriverStatus>(),
+        Some(&DeviceBindingDriverStatus::Unattached {
+            reason: UnattachedReason::CapabilityNotBacked,
+        }),
+    );
+}
+
+/// A device replaced behind the same capability name resolves to a different
+/// physical authority. The pass reports the replacement instead of carrying
+/// the previous authority forward, so a consumer is never handed a grant for
+/// hardware it was not admitted against.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn a_device_replaced_behind_the_same_capability_name_is_reported() {
+    let inventory =
+        SwappableInventory::new(one_capability_inventory([1; 32], DevicePresence::Present));
+    let mut f = presence_fixture();
+    let mut d = binding_driver_over(
+        inventory.clone() as Arc<dyn DeviceInventorySource>,
+        Arc::new(RecordedAuthority::active()),
+    )
+    .await;
+
+    d.reconcile(&mut f.ctx).await.expect("the first pass");
+    assert_eq!(
+        f.ctx.status::<DeviceBindingDriverStatus>(),
+        Some(&DeviceBindingDriverStatus::Admitted {
+            component: DeviceComponent::Gpu,
+            authority: DeviceAuthorityKey::from_core([1; 32]),
+        }),
+    );
+
+    // The same capability name now answers to a different physical device.
+    inventory.serve(one_capability_inventory([2; 32], DevicePresence::Present)).await;
+    d.reconcile(&mut f.ctx).await.expect("the pass that observes the replacement");
+    assert_eq!(
+        f.ctx.status::<DeviceBindingDriverStatus>(),
+        Some(&DeviceBindingDriverStatus::Replaced {
+            component: DeviceComponent::Gpu,
+            authority: DeviceAuthorityKey::from_core([2; 32]),
+        }),
+        "a replaced device is named, not delivered under the authority it replaced",
+    );
+    assert_ne!(
+        f.ctx.status::<DeviceBindingDriverStatus>(),
+        Some(&DeviceBindingDriverStatus::Admitted {
+            component: DeviceComponent::Gpu,
+            authority: DeviceAuthorityKey::from_core([1; 32]),
+        }),
+    );
+
+    // The next pass still observes the new device, so the replacement settles
+    // into a delivery under the authority actually present now.
+    d.reconcile(&mut f.ctx).await.expect("the pass after the replacement");
+    assert_eq!(
+        f.ctx.status::<DeviceBindingDriverStatus>(),
+        Some(&DeviceBindingDriverStatus::Admitted {
+            component: DeviceComponent::Gpu,
+            authority: DeviceAuthorityKey::from_core([2; 32]),
+        }),
+    );
 }
 

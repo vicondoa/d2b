@@ -220,7 +220,11 @@ impl VirtiofsBindingEffectPort for &ScriptedPort {
         })
     }
 
-    async fn observe_socket(&self, _worker: &LaunchedWorker) -> Result<bool, VirtiofsBindingError> {
+    async fn observe_socket(
+        &self,
+        _binding: &StoredBinding,
+        _worker: &LaunchedWorker,
+    ) -> Result<bool, VirtiofsBindingError> {
         self.record(PortCall::ObserveSocket).await;
         Ok(self.socket_ready)
     }
@@ -244,7 +248,11 @@ impl VirtiofsBindingEffectPort for &ScriptedPort {
         Ok(self.store_view_marker)
     }
 
-    async fn delete_worker(&self, _worker: &LaunchedWorker) -> Result<(), VirtiofsBindingError> {
+    async fn delete_worker(
+        &self,
+        _binding: &StoredBinding,
+        _worker: &LaunchedWorker,
+    ) -> Result<(), VirtiofsBindingError> {
         self.record(PortCall::DeleteWorker).await;
         Ok(())
     }

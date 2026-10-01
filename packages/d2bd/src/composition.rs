@@ -8568,6 +8568,7 @@ mod network_tap_provenance_tests {
             ),
             spec,
             vec![first_guest.clone(), second_guest.clone()],
+            Vec::new(),
         )
         .unwrap()
         .proof();

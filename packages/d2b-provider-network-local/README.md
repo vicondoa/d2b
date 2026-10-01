@@ -47,6 +47,16 @@ trusted slot. A Host or Guest child-support ceiling is recorded as an admission
 constraint and creates no membership; only a parent's own consumption does.
 Releasing one consumer retains the fabric while any other membership is live.
 
+A committed `Network` row is also the source of the committed `NetworkBinding`
+rows. The row's own attachments decide which execution targets join its
+fabric, and each consumer's exact request - its slot, its presentation, and
+its traffic policy - is read off that same row, so a relationship cannot widen
+itself by asking for a different slot, a different presentation, or another
+Network. The committed row carries the relationship and this Provider's own
+decision about it and no traffic policy at all: the firewall is the Network's
+single ownership slot. A Network row that attaches nothing commits no row, and
+a row a shrunken attachment set no longer derives is retired.
+
 ## Controllers / services / workers / binaries
 
 The `d2b-provider-network-local-ctrl` controller is Host-placed and uses the
@@ -116,6 +126,16 @@ that derives the config Volume, the net-VM Guest, and the guest-agent Process
 children, and the `NetworkDriverEffects` port the daemon implements. The shared
 shared-provider driver flow (child ensures, owned-child retirement, status
 projection) comes from `d2b-provider-toolkit`.
+
+`network_binding_descriptor` (`src/binding.rs`) declares the `NetworkBinding`
+type for the plane. The shared fabric is realized once per `(Network,
+execution target)` by the owning `Network` row, so the relationship driver owns
+no host state of its own: it re-derives the committed row name from the
+committed identities, compares the committed decision against the decision
+this Provider admits, checks the owning `Network` row behind its owner fence
+and its current attachments, and publishes the interface the consumer holds on
+the fabric. It serves no broker operations, mints no children, contributes no
+startup steps, and declares no hosted effects service.
 
 ## Build and test
 

@@ -12542,6 +12542,7 @@ mod tests {
             ),
             spec,
             Vec::new(),
+            Vec::new(),
         )
         .unwrap()
     }
@@ -12596,6 +12597,7 @@ mod tests {
             ),
             spec,
             Vec::new(),
+            Vec::new(),
         )
         .unwrap()
     }
@@ -12618,7 +12620,7 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        NetworkAdmissionIntent::new(key, spec, Vec::new()).unwrap()
+        NetworkAdmissionIntent::new(key, spec, Vec::new(), Vec::new()).unwrap()
     }
 
     fn self_owned_occupancy(intent: &NetworkAdmissionIntent) -> HostNetworkOccupancy {

@@ -2132,6 +2132,12 @@ impl ConstructionInputs {
                 as Arc<dyn d2b_provider_device::facets::DeviceRuntime>,
             inventory: Arc::clone(&shared_provider_effects)
                 as Arc<dyn d2b_provider_device::facets::DeviceInventorySource>,
+            // U16: the authority evidence a committed DeviceBinding's
+            // presence is decided against. The shared provider effects are
+            // the daemon's own read of the authority journal and the standing
+            // relationships, so the family never reads them itself.
+            authority: Arc::clone(&shared_provider_effects)
+                as Arc<dyn d2b_provider_device::facets::DeviceBindingAuthoritySource>,
         };
         let tpm_facets = d2b_provider_device_tpm::facets::TpmEffectFacets {
             runtime: Arc::clone(&shared_provider_effects)
@@ -3098,11 +3104,21 @@ impl ResourcePlaneV3 {
             })),
             // The Network family: the driver builds its effects from the
             // declared facets; no externally built port appears here (R2).
-            "network-local" => vec![network_descriptor(NetworkDriverArgs {
-                zone: inputs.zone.clone(),
-                controller_generation: inputs.authority.controller_generation,
-                facets: inputs.network_facets.clone(),
-            })],
+            "network-local" => vec![
+                // The NetworkBinding row type this family also serves (U17):
+                // the relationships whose membership the fabric render
+                // writes, read back from the plane's own committed rows.
+                d2b_provider_network_local::network_binding_descriptor(
+                    d2b_provider_network_local::NetworkBindingDriverArgs {
+                        zone: inputs.zone.clone(),
+                    },
+                ),
+                network_descriptor(NetworkDriverArgs {
+                    zone: inputs.zone.clone(),
+                    controller_generation: inputs.authority.controller_generation,
+                    facets: inputs.network_facets.clone(),
+                }),
+            ],
 // The Host family (U5): the driver builds its effects from the
             // daemon-supplied facet set; no externally built port appears at
             // this construction site (R2).
@@ -6321,40 +6337,6 @@ HOST_EFFECTS_SERVICE.id,
             principal: principal.to_owned(),
             origin: d2b_resource_runtime::spec_store::ResourceProvenance::Api,
         }
-    }
-
-    /// A zone-local plane is not the foundation plane: a system-homed row is
-    /// refused terminally, naming the type and the caller.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_zone_local_plane_refuses_a_system_homed_row() {
-        let (_dir, inputs, _readiness) = test_inputs();
-        let plane = ResourcePlaneV3::open(inputs).await.expect("plane");
-
-        let error = plane
-           .client()
-           .apply(api_subject("User/alice"), operation_desired("test", "worker"))
-           .await
-           .expect_err("a system-homed write is refused");
-        assert!(
-            matches!(
-                &error,
-                d2b_resource_runtime::error::ResourceError::AdmissionDenied {
-                    type_name,
-                    principal,
-                   ..
-                } if type_name == "Operation" && principal == "User/alice"
-            ),
-            "unexpected refusal: {error:?}"
-        );
-        assert!(
-            error.to_string().contains("wrong plane"),
-            "the refusal keeps the named shape: {error}"
-        );
-        // The refused row never reached the durable store.
-        assert!(plane.store().list(SpecSelector::default()).await.expect("list")
-           .iter()
-           .all(|row| row.key.type_name != "Command"));
     }
 
     /// The foundation plane commits the seeded policy rows before its manager

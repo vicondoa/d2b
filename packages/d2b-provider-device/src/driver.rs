@@ -248,8 +248,10 @@ struct DeviceFamily {
     effects: Arc<dyn DeviceDriverEffects>,
     /// The binding seam both halves share: the producing half reads the
     /// trusted inventory and the declared relationships through it, the
-    /// serving half reads the same inventory. One value answers both, so the
-    /// capability a source admits is the capability the row is served against.
+    /// serving half reads the same inventory plus the authority evidence it
+    /// re-admits the committed row against before deciding presence. One value
+    /// answers both, so the capability a source admits is the capability the
+    /// row is decided against.
     bindings: Arc<dyn crate::binding::DeviceBindingEffects>,
 }
 

@@ -92,6 +92,17 @@ pub struct DeviceEffects {
     /// without it. Building the effects without it left the family's own
     /// presence decision unreachable from the composition root.
     inventory: Arc<dyn crate::facets::DeviceInventorySource>,
+    /// The graph-authority evidence the serving half re-admits a committed
+    /// `DeviceBinding` row against before deciding its presence.
+    ///
+    /// Carried, not dropped, for the same reason as the inventory above:
+    /// [`crate::binding::admit_device_request`] refuses a request with no
+    /// authorization and no dependency fence, and
+    /// [`crate::binding::BindingLifecycleState::proves_effect`] reads the
+    /// lifecycle beside them. Without this facet the serving half can observe
+    /// which devices are present but can never decide whether the relationship
+    /// it is serving is proven, so it reports degraded for everything.
+    authority: Arc<dyn crate::facets::DeviceBindingAuthoritySource>,
 }
 
 impl DeviceEffects {
@@ -101,6 +112,7 @@ impl DeviceEffects {
         Self {
             runtime: facets.runtime,
             inventory: facets.inventory,
+            authority: facets.authority,
         }
     }
 
@@ -122,6 +134,25 @@ impl DeviceEffects {
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<crate::binding::DeviceInventory, SharedProviderEffectError> {
         self.inventory.device_inventory(request).await
+    }
+
+    /// The graph-authority evidence held for one committed `DeviceBinding`
+    /// row.
+    ///
+    /// The read is routed to the daemon: it answers from the authority journal
+    /// and the graph authority's own verdict on this exact relationship. A
+    /// plane whose facet cannot answer reports the evidence as unavailable, and
+    /// the serving half then reports degraded rather than delivered.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SharedProviderEffectError`] when the journal cannot be read
+    /// for the row or holds no evidence for it.
+    pub async fn binding_evidence(
+        &self,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<crate::binding::DeviceBindingEvidence, SharedProviderEffectError> {
+        self.authority.binding_evidence(request).await
     }
 }
 

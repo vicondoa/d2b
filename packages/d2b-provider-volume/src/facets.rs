@@ -29,23 +29,210 @@
 //!   `d2b-provider-volume-local` beside the effect ports it implements, so
 //!   the daemon holds no volume-local mutation code.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneId, volume::VolumeSpec};
+use d2b_contracts_resource::v3::{
+    ResourceGeneration, ResourceRef, ResourceUid, ZoneId, volume::VolumeSpec,
+    volume_binding::VolumeBindingSpec,
+};
 use d2b_provider_volume_local::AdmittedVolumeBinding;
+use d2b_provider_volume_virtiofs::{
+    BindingPhase, MountObservation, StoredBinding, VirtiofsBindingError, VirtiofsServingDispatch,
+    VirtiofsServingError,
+};
+use d2b_resource_runtime::spec_store::StoredDesiredResource;
 
 /// The daemon-supplied facet set the provider-owned Volume effects are
 /// built from (U7).
 ///
 /// The composition root supplies the objects; the driver never holds a
 /// daemon state type (R2).
+
 #[derive(Clone)]
 pub struct VolumeEffectFacets {
     /// The daemon's Volume runtime: the orchestration the driver effects
     /// delegate to, over the daemon's own trusted root resolver and durable
     /// layout state.
     pub runtime: Arc<dyn VolumeRuntime>,
+}
+
+/// Why one committed relationship is not delivered.
+///
+/// The two halves are distinct facts and are never collapsed: the serving
+/// pass's own closed refusal is this family's vocabulary, while a dispatch
+/// class is the privileged leg's and says the request never reached the
+/// host at all. Neither carries a socket path, a shared directory, argv,
+/// or a numerical identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BindingDeliveryReason {
+    /// The serving pass refused this row itself.
+    Serving(VirtiofsBindingError),
+    /// The privileged leg refused the request, or never answered it.
+    Dispatch(VirtiofsServingError),
+}
+
+impl BindingDeliveryReason {
+    /// The closed, path-free code this refusal reports under.
+    pub fn code(&self) -> &str {
+        match self {
+            Self::Serving(reason) => reason.code(),
+            Self::Dispatch(error) => error.code(),
+        }
+    }
+}
+
+impl core::fmt::Display for BindingDeliveryReason {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(self.code())
+    }
+}
+
+impl std::error::Error for BindingDeliveryReason {}
+
+/// One committed relationship's virtiofs delivery verdict (U15).
+///
+/// Delivery is a real observation: the consumer's own mount reaching it.
+/// `phase` reaches `Ready` only when the privileged leg reports the mount
+/// present, and a consumer that reports the source serving while its own
+/// mount is absent is `Degraded`, never delivered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BindingDelivery {
+    name: String,
+    phase: BindingPhase,
+    source_prepared: bool,
+    consumer_mount: MountObservation,
+    reason: Option<BindingDeliveryReason>,
+}
+
+impl BindingDelivery {
+    /// Bind one verdict to the committed row it describes.
+    pub fn new(
+        name: impl Into<String>,
+        phase: BindingPhase,
+        source_prepared: bool,
+        consumer_mount: MountObservation,
+        reason: Option<BindingDeliveryReason>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            phase,
+            source_prepared,
+            consumer_mount,
+            reason,
+        }
+    }
+
+    /// The committed row this verdict is about.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The phase the serving pass computed.
+    pub const fn phase(&self) -> BindingPhase {
+        self.phase
+    }
+
+    /// Whether the source is prepared: the consumer's pre-start condition.
+    pub const fn source_prepared(&self) -> bool {
+        self.source_prepared
+    }
+
+    /// What the consumer currently observes at its mount point.
+    pub const fn consumer_mount(&self) -> MountObservation {
+        self.consumer_mount
+    }
+
+    /// Why the relationship is not delivered.
+    pub const fn reason(&self) -> Option<&BindingDeliveryReason> {
+        self.reason.as_ref()
+    }
+
+    /// Whether the consumer's mount is observed present.
+    pub fn is_delivered(&self) -> bool {
+        self.phase == BindingPhase::Ready
+    }
+}
+
+/// One committed canonical `VolumeBinding` row this pass wrote, read back
+/// as the serving identity the virtiofs family delivers (U15).
+///
+/// The row is the manager's own committed handle: its durable uid, its row
+/// generation, and the exact bytes it was committed under. Nothing here is
+/// re-derived from the attachment list, so a delivery can only ever be
+/// about a row that exists in the store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommittedBinding {
+    name: String,
+    stored: StoredBinding,
+}
+
+impl CommittedBinding {
+    /// Bind one committed row's name and serving identity.
+    pub const fn new(name: String, stored: StoredBinding) -> Self {
+        Self { name, stored }
+    }
+
+    /// Read one committed manager row as a serving identity.
+    ///
+    /// # Errors
+    ///
+    /// Refuses committed bytes that are not a strictly neutral
+    /// `VolumeBinding` spec (KTD1), and an identity the readiness fence
+    /// cannot be built from.
+    pub fn from_row(row: &StoredDesiredResource) -> Result<Self, VirtiofsBindingError> {
+        let invalid = VirtiofsBindingError::InvalidBinding;
+        let mut base: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_slice::<serde_json::Value>(&row.spec)
+                .map_err(|_| invalid)?
+                .as_object()
+                .cloned()
+                .ok_or(invalid)?;
+        // The committed bytes carry the serving Provider reference beside
+        // the neutral spec; the standard catalog admits no provider
+        // extension path for the type, so only the reference itself is
+        // dropped before the strict spec decode.
+        base.remove("providerRef");
+        let spec: VolumeBindingSpec =
+            serde_json::from_value(serde_json::Value::Object(base)).map_err(|_| invalid)?;
+        let uid = ResourceUid::from_bytes(&row.uid).map_err(|_| invalid)?;
+        let generation = ResourceGeneration::new(row.generation).map_err(|_| invalid)?;
+        Ok(Self {
+            name: row.key.name.clone(),
+            stored: StoredBinding::from_committed_row(spec, uid, generation),
+        })
+    }
+
+    /// The committed row's name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The serving identity the committed row stands for.
+    pub const fn stored(&self) -> &StoredBinding {
+        &self.stored
+    }
+}
+
+/// The privileged virtiofs serving delivery one Zone composes (U15).
+///
+/// Everything here is a host fact the provider crate cannot derive for
+/// itself: the privileged dispatch only the daemon can reach, the
+/// broker-owned directory the private serving socket is bound under, and
+/// the consumer Guest's vcpu count the worker plan's thread pool is tuned
+/// from. The composition root supplies the value; the family crate holds no
+/// daemon state type.
+#[derive(Clone)]
+pub struct VolumeServingComposition {
+    /// The privileged virtiofs serving dispatch.
+    pub dispatch: Arc<dyn VirtiofsServingDispatch>,
+    /// The broker-owned runtime root the private serving socket is derived
+    /// under.
+    pub runtime_root: PathBuf,
+    /// The consumer Guest's vcpu count, supplied by the daemon as the Zone's
+    /// own authority fact rather than read from a Guest row.
+    pub vcpu_count: u32,
 }
 
 /// One Volume as the canonical binding admission reads it (U14, KTD2/KTD3).
@@ -238,5 +425,23 @@ pub trait VolumeRuntime: Send + Sync + 'static {
             BindingAdmissionEvidence::Authorization,
             BindingAdmissionEvidence::FreshnessFence,
         ]))
+    }
+
+    /// The privileged virtiofs serving delivery this Zone composes (U15).
+    ///
+    /// A committed `VolumeBinding` row is realized by the virtiofs
+    /// family's own serving pass, and that pass crosses the privileged
+    /// boundary: only the daemon holds the broker socket, the broker-owned
+    /// runtime root the private serving socket is bound under, and the
+    /// Zone's vcpu authority. The composition root supplies those three
+    /// facts together; the family crate derives the plan, the socket
+    /// identity, and the fence itself and reconciles what comes back.
+    ///
+    /// The default is `None`: the leg is daemon-only, so a runtime that
+    /// was not given one composes no delivery, and every committed
+    /// relationship is reported undelivered by name rather than being
+    /// described as served by a leg nobody holds.
+    fn virtiofs_serving(&self) -> Option<VolumeServingComposition> {
+        None
     }
 }

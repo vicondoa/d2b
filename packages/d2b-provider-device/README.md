@@ -57,6 +57,28 @@ controller-created rows (the TPM state Volume) through the child surface. A
 reconcile pass therefore never diffs - and never retires - the rows another
 layer declared.
 
+## `DeviceBinding` presence
+
+The family also serves the `DeviceBinding` rows its own `Device` sources
+commit. A serving pass does not read presence off the row's existence: it
+re-admits the committed relationship through the family's one admission path
+against the authorization and dependency fence the graph authority holds for
+that row, reads the trusted inventory through the same facet the producing
+half uses, and hands both to `d2b_provider_device::binding::decide_presence`.
+The decision is what the driver publishes:
+
+| Decision | Status |
+| --- | --- |
+| capability backed and the effect proven | `Admitted` with the resolved `DeviceAuthorityKey` |
+| capability backed, effect not proven | `Unattached { reason: PresenceUnproven }` |
+| capability no longer backed | `Unattached { reason: CapabilityNotBacked }` |
+| a different physical device answers the same capability name | `Replaced` |
+
+An unproven presence is never reported as delivered use. The authority
+evidence crosses as the declared facet
+`facets::DeviceBindingAuthoritySource`, so a plane with no authority journal
+behind it holds the refusal and every relationship reports degraded.
+
 ## Placement and dependencies
 
 A `Device` row is reconciled on its containing Zone's Host; the guest-side
@@ -68,6 +90,11 @@ passes its own per-resource `DeviceResourceState` back through the driver.
 The crate depends on the four realizer crates for their exported identities,
 on `d2b-provider-toolkit` for the shared driver machinery, and on
 `d2b-resource-runtime`/`d2b-resource-types` for the driver contract.
+
+`DeviceBinding` presence is decided through the same declared facets: the
+`DeviceInventorySource` observation the daemon resolves over the verified host
+device-node matrix, and the `DeviceBindingAuthoritySource` evidence it reads
+from the authority journal.
 
 ## RBAC requirements
 

@@ -1073,7 +1073,17 @@ impl ProductionSharedProviderEffects {
             .cloned()
             .ok_or(SharedProviderEffectError::Unavailable)?;
         let network_generation = request.generation;
-        let network_ref = key_ref(&request.target)?.to_canonical_string();
+        let network_key_ref = key_ref(&request.target)?;
+        let network_ref = network_key_ref.to_canonical_string();
+        // This Network's own store-assigned uid, read from its committed row
+        // rather than from the request, for the same reason the consumers'
+        // uids are read from theirs: a relationship is admitted against the
+        // identities the store assigned, not against a caller's claim.
+        let network_uid = runtime
+            .committed_resource_stored(&network_key_ref, "network-binding-source-identity")
+            .await
+            .map_err(|_| SharedProviderEffectError::InvalidResource)?
+            .uid;
         let mut guest_uids = Vec::with_capacity(spec.attachments().len());
         let mut attachment_generation = network_generation.get();
         for attachment in spec.attachments() {
@@ -1156,6 +1166,69 @@ impl ProductionSharedProviderEffects {
                 .ok_or(SharedProviderEffectError::InvalidResource)?;
             attachment_generation = attachment_generation.max(generation);
         }
+        // U17: the committed `NetworkBinding` relationships this Network's
+        // fabric admits. Each carries the consumer's own typed request, and
+        // that request is the only source of the consumer policy the live
+        // config render writes, so a Network that declares no membership
+        // renders the fabric alone rather than a default policy.
+        //
+        // The committed rows of that type whose `networkRef` is this Network.
+        // Each row's stored spec BASE is the `NetworkBindingSpec` the
+        // producing pass minted; the consumer's identity is read from the
+        // consumer's own committed row rather than from the relationship, so a
+        // row naming a consumer the plane cannot resolve is an error rather
+        // than a silently wrong relationship. The family's own
+        // `served_network_consumers` re-derives each row name from the
+        // committed identities and refuses a mismatch, and skips a row whose
+        // `executionRef` this Network no longer attaches, so a stale row
+        // yields no membership instead of a wrong one.
+        let mut committed = Vec::new();
+        for row in runtime
+            .committed_resources_of_type("NetworkBinding")
+            .await
+            .map_err(|_| SharedProviderEffectError::Unavailable)?
+        {
+            if row.pointer("/spec/networkRef").and_then(Value::as_str)
+                != Some(network_ref.as_str())
+            {
+                continue;
+            }
+            let execution_ref = row
+                .pointer("/spec/executionRef")
+                .and_then(Value::as_str)
+                .and_then(|value| ResourceRef::parse(value).ok())
+                .ok_or(SharedProviderEffectError::InvalidResource)?;
+            let name = row
+                .pointer("/metadata/name")
+                .and_then(Value::as_str)
+                .and_then(|value| d2b_contracts_resource::v3::BoundedToken::parse(value.to_owned()).ok())
+                .ok_or(SharedProviderEffectError::InvalidResource)?;
+            let consumer = runtime
+                .committed_resource_stored(&execution_ref, "network-binding-consumer-identity")
+                .await
+                .map_err(|_| SharedProviderEffectError::InvalidResource)?;
+            let consumer_uid = consumer.uid;
+            let spec = row
+                .pointer("/spec")
+                .and_then(Value::as_object)
+                .ok_or(SharedProviderEffectError::InvalidResource)?;
+            committed.push(
+                d2b_provider_network_local::CommittedNetworkBinding::new(
+                    name,
+                    serde_json::to_vec(spec).map_err(|_| SharedProviderEffectError::InvalidResource)?,
+                    consumer_uid,
+                ),
+            );
+        }
+        let relationships = d2b_provider_network_local::served_network_consumers(
+            &d2b_contracts_resource::v3::ZoneId::parse(self.zone.as_str())
+                .map_err(|_| SharedProviderEffectError::InvalidResource)?,
+            &network_key_ref,
+            &network_uid,
+            spec,
+            &committed,
+        )
+        .map_err(|_| SharedProviderEffectError::InvalidResource)?;
         let installed_generation = resolver
             .installed_generation_identity()
             .and_then(|identity| {
@@ -1177,6 +1250,7 @@ impl ProductionSharedProviderEffects {
             ),
             spec.clone(),
             guest_uids,
+            relationships,
         )
         .map_err(|_| SharedProviderEffectError::InvalidResource)?;
         let plane = self
@@ -2879,6 +2953,33 @@ fn device_function_host_class(function: &str) -> Option<d2b_host::devices::Devic
 // The keys are minted here, in the trusted adapter, from the row's own
 // durable identity, its generation, and the manager's controller
 // generation - never from a device-node path, a serial, or a template name.
+/// U16: the authority evidence one committed `DeviceBinding`'s presence is
+/// decided against.
+///
+/// This refuses, and that is the honest answer rather than a missing one. The
+/// evidence is `GraphAuthority::admit_mutation`'s authorization over the
+/// committed row, the authority journal's freshness for it, and the
+/// relationship's observed standing - and this plane has no accepted graph for
+/// its own Zone to admit against, because the verified deployment graph is
+/// per-deployment and the admission is per-Zone.
+///
+/// A driver that cannot prove its evidence reports the relationship degraded,
+/// which is the fail-closed direction: a `DeviceBinding` is visibly unproven
+/// rather than silently delivered. It does not revoke - uncertainty and
+/// revocation are different answers.
+#[async_trait]
+impl d2b_provider_device::facets::DeviceBindingAuthoritySource for ProductionSharedProviderEffects {
+    async fn binding_evidence(
+        &self,
+        _request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<
+        d2b_provider_device::binding::DeviceBindingEvidence,
+        SharedProviderEffectError,
+    > {
+        Err(SharedProviderEffectError::Unavailable)
+    }
+}
+
 #[async_trait]
 impl d2b_provider_device::facets::DeviceInventorySource for ProductionSharedProviderEffects {
     async fn device_inventory(

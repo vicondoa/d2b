@@ -12,14 +12,13 @@
 //! family crate holds no daemon state type.
 
 use std::sync::Arc;
-
 use async_trait::async_trait;
 use d2b_provider_toolkit::{
     SharedProviderEffectError, SharedProviderEffectOutcome, SharedProviderEffectRequest,
     SharedProviderFinalize,
 };
 
-use crate::binding::DeviceInventory;
+use crate::binding::{DeviceBindingEvidence, DeviceInventory};
 use crate::driver::{DeviceComponent, DeviceResourceState};
 
 /// The daemon-supplied facet set the provider-owned Device effects are built
@@ -36,6 +35,44 @@ pub struct DeviceEffectFacets {
     /// The trusted host inventory the Device source admits its typed
     /// `DeviceBinding` relationships against.
     pub inventory: Arc<dyn DeviceInventorySource>,
+    /// The graph-authority evidence the serving half re-admits a committed
+    /// `DeviceBinding` row against and decides its presence from.
+    pub authority: Arc<dyn DeviceBindingAuthoritySource>,
+}
+
+/// The graph-authority evidence one committed `DeviceBinding` row's presence
+/// is decided from.
+///
+/// A serving pass may not assume a relationship it did not itself admit. The
+/// committed row carries the source's accepted decision but not the
+/// authorization that admitted it, the dependency fence it was fenced
+/// against, or the lifecycle observed for it since - and
+/// [`crate::binding::admit_device_request`] refuses a request without the
+/// first two, while [`crate::binding::decide_presence`] reads the third. So
+/// the evidence crosses as a declared facet: an implementation is supplied by
+/// the composition root over the authority journal and the graph authority's
+/// own verdict, never derived from the row being served. A plane with no
+/// authority evidence behind it holds the refusal, and every relationship
+/// then reports degraded rather than delivered.
+#[async_trait]
+pub trait DeviceBindingAuthoritySource: Send + Sync + 'static {
+    /// The evidence the authority journal holds for one committed
+    /// `DeviceBinding` row.
+    ///
+    /// `request` is the binding row's OWN effect request - its key, uid,
+    /// generation, and committed spec - so the row being served is the only
+    /// subject this answer may be about.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SharedProviderEffectError::Unavailable`] when the authority
+    /// journal cannot be read for the row, and
+    /// [`SharedProviderEffectError::InvalidResource`] when the row does not
+    /// decode as a `DeviceBinding` or the journal holds no evidence for it.
+    async fn binding_evidence(
+        &self,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<DeviceBindingEvidence, SharedProviderEffectError>;
 }
 
 /// The trusted physical inventory one `Device` row resolves to.

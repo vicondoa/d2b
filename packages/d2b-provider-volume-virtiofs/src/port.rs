@@ -8,6 +8,8 @@
 
 use std::future::Future;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::fmt;
 
 use serde::Serialize;
 
@@ -15,8 +17,13 @@ use d2b_contracts_resource::v3::ResourceRef;
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 use d2b_contracts_resource::v3::volume_binding::VolumeBindingStatusResource;
 
+use crate::controller::{CONTROLLER_IDENTITY, VirtiofsBindingController};
 use crate::error::VirtiofsBindingError;
 use crate::bindings::{SocketIdentity, StoredBinding};
+use crate::facets::{
+    VirtiofsServingAnswer, VirtiofsServingDispatch, VirtiofsServingError,
+    VirtiofsServingObservation, VirtiofsServingRequest,
+};
 use crate::worker::VirtiofsdWorkerPlan;
 
 /// The worker the effect adapter launched for one binding.
@@ -71,6 +78,10 @@ impl MountObservation {
 }
 
 /// The typed async effect port for the volume-virtiofs binding domain.
+///
+/// Every verb carries the committed row it is about, so the privileged leg
+/// receives the KTD3 fence on each request rather than only on the one that
+/// launched the worker.
 pub trait VirtiofsBindingEffectPort: Send + Sync {
     /// Launch the binding-owned virtiofsd worker from the launch the
     /// controller derived.
@@ -83,6 +94,7 @@ pub trait VirtiofsBindingEffectPort: Send + Sync {
     /// Report whether the worker's private socket is listening.
     fn observe_socket(
         &self,
+        binding: &StoredBinding,
         worker: &LaunchedWorker,
     ) -> impl Future<Output = Result<bool, VirtiofsBindingError>> + Send;
 
@@ -107,6 +119,7 @@ pub trait VirtiofsBindingEffectPort: Send + Sync {
     /// Delete the binding-owned worker and its Endpoint.
     fn delete_worker(
         &self,
+        binding: &StoredBinding,
         worker: &LaunchedWorker,
     ) -> impl Future<Output = Result<(), VirtiofsBindingError>> + Send;
 
@@ -225,5 +238,264 @@ fn serialize_reason<S: serde::Serializer>(
     match reason {
         Some(reason) => serializer.serialize_str(reason.code()),
         None => serializer.serialize_none(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Production port: the family seam over the daemon-supplied dispatch
+// ---------------------------------------------------------------------------
+
+/// The stable code an identity the privileged leg returned did not match is
+/// refused under.
+///
+/// The launch a worker came back under, or the socket an observation
+/// answered about, is the relationship's own derived identity and nothing
+/// else. An answer that names another one is not evidence about this row,
+/// so it is refused by name rather than folded into a verdict.
+const WORKER_IDENTITY_MISMATCH: &str = "virtiofs-worker-identity-mismatch";
+
+/// The production effect port: the family's [`VirtiofsBindingEffectPort`]
+/// over the daemon-supplied privileged dispatch (U15).
+///
+/// The port holds the dispatch and the Zone's bounded token, and nothing
+/// else: no socket, no host path, no numerical principal. Every verb builds
+/// the typed request from the committed row and the controller's own
+/// derivation, and every answer is reconciled against those derived facts
+/// before the serving pass believes it. A privileged leg that refuses, or
+/// that never answers, fails the verb closed - the pass never reports a
+/// delivery it could not observe.
+pub struct VirtiofsBindingPort {
+    dispatch: Arc<dyn VirtiofsServingDispatch>,
+    zone: BoundedToken,
+}
+
+impl fmt::Debug for VirtiofsBindingPort {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VirtiofsBindingPort")
+            .field("zone", &self.zone.as_str())
+            .finish_non_exhaustive()
+    }
+}
+
+impl VirtiofsBindingPort {
+    /// Build the port over the daemon-supplied dispatch.
+    ///
+    /// `zone` is the socket-identity namespace the whole relationship is
+    /// derived in, so it is a property of this instance rather than of any
+    /// resource: two bindings that share a source and a consumer still
+    /// derive two distinct sockets inside it.
+    pub fn new(dispatch: Arc<dyn VirtiofsServingDispatch>, zone: BoundedToken) -> Self {
+        Self { dispatch, zone }
+    }
+
+    /// The privileged dispatch this port serves.
+    pub const fn dispatch(&self) -> &Arc<dyn VirtiofsServingDispatch> {
+        &self.dispatch
+    }
+
+    /// The production serving pass over this port.
+    ///
+    /// `runtime_root` is the broker-owned directory the private serving
+    /// socket path is derived under. The controller owns the derivation;
+    /// the port never resolves a path of its own.
+    pub fn into_controller(
+        self,
+        runtime_root: impl Into<PathBuf>,
+    ) -> VirtiofsBindingController<Self> {
+        let zone = self.zone.clone();
+        VirtiofsBindingController::new(self, zone, runtime_root)
+    }
+    /// The privileged leg's refusal class is a foreign vocabulary and is
+    /// recorded at the refusal point, where it belongs; the family's status
+    /// carries the closed code the rest of the pass speaks.
+    async fn ask(
+        &self,
+        request: VirtiofsServingRequest,
+    ) -> Result<VirtiofsServingAnswer, VirtiofsBindingError> {
+        self.dispatch.dispatch(request).await.map_err(|error| {
+            tracing::warn!(
+                zone = %self.zone.as_str(),
+                reason = error.code(),
+                detail = %error,
+                "virtiofs serving dispatch refused the privileged leg request",
+            );
+            match error {
+                VirtiofsServingError::Refused(_) => VirtiofsBindingError::ServingRefused,
+                VirtiofsServingError::Unavailable(_) => {
+                    VirtiofsBindingError::ServingUnavailable
+                }
+            }
+        })
+    }
+
+    /// Reconcile one observation against the socket the committed row
+    /// derives.
+    fn reconcile_observation(
+        answer: VirtiofsServingAnswer,
+        socket: SocketIdentity,
+    ) -> Result<VirtiofsServingObservation, VirtiofsBindingError> {
+        match answer {
+            VirtiofsServingAnswer::Observed(observed)
+                if observed.socket() == socket =>
+            {
+                Ok(observed)
+            }
+            _ => Err(VirtiofsBindingError::WorkerIdentityMismatch),
+        }
+    }
+}
+
+impl VirtiofsBindingEffectPort for VirtiofsBindingPort {
+    /// The worker that came back is reconciled against the worker's own
+    /// derived identity: the binding's worker `Process` reference and the
+    /// socket identity its relationship stands for. A worker realized
+    /// under another identity is refused, never adopted.
+    async fn launch_worker(
+        &self,
+        binding: &StoredBinding,
+        launch: &ServingWorkerLaunch,
+    ) -> Result<LaunchedWorker, VirtiofsBindingError> {
+        let expected = binding
+            .worker_process_ref()
+            .map_err(|_| VirtiofsBindingError::InvalidBinding)?;
+        let request = VirtiofsServingRequest::for_launch(
+            binding,
+            self.zone.clone(),
+            expected.clone(),
+            launch.clone(),
+        );
+        let socket = request.socket();
+        if request.launch().map(|launch| launch.plan.socket) != Some(socket) {
+            // The plan the controller derived and the socket the request
+            // carries are the same derivation; a disagreement here is a
+            // composition fault, not a privileged-leg answer.
+            return Err(VirtiofsBindingError::WorkerIdentityMismatch);
+        }
+        match self.ask(request).await? {
+            VirtiofsServingAnswer::Launched(worker)
+                if worker.process_ref == expected && worker.socket == socket =>
+ {
+                Ok(worker)
+            }
+            _ => {
+                tracing::warn!(
+                    zone = %self.zone.as_str(),
+                    reason = WORKER_IDENTITY_MISMATCH,
+                    "virtiofsd worker came back under another derived identity",
+                );
+                Err(VirtiofsBindingError::WorkerIdentityMismatch)
+            }
+        }
+    }
+
+    /// Source preparation is the privileged leg's own socket evidence, for
+    /// the socket this relationship derives and no other.
+    async fn observe_socket(
+        &self,
+        binding: &StoredBinding,
+        worker: &LaunchedWorker,
+    ) -> Result<bool, VirtiofsBindingError> {
+        let request = VirtiofsServingRequest::for_observe(
+            binding,
+            self.zone.clone(),
+            worker.process_ref.clone(),
+            Some(worker.clone()),
+        );
+        let socket = request.socket();
+        let observed = Self::reconcile_observation(self.ask(request).await?, socket)?;
+        Ok(observed.socket_listening())
+    }
+
+    /// Delivery is what the CONSUMER reports at its mount point: the three
+    /// observations stay distinct, and a consumer that has not started
+    /// cannot report an absent mount.
+    async fn observe_guest_mount(
+        &self,
+        binding: &StoredBinding,
+    ) -> Result<MountObservation, VirtiofsBindingError> {
+        let request = VirtiofsServingRequest::for_observe(
+            binding,
+            self.zone.clone(),
+            binding
+                .worker_process_ref()
+                .map_err(|_| VirtiofsBindingError::InvalidBinding)?,
+            None,
+        );
+        let socket = request.socket();
+        let observed = Self::reconcile_observation(self.ask(request).await?, socket)?;
+        Ok(observed.consumer_mount())
+    }
+
+    /// A closure view's worker is launched only over a proven zero-length
+    /// readiness marker. An unanswered probe fails closed: a marker that
+    /// could not be read is not a marker that is present.
+    async fn observe_store_view_marker(
+        &self,
+        binding: &StoredBinding,
+    ) -> Result<bool, VirtiofsBindingError> {
+        let request = VirtiofsServingRequest::for_observe(
+            binding,
+            self.zone.clone(),
+            binding
+                .worker_process_ref()
+                .map_err(|_| VirtiofsBindingError::InvalidBinding)?,
+            None,
+        );
+        let socket = request.socket();
+        let observed = Self::reconcile_observation(self.ask(request).await?, socket)?;
+        Ok(observed.marker_present())
+    }
+
+    /// The teardown travels as its own verb, so the key a worker was
+    /// launched under cannot reproduce its removal.
+    async fn delete_worker(
+        &self,
+        binding: &StoredBinding,
+        worker: &LaunchedWorker,
+    ) -> Result<(), VirtiofsBindingError> {
+        let request = VirtiofsServingRequest::for_remove(
+            binding,
+            self.zone.clone(),
+            worker.process_ref.clone(),
+            worker.clone(),
+        );
+        let socket = request.socket();
+        match self.ask(request).await? {
+            VirtiofsServingAnswer::Removed => Ok(()),
+            // An answer about another socket is not an answer about this
+            // relationship's teardown.
+            VirtiofsServingAnswer::Observed(observed) if observed.socket() == socket => {
+                Err(VirtiofsBindingError::WorkerIdentityMismatch)
+            }
+            _ => Err(VirtiofsBindingError::WorkerIdentityMismatch),
+        }
+    }
+
+    /// Only the virtiofs controller identity may publish, and the fence
+    /// travels with the projection so the writing side validates it
+    /// against the row it names.
+    async fn write_binding_status(
+        &self,
+        writer: &BoundedToken,
+        binding: &StoredBinding,
+        projection: &VolumeBindingStatusResource,
+    ) -> Result<(), VirtiofsBindingError> {
+        if writer.as_str() != CONTROLLER_IDENTITY {
+            return Err(VirtiofsBindingError::UnauthorizedWriter);
+        }
+        let request = VirtiofsServingRequest::for_publish(
+            binding,
+            self.zone.clone(),
+            binding
+                .worker_process_ref()
+                .map_err(|_| VirtiofsBindingError::InvalidBinding)?,
+            writer.clone(),
+            projection.clone(),
+        );
+        match self.ask(request).await? {
+            VirtiofsServingAnswer::Published => Ok(()),
+            _ => Err(VirtiofsBindingError::StaleFence),
+        }
     }
 }

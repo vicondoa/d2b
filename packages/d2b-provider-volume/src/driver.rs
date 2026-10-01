@@ -36,7 +36,12 @@ use d2b_contracts_resource::v3::{
     volume::VolumeSpec,
 };
 use crate::effects_service::{VOLUME_EFFECTS_SERVICE, VolumeEffectsService};
-use crate::facets::{BindingEvidenceAbsent, VolumeBindingAdmission, VolumeEffectFacets};
+use crate::facets::{
+    BindingDelivery, BindingDeliveryReason, BindingEvidenceAbsent, CommittedBinding,
+    VolumeBindingAdmission, VolumeEffectFacets,
+};
+use d2b_provider_volume_virtiofs::{BindingPhase, MountObservation, VirtiofsServingError};
+use d2b_resource_runtime::spec_store::EnsureOutcome;
 use d2b_provider_toolkit::shared_provider::{ContextChildSurface, SharedProviderChildSurface};
 use d2b_provider_volume_local::{
     AdmittedVolumeBinding, canonical_binding_row, desired_binding_intents,
@@ -208,7 +213,13 @@ pub(crate) enum CanonicalBindingState {
     NotReconciled,
     /// The seam admitted exactly this many relationships, and every one of
     /// them is committed under this row.
-    Committed { relationships: usize },
+    Committed {
+        /// Relationships committed under this row on this pass.
+        relationships: usize,
+        /// What the virtiofs delivery pass (U15) did with those committed
+        /// rows.
+        delivery: BindingDeliverySet,
+    },
     /// The seam carried no admission evidence: nothing was committed and
     /// nothing was retired, and the refusal names what is missing.
     EvidenceAbsent(BindingEvidenceAbsent),
@@ -219,8 +230,49 @@ impl CanonicalBindingState {
     pub(crate) const fn committed(&self) -> usize {
         match self {
             Self::NotReconciled | Self::EvidenceAbsent(_) => 0,
-            Self::Committed { relationships } => *relationships,
+            Self::Committed { relationships, .. } => *relationships,
         }
+    }
+}
+
+/// What the virtiofs delivery pass (U15) did with this row's committed
+/// canonical relationships.
+///
+/// The two states are the whole contract: the privileged leg is daemon-only,
+/// so a runtime that composes none reports the absence by name and delivers
+/// nothing, rather than describing rows as served by a leg nobody holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BindingDeliverySet {
+    /// This Zone's runtime composes no virtiofs serving delivery, so every
+    /// committed relationship is undelivered and no row is described as
+    /// served.
+    CompositionAbsent,
+    /// One verdict per committed relationship this pass delivered, in the
+    /// order the pass committed them.
+    Delivered(Vec<BindingDelivery>),
+}
+
+impl BindingDeliverySet {
+    /// How many committed relationships this pass reported a verdict for.
+    ///
+    /// Not `len`: this counts the verdicts a pass reported, not the contents
+    /// of a collection, so it is zero for a runtime that composes no delivery
+    /// rather than for one that delivered nothing. `delivered_any` is the
+    /// predicate that answers whether anything reached a consumer.
+    pub fn verdict_count(&self) -> usize {
+        match self {
+            Self::CompositionAbsent => 0,
+            Self::Delivered(delivered) => delivered.len(),
+        }
+    }
+
+    /// Whether no relationship reached the consumer.
+    ///
+    /// This is the negative the delivery contract turns on: a committed row
+    /// whose consumer never reports its mount is NOT delivered, and a Zone
+    /// with no privileged leg delivers nothing at all.
+    pub fn delivered_any(&self) -> bool {
+        matches!(self, Self::Delivered(delivered) if delivered.iter().any(BindingDelivery::is_delivered))
     }
 }
 
@@ -292,6 +344,60 @@ pub trait VolumeDriverEffects: Send + Sync + 'static {
         &self,
         source: &VolumeBindingAdmission<'_>,
     ) -> Result<Vec<AdmittedVolumeBinding>, BindingEvidenceAbsent>;
+
+    /// Whether this driver's effects compose a virtiofs serving delivery.
+    ///
+    /// The privileged leg is daemon-only (R2): a driver whose effects were
+    /// not given one reports the absence by name, rather than calling the
+    /// delivery verbs once per relationship and recording the same refusal
+    /// over and over as if each row had failed on its own.
+    fn serves_virtiofs_bindings(&self) -> bool {
+        false
+    }
+
+    /// Deliver one committed `VolumeBinding` row's virtiofs view (U15).
+    ///
+    /// The delivery is a real observation: the verdict is the consumer's
+    /// own mount reaching it, as the privileged leg reports it. A row
+    /// whose consumer reports the source serving while its own mount is
+    /// absent is delivered as `Degraded`, never as served.
+    ///
+    /// # Errors
+    ///
+    /// Returns the named refusal under [`BindingDeliveryReason`] when the
+    /// privileged leg refused, never answered, or answered about another
+    /// relationship, and when this runtime composes no delivery at all.
+    async fn deliver_binding(
+        &self,
+        _source: &VolumeBindingAdmission<'_>,
+        _row: &CommittedBinding,
+    ) -> Result<BindingDelivery, BindingDeliveryReason> {
+        Err(BindingDeliveryReason::Dispatch(VirtiofsServingError::Unavailable(
+            "this Volume driver's effects compose no virtiofs serving delivery".to_owned(),
+        )))
+    }
+
+    /// Withdraw one committed row's virtiofs delivery (U15).
+    ///
+    /// A relationship the source no longer admits takes its delivery with
+    /// it: the binding-owned worker is deleted through the same privileged
+    /// dispatch it was launched through, and a mount the consumer still
+    /// reports blocks the withdrawal rather than being force-cleared (KTD6).
+    ///
+    /// # Errors
+    ///
+    /// Returns the named refusal under [`BindingDeliveryReason`] when the
+    /// privileged leg refused or never answered, or when the consumer still
+    /// reports the mount.
+    async fn withdraw_binding(
+        &self,
+        _source: &VolumeBindingAdmission<'_>,
+        _row: &CommittedBinding,
+    ) -> Result<(), BindingDeliveryReason> {
+        Err(BindingDeliveryReason::Dispatch(VirtiofsServingError::Unavailable(
+            "this Volume driver's effects compose no virtiofs serving delivery".to_owned(),
+        )))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -654,12 +760,16 @@ impl VolumeDriver {
                     && is_canonical_binding_row(&row.key.name)
                     && !derived.iter().any(|child| child.name == row.key.name)
             })
+            .collect::<Vec<_>>();
+        let mut committed_rows: Vec<EnsureOutcome> = Vec::with_capacity(derived.len());
+        let retired_keys = obsolete
+            .iter()
             .map(|row| row.key.clone())
             .collect::<Vec<_>>();
         {
             let surface = ContextChildSurface::new(ctx);
             for child in &derived {
-                surface
+                let outcome = surface
                     .ensure(ChildEnsure {
                         type_name: ResourceTypeName::new(VOLUME_BINDING_TYPE),
                         name: child.name.clone(),
@@ -668,17 +778,117 @@ impl VolumeDriver {
                     })
                     .await
                     .map_err(|_| self.error(VolumeDriverErrorKind::ChildMutation, op))?;
+                committed_rows.push(outcome);
             }
-            for key in obsolete {
+            for key in retired_keys {
                 // A canonical row this pass no longer derives: the manager
-                // marks it deleting and owns its teardown, R9/F3.
+                // marks it deleting and owns its teardown, R9/F3. Its
+                // delivery is withdrawn below rather than left serving a
+                // relationship the source no longer admits.
                 surface
                     .delete(&key)
                     .await
                     .map_err(|_| self.error(VolumeDriverErrorKind::ChildMutation, op))?;
             }
         }
-        Ok(CanonicalBindingState::Committed { relationships: derived.len() })
+        // The COMMITTED row, not the derived intent, is what the virtiofs
+        // family delivers (U15): the pass hands over the manager's own
+        // handle for the row it just wrote, so a delivery can only ever be
+        // about a row that exists in the store under the fence its status
+        // carries.
+        let delivery = self
+            .deliver_committed_bindings(source, &committed_rows, &obsolete)
+            .await;
+        Ok(CanonicalBindingState::Committed {
+            relationships: derived.len(),
+            delivery,
+        })
+    }
+
+    /// Deliver every committed canonical row's virtiofs view, and withdraw
+    /// the delivery of every canonical row this pass retired (U15).
+    ///
+    /// The verdict is the consumer's own mount reaching it, as the
+    /// privileged leg reports it; a refusal is recorded under its own code
+    /// rather than collapsing the pass, because a parent's own convergence
+    /// must not depend on a guest that may still be booting.
+    async fn deliver_committed_bindings(
+        &self,
+        source: &VolumeBindingAdmission<'_>,
+        committed: &[EnsureOutcome],
+        retired: &[&StoredDesiredResource],
+    ) -> BindingDeliverySet {
+        if !self.effects.serves_virtiofs_bindings() {
+            // The privileged leg is daemon-only. A runtime that composes
+            // none delivers nothing, and says so by name rather than
+            // describing the rows as served by a leg nobody holds.
+            return BindingDeliverySet::CompositionAbsent;
+        }
+        let mut delivered = Vec::with_capacity(committed.len());
+        for outcome in committed {
+            delivered.push(self.deliver_one(source, outcome.row()).await);
+        }
+        for row in retired {
+            if let Err(reason) = self.withdraw_one(source, row).await {
+                // Cardinality: once per retired row per resync pass.
+                tracing::debug!(
+                    volume = %source.volume_ref().to_canonical_string(),
+                    binding = %row.key.name,
+                    reason = reason.code(),
+                    "withdrawn binding's virtiofs delivery could not be withdrawn",
+                );
+            }
+        }
+        BindingDeliverySet::Delivered(delivered)
+    }
+
+    /// One committed row's delivery verdict, including the rows the pass
+    /// could not even read as a serving identity.
+    async fn deliver_one(
+        &self,
+        source: &VolumeBindingAdmission<'_>,
+        row: &StoredDesiredResource,
+    ) -> BindingDelivery {
+        match CommittedBinding::from_row(row) {
+            Ok(committed) => match self.effects.deliver_binding(source, &committed).await {
+                Ok(delivery) => delivery,
+                Err(reason) => {
+                    // Cardinality: once per undelivered relationship per
+                    // resync pass.
+                    tracing::debug!(
+                        volume = %source.volume_ref().to_canonical_string(),
+                        binding = %committed.name(),
+                        reason = reason.code(),
+                        "committed binding reports no virtiofs delivery",
+                    );
+                    BindingDelivery::new(
+                        committed.name(),
+                        BindingPhase::Failed,
+                        false,
+                        MountObservation::ConsumerNotRunning,
+                        Some(reason),
+                    )
+                }
+            },
+            Err(reason) => BindingDelivery::new(
+                row.key.name.clone(),
+                BindingPhase::Failed,
+                false,
+                MountObservation::ConsumerNotRunning,
+                Some(BindingDeliveryReason::Serving(reason)),
+            ),
+        }
+    }
+
+    /// One retired row's delivery withdrawal.
+    async fn withdraw_one(
+        &self,
+        source: &VolumeBindingAdmission<'_>,
+        row: &StoredDesiredResource,
+    ) -> Result<(), BindingDeliveryReason> {
+        let committed = CommittedBinding::from_row(row)
+            .map_err(BindingDeliveryReason::Serving)?;
+        self.effects.withdraw_binding(source, &committed).await
     }
 
     /// Spawn the preserved layout effect as a long effect (R5, KTD12): the
@@ -1044,6 +1254,7 @@ pub fn volume_descriptor(args: VolumeDriverArgs) -> DriverDescriptor {
 
 #[cfg(test)]
 mod tests {
+    use crate::BindingDeliverySet;
     use std::sync::Arc;
 
     use d2b_provider_toolkit::testing::fakes::RecordingManagerEndpoint;
@@ -1792,7 +2003,10 @@ mod tests {
             VolumeDriverStatus::ServingChildren {
                 desired: derived.len(),
                 converged: true,
-                canonical: CanonicalBindingState::Committed { relationships: derived.len() },
+                canonical: CanonicalBindingState::Committed {
+                    relationships: derived.len(),
+                    delivery: BindingDeliverySet::CompositionAbsent,
+                },
             }
         );
 
@@ -1873,7 +2087,10 @@ mod tests {
             VolumeDriverStatus::ServingChildren {
                 desired: 1,
                 converged: true,
-                canonical: CanonicalBindingState::Committed { relationships: 1 },
+                canonical: CanonicalBindingState::Committed {
+                    relationships: 1,
+                    delivery: BindingDeliverySet::CompositionAbsent,
+                },
             }
         );
     }

@@ -41,8 +41,12 @@ impl VirtiofsBindingEffectPort for &DefaultProbePort {
         (&self.inner).launch_worker(binding, launch).await
     }
 
-    async fn observe_socket(&self, worker: &LaunchedWorker) -> Result<bool, VirtiofsBindingError> {
-        (&self.inner).observe_socket(worker).await
+    async fn observe_socket(
+        &self,
+        binding: &StoredBinding,
+        worker: &LaunchedWorker,
+    ) -> Result<bool, VirtiofsBindingError> {
+        (&self.inner).observe_socket(binding, worker).await
     }
 
     async fn observe_guest_mount(
@@ -52,8 +56,12 @@ impl VirtiofsBindingEffectPort for &DefaultProbePort {
         (&self.inner).observe_guest_mount(binding).await
     }
 
-    async fn delete_worker(&self, worker: &LaunchedWorker) -> Result<(), VirtiofsBindingError> {
-        (&self.inner).delete_worker(worker).await
+    async fn delete_worker(
+        &self,
+        binding: &StoredBinding,
+        worker: &LaunchedWorker,
+    ) -> Result<(), VirtiofsBindingError> {
+        (&self.inner).delete_worker(binding, worker).await
     }
 }
 

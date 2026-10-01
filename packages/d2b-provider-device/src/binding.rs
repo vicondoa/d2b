@@ -31,6 +31,13 @@
 //! `DeviceBinding` row: the family's own `DeviceBindingSpec`, carrying the
 //! consumer's request identities and the source's accepted decision, so a
 //! reader and the graph cannot disagree about what was admitted.
+//
+// The serving half reads the same facts back. A committed `DeviceBinding` row
+// is re-admitted against the authorization and dependency fence the graph
+// authority holds for it, paired with the trusted inventory read now, and the
+// family's own [`decide_presence`] decides whether the relationship is
+// retained, degraded, or revoked. Presence is a decision this module runs, not
+// something a row's existence is read as (R21, R36, R41).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -251,6 +258,84 @@ impl core::fmt::Debug for DeviceInventory {
         formatter
             .debug_struct("DeviceInventory")
             .field("entries", &self.entries)
+            .finish()
+    }
+}
+
+/// What the graph authority holds for one committed `DeviceBinding`
+/// relationship.
+///
+/// Four facts, none of them the serving family's to produce: the canonical
+/// request the authority admitted (the committed row names the identities and
+/// the decision, but not the request's attachment mode), the authorization
+/// that admitted it, the dependency fence it was fenced against, and the
+/// lifecycle observed for it now. The first three are what
+/// [`admit_device_request`] refuses without; the fourth is what
+/// [`decide_presence`] reads when it decides whether current use is retained,
+/// degraded, or revoked.
+///
+/// The value is evidence about a relationship, never authority over it: it is
+/// minted by the authority journal through
+/// [`crate::facets::DeviceBindingAuthoritySource`] and never derived from the
+/// row being served.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DeviceBindingEvidence {
+    request: DeviceBindingRequest,
+    authorization: BindingAuthorization,
+    freshness: Vec<FreshnessTuple>,
+    lifecycle: BindingLifecycleState,
+}
+
+impl DeviceBindingEvidence {
+    /// Carry the admitted request with the evidence its admission is fenced
+    /// against and the lifecycle observed for it now.
+    pub const fn new(
+        request: DeviceBindingRequest,
+        authorization: BindingAuthorization,
+        freshness: Vec<FreshnessTuple>,
+        lifecycle: BindingLifecycleState,
+    ) -> Self {
+        Self {
+            request,
+            authorization,
+            freshness,
+            lifecycle,
+        }
+    }
+
+    /// Borrow the canonical request the authority admitted.
+    pub const fn request(&self) -> &DeviceBindingRequest {
+        &self.request
+    }
+
+    /// Borrow the authorization that admitted the request.
+    pub const fn authorization(&self) -> &BindingAuthorization {
+        &self.authorization
+    }
+
+    /// Borrow the committed dependency rows the admission is fenced against.
+    pub fn freshness(&self) -> &[FreshnessTuple] {
+        &self.freshness
+    }
+
+    /// The lifecycle observed for this relationship now.
+    ///
+    /// `Degraded` and `Unknown` are uncertainty rather than success, which is
+    /// exactly what [`decide_presence`] turns into an unproven-presence
+    /// answer.
+    pub const fn lifecycle(&self) -> BindingLifecycleState {
+        self.lifecycle
+    }
+}
+
+impl core::fmt::Debug for DeviceBindingEvidence {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("DeviceBindingEvidence")
+            .field("request", &self.request)
+            .field("authorized", &self.authorization.is_granted())
+            .field("fenced", &self.freshness.len())
+            .field("lifecycle", &self.lifecycle)
             .finish()
     }
 }
@@ -1733,17 +1818,31 @@ fn declared_device_spec(spec_value: &Value) -> Result<DeviceSpec, serde_json::Er
 //   provider-specific effects do not expose, so the driver declares no such
 //   verb and reports the attachment it cannot make as a named refusal.
 //
-// What the driver *can* prove is real and worth serving: the committed row
-// decodes, its decision admits it, the parent and consumer rows resolve behind
-// their fences, the named capability is one this Provider declares, and the
-// trusted inventory still backs it. A row whose capability the host no longer
-// backs is reported as revoked through [`decide_presence`] rather than as
-// served.
+// What the driver *can* prove is real and worth serving, and it proves it by
+// running the family's own [`decide_presence`] rather than by assuming the
+// row's existence:
+//
+// - the committed row decodes, its decision admits it, the parent and consumer
+//   rows resolve behind their fences, and the named capability is one this
+//   Provider declares;
+// - the trusted inventory still backs it, which is the observation
+//   [`decide_presence`] revokes on;
+// - the relationship is re-admitted through [`admit_device_request`] against
+//   the authorization and dependency fence the graph authority holds for THIS
+//   row ([`DeviceBindingEvidence`], routed through
+//   [`crate::facets::DeviceBindingAuthoritySource`]), so the serving half never
+//   admits itself;
+// - the lifecycle the authority journal observed for it is the half
+//   [`decide_presence`] reads, and an effect it cannot prove is degraded rather
+//   than delivered;
+// - a device replaced behind the same capability name resolves to a different
+//   [`DeviceAuthorityKey`] than the pass that last delivered the row, which is
+//   reported as [`DeviceBindingDriverStatus::Replaced`] rather than carried
+//   forward under the authority it replaced.
 
 /// The `Device` ResourceType the committed relationship's source is.
 const DEVICE_RESOURCE_TYPE: &str = "Device";
 
-/// Canonical `DeviceBinding` ResourceType name.
 /// The operation-id prefix one DeviceBinding effect call carries.
 pub const DEVICE_BINDING_OPERATION_PREFIX: &str = "device-binding";
 
@@ -1850,8 +1949,14 @@ impl std::error::Error for BindingDriverError {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeviceBindingDriverStatus {
     /// The committed relationship is admitted, the trusted inventory still
-    /// backs the capability it names, and the family's own presence decision
-    /// retains it.
+    /// backs the capability it names, and the family's own
+    /// [`decide_presence`] decision retains it.
+    ///
+    /// The decision is run, not assumed: the serving pass re-admits this
+    /// committed row through [`admit_device_request`] against the authority
+    /// evidence the daemon supplies and then hands the relationship and the
+    /// observed inventory to [`decide_presence`]. Retained is the only way
+    /// here.
     ///
     /// This is NOT an attachment. The host effect that would attach it is the
     /// dispatch this family cannot build - see the module section on which
@@ -1877,6 +1982,22 @@ pub enum DeviceBindingDriverStatus {
         /// Closed, field-free: why no attachment is standing.
         reason: UnattachedReason,
     },
+    /// The physical authority behind the named capability is not the one the
+    /// last delivered pass published.
+    ///
+    /// The capability the row names is still backed, but a different physical
+    /// device now answers to that name, so the relationship this row was
+    /// admitted against is not the one the host would deliver. Reported by
+    /// name rather than carried forward: re-reading it as the authority the
+    /// previous pass pinned would hand a consumer a device grant for hardware
+    /// it was never admitted against (R41).
+    Replaced {
+        /// The component the parent `Device` row's own `providerRef` selected.
+        component: DeviceComponent,
+        /// The opaque physical authority the trusted inventory resolved for the
+        /// named capability on this pass.
+        authority: DeviceAuthorityKey,
+    },
 }
 
 /// The closed set of reasons an attachment is not standing.
@@ -1887,6 +2008,15 @@ pub enum UnattachedReason {
     /// [`capability_backed`] observation is false and the claim is revoked
     /// rather than served (R21, R36).
     CapabilityNotBacked,
+    /// The family's own [`decide_presence`] found the capability backed but the
+    /// relationship's effect unproven, so current use is degraded rather than
+    /// delivered.
+    ///
+    /// Uncertainty is never read as granted use: an unresolved inventory, an
+    /// authority journal that cannot answer, evidence about another
+    /// relationship, and a lifecycle that proves no effective result all land
+    /// here (R21, R36).
+    PresenceUnproven,
     /// The host effect that would attach this capability is not routable from a
     /// committed row. Named rather than approximated: the family does not
     /// claim an attachment it cannot make.
@@ -1933,6 +2063,12 @@ pub fn device_binding_spec_decoder() -> Arc<dyn SpecDecoder> {
 /// default answer is the truthful one: this seam has no authority evidence to
 /// show, so the source admits nothing and commits nothing (see
 /// [`produce_binding_rows`]).
+///
+/// [`Self::binding_evidence`] is the serving half's one input for the presence
+/// decision, and its default answer is the truthful one for a seam with no
+/// authority journal behind it: it reports the evidence as unavailable, and
+/// every relationship then reports degraded rather than delivered (see
+/// [`decide_presence`]).
 #[async_trait::async_trait]
 pub trait DeviceBindingEffects: Send + Sync + 'static {
     /// Resolve the trusted host inventory for one committed `Device` row.
@@ -1966,6 +2102,29 @@ pub trait DeviceBindingEffects: Send + Sync + 'static {
     ) -> DeviceDeclaredBindings {
         DeviceDeclaredBindings::undeclared()
     }
+
+    /// The evidence the graph authority holds for one committed `DeviceBinding`
+    /// row, with the lifecycle observed for that relationship now.
+    ///
+    /// The serving half re-admits the committed row before it decides
+    /// presence, and [`admit_device_request`] refuses without an authorization
+    /// and a dependency fence; the lifecycle is what
+    /// [`BindingLifecycleState::proves_effect`] reads. The request is the
+    /// binding row's own effect request, so the row being served is the only
+    /// subject the answer may be about.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SharedProviderEffectError::Unavailable`] when no authority
+    /// evidence can be read for the row. The default is that refusal: a seam
+    /// with no journal behind it has nothing to show, and inventing the
+    /// authorization would be the family granting its own device authority.
+    async fn binding_evidence(
+        &self,
+        _request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<DeviceBindingEvidence, SharedProviderEffectError> {
+        Err(SharedProviderEffectError::Unavailable)
+    }
 }
 
 /// The provider-owned binding effects, built from the daemon-supplied facet set
@@ -1983,6 +2142,13 @@ impl DeviceBindingEffects for DeviceBindingEffectsService {
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<DeviceInventory, SharedProviderEffectError> {
         crate::effects_service::DeviceEffects::device_inventory(self, request).await
+    }
+
+    async fn binding_evidence(
+        &self,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<DeviceBindingEvidence, SharedProviderEffectError> {
+        crate::effects_service::DeviceEffects::binding_evidence(self, request).await
     }
 }
 
@@ -2042,6 +2208,22 @@ impl ResourceDriverFactory for DeviceBindingDriverFactory {
 // ---------------------------------------------------------------------------
 // Driver
 // ---------------------------------------------------------------------------
+
+/// One committed relationship, resolved through every fence a serving pass
+/// runs, with the two store-assigned identities its KTD3 key is derived from.
+struct ServingRelationship {
+    /// The committed row's own decoded spec.
+    binding: DeviceBindingSpec,
+    /// The realizing component the parent row's `providerRef` selected.
+    component: DeviceComponent,
+    /// The parent row's own declared spec, read through the family's shared
+    /// decode.
+    spec: DeviceSpec,
+    /// The parent `Device` row's store-assigned identity.
+    device_uid: ResourceUid,
+    /// The consumer row's store-assigned identity.
+    consumer_uid: ResourceUid,
+}
 
 /// One committed `DeviceBinding` row's driver.
 ///
@@ -2192,7 +2374,7 @@ impl DeviceBindingDriver {
         ctx: &mut ResourceContext,
         binding: &DeviceBindingSpec,
         op: DriverOp,
-    ) -> Result<(DeviceComponent, DeviceSpec), BindingDriverError> {
+    ) -> Result<(DeviceComponent, DeviceSpec, ResourceUid), BindingDriverError> {
         let key = self.parent_device_key(binding);
         let lookup = ctx.lookup(&key).await;
         let row = match lookup {
@@ -2250,7 +2432,9 @@ impl DeviceBindingDriver {
                     )),
             )
         })?;
-        Ok((component, spec))
+        let uid = ResourceUid::from_bytes(&row.uid)
+            .map_err(|_| self.parent_spec_invalid(op, "parent.uid"))?;
+        Ok((component, spec, uid))
     }
 
     /// The terminal classification for a present parent row whose stored spec
@@ -2331,17 +2515,29 @@ impl DeviceBindingDriver {
     /// Every check a serving pass runs before it touches the host: the wire
     /// decode, the committed decision, the parent row behind its owner fence,
     /// that row's own vocabulary, and the consumer row.
+    ///
+    /// The two store-assigned identities travel back with the answer because
+    /// the KTD3 key is derived from them: a pass that re-admits this committed
+    /// row to decide presence has to derive the same key the source admitted,
+    /// and a device or a consumer replaced under the same name yields a
+    /// different relationship rather than the old one continued.
     async fn resolved(
         &self,
         ctx: &mut ResourceContext,
         op: DriverOp,
-    ) -> Result<(DeviceBindingSpec, DeviceComponent, DeviceSpec), BindingDriverError> {
+    ) -> Result<ServingRelationship, BindingDriverError> {
         let binding = self.decoded_binding(ctx, op)?;
         self.check_committed_decision(&binding, op)?;
-        let (component, spec) = self.parent_device(ctx, &binding, op).await?;
+        let (component, spec, device_uid) = self.parent_device(ctx, &binding, op).await?;
         self.check_parent_policy(component, &spec, &binding, op)?;
-        self.consumer_uid(ctx, &binding, op).await?;
-        Ok((binding, component, spec))
+        let consumer_uid = self.consumer_uid(ctx, &binding, op).await?;
+        Ok(ServingRelationship {
+            binding,
+            component,
+            spec,
+            device_uid,
+            consumer_uid,
+        })
     }
 
     /// Register one dependency watch, at most once per target (R12/R17).
@@ -2417,6 +2613,55 @@ impl DeviceBindingDriver {
             .await
             .map_err(|_| self.error(BindingDriverErrorKind::InventoryUnavailable, op))
     }
+
+    /// The graph-authority evidence held for THIS committed row.
+    ///
+    /// The request is built from the binding row itself rather than from its
+    /// parent, because the relationship is the subject: the authority journal
+    /// holds evidence per relationship, so the row's own key, uid, generation,
+    /// committed spec, and last published status are what identify it. The
+    /// spec travels whole, so the journal reads the same canonical bytes the
+    /// row was decoded from rather than a second spelling of them.
+    async fn binding_evidence(
+        &self,
+        ctx: &mut ResourceContext,
+        op: DriverOp,
+    ) -> Result<DeviceBindingEvidence, BindingDriverError> {
+        let envelope = ctx
+            .spec::<BindingSpecEnvelope>()
+            .map_err(|_| self.error(BindingDriverErrorKind::SpecInvalid, op))?;
+        let spec_value = serde_json::to_value(&envelope.base)
+            .unwrap_or_else(|_| Value::Object(serde_json::Map::new()));
+        let target = ctx.key().clone();
+        let uid = ResourceUid::from_bytes(ctx.uid()).map_err(|_| {
+            self.error(BindingDriverErrorKind::InventoryUnavailable, op)
+                .with_detail(FailureDetail::at("evidence/uid"))
+        })?;
+        let generation = ResourceGeneration::new(ctx.generation()).map_err(|_| {
+            self.error(BindingDriverErrorKind::InventoryUnavailable, op)
+                .with_detail(FailureDetail::at("evidence/generation"))
+        })?;
+        let operation_id = binding_operation_id(target.name.as_str());
+        let surface = ContextChildSurface::new(ctx);
+        let request = SharedProviderEffectRequest {
+            zone: self.zone.clone(),
+            target,
+            uid,
+            generation,
+            operation_id,
+            spec: &spec_value,
+            metadata: serde_json::Value::Object(serde_json::Map::new()),
+            status: None,
+            children: &surface,
+        };
+        self.effects
+            .binding_evidence(&request)
+            .await
+            .map_err(|_| {
+                self.error(BindingDriverErrorKind::InventoryUnavailable, op)
+                    .with_detail(FailureDetail::at("evidence/read"))
+            })
+    }
 }
 
 /// The hex spelling one compared uid renders as.
@@ -2478,23 +2723,30 @@ impl ResourceDriver for DeviceBindingDriver {
     }
 
     /// One reconcile pass: resolve the committed relationship through its
-    /// fences, ask the trusted inventory whether the host still backs the
-    /// capability the row names, and publish the in-memory status (R11).
+    /// fences, DECIDE its presence from the committed row plus the observed
+    /// inventory, and publish the in-memory status (R11).
     ///
-    /// An unattached relationship re-checks on the preserved resync cadence:
-    /// hardware presence is host-dependent and an absence observation reaches
-    /// this actor as no watch delivery on the binding row.
+    /// The decision runs here rather than being assumed by the row's
+    /// existence: the pass re-admits this committed relationship against the
+    /// authority evidence the daemon holds for it, hands it and the freshly
+    /// observed inventory to the family's own [`decide_presence`], and reports
+    /// what that decision returned. A relationship whose presence is unproven
+    /// is published degraded, never delivered (R21, R36).
+    ///
+    /// A relationship that is not `Admitted` re-checks on the preserved resync
+    /// cadence: hardware presence is host-dependent and an absence observation
+    /// reaches this actor as no watch delivery on the binding row.
     async fn reconcile(
         &mut self,
         ctx: &mut ResourceContext,
     ) -> Result<ReconcileOutcome, Self::Error> {
         let op = DriverOp::Reconcile;
-        let (binding, component, _spec) = self.resolved(ctx, op).await?;
+        let resolved = self.resolved(ctx, op).await?;
         // Dependency edges (R12/R17): the Device row and the consumer row both
         // wake this actor when they change.
-        self.watch_once(ctx, self.parent_device_key(&binding)).await;
-        self.watch_once(ctx, self.consumer_key(&binding)).await;
-        let status = self.attachment_state(ctx, &binding, component).await;
+        self.watch_once(ctx, self.parent_device_key(&resolved.binding)).await;
+        self.watch_once(ctx, self.consumer_key(&resolved.binding)).await;
+        let status = self.attachment_state(ctx, &resolved).await;
         let retained = matches!(status, DeviceBindingDriverStatus::Admitted { .. });
         ctx.set_status(status);
         if !retained {
@@ -2520,11 +2772,13 @@ impl ResourceDriver for DeviceBindingDriver {
     /// and a row whose spec no longer decodes converges without effects.
     async fn pre_drain(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
         let op = DriverOp::Delete;
-        let Ok((_binding, component, _spec)) = self.resolved(ctx, op).await else {
+        let Ok(serving) = self.resolved(ctx, op).await else {
             // Nothing durable to fence: converged without effects.
             return Ok(());
         };
-        ctx.set_status(DeviceBindingDriverStatus::Draining { component });
+        ctx.set_status(DeviceBindingDriverStatus::Draining {
+            component: serving.component,
+        });
         Ok(())
     }
 
@@ -2547,7 +2801,7 @@ impl ResourceDriver for DeviceBindingDriver {
     /// there is no attachment to withdraw.
     async fn delete(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
         let op = DriverOp::Delete;
-        if let Ok((_binding, _component, _spec)) = self.resolved(ctx, op).await {
+        if self.resolved(ctx, op).await.is_ok() {
             ctx.set_status(DeviceBindingDriverStatus::Unattached {
                 reason: UnattachedReason::AttachDispatchUnroutable,
             });
@@ -2557,29 +2811,42 @@ impl ResourceDriver for DeviceBindingDriver {
 }
 
 impl DeviceBindingDriver {
-    /// The attachment state this pass observes.
+    /// The presence this pass decides for the committed relationship.
     ///
-    /// The attachment state this pass observes.
+    /// The decision is [`decide_presence`]'s, not this function's. The pass
+    /// assembles what that function needs and reports what it returned:
     ///
-    /// One closed class is decided here with real evidence, through the
-    /// family's own [`capability_backed`] observation: a capability the trusted
-    /// inventory no longer resolves or reports as gone admits no attachment.
-    /// The other is the attach path itself - the provider-specific effects take
-    /// no generic attachment and nothing dispatches on the row's provider - so
-    /// it is reported as named rather than approximated. A row that passes
-    /// every structural check and every presence observation still reaches the
-    /// attach verdict, which is the honest answer and not a defect in the
-    /// checks.
+    /// - the trusted inventory, read through the family's own seam. An
+    ///   inventory this pass cannot read is not an absence observation, so the
+    ///   relationship is degraded rather than revoked;
+    /// - the admitted relationship, re-admitted here from the committed row
+    ///   plus the authority evidence the daemon holds for it. Re-admitting is
+    ///   what keeps the serving half from granting itself device authority: the
+    ///   committed row carries the source's decision but not the authorization
+    ///   behind it, so without the authority journal's evidence there is no
+    ///   relationship to decide about and the answer is degraded;
+    /// - the lifecycle the authority journal observed for that relationship,
+    ///   which is the half [`BindingLifecycleState::proves_effect`] reads.
+    ///
+    /// A capability the trusted inventory no longer backs cannot be re-admitted
+    /// at all - [`admit_device_request`] refuses it - so that case is settled
+    /// through [`capability_backed`], the very predicate
+    /// [`decide_presence`] revokes on, and reported as revoked rather than as
+    /// uncertainty.
+    ///
+    /// The attach path itself stays named rather than approximated: the
+    /// provider-specific effects take no generic attachment and nothing
+    /// dispatches on the row's provider, so even a retained relationship does
+    /// not publish an attachment this family cannot make.
     async fn attachment_state(
         &self,
         ctx: &mut ResourceContext,
-        binding: &DeviceBindingSpec,
-        component: DeviceComponent,
+        resolved: &ServingRelationship,
     ) -> DeviceBindingDriverStatus {
-        let Ok(inventory) = self.inventory(ctx, binding, DriverOp::Reconcile).await else {
-            // An unresolved inventory admits nothing, which is the fail-closed
-            // answer rather than a claim the source could not prove.
-            return unattached(UnattachedReason::CapabilityNotBacked);
+        let op = DriverOp::Reconcile;
+        let component = resolved.component;
+        let Ok(inventory) = self.inventory(ctx, &resolved.binding, op).await else {
+            return unattached(UnattachedReason::PresenceUnproven);
         };
         // The fence lives in the in-memory status slot rather than a durable
         // field (R11), so a pre-drain that ran is still read back as fenced on
@@ -2590,19 +2857,116 @@ impl DeviceBindingDriver {
         ) {
             return DeviceBindingDriverStatus::Draining { component };
         }
-        let Some(entry) = inventory.entry(binding.function()) else {
-            return unattached(UnattachedReason::CapabilityNotBacked);
-        };
-        if !capability_backed(&inventory, binding.function()) {
+        if !capability_backed(&inventory, resolved.binding.function()) {
             return unattached(UnattachedReason::CapabilityNotBacked);
         }
-        // The opaque authority the trusted inventory resolved. It is a digest,
-        // not a node path, so publishing it leaks no host identity.
-        DeviceBindingDriverStatus::Admitted {
-            component,
-            authority: entry.authority_key().clone(),
+        let Ok(live) = self.served_relationship(ctx, resolved, &inventory).await else {
+            return unattached(UnattachedReason::PresenceUnproven);
+        };
+        // The opaque authority the admission was evaluated against, taken from
+        // the inventory entry the family's own admission resolved. It is a
+        // digest, not a node path, so publishing it leaks no host identity.
+        let authority = live.binding().authority_key().clone();
+        let fates = decide_presence(&[live], &inventory);
+        let Some(fate) = fates.first() else {
+            return unattached(UnattachedReason::PresenceUnproven);
+        };
+        match fate.outcome() {
+            DeviceUseOutcome::Revoked => unattached(UnattachedReason::CapabilityNotBacked),
+            DeviceUseOutcome::Degraded => unattached(UnattachedReason::PresenceUnproven),
+            DeviceUseOutcome::Retained => {
+                // A device replaced under the same capability name resolves to
+                // a different physical authority than the pass that last
+                // delivered this row. Reporting it as delivered would hand the
+                // consumer a grant for hardware it was never admitted against,
+                // so the replacement is named and re-checked instead (R41).
+                match ctx.status::<DeviceBindingDriverStatus>() {
+                    Some(DeviceBindingDriverStatus::Admitted {
+                        authority: before,
+                        ..
+                    }) if *before != authority => {
+                        DeviceBindingDriverStatus::Replaced { component, authority }
+                    }
+                    _ => DeviceBindingDriverStatus::Admitted { component, authority },
+                }
+            }
         }
     }
+
+    /// Re-admit the committed relationship this pass is deciding presence for.
+    ///
+    /// The committed row is the subject and the authority evidence is the only
+    /// input beyond it: the canonical request, the authorization, the
+    /// dependency fence, and the lifecycle come from the authority journal
+    /// through the family's declared seam. Evidence about a DIFFERENT
+    /// relationship is refused here rather than admitted for this row, so the
+    /// journal can never widen what the committed row claims.
+    ///
+    /// The peer set is empty on purpose: this pass RE-DERIVES one relationship
+    /// the source already arbitrated and committed, it does not arbitrate.
+    /// Arbitration against peers stays the producing half's single decision,
+    /// and a new peer reaches this row because the parent `Device` row is
+    /// watched: the parent's own reconcile re-arbitrates and retires or admits
+    /// there. What this pass must not do is settle exclusivity itself.
+    ///
+    /// The committed row is the subject and the authority evidence is the only
+    /// input beyond it: the canonical request, the authorization, the
+    /// dependency fence, and the lifecycle come from the authority journal
+    /// through the family's declared seam. Evidence about a DIFFERENT
+    /// relationship is refused here rather than admitted for this row, so the
+    /// journal can never widen what the committed row claims.
+    async fn served_relationship(
+        &self,
+        ctx: &mut ResourceContext,
+        resolved: &ServingRelationship,
+        inventory: &DeviceInventory,
+    ) -> Result<LiveDeviceBinding, BindingDriverError> {
+        let op = DriverOp::Reconcile;
+        let evidence = self.binding_evidence(ctx, op).await?;
+        if !evidence_names(&resolved.binding, &evidence) {
+            return Err(self
+                .error(BindingDriverErrorKind::DecisionRefused, op)
+                .with_detail(FailureDetail::at("evidence/relationship")));
+        }
+        let support = device_attachment_support();
+        let grant = DeviceAdmissionGrant::new(
+            &support,
+            evidence.authorization(),
+            evidence.freshness(),
+            device_effect_operations(resolved.component),
+        );
+        let source = DeviceAdmissionSource::new(
+            &self.zone,
+            resolved.binding.device_ref(),
+            &resolved.device_uid,
+            &resolved.spec,
+            inventory,
+            &grant,
+        );
+        let admitted =
+            admit_device_request(&source, &resolved.consumer_uid, evidence.request(), &[])
+                .map_err(|_| self.error(BindingDriverErrorKind::DecisionRefused, op))?;
+        Ok(LiveDeviceBinding::new(admitted, evidence.lifecycle()))
+    }
+}
+
+/// Whether the authority evidence is about exactly this committed row.
+///
+/// The committed row is the subject of the decision; the journal's answer is
+/// only admissible for it when the canonical request names the same source,
+/// consumer, slot, capability, and claim the row committed. Evidence for a
+/// neighbouring relationship - a different consumer, a different slot, a
+/// widened claim - is refused rather than admitted here, so the journal can
+/// never widen what the committed row claims. The request's attachment mode is
+/// the one field the row does not carry, which is exactly why the request
+/// travels from the journal at all.
+fn evidence_names(binding: &DeviceBindingSpec, evidence: &DeviceBindingEvidence) -> bool {
+    let request = evidence.request();
+    request.source_ref() == binding.device_ref()
+        && request.consumer_ref() == binding.execution_ref()
+        && request.slot().as_str() == binding.slot().as_str()
+        && request.function() == binding.function()
+        && request.claim() == *binding.claim()
 }
 
 /// The status an unattached relationship publishes, with the driver converging.

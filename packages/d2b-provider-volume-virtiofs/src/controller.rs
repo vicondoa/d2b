@@ -43,6 +43,14 @@ use crate::worker::{VirtiofsdWorkerPlan, WorkerSandbox};
 /// The bounded repair interval, in seconds, for virtiofs workers.
 pub const VIRTIOFS_REPAIR_INTERVAL_SECS: u64 = 30;
 
+/// The Provider component identity that owns a `VolumeBinding` row, and
+/// the only identity allowed to publish that row's fenced status (KTD3).
+///
+/// The port checks the writer against this value before it crosses the
+/// provider boundary, so a status write can never be minted under another
+/// component's name.
+pub const CONTROLLER_IDENTITY: &str = "volume-virtiofs";
+
 /// Resolve the named view a binding selects, read-only.
 pub fn resolve_view<'spec>(
     volume: &'spec VolumeSpec,
@@ -75,7 +83,8 @@ impl<P: VirtiofsBindingEffectPort> VirtiofsBindingController<P> {
     /// one without derive identical deliveries.
     pub fn new(port: P, zone: BoundedToken, runtime_root: impl Into<PathBuf>) -> Self {
         Self {
-            provider: BoundedToken::parse("volume-virtiofs").expect("frozen provider name"),
+            provider: BoundedToken::parse(CONTROLLER_IDENTITY)
+                .expect("the frozen provider name is a bounded token"),
             zone,
             port,
             runtime_root: runtime_root.into(),
@@ -264,7 +273,7 @@ impl<P: VirtiofsBindingEffectPort> VirtiofsBindingController<P> {
         };
         let source_prepared = self
             .port
-            .observe_socket(&worker)
+            .observe_socket(binding, &worker)
             .await
             .inspect_err(|error| {
                 tracing::warn!(
@@ -307,6 +316,34 @@ impl<P: VirtiofsBindingEffectPort> VirtiofsBindingController<P> {
             reason,
             projection: Self::projection(binding, source_prepared, reason),
         })
+    }
+
+
+    /// The delivery verdict for one committed row, WITHOUT publishing
+    /// status (U15).
+    ///
+    /// This is the whole of the serving pass minus the row's fenced status
+    /// publication, and it is the entry point a source-side pass uses after
+    /// it commits a canonical row: the source owns the commit, and the
+    /// `VolumeBinding` row's own actor owns the status projection that
+    /// row publishes. Keeping the two apart is deliberate - a fenced
+    /// projection is written by exactly one actor, so a second writer
+    /// cannot publish a stale verdict under the row's fence.
+    ///
+    /// Everything else is unchanged from [`Self::reconcile`]: the worker
+    /// plan, the private socket path, the closure store-view marker gate,
+    /// the socket probe, and the consumer's three-state mount observation
+    /// are all derived from the admitted row and answered by the privileged
+    /// leg.
+    pub async fn observe(
+        &self,
+        binding: &StoredBinding,
+        volume: &VolumeSpec,
+        vcpu_count: u32,
+        principal: BoundedToken,
+    ) -> Result<BindingStatusReport, VirtiofsBindingError> {
+        self.compute_report(binding, volume, vcpu_count, principal)
+            .await
     }
 
     /// Join the path-free plan to the private socket path the binding's
@@ -399,7 +436,7 @@ impl<P: VirtiofsBindingEffectPort> VirtiofsBindingController<P> {
         worker: &LaunchedWorker,
     ) -> Result<(), VirtiofsBindingError> {
         self.port
-            .delete_worker(worker)
+            .delete_worker(binding, worker)
             .await
             .inspect_err(|error| {
                 tracing::warn!(

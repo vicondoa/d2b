@@ -40,8 +40,8 @@ use d2b_provider_toolkit::{
     SharedProviderEffectRequest, SharedProviderFamily, SharedProviderFinalize, key_ref,
     resource_uid, shared_provider_spec_decoder,
 };
-use d2b_resource_runtime::context::{ChildEnsure, ResourceContext};
-use d2b_resource_runtime::identity::ResourceTypeName;
+use d2b_resource_runtime::context::{ChildEnsure, ResourceContext, RowLookup};
+use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_types::{
     AllowedSources, CONVERTED_TYPE_VERBS, ChildCreation, ChildCustody, DriverDescriptor,
     WellKnownType,
@@ -161,9 +161,119 @@ pub struct NetworkDriverArgs {
     pub facets: NetworkEffectFacets,
 }
 
+/// The `NetworkBinding` ResourceType one committed relationship commits as.
+///
+/// The name is the contract's own constant rather than a second hand-written
+/// spelling, so the child type this pass ensures and the type a serving driver
+/// decodes cannot drift.
+const NETWORK_BINDING_TYPE_NAME: &str =
+    d2b_contracts_resource::v3::network_binding::NETWORK_BINDING_RESOURCE_TYPE;
+
+/// The `Zone` ResourceType whose committed self row carries the Zone uid the
+/// derived fabric identity is a function of.
+const ZONE_RESOURCE_TYPE: &str = "Zone";
+
 /// The family's declarations and typed Provider effect.
 struct NetworkFamily {
+    /// The Zone this family's rows live in.
+    zone: ZoneId,
     effects: Arc<dyn NetworkDriverEffects>,
+}
+
+impl NetworkFamily {
+    /// Commit the `NetworkBinding` rows this committed `Network` row implies,
+    /// and derive no row for a consumer it does not attach.
+    ///
+    /// The derivation is the family's own: the committed row's attachments
+    /// decide which execution targets join its fabric, and each consumer's
+    /// exact request - its slot, its presentation, its traffic policy - is
+    /// read off that same row. Nothing the caller or the consumer supplies
+    /// reaches any of it, so a row cannot widen its own relationship by asking
+    /// for a different slot, a different presentation, or another Network.
+    ///
+    /// The only committed facts read from elsewhere are identities: the Zone
+    /// self row's uid and each attached consumer's own store-assigned uid. A
+    /// consumer whose row the manager cannot answer for defers the pass
+    /// rather than committing an unbacked relationship, because a row the
+    /// store cannot name is not a relationship this source admitted.
+    async fn binding_children(
+        &self,
+        ctx: &mut ResourceContext,
+        spec: &NetworkSpec,
+    ) -> Result<Vec<ChildEnsure>, SharedProviderDeclarationError> {
+        if spec.attachments().is_empty() {
+            // A Network row that attaches nothing implies no relationship, so
+            // there is no fabric identity to read and no row to commit.
+            return Ok(Vec::new());
+        }
+        let defer = || SharedProviderDeclarationError::ChildMutation;
+        let network_ref =
+            key_ref(ctx.key()).map_err(|_| SharedProviderDeclarationError::SpecInvalid)?;
+        let network_uid =
+            resource_uid(ctx.uid()).map_err(|_| SharedProviderDeclarationError::SpecInvalid)?;
+        let zone_uid = self.zone_uid(ctx).await?;
+        let mut identities = Vec::with_capacity(spec.attachments().len());
+        for attachment in spec.attachments() {
+            let consumer_ref = attachment.execution_ref();
+            let key = ResourceKey::new(
+                self.zone.as_str(),
+                consumer_ref.resource_type().as_str(),
+                consumer_ref.name().as_str(),
+            );
+            let uid = match ctx.lookup(&key).await {
+                RowLookup::Present { row, .. } => resource_uid(&row.uid).map_err(|_| defer())?,
+                // An absent consumer row and a manager that cannot answer are
+                // both "not known yet": neither is evidence that this Network
+                // attaches nobody.
+                _ => return Err(defer()),
+            };
+            identities.push(
+                crate::binding::NetworkConsumerIdentity::new(consumer_ref.clone(), uid)
+                    .map_err(|_| SharedProviderDeclarationError::SpecInvalid)?,
+            );
+        }
+        let rows = crate::binding::produce_binding_rows(
+            &self.zone,
+            &zone_uid,
+            &network_ref,
+            &network_uid,
+            spec,
+            &identities,
+        )
+        .map_err(|_| SharedProviderDeclarationError::SpecInvalid)?;
+        let metadata = serde_json::to_vec(&json!({
+            "ownerRef": network_ref.to_canonical_string(),
+            "labels": {},
+            "annotations": {},
+        }))
+        .map_err(|_| SharedProviderDeclarationError::SpecInvalid)?;
+        Ok(rows
+            .iter()
+            .map(|row| ChildEnsure {
+                type_name: ResourceTypeName::new(NETWORK_BINDING_TYPE_NAME),
+                name: row.name().as_str().to_owned(),
+                spec: row.spec().to_vec(),
+                metadata: metadata.clone(),
+            })
+            .collect())
+    }
+
+    /// The Zone's own store-assigned identity, from its committed self row.
+    ///
+    /// The fabric's interface names are a function of the Zone uid, and the
+    /// store is the only place that identity lives, so a Zone whose self row
+    /// is absent defers instead of answering with a number nothing verified.
+    async fn zone_uid(
+        &self,
+        ctx: &mut ResourceContext,
+    ) -> Result<ResourceUid, SharedProviderDeclarationError> {
+        let key = ResourceKey::new(self.zone.as_str(), ZONE_RESOURCE_TYPE, self.zone.as_str());
+        match ctx.lookup(&key).await {
+            RowLookup::Present { row, .. } => resource_uid(&row.uid)
+                .map_err(|_| SharedProviderDeclarationError::ChildMutation),
+            _ => Err(SharedProviderDeclarationError::ChildMutation),
+        }
+    }
 }
 
 #[async_trait]
@@ -189,7 +299,14 @@ impl SharedProviderFamily for NetworkFamily {
                     resource_uid(ctx.uid()).map_err(|_| SharedProviderDeclarationError::SpecInvalid)?;
                 let spec =
                     network_spec(spec).map_err(|_| SharedProviderDeclarationError::SpecInvalid)?;
-                network_child_ensures(&owner, &uid, &spec)
+                let mut children =
+                    network_child_ensures(&owner, &uid, &spec)?.unwrap_or_default();
+                // The committed `NetworkBinding` relationships ride the same
+                // child surface as the family's own rows, so the manager's own
+                // diff both ensures them and retires the ones this row no
+                // longer derives.
+                children.extend(self.binding_children(ctx, &spec).await?);
+                Ok(Some(children))
             }
         }
     }
@@ -234,6 +351,7 @@ const NETWORK_READS: &[WellKnownType] = &[
     WellKnownType::VOLUME,
     WellKnownType::PROCESS,
     WellKnownType::USER,
+    WellKnownType::ZONE,
 ];
 
 /// The Network type's driver declaration.
@@ -269,9 +387,10 @@ pub fn network_descriptor(args: NetworkDriverArgs) -> DriverDescriptor {
         decoder: shared_provider_spec_decoder(),
         factory: Arc::new(SharedProviderDriverFactory::new(
             SharedProviderDriverArgs {
-                zone: args.zone,
+                zone: args.zone.clone(),
                 controller_generation: args.controller_generation,
                 family: Arc::new(NetworkFamily {
+                    zone: args.zone,
                     effects: Arc::new(NetworkEffectsService::new(args.facets)),
                 }),
             },

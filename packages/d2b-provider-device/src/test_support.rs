@@ -7,16 +7,27 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use d2b_contracts_resource::v3::{
+    BindingAuthorization, BindingLifecycleState, BindingSlot, DeviceAttachmentMode,
+    DeviceBindingRequest, DeviceBindingSpec, DesiredDigest, DesiredRevision, FreshnessTuple,
+    ResourceRef, StoreIncarnation,
+};
+
 use d2b_provider_toolkit::{
     SharedProviderEffectError, SharedProviderEffectOutcome, SharedProviderEffectPhase,
     SharedProviderEffectRequest, SharedProviderFinalize,
 };
 
-use crate::binding::{DeviceInventory, DeviceInventoryEntry, DevicePresence};
+use crate::binding::{DeviceBindingEvidence, DeviceInventory, DeviceInventoryEntry, DevicePresence};
 use crate::driver::{
     DeviceComponent, DeviceResourceState, component_for_provider, declared_device_functions,
 };
-use crate::facets::{DeviceEffectFacets, DeviceInventorySource, DeviceRuntime};
+use crate::facets::{
+    DeviceBindingAuthoritySource, DeviceEffectFacets, DeviceInventorySource, DeviceRuntime,
+};
+
+/// The store incarnation every recorded authority fence is written against.
+const RECORDED_STORE: &str = "store-one";
 
 /// Recording [`DeviceInventorySource`] double: resolves the declared
 /// vocabulary of a Device row to present capabilities with distinct
@@ -150,6 +161,77 @@ impl DeviceInventorySource for FixedInventory {
     }
 }
 
+/// Recording [`DeviceBindingAuthoritySource`] double: reconstructs the
+/// canonical request from the committed row's own spec, grants it against a
+/// fence over that same row, and reports the lifecycle the test hands it.
+///
+/// This is a stand-in for the authority journal, not a grant the family mints
+/// for itself: the request is read back out of the committed bytes rather than
+/// composed here, so a driver that admitted something the row does not say
+/// still fails. The lifecycle is the recording double's one knob, which is what
+/// lets a test observe the difference between a proven and an unproven
+/// relationship without restating the host device-node matrix.
+#[derive(Clone, Copy)]
+pub struct RecordedAuthority {
+    lifecycle: BindingLifecycleState,
+}
+
+impl RecordedAuthority {
+    /// Report this lifecycle for every committed relationship.
+    pub const fn new(lifecycle: BindingLifecycleState) -> Self {
+        Self { lifecycle }
+    }
+
+    /// Report the one lifecycle whose presence is proven: the relationship's
+    /// effect is standing.
+    pub const fn active() -> Self {
+        Self::new(BindingLifecycleState::Active)
+    }
+}
+
+#[async_trait]
+impl DeviceBindingAuthoritySource for RecordedAuthority {
+    async fn binding_evidence(
+        &self,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<DeviceBindingEvidence, SharedProviderEffectError> {
+        let Ok(binding) = serde_json::from_value::<DeviceBindingSpec>(request.spec.clone()) else {
+            return Err(SharedProviderEffectError::InvalidResource);
+        };
+        let canonical = DeviceBindingRequest::new(
+            binding.device_ref().clone(),
+            binding.execution_ref().clone(),
+            BindingSlot::parse(binding.slot().as_str())
+                .map_err(|_| SharedProviderEffectError::InvalidResource)?,
+            binding.function().clone(),
+            *binding.claim(),
+            DeviceAttachmentMode::Descriptor,
+        )
+        .map_err(|_| SharedProviderEffectError::InvalidResource)?;
+        // The fence is over the committed row itself, which is what the journal
+        // would hold: the relationship, at its store-assigned identity, in this
+        // store incarnation.
+        let subject_name = format!("{}/{}", request.target.type_name, request.target.name);
+        let subject = ResourceRef::parse(&subject_name)
+            .map_err(|_| SharedProviderEffectError::InvalidResource)?;
+        let fence = FreshnessTuple::new(
+            request.zone.clone(),
+            StoreIncarnation::parse(RECORDED_STORE)
+                .map_err(|_| SharedProviderEffectError::InvalidResource)?,
+            subject.clone(),
+            request.uid.clone(),
+            DesiredRevision::INITIAL,
+            DesiredDigest::of(subject.to_canonical_string().as_bytes()),
+        );
+        Ok(DeviceBindingEvidence::new(
+            canonical,
+            BindingAuthorization::granted(),
+            vec![fence],
+            self.lifecycle,
+        ))
+    }
+}
+
 /// Recording [`DeviceRuntime`] double: answers Pending/Complete for every
 /// effect call and records the driven components, so `d2bd`'s plane tests
 /// can build a facet set without a daemon.
@@ -192,10 +274,7 @@ impl DeviceRuntime for RecordingRuntime {
 
 /// Build a Device facet set from a recording runtime double.
 pub fn recording_facets(runtime: Arc<RecordingRuntime>) -> DeviceEffectFacets {
-    DeviceEffectFacets {
-        runtime,
-        inventory: Arc::new(RecordingInventory),
-    }
+    device_facets(runtime, Arc::new(RecordingInventory), Arc::new(RecordedAuthority::active()))
 }
 
 /// Build a Device facet set whose inventory is the caller's own observation.
@@ -203,8 +282,28 @@ pub fn fixed_facets(
     runtime: Arc<RecordingRuntime>,
     inventory: DeviceInventory,
 ) -> DeviceEffectFacets {
+    device_facets(
+        runtime,
+        Arc::new(FixedInventory::new(inventory)),
+        Arc::new(RecordedAuthority::active()),
+    )
+}
+
+/// Build a Device facet set over the caller's own inventory and authority
+/// observations.
+///
+/// This is the seam a test drives presence through: the inventory facet answers
+/// which devices the host backs, and the authority facet answers whether the
+/// relationship's effect is proven. Both are read through the same production
+/// construction the composition root uses.
+pub fn device_facets(
+    runtime: Arc<RecordingRuntime>,
+    inventory: Arc<dyn DeviceInventorySource>,
+    authority: Arc<dyn DeviceBindingAuthoritySource>,
+) -> DeviceEffectFacets {
     DeviceEffectFacets {
         runtime,
-        inventory: Arc::new(FixedInventory::new(inventory)),
+        inventory,
+        authority,
     }
 }

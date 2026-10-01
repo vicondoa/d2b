@@ -20,12 +20,11 @@ use d2b_provider_volume_local::AdmittedVolumeBinding;
 
 use crate::facets::{
     BindingAdmissionEvidence, BindingEvidenceAbsent, VolumeBindingAdmission, VolumeEffectFacets,
-    VolumeRuntime,
+    VolumeRuntime, VolumeServingComposition,
 };
 
-/// A runtime double that refuses every call: the registration boundary never
-/// runs an effect, so a test that accidentally drives one fails loudly
-/// instead of passing silently.
+/// The refusal the boundary records when it runs an effect: it never
+/// passes silently.
 #[derive(Default)]
 pub struct RefusingRuntime;
 
@@ -90,6 +89,10 @@ pub struct RecordingRuntime {
     evidence: AtomicBool,
     /// How many passes asked the canonical admission seam (U14).
     admission_passes: AtomicUsize,
+    /// The Zone's privileged virtiofs serving composition (U15), and how
+    /// many passes reached its presence probe.
+    serving_composition: std::sync::Mutex<Option<VolumeServingComposition>>,
+    serving_probes: AtomicUsize,
 }
 
 impl RecordingRuntime {
@@ -103,6 +106,8 @@ impl RecordingRuntime {
             admitted: tokio::sync::Mutex::new(Vec::new()),
             evidence: AtomicBool::new(false),
             admission_passes: AtomicUsize::new(0),
+            serving_composition: std::sync::Mutex::new(None),
+            serving_probes: AtomicUsize::new(0),
         })
     }
 
@@ -210,5 +215,17 @@ impl VolumeRuntime for RecordingRuntime {
             ]));
         }
         Ok(self.admitted.lock().await.clone())
+    }
+
+    /// The scripted virtiofs serving composition (U15): the double hands
+    /// the family exactly what the daemon would, and withholds it - rather
+    /// than inventing one - when a test withdrew it.
+    fn virtiofs_serving(&self) -> Option<VolumeServingComposition> {
+        self.serving_probes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.serving_composition
+            .lock()
+            .expect("a test-support recorder lock is never poisoned")
+            .clone()
     }
 }

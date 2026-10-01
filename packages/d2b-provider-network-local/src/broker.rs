@@ -1739,6 +1739,7 @@ mod tests {
             ),
             network_spec(false),
             vec![attachment_uid],
+            Vec::new(),
         )
         .unwrap()
         .proof();
