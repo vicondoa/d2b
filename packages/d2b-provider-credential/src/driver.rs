@@ -2,28 +2,32 @@
 //! daemon-owned Credential controller path for the three Credential Providers
 //! (secret-service, entra, managed-identity; R3, R4, R30).
 //!
-//! The driver keeps the old controller behavior and nothing else: reconcile
-//! reports Provider readiness for every Credential and, for the
-//! managed-identity Provider, derives the co-located agent Process child
-//! exactly as the preserved `managed_identity_agent_payload` did and ensures
-//! it through the manager-routed child ensure (the child spec is committed
-//! BEFORE the child actor exists, F1). The agent is never spawned here: it
-//! is a Process resource whose lifetime belongs to the Process driver
-//! (KTD13), and the child creation is declared on
-//! [`credential_descriptor`]. Delete preserves the revocation-first ordering:
-//! the provider RevokeToken call is confirmed (or already confirmed) before
-//! any owned Process child is marked deleting, and fails closed when the
-//! session generation is missing or no longer current (R28). The manager
-//! holds the Credential row until its owned children retire (F3), so the
-//! durable deleting mark stays observable for the whole teardown exactly as
-//! the old revoke-finalizer ordering made it.
+//! The driver keeps the old controller behavior and the binding derivation the
+//! committed graph is missing: reconcile first derives the delivery
+//! relationships the row's own committed spec declares and commits them
+//! through the manager-routed child ensure, then reports Provider readiness
+//! for every Credential and, for the managed-identity Provider, derives the
+//! co-located agent Process child exactly as the preserved
+//! `managed_identity_agent_payload` did and ensures it the same way (the
+//! child spec is committed BEFORE the child actor exists, F1). A derived
+//! relationship is held to this row's own admitted operations and lease
+//! ceiling before it is committed, and a row the spec no longer declares is
+//! retired rather than left behind. The agent is never spawned here: it is a
+//! Process resource whose lifetime belongs to the Process driver (KTD13), and
+//! both child creations are declared on [`credential_descriptor`]. Delete
+//! preserves the revocation-first ordering: the provider RevokeToken call is
+//! confirmed (or already confirmed) before any owned child is marked
+//! deleting, and fails closed when the session generation is missing or no
+//! longer current (R28). The manager holds the Credential row until its owned
+//! children retire (F3), so the durable deleting mark stays observable for the
+//! whole teardown exactly as the old revoke-finalizer ordering made it.
 //!
 //! Conversion mapping (spec section 13):
 //! - `describe` -> [`CredentialDriverFactory`] registration under `Credential`.
 //! - `validate_spec` -> [`ResourceDriver::validate`].
 //! - `observe` -> [`ResourceDriver::recover`].
-//! - finalizer enrollment + agent child minting + provider readiness ->
-//!   [`ResourceDriver::reconcile`].
+//! - binding relationship derivation + agent child minting + provider
+//!   readiness -> [`ResourceDriver::reconcile`].
 //! - `prepare_finalize`/`execute_finalize`/`finalize` -> [`ResourceDriver::delete`].
 //! - `UpdateStatus` -> `ctx.set_status` (in-memory only, R11).
 //!
@@ -61,11 +65,12 @@ use d2b_resource_runtime::driver::{
     DynResourceDriver, ReconcileOutcome, RecoveryOutcome, ResourceDriver, ResourceDriverFactory,
 };
 use d2b_resource_runtime::error::{DriverFailure, DriverOp, FailureClass};
-use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
+use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName, StoredDesiredResource};
 use d2b_resource_types::{
     AllowedSources, ChildCreation, ChildCustody, DriverDescriptor, WellKnownType,
 };
 
+use crate::binding::{CREDENTIAL_BINDING_TYPE_NAME, admitted_binding_rows};
 use crate::effects_service::{CREDENTIAL_EFFECTS_SERVICE, CredentialEffectsService};
 use crate::facets::CredentialEffectFacets;
 use crate::session::{
@@ -110,6 +115,12 @@ enum CredentialDriverErrorKind {
     /// The managed-identity agent Process child is not (yet) serving, or the
     /// execution target it must realize on is not ready.
     AgentUnavailable,
+    /// The delivery relationship this row declares is not committed: a derived
+    /// row outside the source's own admitted operations, above its own lease
+    /// ceiling, or scoped somewhere this row does not deliver to. Terminal,
+    /// and nothing is committed - a relationship the source's own policy does
+    /// not admit is refused here rather than committed and served.
+    BindingRefused,
     /// A manager child mutation failed.
     ChildMutation,
     /// The revocation identity was rejected (wrong zone/Provider/generation
@@ -126,6 +137,7 @@ impl CredentialDriverErrorKind {
             Self::SpecInvalid | Self::ProviderUnsupported | Self::RevocationIdentity => {
                 FailureClass::Terminal
             }
+            Self::BindingRefused => FailureClass::Terminal,
             Self::ProviderUnavailable
             | Self::AgentUnavailable
             | Self::ChildMutation
@@ -157,6 +169,7 @@ impl core::fmt::Display for CredentialDriverError {
             CredentialDriverErrorKind::ProviderUnsupported => "credential-provider-unsupported",
             CredentialDriverErrorKind::ProviderUnavailable => "credential-provider-unavailable",
             CredentialDriverErrorKind::AgentUnavailable => "credential-agent-unavailable",
+            CredentialDriverErrorKind::BindingRefused => "credential-binding-refused",
             CredentialDriverErrorKind::ChildMutation => "credential-child-mutation-failed",
             CredentialDriverErrorKind::RevocationIdentity => {
                 "credential-revocation-identity-rejected"
@@ -714,6 +727,79 @@ impl CredentialDriver {
             .collect())
     }
 
+    /// The owned `CredentialBinding` children of this Credential, through the
+    /// manager (the owner-scoped child list, narrowed to the relationship
+    /// rows this driver mints).
+    async fn owned_bindings(
+        &self,
+        ctx: &mut ResourceContext,
+        op: DriverOp,
+    ) -> Result<Vec<StoredDesiredResource>, CredentialDriverError> {
+        let children = ctx
+            .children()
+            .await
+            .map_err(|_| self.error(CredentialDriverErrorKind::ChildMutation, op))?;
+        Ok(children
+            .into_iter()
+            .filter(|child| child.key.type_name == CREDENTIAL_BINDING_TYPE_NAME)
+            .collect())
+    }
+
+    /// Commit the delivery relationships this row declares and retire the ones
+    /// it no longer declares.
+    ///
+    /// The derived rows are a function of the committed `Credential` spec
+    /// alone, so they are committed before the Provider-readiness gate: the
+    /// committed relationship is the graph's statement of what this row
+    /// delivers, and a Provider that is merely not ready yet is not a change
+    /// to that statement. Each row is held to this row's own admitted
+    /// operations and lease ceiling before it is committed
+    /// ([`admitted_binding_rows`]), so a relationship this row's policy does
+    /// not admit is refused here rather than committed and served.
+    ///
+    /// The pass is idempotent in both directions: re-ensuring unchanged bytes
+    /// is the manager's `Unchanged` answer rather than a second row, and a
+    /// derived set that shrank - a narrowed scope, a withdrawn operation set,
+    /// a lease below the floor - deletes the rows this pass no longer derives,
+    /// which is the ownership-bounded reset the reset property depends on.
+    async fn reconcile_binding_children(
+        &self,
+        ctx: &mut ResourceContext,
+        spec: &CredentialSpec,
+        op: DriverOp,
+    ) -> Result<(), CredentialDriverError> {
+        let credential_ref = self.credential_ref(ctx, op)?;
+        let derived = admitted_binding_rows(&credential_ref, spec).map_err(|refusal| {
+            tracing::warn!(
+                refusal = refusal.code(),
+                "credential delivery relationship refused; nothing committed"
+            );
+            self.error(CredentialDriverErrorKind::BindingRefused, op)
+        })?;
+        for row in &derived {
+            ctx.ensure_child(ChildEnsure {
+                type_name: ResourceTypeName::new(CREDENTIAL_BINDING_TYPE_NAME),
+                name: row.name.clone(),
+                spec: row.spec.clone(),
+                metadata: Vec::new(),
+            })
+            .await
+            .map_err(|_| self.error(CredentialDriverErrorKind::ChildMutation, op))?;
+        }
+        for row in self.owned_bindings(ctx, op).await? {
+            let still_derived = derived.iter().any(|child| child.name == row.key.name);
+            if !still_derived && !row.deleting {
+                // Obsolete relationship: the manager retires it and owns its
+                // own teardown (R9/F3). A row already marked deleting is
+                // skipped, because the manager refuses a second delete.
+                ctx.delete(&row.key)
+                    .await
+                    .map_err(|_| self.error(CredentialDriverErrorKind::ChildMutation, op))?;
+            }
+        }
+        Ok(())
+    }
+
     /// Build one revocation request for this Credential (R28): the request
     /// binds the exact session generation, provider generation, and
     /// controller generation; a zero/unknown generation fails closed here.
@@ -941,9 +1027,11 @@ impl ResourceDriver for CredentialDriver {
     }
 
     /// One reconcile pass (old `plan` + `reconcile` + `execute_effect`): the
-    /// Provider must be ready, and the managed-identity Provider additionally
-    /// derives + ensures its agent Process child and reports the child-phase
-    /// classification. The resource never goes ready before its effects are.
+    /// committed spec's own delivery relationships are derived and committed
+    /// first, then the Provider must be ready, and the managed-identity
+    /// Provider additionally derives + ensures its agent Process child and
+    /// reports the child-phase classification. The resource never goes ready
+    /// before its effects are.
     async fn reconcile(
         &mut self,
         ctx: &mut ResourceContext,
@@ -951,6 +1039,12 @@ impl ResourceDriver for CredentialDriver {
         let (envelope, spec) = self.decoded_spec(ctx, DriverOp::Reconcile)?;
         let (provider_ref, kind) = self.provider_of(&envelope, DriverOp::Reconcile)?;
         let execution_ref = self.execution_ref(&spec, DriverOp::Reconcile)?.clone();
+        // The relationships this row declares are derived from its own
+        // committed spec, so they are committed before the Provider gate: a
+        // Provider that is not ready yet is not a change to what this row
+        // declares it delivers.
+        self.reconcile_binding_children(ctx, &spec, DriverOp::Reconcile)
+            .await?;
         // Absence and a failed dependency read both report the Provider
         // unavailable (retryable): a read failure must not be answered as
         // absence, and neither may reconcile against guessed readiness.
@@ -1129,17 +1223,40 @@ const CREDENTIAL_READS: &[WellKnownType] = &[
     WellKnownType::PROVIDER,
 ];
 
+/// The serving surface a derived `CredentialBinding` child is created under.
+///
+/// `CredentialBinding` is a builtin type with no Provider component behind it:
+/// the family's own binding driver serves the row, and the committed row
+/// carries no `providerRef` to select one with. The declaration therefore
+/// names this family's realization of the relationship rather than a Provider
+/// reference no committed row could carry, and the relationship is still
+/// declared exactly once, here.
+const CREDENTIAL_BINDING_REALIZATION_REF: &str = "credential-binding";
+
 /// The children this driver may create.
 ///
-/// The managed-identity agent is the Credential's only child: a `Process`
-/// minted under the minijail Process Provider's own reference, created and
-/// torn down by this driver (DriverOwned) behind the revocation gate.
-const CREDENTIAL_CREATIONS: &[ChildCreation] = &[ChildCreation {
-    child: WellKnownType::PROCESS,
-    provider_ref: AGENT_PROCESS_PROVIDER_REF,
-    custody: ChildCustody::DriverOwned,
-    order: 0,
-}];
+/// The delivery relationship first: one `CredentialBinding` per delivery the
+/// committed spec declares, derived from that spec alone and committed
+/// through the manager before any Provider effect runs. The managed-identity
+/// agent follows, a `Process` minted under the minijail Process Provider's
+/// own reference. Both are created and torn down by this driver
+/// (DriverOwned); the agent's teardown stays behind the revocation gate.
+/// Children retire in descending rank, so the realization goes before the
+/// relationship it realizes.
+const CREDENTIAL_CREATIONS: &[ChildCreation] = &[
+    ChildCreation {
+        child: WellKnownType::CREDENTIAL_BINDING,
+        provider_ref: CREDENTIAL_BINDING_REALIZATION_REF,
+        custody: ChildCustody::DriverOwned,
+        order: 0,
+    },
+    ChildCreation {
+        child: WellKnownType::PROCESS,
+        provider_ref: AGENT_PROCESS_PROVIDER_REF,
+        custody: ChildCustody::DriverOwned,
+        order: 1,
+    },
+];
 
 /// The Credential type's driver declaration.
 ///
@@ -1212,6 +1329,9 @@ mod tests {
         CredentialEffectFacets, CredentialLeaseFacts, credential_spec_decoder,
     };
 
+    use super::CREDENTIAL_BINDING_TYPE_NAME;
+    use d2b_contracts_resource::v3::{CredentialBindingSpec, credential_binding::CredentialOperation};
+
     const MI_PROVIDER: &str = "Provider/credential-managed-identity";
     const SECRET_SERVICE_PROVIDER: &str = "Provider/credential-secret-service";
 
@@ -1260,10 +1380,12 @@ mod tests {
         ) -> Result<EnsureOutcome, ResourceError> {
             self.log.lock().push(format!("ensure:{}", child.name)); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             let key = ResourceKey::new(&parent.zone, child.type_name.as_str(), &child.name);
-            let row = StoredDesiredResource {
+            self.ensured.lock().push(child.clone()); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            let mut children = self.children.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            let committed = |generation: u64| StoredDesiredResource {
                 key: key.clone(),
                 uid: [0x51; 16],
-                generation: 1,
+                generation,
                 owner_uid: Some([0x42; 16]),
                 provenance: ResourceProvenance::Resource,
                 deleting: false,
@@ -1271,19 +1393,31 @@ mod tests {
                 metadata: child.metadata.clone(),
                 created_at: 0,
             };
-            self.ensured.lock().push(child); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            let mut children = self.children.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             match children.iter().position(|existing| existing.key == key) {
                 Some(index) if children[index].deleting => Err(ResourceError::DeletingConflict {
                     zone: key.zone,
                     type_name: key.type_name,
                     name: key.name,
                 }),
+                // Byte-identical desired state is the manager's `Unchanged`
+                // answer and leaves the row's generation where it was: that is
+                // what makes a second pass over an unchanged parent commit
+                // nothing new.
+                Some(index)
+                    if children[index].spec == child.spec
+                        && children[index].metadata == child.metadata =>
+                {
+                    Ok(EnsureOutcome::Unchanged(children[index].clone()))
+                }
+                // Different bytes advance the row's generation, the way
+                // `ensure_internal` does, so an updated child is observable.
                 Some(index) => {
+                    let row = committed(children[index].generation + 1);
                     children[index] = row.clone();
-                    Ok(EnsureOutcome::Unchanged(row))
+                    Ok(EnsureOutcome::Updated(row))
                 }
                 None => {
+                    let row = committed(1);
                     children.push(row.clone());
                     Ok(EnsureOutcome::Created(row))
                 }
@@ -1415,6 +1549,54 @@ mod tests {
             effects_tx,
             notify_tx,
         )
+    }
+
+    /// The ensured or committed children of the given type.
+    fn children_of_type(children: Vec<ChildEnsure>, type_name: &str) -> Vec<ChildEnsure> {
+        children
+            .into_iter()
+            .filter(|child| child.type_name.as_str() == type_name)
+            .collect()
+    }
+
+    /// The managed-identity agent children of one recording.
+    fn agent_children(children: Vec<ChildEnsure>) -> Vec<ChildEnsure> {
+        children_of_type(children, "Process")
+    }
+
+    /// The committed children of the given type.
+    fn committed_children(
+        manager: &RecordingManager,
+        type_name: &str,
+    ) -> Vec<StoredDesiredResource> {
+        manager
+            .children()
+            .into_iter()
+            .filter(|child| child.key.type_name == type_name)
+            .collect()
+    }
+
+    /// The committed delivery relationships of one recording manager.
+    fn committed_bindings(manager: &RecordingManager) -> Vec<StoredDesiredResource> {
+        committed_children(manager, CREDENTIAL_BINDING_TYPE_NAME)
+    }
+
+    /// One `Credential` row whose committed spec declares exactly the delivery
+    /// operations and lease lifetime named here.
+    fn delivering_row(
+        provider_ref: &str,
+        execution_ref: &str,
+        operations: &[&str],
+        max_lease_lifetime_ms: u64,
+    ) -> StoredDesiredResource {
+        let mut spec = credential_spec_json(provider_ref, execution_ref);
+        spec["allowedOperations"] = serde_json::json!(operations);
+        spec["rotation"] =
+            serde_json::json!({ "policy": "on-expiry", "maxLeaseLifetimeMs": max_lease_lifetime_ms });
+        StoredDesiredResource {
+            spec: serde_json::to_vec(&spec).expect("spec bytes"),
+            ..row_with(provider_ref, execution_ref, false)
+        }
     }
 
     fn driver(effects: Arc<FakeEffects>) -> CredentialDriver {
@@ -1617,8 +1799,8 @@ mod tests {
             .await
             .expect_err("execution target not ready");
         assert!(
-            manager.ensured().is_empty(),
-            "no child before the gate opens"
+            agent_children(manager.ensured()).is_empty(),
+            "no agent child before the gate opens"
         );
         assert_eq!(
             ctx.status::<CredentialDriverStatus>(),
@@ -1644,13 +1826,12 @@ mod tests {
             ctx.status::<CredentialDriverStatus>(),
             Some(&CredentialDriverStatus::AgentPending)
         );
-        let ensured = manager.ensured();
+        let ensured = agent_children(manager.ensured());
         assert_eq!(ensured.len(), 1);
         assert_eq!(ensured[0].type_name.as_str(), "Process");
         assert_eq!(ensured[0].name, "mi-agent-relay");
         assert_eq!(
-            manager
-                .children()
+            committed_children(&manager, "Process")
                 .first()
                 .map(|child| child.key.type_name.as_str()),
             Some("Process")
@@ -1695,7 +1876,7 @@ mod tests {
                 .expect("agent ready"),
             ReconcileOutcome::Satisfied
         );
-        let ensured = manager.ensured();
+        let ensured = agent_children(manager.ensured());
         let child = ensured.first().expect("agent child");
 
         // The Process spec is the signed-template shape (argv-free, KTD13).
@@ -1750,9 +1931,12 @@ mod tests {
         );
     }
 
+    /// The managed-identity agent is the Credential driver's only Process
+    /// child: another Provider's Credential commits the delivery relationship
+    /// its own spec declares and nothing else, so no agent is minted for it.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
-    async fn non_managed_identity_credentials_reconcile_without_children() {
+    async fn non_managed_identity_credentials_never_mint_the_agent_child() {
         let log = log();
         let effects = FakeEffects::new(Arc::clone(&log));
         let manager = RecordingManager::new(Arc::clone(&log));
@@ -1764,7 +1948,7 @@ mod tests {
                 .expect("secret-service ready"),
             ReconcileOutcome::Satisfied
         );
-        assert!(manager.ensured().is_empty());
+        assert!(agent_children(manager.ensured()).is_empty());
         assert_eq!(
             ctx.status::<CredentialDriverStatus>(),
             Some(&CredentialDriverStatus::Ready)
@@ -2123,5 +2307,203 @@ mod tests {
             ctx.status::<CredentialDriverStatus>(),
             Some(&CredentialDriverStatus::AgentPending)
         );
+    }
+
+    // -- committed delivery relationships -------------------------------------
+
+    /// The committed row is the family's own `CredentialBinding` contract, so
+    /// every fact it asserts is read back through that contract rather than
+    /// through the bytes the pass happened to write.
+    fn committed_row(row: &StoredDesiredResource) -> CredentialBindingSpec {
+        serde_json::from_slice(&row.spec).expect("committed bytes are the row contract")
+    }
+
+    /// Over one committed `Credential` row: the first pass commits the
+    /// relationship its own spec declares, a second pass over the unchanged row
+    /// commits nothing new, and a spec that no longer declares the
+    /// relationship retires the committed row.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn reconcile_commits_the_declared_delivery_once_and_retires_it_when_undeclared() {
+        let log = log();
+        let effects = FakeEffects::new(Arc::clone(&log));
+        let manager = RecordingManager::new(Arc::clone(&log));
+        // The row names the Provider its delivery is minted against in
+        // `consumerRef` and the party the material reaches in
+        // `scope.executionRef`; the two are different references on purpose.
+        let mut declared = delivering_row(
+            SECRET_SERVICE_PROVIDER,
+            "Guest/gateway",
+            &["acquire-token", "sign-challenge"],
+            600_000,
+        );
+        let mut spec: serde_json::Value =
+            serde_json::from_slice(&declared.spec).expect("spec value");
+        spec["consumerRef"] = serde_json::json!(SECRET_SERVICE_PROVIDER);
+        declared.spec = serde_json::to_vec(&spec).expect("spec bytes");
+
+        let mut ctx = context(declared.clone(), Arc::clone(&manager));
+        assert_eq!(
+            driver(Arc::clone(&effects))
+                .reconcile(&mut ctx)
+                .await
+                .expect("secret-service ready"),
+            ReconcileOutcome::Satisfied
+        );
+
+        // The first pass commits exactly the relationship the row declares.
+        let committed = committed_bindings(&manager);
+        assert_eq!(committed.len(), 1, "one declared delivery, one row");
+        let first = &committed[0];
+        let relationship = committed_row(first);
+        assert_eq!(
+            relationship.credential_ref().to_canonical_string(),
+            "Credential/relay"
+        );
+        // The consumer is the row's own scope, never its `consumerRef`: the
+        // delivered destination is the Guest, not the Provider.
+        assert_eq!(
+            relationship.execution_ref().to_canonical_string(),
+            "Guest/gateway"
+        );
+        assert_eq!(
+            relationship.operations(),
+            [
+                CredentialOperation::AcquireToken,
+                CredentialOperation::SignChallenge,
+            ]
+        );
+        assert_eq!(relationship.lifetime_ms(), 600_000);
+        assert_eq!(first.generation, 1, "the first commit creates the row");
+
+        // A second pass over the unchanged row re-derives the same identity and
+        // commits nothing new: no second row, and no generation advance.
+        let mut ctx = context(declared.clone(), Arc::clone(&manager));
+        driver(Arc::clone(&effects))
+            .reconcile(&mut ctx)
+            .await
+            .expect("second pass");
+        let after = committed_bindings(&manager);
+        assert_eq!(after.len(), 1, "one row, not one per pass");
+        assert_eq!(after[0], *first, "the committed row is untouched");
+        assert_eq!(
+            children_of_type(manager.ensured(), CREDENTIAL_BINDING_TYPE_NAME)
+                .iter()
+                .map(|child| child.name.clone())
+                .collect::<Vec<_>>(),
+            vec![first.key.name.clone(); 2],
+            "the pass re-ensured the same identity both times"
+        );
+
+        // The parent stops declaring the relationship: its only remaining
+        // operation establishes no delivery session, so the derived set is
+        // empty and the committed row is retired rather than left behind.
+        let withdrawn = delivering_row(
+            SECRET_SERVICE_PROVIDER,
+            "Guest/gateway",
+            &["revoke-token"],
+            600_000,
+        );
+        let mut ctx = context(withdrawn, Arc::clone(&manager));
+        driver(Arc::clone(&effects))
+            .reconcile(&mut ctx)
+            .await
+            .expect("nothing left to derive");
+        let retired = committed_bindings(&manager);
+        assert_eq!(retired.len(), 1, "the committed row is still owned here");
+        assert!(
+            retired[0].deleting,
+            "an undeclared relationship is retired, not left live"
+        );
+        assert!(
+            children_of_type(manager.ensured(), CREDENTIAL_BINDING_TYPE_NAME)
+                .iter()
+                .all(|child| child.spec == first.spec),
+            "no second identity was minted beside the retired one"
+        );
+    }
+
+    /// A narrowing that keeps the same relationship updates the one row in
+    /// place: the identity is derived from the row's own references, so a
+    /// withdrawn operation or a shorter lease is not a second row beside it.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_narrowed_declaration_updates_the_one_relationship_in_place() {
+        let log = log();
+        let effects = FakeEffects::new(Arc::clone(&log));
+        let manager = RecordingManager::new(Arc::clone(&log));
+        let mut ctx = context(
+            delivering_row(
+                SECRET_SERVICE_PROVIDER,
+                "Guest/gateway",
+                &["acquire-token", "sign-challenge"],
+                600_000,
+            ),
+            Arc::clone(&manager),
+        );
+        driver(Arc::clone(&effects))
+            .reconcile(&mut ctx)
+            .await
+            .expect("first pass");
+        let first = committed_bindings(&manager);
+        assert_eq!(first.len(), 1);
+
+        let mut ctx = context(
+            delivering_row(
+                SECRET_SERVICE_PROVIDER,
+                "Guest/gateway",
+                &["acquire-token"],
+                60_000,
+            ),
+            Arc::clone(&manager),
+        );
+        driver(Arc::clone(&effects))
+            .reconcile(&mut ctx)
+            .await
+            .expect("narrowed pass");
+        let narrowed = committed_bindings(&manager);
+        assert_eq!(narrowed.len(), 1, "the same relationship, not a second");
+        assert_eq!(narrowed[0].key.name, first[0].key.name);
+        assert_eq!(narrowed[0].generation, 2, "the row moved forward");
+        let relationship = committed_row(&narrowed[0]);
+        assert_eq!(relationship.operations(), [CredentialOperation::AcquireToken]);
+        assert_eq!(relationship.lifetime_ms(), 60_000);
+    }
+
+    /// With the source's own lease ceiling admitting no lifetime the row
+    /// contract can express, nothing is committed and the pass refuses
+    /// terminally rather than widening the ceiling to fit.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_lease_ceiling_within_no_representable_lifetime_commits_nothing() {
+        let log = log();
+        let effects = FakeEffects::new(Arc::clone(&log));
+        let manager = RecordingManager::new(Arc::clone(&log));
+        let mut ctx = context(
+            delivering_row(
+                SECRET_SERVICE_PROVIDER,
+                "Guest/gateway",
+                &["acquire-token"],
+                500,
+            ),
+            Arc::clone(&manager),
+        );
+        let error = driver(Arc::clone(&effects))
+            .reconcile(&mut ctx)
+            .await
+            .expect_err("no representable lifetime");
+        assert_eq!(error.to_string(), "credential-binding-refused");
+        assert!(
+            matches!(
+                driver(Arc::clone(&effects)).classify_error(&error).class(),
+                FailureClass::Terminal
+            ),
+            "a lease ceiling this row cannot express never converges by retrying"
+        );
+        assert!(
+            children_of_type(manager.ensured(), CREDENTIAL_BINDING_TYPE_NAME).is_empty(),
+            "a refused relationship commits no row"
+        );
+        assert!(committed_bindings(&manager).is_empty());
     }
 }

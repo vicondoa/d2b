@@ -36,11 +36,13 @@ use d2b_provider_credential::test_support::{
     RecordingRuntime, RecordingSession, log, recording_facets,
 };
 use d2b_provider_credential::{
-    CREDENTIAL_DELIVERY_SLOT, CredentialBindingAdmission, CredentialBindingDriverArgs,
-    CredentialBindingDriverStatus, CredentialDeliveryAuthority, CredentialDeliveryEvidence,
-    CredentialLeaseFacts, CredentialSourcePolicy, UndeliveredReason, canonical_binding_rows,
-    credential_binding_descriptor, credential_binding_row_name, credential_binding_spec_decoder,
-    credential_binding_support, credential_source_decision, delivery_operation,
+    CREDENTIAL_DELIVERY_SLOT, CanonicalCredentialBinding, CredentialBindingAdmission,
+    CredentialBindingCommitRefusal, CredentialBindingDriverArgs, CredentialBindingDriverStatus,
+    CredentialDeliveryAuthority, CredentialDeliveryEvidence, CredentialLeaseFacts,
+    CredentialSourcePolicy, UndeliveredReason, admitted_binding_rows, admitted_delivery_row,
+    canonical_binding_rows, credential_binding_descriptor, credential_binding_row_name,
+    credential_binding_spec_decoder, credential_binding_support, credential_source_decision,
+    delivery_operation,
 };
 use d2b_provider_credential::{CredentialRevocationOutcome, CredentialRevocationReport};
 use d2b_provider_toolkit::testing::fakes::{RecordingManagerEndpoint, RecordingRequeue};
@@ -1410,6 +1412,279 @@ fn a_lease_ceiling_within_no_representable_lifetime_is_refused() {
         )
         .expect_err("a ceiling below the contract's own floor commits no row"),
         BindingContractError::OutOfRange,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The commit-time admission check (U37)
+// ---------------------------------------------------------------------------
+//
+// A derived row is a candidate, not an authority: the pass that commits it
+// holds it to the source row's own committed policy first. The rows below are
+// built by hand rather than derived, because the property is that a row
+// arriving from anywhere is held to those bounds - a derivation that only
+// ever produced admitted rows would prove nothing about the check.
+
+/// One candidate row, committed under the name its own identities derive
+/// unless `name` overrides it.
+fn candidate_row(
+    credential_ref: &str,
+    execution_ref: &str,
+    operations: &[CredentialOperation],
+    lifetime_ms: u64,
+    name: Option<&str>,
+) -> CanonicalCredentialBinding {
+    let row = CredentialBindingSpec::new(
+        resource(credential_ref),
+        resource(execution_ref),
+        operations.to_vec(),
+        lifetime_ms,
+        d2b_contracts_resource::v3::execution_policy::BoundedToken::parse(CREDENTIAL_DELIVERY_SLOT)
+            .expect("slot"),
+        credential_source_decision(),
+    )
+    .expect("candidate row");
+    CanonicalCredentialBinding {
+        name: name
+            .map(str::to_owned)
+            .unwrap_or_else(|| credential_binding_row_name(&row).expect("derived name").as_str().to_owned()),
+        spec: canonical_json_bytes(&row).expect("canonical bytes"),
+    }
+}
+
+/// The source's admitted operation set is the ceiling: a row that delivers an
+/// operation the source did not grant is refused, and the refusal names it.
+#[test]
+fn a_row_wider_than_the_admitted_operations_is_refused() {
+    let spec = credential_spec_scoped(
+        Some(GUEST),
+        &[OperationClass::AcquireToken],
+        600_000,
+    );
+    assert_eq!(
+        admitted_delivery_row(
+            &resource(CREDENTIAL),
+            &spec,
+            &candidate_row(
+                CREDENTIAL,
+                GUEST,
+                &[CredentialOperation::AcquireToken, CredentialOperation::SignChallenge],
+                600_000,
+                None,
+            ),
+        )
+        .expect_err("a withdrawn operation is refused"),
+        CredentialBindingCommitRefusal::OperationNotAdmitted(
+            CredentialOperation::SignChallenge
+        )
+    );
+    // The same row narrowed to what the source admits is admitted, so the
+    // refusal is about the bound and not about the shape.
+    assert_eq!(
+        admitted_delivery_row(
+            &resource(CREDENTIAL),
+            &spec,
+            &candidate_row(
+                CREDENTIAL,
+                GUEST,
+                &[CredentialOperation::AcquireToken],
+                600_000,
+                None,
+            ),
+        ),
+        Ok(())
+    );
+}
+
+/// The source's own lease ceiling is the ceiling: a row asking for a longer
+/// lease is refused, and the refusal carries both bounds.
+#[test]
+fn a_row_above_the_lease_ceiling_is_refused() {
+    let spec = credential_spec_scoped(
+        Some(GUEST),
+        &[OperationClass::AcquireToken],
+        60_000,
+    );
+    assert_eq!(
+        admitted_delivery_row(
+            &resource(CREDENTIAL),
+            &spec,
+            &candidate_row(
+                CREDENTIAL,
+                GUEST,
+                &[CredentialOperation::AcquireToken],
+                600_000,
+                None,
+            ),
+        )
+        .expect_err("a lease above the source's own ceiling is refused"),
+        CredentialBindingCommitRefusal::LifetimeAboveCeiling {
+            lifetime_ms: 600_000,
+            ceiling_ms: 60_000,
+        }
+    );
+}
+
+/// The consumer is the source row's own `scope.executionRef`. A row naming
+/// the Provider the delivery is minted against instead - the row's
+/// `consumerRef` - would send the material to the wrong destination, so it is
+/// refused before it is committed.
+#[test]
+fn a_row_delivering_to_something_the_scope_does_not_admit_is_refused() {
+    let spec = credential_spec_scoped(
+        Some(GUEST),
+        &[OperationClass::AcquireToken],
+        600_000,
+    );
+    assert_eq!(
+        admitted_delivery_row(
+            &resource(CREDENTIAL),
+            &spec,
+            &candidate_row(
+                CREDENTIAL,
+                "Process/web",
+                &[CredentialOperation::AcquireToken],
+                600_000,
+                None,
+            ),
+        )
+        .expect_err("an unscoped destination is refused"),
+        CredentialBindingCommitRefusal::ConsumerNotScoped
+    );
+}
+
+/// A row bound to another `Credential`, committed under a name that is not the
+/// one its identities derive, or written as bytes that are not the family's
+/// row contract at all, is refused on each of those grounds.
+#[test]
+fn a_row_that_is_not_this_relationships_own_bytes_is_refused() {
+    let spec = credential_spec_scoped(
+        Some(GUEST),
+        &[OperationClass::AcquireToken],
+        600_000,
+    );
+    assert_eq!(
+        admitted_delivery_row(
+            &resource(CREDENTIAL),
+            &spec,
+            &candidate_row(
+                "Credential/other",
+                GUEST,
+                &[CredentialOperation::AcquireToken],
+                600_000,
+                None,
+            ),
+        )
+        .expect_err("another source's relationship"),
+        CredentialBindingCommitRefusal::SourceMismatch
+    );
+    assert_eq!(
+        admitted_delivery_row(
+            &resource(CREDENTIAL),
+            &spec,
+            &candidate_row(
+                CREDENTIAL,
+                GUEST,
+                &[CredentialOperation::AcquireToken],
+                600_000,
+                Some("cred-binding-not-the-derived-name"),
+            ),
+        )
+        .expect_err("a name this source did not derive"),
+        CredentialBindingCommitRefusal::RowNameNotDerived
+    );
+    assert_eq!(
+        admitted_delivery_row(
+            &resource(CREDENTIAL),
+            &spec,
+            &CanonicalCredentialBinding {
+                name: "cred-binding-whatever".to_owned(),
+                spec: b"{}".to_vec(),
+            },
+        )
+        .expect_err("bytes that are not the row contract"),
+        CredentialBindingCommitRefusal::RowContract(BindingContractError::InvalidField)
+    );
+}
+
+/// Every refusal names which bound refused, so a caller reports the refusal
+/// rather than a generic "binding failed".
+#[test]
+fn every_commit_refusal_names_its_bound() {
+    let spec = credential_spec_scoped(
+        Some(GUEST),
+        &[OperationClass::AcquireToken],
+        60_000,
+    );
+    let refusals = [
+        admitted_delivery_row(
+            &resource(CREDENTIAL),
+            &spec,
+            &candidate_row(
+                CREDENTIAL,
+                GUEST,
+                &[CredentialOperation::AcquireToken, CredentialOperation::SignChallenge],
+                60_000,
+                None,
+            ),
+        )
+        .expect_err("operations"),
+        admitted_delivery_row(
+            &resource(CREDENTIAL),
+            &spec,
+            &candidate_row(
+                CREDENTIAL,
+                GUEST,
+                &[CredentialOperation::AcquireToken],
+                600_000,
+                None,
+            ),
+        )
+        .expect_err("lifetime"),
+        admitted_delivery_row(
+            &resource(CREDENTIAL),
+            &spec,
+            &candidate_row(
+                CREDENTIAL,
+                "Process/web",
+                &[CredentialOperation::AcquireToken],
+                60_000,
+                None,
+            ),
+        )
+        .expect_err("destination"),
+    ];
+    assert_eq!(
+        refusals.map(|refusal| refusal.code()),
+        [
+            "credential-binding-operation-not-admitted",
+            "credential-binding-lifetime-above-ceiling",
+            "credential-binding-consumer-not-scoped",
+        ]
+    );
+}
+
+/// The pass commits what the family derives: the rows a committed `Credential`
+/// row declares are the rows that survive the check, unchanged.
+#[test]
+fn the_admitted_rows_are_exactly_the_derived_rows() {
+    let spec = credential_spec_scoped(
+        Some(GUEST),
+        &[OperationClass::AcquireToken, OperationClass::SignChallenge],
+        600_000,
+    );
+    let derived = canonical_binding_rows(&resource(CREDENTIAL), &spec).expect("derived rows");
+    assert_eq!(
+        admitted_binding_rows(&resource(CREDENTIAL), &spec).expect("admitted rows"),
+        derived
+    );
+    assert!(
+        admitted_binding_rows(
+            &resource(CREDENTIAL),
+            &credential_spec_scoped(Some(GUEST), &[OperationClass::AcquireToken], 500),
+        )
+        .is_err(),
+        "a derivation the source's own ceiling cannot express admits nothing"
     );
 }
 

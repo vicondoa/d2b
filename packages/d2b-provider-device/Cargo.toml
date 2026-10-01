@@ -31,6 +31,7 @@ parking_lot = "0.12"
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["sync"] }
+tracing = "0.1"
 
 [[test]]
 name = "device_family"
@@ -40,6 +41,11 @@ required-features = ["test-support"]
 [[test]]
 name = "device_binding"
 path = "tests/device_binding.rs"
+
+[[test]]
+name = "binding_production"
+path = "tests/binding_production.rs"
+required-features = ["test-support"]
 
 [[test]]
 name = "device_family_integration"

@@ -141,6 +141,12 @@ pub struct BundleResolver {
     /// beside the intents they minted so a declared read-write binding can be
     /// re-resolved against the storage contract the broker attaches.
     device_worker_templates: BTreeMap<String, Vec<ProcessTemplateBinding>>,
+    /// The numeric principal each template-bound row runs as, by declaring
+    /// Zone and by declared row reference. Minted from the same bindings
+    /// `runner_intents` is minted from, so a broker effect that resolves a
+    /// committed consumer's principal resolves the number the launch path
+    /// applies to that row rather than a second derivation of it.
+    consumer_principals: BTreeMap<String, BTreeMap<String, ConsumerPrincipal>>,
     /// The template-derived intents whose declared read-write grant no
     /// attached storage contract resolves, held out of `runner_intents` so
     /// the worker is refused rather than launched with an empty grant, and
@@ -597,6 +603,20 @@ impl ResolvedRunnerIntent {
             accepts_launch_args: false,
         })
     }
+}
+
+/// The numeric principal one committed Zone consumer row runs as.
+///
+/// Both numbers come from [`template_principal_id`], the same derivation the
+/// launch path applies to the row, so a broker effect that names this
+/// principal and a broker effect that launches the row address one host
+/// account rather than two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConsumerPrincipal {
+    /// The host uid the consumer row runs as.
+    pub uid: u32,
+    /// The host gid the consumer row runs as.
+    pub gid: u32,
 }
 
 /// Resolve the legacy placement default for one trusted VM-DAG role.
@@ -1643,6 +1663,7 @@ impl BundleResolver {
             &provider_controller_templates,
         ));
         let device_worker_templates = device_worker_templates_of(&provider_controller_templates);
+        let consumer_principals = consumer_principals_of(&provider_controller_templates);
         // A Device worker's intent id is `(execution target, declared row
         // name)`. Never displace another trusted intent that already claims
         // it: a row whose identity collides with a legacy runner or
@@ -1695,6 +1716,7 @@ impl BundleResolver {
             usbip_bind_intents,
             runner_intents,
             device_worker_templates,
+            consumer_principals,
             unresolved_device_worker_intents: BTreeMap::new(),
             store_view_intents,
         };
@@ -1968,9 +1990,7 @@ impl BundleResolver {
 
     /// Check that a supplied Zone UID is present in a verified private bundle.
     pub fn has_zone_uid(&self, zone_uid: &d2b_contracts_resource::v3::ResourceUid) -> bool {
-        self.parsed_zone_resources
-            .values()
-            .any(|bundle| bundle.zone_uid.as_ref() == Some(zone_uid))
+        self.zone_name_for_uid(zone_uid).is_some()
     }
 
     /// Return the immutable UID bound into one verified Zone resource bundle.
@@ -1978,6 +1998,22 @@ impl BundleResolver {
         self.parsed_zone_resources
             .get(zone.as_str())
             .and_then(|bundle| bundle.zone_uid.clone())
+    }
+
+    /// Return the Zone name whose verified bundle carries exactly this Zone
+    /// self-resource uid.
+    ///
+    /// The inverse of [`Self::zone_uid`]. A Zone uid is the durable identity a
+    /// broker request carries, while every table in this resolver is keyed by
+    /// Zone name, so a request that names a Zone by uid reaches its own Zone
+    /// tables through this lookup - and through no other, so a request naming a
+    /// Zone this host has no verified bundle for resolves to nothing rather
+    /// than to another Zone's rows.
+    pub fn zone_name_for_uid(&self, zone_uid: &ResourceUid) -> Option<&str> {
+        self.parsed_zone_resources
+            .values()
+            .find(|bundle| bundle.zone_uid.as_ref() == Some(zone_uid))
+            .map(|bundle| bundle.zone.as_str())
     }
 
     /// Return the verified broker-owned storage row for one Zone.
@@ -2666,6 +2702,50 @@ impl BundleResolver {
         });
         let first = matches.next()?;
         matches.next().is_none().then_some(first)
+    }
+
+    /// Resolve the numeric principal one committed Zone consumer row runs as,
+    /// from the committed consumer reference alone.
+    ///
+    /// This is the resolution surface a privileged broker effect needs and
+    /// every other runner-intent lookup leaves out: the other lookups take the
+    /// row's `executionRef`, execution domain, `userRef`, and template as
+    /// arguments, so a caller that held only a consumer reference had to supply
+    /// those four facts itself. Here they are read off the row the verified Zone
+    /// bundle declares, so the caller contributes a reference and nothing else.
+    ///
+    /// The lookup is exact on both axes:
+    ///
+    /// - **Zone**: the binding must come from `zone`'s own bundle. A consumer
+    ///   reference is not globally unique - two Zones each declare
+    ///   `Process/shell` - and the principal is derived from identities that
+    ///   include the Zone-local owner, so the same reference in another Zone is
+    ///   a different consumer and must never answer for this one.
+    /// - **Row**: the binding must name exactly `consumer_ref`, and a Zone that
+    ///   declared the same row twice resolves to nothing rather than picking one.
+    ///
+    /// `None` is the answer for a row this host's verified bundle does not
+    /// declare, for a reference that is not a `Process` / `EphemeralProcess`
+    /// row, and for a Zone this host has no verified bundle for. A row
+    /// committed through the Resource API rather than the bundle lands here
+    /// too, exactly as it does for [`Self::find_device_worker_intent`]: there is
+    /// no trusted executable binding to derive a principal from, and the
+    /// broker must refuse rather than invent one.
+    pub fn consumer_principal(
+        &self,
+        zone: &str,
+        consumer_ref: &ResourceRef,
+    ) -> Option<ConsumerPrincipal> {
+        if !matches!(
+            consumer_ref.resource_type().as_str(),
+            "Process" | "EphemeralProcess"
+        ) {
+            return None;
+        }
+        self.consumer_principals
+            .get(zone)?
+            .get(&consumer_ref.to_canonical_string())
+            .copied()
     }
 
     /// Resolve a QEMU media source by VM + opaque ref.
@@ -5100,6 +5180,41 @@ impl TemplateIntentShape {
     }
 }
 
+/// The numeric principal one template-bound Process row runs as: a pure
+/// function of the three identities the row commits, never of anything a
+/// caller names.
+///
+/// `<ownerRef>:<rowRef>:<executionRef>` is hashed and folded into the
+/// `50_000..16_777_215` band, so two rows that share a template on one
+/// execution target still get different numbers, and a row that changes its
+/// owner, its own key, or its execution target gets a different one. The host
+/// layer mirrors this derivation in `nixos-modules/lib.nix`
+/// (`deviceWorkerPrincipalId`) and provisions the matching
+/// `d2b-<zone>-<device>-<row>` account with the resulting id, so a drift
+/// between the two sides does not go unnoticed: every ACL the row was granted
+/// by account name then fails to open for the real uid.
+///
+/// This is the single derivation both [`mint_template_intent`] and
+/// [`BundleResolver::consumer_principal`] read, so the principal a launch is
+/// given and the principal a broker effect resolves for the same row can
+/// never disagree.
+fn template_principal_id(binding: &ProcessTemplateBinding) -> u32 {
+    let principal = format!(
+        "{}:{}:{}",
+        binding.owner_ref().to_canonical_string(),
+        binding.process_ref().to_canonical_string(),
+        binding.execution_ref().to_canonical_string()
+    );
+    let profile_hash = sha2::Sha256::digest(principal.as_bytes());
+    50_000_u32.saturating_add(
+        u32::from_be_bytes(
+            profile_hash[..4]
+                .try_into()
+                .expect("SHA-256 always has four-byte prefixes"),
+        ) & 0x00ff_ffff,
+    )
+}
+
 /// Mint one trusted runner intent from a private template binding.
 fn mint_template_intent(
     binding: &ProcessTemplateBinding,
@@ -5109,20 +5224,7 @@ fn mint_template_intent(
     let role_id = binding.process_ref().name().as_str().to_owned();
     let cgroup_subtree = format!("d2b.slice/{vm_name}/{role_id}");
     let profile_id = binding.template().as_str().to_owned();
-    let principal = format!(
-        "{}:{}:{}",
-        binding.owner_ref().to_canonical_string(),
-        binding.process_ref().to_canonical_string(),
-        binding.execution_ref().to_canonical_string()
-    );
-    let profile_hash = sha2::Sha256::digest(principal.as_bytes());
-    let principal_id = 50_000_u32.saturating_add(
-        u32::from_be_bytes(
-            profile_hash[..4]
-                .try_into()
-                .expect("SHA-256 always has four-byte prefixes"),
-        ) & 0x00ff_ffff,
-    );
+    let principal_id = template_principal_id(binding);
     let (role, seccomp_policy_ref, namespaces, user_namespace, device_binds, umask) = match shape {
         TemplateIntentShape::ProviderController { serving_worker } => (
             ProcessRole::ProviderController,
@@ -5258,6 +5360,42 @@ fn device_worker_templates_of(
                     .cloned()
                     .collect(),
             )
+        })
+        .collect()
+}
+
+/// The principal each template-bound row runs as, indexed by declaring Zone
+/// and declared row reference so a committed consumer reference resolves
+/// without any other fact.
+///
+/// Every declared binding gets an entry, whatever role it launches as: a
+/// broker effect may touch host state on behalf of a Provider controller or a
+/// serving worker as readily as on behalf of a Device worker, and all three
+/// run as the number [`template_principal_id`] derives. A Zone that declared
+/// one row twice gets no entry for that row, because there is no single number
+/// that row runs as and the lookup must refuse rather than pick one.
+fn consumer_principals_of(
+    templates: &BTreeMap<String, Vec<ProcessTemplateBinding>>,
+) -> BTreeMap<String, BTreeMap<String, ConsumerPrincipal>> {
+    templates
+        .iter()
+        .map(|(zone, bindings)| {
+            let mut principals = BTreeMap::new();
+            let mut ambiguous = BTreeSet::new();
+            for binding in bindings {
+                let uid = template_principal_id(binding);
+                let row = binding.process_ref().to_canonical_string();
+                if principals
+                    .insert(row.clone(), ConsumerPrincipal { uid, gid: uid })
+                    .is_some()
+                {
+                    ambiguous.insert(row);
+                }
+            }
+            for row in &ambiguous {
+                principals.remove(row);
+            }
+            (zone.clone(), principals)
         })
         .collect()
 }

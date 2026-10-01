@@ -18,6 +18,13 @@
 //!   over the anchored adapters ([`d2b_provider_volume_local::adapter`])
 //!   and its own trusted root resolver, and the durable layout probe
 //!   (`has_layout`) the driver's recover reads.
+//!
+//! - [`VolumeRuntime::admit_bindings`] is the second seam: the canonical
+//!   binding admission (U14, KTD2/KTD3) needs authorization evidence and a
+//!   freshness fence that only the daemon's authority path holds, so the
+//!   runtime supplies the admitted set and the driver commits it. The
+//!   default refuses rather than minting either fact.
+//!
 //! - the anchored-fd filesystem implementation itself lives in
 //!   `d2b-provider-volume-local` beside the effect ports it implements, so
 //!   the daemon holds no volume-local mutation code.
@@ -25,7 +32,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, volume::VolumeSpec};
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneId, volume::VolumeSpec};
+use d2b_provider_volume_local::AdmittedVolumeBinding;
 
 /// The daemon-supplied facet set the provider-owned Volume effects are
 /// built from (U7).
@@ -39,6 +47,136 @@ pub struct VolumeEffectFacets {
     /// layout state.
     pub runtime: Arc<dyn VolumeRuntime>,
 }
+
+/// One Volume as the canonical binding admission reads it (U14, KTD2/KTD3).
+///
+/// This is the whole of what the source owns about itself: the Zone the
+/// relationships belong to, the exact source reference and store identity
+/// the KTD3 key is derived from, and the declared spec the source's own
+/// policy - declared views, granted rights, one writer - is decided
+/// against.
+#[derive(Clone)]
+pub struct VolumeBindingAdmission<'a> {
+    zone: ZoneId,
+    volume_ref: ResourceRef,
+    volume_uid: ResourceUid,
+    spec: &'a VolumeSpec,
+}
+
+impl<'a> VolumeBindingAdmission<'a> {
+    /// Bind one Volume's Zone, identity, and declared spec.
+    pub const fn new(
+        zone: ZoneId,
+        volume_ref: ResourceRef,
+        volume_uid: ResourceUid,
+        spec: &'a VolumeSpec,
+    ) -> Self {
+        Self { zone, volume_ref, volume_uid, spec }
+    }
+
+    /// The Zone the relationships belong to.
+    pub const fn zone(&self) -> &ZoneId {
+        &self.zone
+    }
+
+    /// The exact source reference.
+    pub const fn volume_ref(&self) -> &ResourceRef {
+        &self.volume_ref
+    }
+
+    /// The source's store-assigned identity.
+    pub const fn volume_uid(&self) -> &ResourceUid {
+        &self.volume_uid
+    }
+
+    /// The declared spec the source's own admission policy reads.
+    pub const fn spec(&self) -> &'a VolumeSpec {
+        self.spec
+    }
+}
+
+impl core::fmt::Debug for VolumeBindingAdmission<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("VolumeBindingAdmission")
+            .field("zone", &self.zone)
+            .field("volume_ref", &self.volume_ref)
+            .finish_non_exhaustive()
+    }
+}
+
+/// One admission fact the canonical binding path needs and the Volume
+/// driver's effect seam does not carry.
+///
+/// Both facts come from the daemon's authority path, not from the provider:
+/// a driver holds the row it reconciles, never the accepted graph or the
+/// broker's observed state, so neither is derivable here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindingAdmissionEvidence {
+    /// The grant the Role/RoleBinding evaluation produced for the
+    /// relationship's own row, read from the prior accepted graph. A
+    /// well-formed request is not authorization, and a candidate carrying
+    /// its own grant authorizes nothing.
+    Authorization,
+    /// The store incarnation plus the dependency revisions and digests the
+    /// admission is fenced against. A `FreshnessTuple` cannot be assembled
+    /// without them: the driver observes its own row, not the observed
+    /// revisions of the source and the consumer.
+    FreshnessFence,
+}
+
+impl BindingAdmissionEvidence {
+    /// The stable label the refusal renders.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Authorization => "the role authorization the accepted graph carries",
+            Self::FreshnessFence => {
+                "the store incarnation and dependency revisions the admission is fenced against"
+            }
+        }
+    }
+}
+
+impl core::fmt::Display for BindingAdmissionEvidence {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// Why a pass admitted no canonical relationship (U14).
+///
+/// The named facts are absent, which is not a pending approval: the source
+/// may not commit a row it cannot fence, so the pass commits nothing and
+/// retires nothing. An absent grant is never evidence that a relationship
+/// ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BindingEvidenceAbsent {
+    missing: Vec<BindingAdmissionEvidence>,
+}
+
+impl BindingEvidenceAbsent {
+    /// Name the facts the seam did not carry.
+    pub fn new(missing: Vec<BindingAdmissionEvidence>) -> Self {
+        Self { missing }
+    }
+
+    /// Every fact this seam was asked for and did not carry.
+    pub fn missing(&self) -> &[BindingAdmissionEvidence] {
+        &self.missing
+    }
+}
+
+impl core::fmt::Display for BindingEvidenceAbsent {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("no binding admission evidence")?;
+        for evidence in &self.missing {
+            write!(formatter, "; missing {evidence}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for BindingEvidenceAbsent {}
 
 /// The daemon-hosted Volume runtime one zone's effects run over (U7).
 ///
@@ -72,4 +210,33 @@ pub trait VolumeRuntime: Send + Sync + 'static {
     /// Discover existing volume-local layout state for this exact uid
     /// (recover probe).
     fn has_layout(&self, volume_uid: &ResourceUid) -> bool;
+
+    /// Admit the canonical `VolumeBindingRequest` relationships declared
+    /// against this Volume and report exactly the relationships the source
+    /// may commit a row for (U14, KTD2/KTD3).
+    ///
+    /// The admitted set is the output of the one source-side admission path
+    /// ([`d2b_provider_volume_local::VolumeLocalController::admit_bindings`]),
+    /// so the source's own policy - the declared view, the rights it grants,
+    /// the single writer, the realization's declared support - is decided
+    /// once, in the crate that owns it, and the driver commits exactly what
+    /// that path admitted.
+    ///
+    /// The default refuses. A runtime that was not given the authority path
+    /// cannot derive [`BindingAdmissionEvidence::Authorization`] or
+    /// [`BindingAdmissionEvidence::FreshnessFence`], and it must not
+    /// substitute a grant of its own: a row committed without them is a
+    /// relationship nothing fenced. Refusing keeps the producing half
+    /// closed rather than quietly un-fenced - the same shape
+    /// [`d2b_resource_runtime::context::ManagerEndpoint::ensure_source_owned_binding`]
+    /// takes for an endpoint that carries no source-controller authority.
+    async fn admit_bindings(
+        &self,
+        _source: &VolumeBindingAdmission<'_>,
+    ) -> Result<Vec<AdmittedVolumeBinding>, BindingEvidenceAbsent> {
+        Err(BindingEvidenceAbsent::new(vec![
+            BindingAdmissionEvidence::Authorization,
+            BindingAdmissionEvidence::FreshnessFence,
+        ]))
+    }
 }

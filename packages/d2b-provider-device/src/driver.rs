@@ -50,12 +50,13 @@ use std::time::Duration;
 use async_trait::async_trait;
 use d2b_contracts_resource::v3::{
     ControllerGeneration, DeviceEffectOperation, DeviceFunction, DeviceSpec, InventorySelector,
-    ResourceRef, ResourceUid, ZoneId,
+    ResourceGeneration, ResourceRef, ResourceUid, ZoneId,
 };
 use d2b_provider_toolkit::{
-    ProviderRow, SharedProviderDeclarationError, SharedProviderDriverArgs,
-    SharedProviderDriverFactory, SharedProviderEffectError, SharedProviderEffectOutcome,
-    SharedProviderEffectRequest, SharedProviderFamily, SharedProviderFinalize, owner_ref,
+    ContextChildSurface, ProviderRow, SharedProviderDeclarationError, SharedProviderDriverArgs,
+    SharedProviderDriverFactory, SharedProviderDriverStatus, SharedProviderEffectError,
+    SharedProviderEffectOutcome, SharedProviderEffectRequest, SharedProviderFamily,
+    SharedProviderFinalize, decode_metadata, owner_ref, resource_uid,
     shared_provider_spec_decoder,
 };
 use d2b_resource_runtime::context::ResourceContext;
@@ -242,7 +243,99 @@ pub struct DeviceDriverArgs {
 
 /// The family's declarations and typed Provider effect.
 struct DeviceFamily {
+    /// The Zone this family's rows live in.
+    zone: ZoneId,
     effects: Arc<dyn DeviceDriverEffects>,
+    /// The binding seam both halves share: the producing half reads the
+    /// trusted inventory and the declared relationships through it, the
+    /// serving half reads the same inventory. One value answers both, so the
+    /// capability a source admits is the capability the row is served against.
+    bindings: Arc<dyn crate::binding::DeviceBindingEffects>,
+}
+
+impl DeviceFamily {
+    /// Reconcile the `DeviceBinding` rows this committed `Device` row owns.
+    ///
+    /// This is the family's producing half, and it runs inside the reconcile
+    /// verb the row is already driven by rather than in a pass of its own.
+    /// Its commit and its retirement are both scoped to the one type this
+    /// source owns relationships in, so the Zone-declared worker rows and the
+    /// effect-created rows the trait's `desired_children` hook declines to
+    /// diff are never touched here.
+    async fn reconcile_binding_children(
+        &self,
+        ctx: &mut ResourceContext,
+        component: DeviceComponent,
+        spec: &Value,
+    ) -> Result<(), SharedProviderDeclarationError> {
+        let target = ctx.key().clone();
+        let uid = resource_uid(ctx.uid())
+            .map_err(|_| SharedProviderDeclarationError::SpecInvalid)?;
+        let generation = ResourceGeneration::new(ctx.generation())
+            .map_err(|_| SharedProviderDeclarationError::SpecInvalid)?;
+        let metadata = decode_metadata(ctx.metadata())
+            .map_err(|_| SharedProviderDeclarationError::SpecInvalid)?;
+        let status = ctx
+            .status::<SharedProviderDriverStatus>()
+            .and_then(|status| status.resource.clone());
+        let owned = ctx
+            .children()
+            .await
+            .map_err(|_| SharedProviderDeclarationError::ChildMutation)?;
+
+        // The child surface borrows the context for the pass, and the owned
+        // set is already read, so nothing else needs the context while it is
+        // held.
+        let surface = ContextChildSurface::new(ctx);
+        let request = SharedProviderEffectRequest {
+            zone: self.zone.clone(),
+            operation_id: crate::binding::binding_operation_id(target.name.as_str()),
+            target,
+            uid,
+            generation,
+            spec,
+            metadata,
+            status,
+            children: &surface,
+        };
+        // The trusted inventory is an observation: a Zone that cannot resolve
+        // one admits nothing and retires nothing, so the pass fails retryably
+        // rather than reading an absent observation as an absence.
+        let inventory = self
+            .bindings
+            .device_inventory(&request)
+            .await
+            .map_err(|_| SharedProviderDeclarationError::ChildMutation)?;
+        let declared = self.bindings.declared_bindings(&request).await;
+        let production = crate::binding::produce_binding_rows(
+            &request,
+            component,
+            &inventory,
+            &declared,
+            &owned,
+        )
+        .await
+        .map_err(|error| match error {
+            crate::binding::BindingProductionError::ProviderRefused => {
+                SharedProviderDeclarationError::SpecInvalid
+            }
+            crate::binding::BindingProductionError::ChildMutation => {
+                SharedProviderDeclarationError::ChildMutation
+            }
+        })?;
+        if let Some(refusal) = production.refusal() {
+            // Named, not approximated: a source that cannot show its
+            // admission evidence commits nothing and says which fact was
+            // missing, so the gap is visible instead of silently producing an
+            // empty desired set.
+            tracing::warn!(
+                device = %request.target,
+                refusal = %refusal,
+                "the Device source committed no device binding row",
+            );
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -256,13 +349,21 @@ impl SharedProviderFamily for DeviceFamily {
 
     async fn desired_children(
         &self,
-        _ctx: &mut ResourceContext,
-        _component: DeviceComponent,
-        _spec: &Value,
+        ctx: &mut ResourceContext,
+        component: DeviceComponent,
+        spec: &Value,
     ) -> Result<Option<Vec<d2b_resource_runtime::context::ChildEnsure>>, SharedProviderDeclarationError>
     {
         // The Device-owned worker rows belong to the Zone bundle and the
         // controller-created rows to the family effect; see the module header.
+        // Diffing those against any desired set would retire them, so this
+        // hook keeps declining the shared diff.
+        //
+        // The `DeviceBinding` rows this source DOES own are reconciled here
+        // instead, scoped to that one type: the producing pass commits and
+        // retires through the manager's child surface and touches nothing
+        // else the row owns.
+        self.reconcile_binding_children(ctx, component, spec).await?;
         Ok(None)
     }
 
@@ -419,9 +520,23 @@ const DEVICE_READS: &[WellKnownType] = &[
 ///
 /// `Device` is `BUILTIN | STARTUP | RUNTIME` (the RUNTIME bit is present):
 /// hardware presence is host-dependent, so the driver may arrive late. The
-/// type is not exportable, and the Device rows create no children through
-/// this declaration - their worker rows are declared by the Zone bundle.
+/// type is not exportable, and the Device rows' worker rows are declared by
+/// the Zone bundle rather than here.
+///
+/// The `DeviceBinding` rows the reconcile pass mints are declared as
+/// creations only once the child type names the Provider that serves it. It
+/// does not: `DeviceBinding` is served by this same crate's binding driver,
+/// which selects no Provider of its own, so there is no `(child, provider)`
+/// pair to declare. The rows are named from the relationship key and owned by
+/// the `Device` row, and the producing pass only ever adds or removes that
+/// one type.
 pub fn device_descriptor(args: DeviceDriverArgs) -> DriverDescriptor {
+    // One value answers both seams the family holds: the driver's typed
+    // Provider effect, and the binding halves' own read of the trusted
+    // inventory and the declared relationships. Building it from the
+    // daemon-supplied facets keeps the construction site free of any
+    // externally built port (R2).
+    let effects = Arc::new(crate::effects_service::DeviceEffects::new(args.facets));
     DriverDescriptor {
         resource_type: WellKnownType::DEVICE,
         allowed_sources: AllowedSources::BUILTIN
@@ -438,10 +553,12 @@ pub fn device_descriptor(args: DeviceDriverArgs) -> DriverDescriptor {
         decoder: shared_provider_spec_decoder(),
         factory: Arc::new(SharedProviderDriverFactory::new(
             SharedProviderDriverArgs {
-                zone: args.zone,
+                zone: args.zone.clone(),
                 controller_generation: args.controller_generation,
                 family: Arc::new(DeviceFamily {
-                    effects: Arc::new(crate::effects_service::DeviceEffects::new(args.facets)),
+                    zone: args.zone,
+                    effects: effects.clone(),
+                    bindings: effects,
                 }),
             },
         )),

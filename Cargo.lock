@@ -1241,6 +1241,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1910,6 +1911,7 @@ dependencies = [
  "d2b-resource-types",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

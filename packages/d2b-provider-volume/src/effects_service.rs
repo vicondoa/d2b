@@ -26,10 +26,13 @@ use d2b_contracts_resource::v3::{
 use d2b_provider_toolkit::{
     EffectResponse, EffectService, EffectServiceError, EffectServiceFactory, ServiceInvocation,
 };
+use d2b_provider_volume_local::AdmittedVolumeBinding;
 use d2b_resource_types::{ServiceDecl, ServiceMethod};
 
 use crate::driver::VolumeDriverEffects;
-use crate::facets::{VolumeEffectFacets, VolumeRuntime};
+use crate::facets::{
+    BindingEvidenceAbsent, VolumeBindingAdmission, VolumeEffectFacets, VolumeRuntime,
+};
 
 /// The Volume family's declared effects service.
 ///
@@ -145,6 +148,17 @@ impl VolumeDriverEffects for VolumeEffectsService {
 
     fn has_layout(&self, volume_uid: &ResourceUid) -> bool {
         self.runtime.has_layout(volume_uid)
+    }
+
+    /// The canonical binding admission (U14) crosses to the daemon runtime
+    /// unchanged: the admitted set is the daemon's authority path's output,
+    /// and its absence is reported as the same named refusal the facet
+    /// answers with, never substituted here.
+    async fn admit_bindings(
+        &self,
+        source: &VolumeBindingAdmission<'_>,
+    ) -> Result<Vec<AdmittedVolumeBinding>, BindingEvidenceAbsent> {
+        self.runtime.admit_bindings(source).await
     }
 }
 

@@ -31,12 +31,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use d2b_contracts_resource::v3::{
-    BindingContractError, ResourceName, ResourceRef, ResourceSpec,
+    BindingContractError, ResourceName, ResourceRef, ResourceSpec, ZoneId,
     ResourceTypeName as ContractResourceTypeName, ResourceUid,
     volume::VolumeSpec,
 };
 use crate::effects_service::{VOLUME_EFFECTS_SERVICE, VolumeEffectsService};
-use crate::facets::VolumeEffectFacets;
+use crate::facets::{BindingEvidenceAbsent, VolumeBindingAdmission, VolumeEffectFacets};
+use d2b_provider_toolkit::shared_provider::{ContextChildSurface, SharedProviderChildSurface};
 use d2b_provider_volume_local::{
     AdmittedVolumeBinding, canonical_binding_row, desired_binding_intents,
 };
@@ -51,6 +52,7 @@ use d2b_resource_runtime::error::{
     FailureKinds,
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName, StoredDesiredResource};
+use d2b_resource_runtime::relations::DecodedBindingRequest;
 use d2b_resource_types::{
     AllowedSources, CONVERTED_TYPE_VERBS, ChildCreation, ChildCustody, DriverDescriptor,
     WellKnownType,
@@ -173,13 +175,53 @@ impl core::fmt::Display for VolumeDriverError {
 impl std::error::Error for VolumeDriverError {}
 
 /// Typed in-memory status projection (R11: never persisted).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum VolumeDriverStatus {
     /// The layout effect is in flight.
     EnsuringLayout,
     /// Binding children derived; readiness aggregates the child rows this
     /// pass converged (R8/R9: child phases, never a parent-side override).
-    ServingChildren { desired: usize, converged: bool },
+    ServingChildren {
+        /// Every `VolumeBinding` row this pass serves: the attachment-shaped
+        /// children the spec derives plus the canonical relationships the
+        /// admission committed.
+        desired: usize,
+        /// Whether every attachment-shaped child this pass derived is
+        /// present. A canonical row is committed by the pass that derives it,
+        /// so it is converged by construction or that pass failed.
+        converged: bool,
+        /// What the canonical KTD2 path (U14) did on this pass.
+        canonical: CanonicalBindingState,
+    },
+}
+
+/// What the canonical `VolumeBinding` path (U14, KTD2/KTD3) did on one
+/// pass.
+///
+/// These three states are the whole contract of the producing half: a row
+/// is committed only out of a real admission, and a pass with no evidence
+/// changes nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CanonicalBindingState {
+    /// The pass did not reach the admission (recover adopts without
+    /// reconciling).
+    NotReconciled,
+    /// The seam admitted exactly this many relationships, and every one of
+    /// them is committed under this row.
+    Committed { relationships: usize },
+    /// The seam carried no admission evidence: nothing was committed and
+    /// nothing was retired, and the refusal names what is missing.
+    EvidenceAbsent(BindingEvidenceAbsent),
+}
+
+impl CanonicalBindingState {
+    /// How many canonical relationships this row commits after the pass.
+    pub(crate) const fn committed(&self) -> usize {
+        match self {
+            Self::NotReconciled | Self::EvidenceAbsent(_) => 0,
+            Self::Committed { relationships } => *relationships,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -238,6 +280,18 @@ pub trait VolumeDriverEffects: Send + Sync + 'static {
     /// Discover existing volume-local layout state for this exact uid
     /// (recover probe).
     fn has_layout(&self, volume_uid: &ResourceUid) -> bool;
+
+    /// Admit the canonical `VolumeBindingRequest` relationships declared
+    /// against this Volume and report the ones the source may commit a row
+    /// for (U14, KTD2/KTD3).
+    ///
+    /// The refusal is a named absence of evidence, never a fallback: the
+    /// driver commits no canonical row without it, because a row is a
+    /// relationship and an unfenced relationship is not one.
+    async fn admit_bindings(
+        &self,
+        source: &VolumeBindingAdmission<'_>,
+    ) -> Result<Vec<AdmittedVolumeBinding>, BindingEvidenceAbsent>;
 }
 
 // ---------------------------------------------------------------------------
@@ -488,6 +542,13 @@ impl VolumeDriver {
             .iter()
             .filter(|row| {
                 row.key.type_name == VOLUME_BINDING_TYPE
+                    // Ownership boundary (U14): this diff owns the
+                    // attachment-shaped rows it derives. A row carrying a
+                    // canonical request belongs to the KTD2 admission below,
+                    // which retires only what it no longer derives - two
+                    // derivations over one resource type would otherwise
+                    // retire each other's rows on every pass.
+                    && !is_canonical_binding_row(&row.spec)
                     && !desired.iter().any(|child| child.name == row.key.name)
             })
             .map(|row| row.key.clone())
@@ -500,6 +561,109 @@ impl VolumeDriver {
                 .map_err(|_| self.error(VolumeDriverErrorKind::ChildMutation, op))?;
         }
         Ok(owned)
+    }
+
+    /// The canonical `VolumeBinding` rows this pass commits (U14,
+    /// KTD2/KTD3).
+    ///
+    /// One admitted relationship becomes exactly one row, named from the
+    /// KTD3 key by [`canonical_binding_children`], and each is committed
+    /// through the manager-routed [`SharedProviderChildSurface`] so the row
+    /// is durable before the binding's actor exists (F1/AE1).
+    ///
+    /// The pass is idempotent by construction: the name is derived from the
+    /// relationship's identities, so a second pass over an unchanged parent
+    /// re-ensures the same rows and the manager answers `Unchanged`. A
+    /// relationship the admitted set no longer names is retired with its
+    /// owner, so a shrinking set does not leak rows (the ownership-bounded
+    /// reset).
+    ///
+    /// Two refusals are load-bearing here. A relationship whose KTD3 key does
+    /// not name this row as its source is not this parent's relationship and
+    /// is never committed under it. And an absent admission admits nothing:
+    /// the pass commits nothing and retires nothing, because a missing grant
+    /// is not evidence that a relationship ended. Nothing here mints an
+    /// authorization or a fence of its own.
+    async fn reconcile_canonical_bindings(
+        &self,
+        ctx: &mut ResourceContext,
+        source: &VolumeBindingAdmission<'_>,
+        op: DriverOp,
+    ) -> Result<CanonicalBindingState, VolumeDriverError> {
+        let admitted = match self.effects.admit_bindings(source).await {
+            Ok(admitted) => admitted,
+            Err(absent) => {
+                tracing::warn!(
+                    zone = %source.zone().as_str(),
+                    volume = %source.volume_ref().to_canonical_string(),
+                    reason = %absent,
+                    "no canonical volume binding row committed: admission evidence absent"
+                );
+                return Ok(CanonicalBindingState::EvidenceAbsent(absent));
+            }
+        };
+        if let Some(foreign) = admitted
+            .iter()
+            .find(|admitted| !names_this_source(admitted, source))
+        {
+            // The seam answered for a relationship this row is not the
+            // source of. Committing it would mint a row under one parent
+            // naming another Volume, so the pass refuses instead.
+            return Err(self
+                .error(VolumeDriverErrorKind::ChildDerivation, op)
+                .with_detail(
+                    FailureDetail::at("bindings/derive")
+                        .comparison(FailureComparison::new(
+                            "binding.sourceRef",
+                            source.volume_ref().to_canonical_string(),
+                            foreign.key().source_ref().to_canonical_string(),
+                        ))
+                        .with_note("the admitted relationship names another source"),
+                ));
+        }
+        let derived = canonical_binding_children(&admitted).map_err(|error| {
+            self.error(VolumeDriverErrorKind::ChildDerivation, op)
+                .with_detail(binding_contract_detail(&error))
+        })?;
+        // The owned set is read once, before the pass mutates it: the rows
+        // this pass may retire are the canonical ones its derived set no
+        // longer names.
+        let owned = ctx
+            .children()
+            .await
+            .map_err(|_| self.error(VolumeDriverErrorKind::ChildMutation, op))?;
+        let obsolete = owned
+            .iter()
+            .filter(|row| {
+                row.key.type_name == VOLUME_BINDING_TYPE
+                    && is_canonical_binding_row(&row.spec)
+                    && !derived.iter().any(|child| child.name == row.key.name)
+            })
+            .map(|row| row.key.clone())
+            .collect::<Vec<_>>();
+        {
+            let surface = ContextChildSurface::new(ctx);
+            for child in &derived {
+                surface
+                    .ensure(ChildEnsure {
+                        type_name: ResourceTypeName::new(VOLUME_BINDING_TYPE),
+                        name: child.name.clone(),
+                        spec: child.spec.clone(),
+                        metadata: Vec::new(),
+                    })
+                    .await
+                    .map_err(|_| self.error(VolumeDriverErrorKind::ChildMutation, op))?;
+            }
+            for key in obsolete {
+                // A canonical row this pass no longer derives: the manager
+                // marks it deleting and owns its teardown, R9/F3.
+                surface
+                    .delete(&key)
+                    .await
+                    .map_err(|_| self.error(VolumeDriverErrorKind::ChildMutation, op))?;
+            }
+        }
+        Ok(CanonicalBindingState::Committed { relationships: derived.len() })
     }
 
     /// Spawn the preserved layout effect as a long effect (R5, KTD12): the
@@ -584,6 +748,37 @@ fn derivation_detail(code: &str) -> FailureDetail {
         .with_note(code)
 }
 
+/// The comparison naming why a canonical row's derivation refused: the
+/// derived row name or its desired bytes are not the closed contract's.
+fn binding_contract_detail(code: &BindingContractError) -> FailureDetail {
+    FailureDetail::at("bindings/derive")
+        .comparison(FailureComparison::new(
+            "binding.row",
+            "a bounded row name over the canonical request",
+            "refused",
+        ))
+        .with_note(code.to_string())
+}
+
+/// Whether one stored child row carries this family's canonical binding
+/// request (KTD2) rather than the attachment-shaped row the pre-cutover
+/// derivation commits.
+///
+/// The two are disjoint wire shapes, so the row itself says which
+/// derivation owns it: that is the durable ownership boundary between the
+/// two diffs, and it holds across a restart, where an in-memory set would
+/// not.
+fn is_canonical_binding_row(spec: &[u8]) -> bool {
+    DecodedBindingRequest::decode(VOLUME_BINDING_TYPE, spec).is_some()
+}
+
+/// Whether one admitted relationship's KTD3 key names exactly this Volume
+/// as its source.
+fn names_this_source(admitted: &AdmittedVolumeBinding, source: &VolumeBindingAdmission<'_>) -> bool {
+    admitted.key().source_ref() == source.volume_ref()
+        && admitted.key().source_uid() == source.volume_uid()
+}
+
 fn resource_uid(bytes: &[u8; 16]) -> Result<ResourceUid, ()> {
     ResourceUid::from_bytes(bytes).map_err(|_| ())
 }
@@ -633,7 +828,11 @@ impl ResourceDriver for VolumeDriver {
             // follows re-runs the layout effect, which re-derives and
             // re-materializes the root, and is idempotent on a root that is
             // still there.
-            ctx.set_status(VolumeDriverStatus::ServingChildren { desired: 0, converged: false });
+            ctx.set_status(VolumeDriverStatus::ServingChildren {
+                desired: 0,
+                converged: false,
+                canonical: CanonicalBindingState::NotReconciled,
+            });
             Ok(RecoveryOutcome::Adopted)
         } else {
             Ok(RecoveryOutcome::Missing)
@@ -643,7 +842,9 @@ impl ResourceDriver for VolumeDriver {
     /// One reconcile pass: pass one spawns the preserved layout effect
     /// (R5); after its completion the actor re-reconciles and this pass
     /// derives the deterministic binding children and ensures each through
-    /// the manager (F1); readiness aggregates the child rows this pass
+    /// the manager (F1), then admits the canonical KTD2 relationships and
+    /// commits one row per admitted relationship through the manager-routed
+    /// child surface (U14); readiness aggregates the child rows this pass
     /// converged.
     async fn reconcile(&mut self, ctx: &mut ResourceContext) -> Result<ReconcileOutcome, Self::Error> {
         let (envelope, spec) = self.decoded_spec(ctx, DriverOp::Reconcile)?;
@@ -668,9 +869,22 @@ impl ResourceDriver for VolumeDriver {
                 .iter()
                 .any(|row| row.key.type_name == VOLUME_BINDING_TYPE && row.key.name == child.name)
         });
+        // The canonical pass runs last so the pass's final child state is the
+        // one the KTD2 admission produced; the two diffs are fenced apart
+        // above, so neither order would collide.
+        let zone = ZoneId::parse(&ctx.key().zone)
+            .map_err(|_| self.error(VolumeDriverErrorKind::SpecInvalid, DriverOp::Reconcile))?;
+        let canonical = self
+            .reconcile_canonical_bindings(
+                ctx,
+                &VolumeBindingAdmission::new(zone, volume_ref, uid, &spec),
+                DriverOp::Reconcile,
+            )
+            .await?;
         ctx.set_status(VolumeDriverStatus::ServingChildren {
-            desired: desired.len(),
+            desired: desired.len() + canonical.committed(),
             converged,
+            canonical,
         });
         // The child set is what this plane serves, and a set that did not
         // converge re-checks on the preserved cadence so a binding that drifts
@@ -968,7 +1182,16 @@ mod tests {
             .expect("status");
         assert_eq!(
             *status,
-            super::VolumeDriverStatus::ServingChildren { desired: 1, converged: true }
+            super::VolumeDriverStatus::ServingChildren {
+                desired: 1,
+                converged: true,
+                canonical: super::CanonicalBindingState::EvidenceAbsent(
+                    BindingEvidenceAbsent::new(vec![
+                        BindingAdmissionEvidence::Authorization,
+                        BindingAdmissionEvidence::FreshnessFence,
+                    ]),
+                ),
+            }
         );
     }
 
@@ -1303,19 +1526,30 @@ mod tests {
         VolumeBindingRequest, VolumePresentation, ZoneId, canonical_json_bytes,
     };
     use d2b_provider_volume_local::{
-        VolumeAdmissionGrant, VolumeConsumerRequest, admit_consumer_requests,
-        VolumeAdmissionSource,
+        AdmittedVolumeBinding, VolumeAdmissionGrant, VolumeAdmissionSource, VolumeConsumerRequest,
+        admit_consumer_requests,
     };
     use d2b_resource_runtime::relations::DecodedBindingRequest;
 
-    use super::canonical_binding_children;
+    use super::{
+        CanonicalBindingState, VOLUME_BINDING_TYPE, VolumeDriverStatus, canonical_binding_children,
+        canonical_binding_row,
+    };
+    use crate::facets::{BindingAdmissionEvidence, BindingEvidenceAbsent};
 
     const VOLUME_UID_VALUE: &str = "6f9619ff-8b86-4d01-b42d-00cf4fc964ff";
     const PROCESS_UID: &str = "323e4567-e89b-42d3-a456-426614174002";
     const GUEST_UID: &str = "123e4567-e89b-42d3-a456-426614174000";
 
-    fn canonical_graph_volume() -> VolumeSpec {
-        serde_json::from_value(serde_json::json!({
+    /// The durable uid the reconciled test row carries: the identity its
+    /// relationships are admitted against, because a KTD3 key names the
+    /// source's store identity and not its reference alone.
+    const ROW_UID: [u8; 16] = [0x42; 16];
+
+    /// A conformant graph-era Volume: declared views, no attachment list.
+    /// Its relationships arrive through the admission seam instead.
+    fn canonical_graph_volume_value() -> serde_json::Value {
+        serde_json::json!({
             "source": {
                 "executionRef": "Host/host-system",
                 "settings": { "kind": "local-path", "sourcePolicyId": "state-root" },
@@ -1325,17 +1559,43 @@ mod tests {
             "views": {
                 "controller": { "path": "", "rights": ["read", "write", "traverse"] },
             },
-        }))
-        .expect("conformant Volume spec")
+        })
+    }
+
+    fn canonical_graph_volume() -> VolumeSpec {
+        serde_json::from_value(canonical_graph_volume_value())
+            .expect("conformant Volume spec")
+    }
+
+    /// The same spec as the row the driver reconciles: the stored envelope
+    /// carries the Provider reference the driver checks.
+    fn canonical_row_bytes() -> Vec<u8> {
+        let mut spec = canonical_graph_volume_value();
+        spec.as_object_mut()
+            .expect("spec object")
+            .insert(
+                "providerRef".to_owned(),
+                serde_json::Value::String("Provider/volume-local".to_owned()),
+            );
+        serde_json::to_vec(&spec).expect("canonical volume spec")
+    }
+
+    /// The reconciled row's own store identity, as the authority spells it.
+    fn row_uid() -> ResourceUid {
+        ResourceUid::from_bytes(&ROW_UID).expect("canonical row uid")
     }
 
     /// One admitted relationship per consumer kind, admitted through the one
-    /// source-side path.
-    fn admitted_set() -> Vec<d2b_provider_volume_local::AdmittedVolumeBinding> {
+    /// source-side path against exactly the identity the source carries.
+    fn admitted_source(
+        source_ref: &str,
+        source_uid: &str,
+        spec: &VolumeSpec,
+    ) -> Vec<AdmittedVolumeBinding> {
         let zone = ZoneId::parse("work").expect("zone");
         let volume_ref =
-            d2b_contracts_resource::v3::ResourceRef::parse("Volume/state").expect("volume");
-        let volume_uid = ResourceUid::parse(VOLUME_UID_VALUE).expect("uid");
+            d2b_contracts_resource::v3::ResourceRef::parse(source_ref).expect("volume");
+        let volume_uid = ResourceUid::parse(source_uid).expect("uid");
         let support = BindingRealizationSupport::new(vec![
             BindingRealizationFacet::FilesystemPresentation,
             BindingRealizationFacet::ConsumerDeviceSlot,
@@ -1343,7 +1603,7 @@ mod tests {
         .expect("support set");
         let authorization = BindingAuthorization::granted();
         let fence: Vec<FreshnessTuple> = [
-            ("Volume/state", VOLUME_UID_VALUE),
+            (source_ref, source_uid),
             ("Process/worker", PROCESS_UID),
             ("Guest/work-vm", GUEST_UID),
         ]
@@ -1360,9 +1620,8 @@ mod tests {
         })
         .collect();
         let grant = VolumeAdmissionGrant::new(&support, &authorization, &fence);
-        let spec = canonical_graph_volume();
         let source =
-            VolumeAdmissionSource::new(&zone, &volume_ref, &volume_uid, &spec, false, &grant);
+            VolumeAdmissionSource::new(&zone, &volume_ref, &volume_uid, spec, false, &grant);
         let requests = [
             VolumeConsumerRequest::new(
                 ResourceUid::parse(PROCESS_UID).expect("uid"),
@@ -1392,6 +1651,240 @@ mod tests {
             ),
         ];
         admit_consumer_requests(&source, &requests).expect("admitted")
+    }
+
+    /// The admitted set for the source identity the derivation tests pin.
+    fn admitted_set() -> Vec<AdmittedVolumeBinding> {
+        admitted_source("Volume/state", VOLUME_UID_VALUE, &canonical_graph_volume())
+    }
+
+    /// The admitted set the seam answers with for the row the driver
+    /// reconciles: the same two consumer kinds, against that row's own
+    /// identity.
+    fn admitted_for_row() -> Vec<AdmittedVolumeBinding> {
+        admitted_source("Volume/data", row_uid().as_str(), &canonical_graph_volume())
+    }
+
+    /// The manager key one derived canonical row is committed under.
+    fn binding_key(name: &str) -> ResourceKey {
+        ResourceKey::new("work", VOLUME_BINDING_TYPE, name)
+    }
+
+    /// The committed `VolumeBinding` rows, ordered by name.
+    fn committed_bindings(manager: &RecordingManagerEndpoint) -> Vec<StoredDesiredResource> {
+        let mut rows: Vec<StoredDesiredResource> = manager
+            .rows()
+            .into_iter()
+            .filter(|row| row.key.type_name == VOLUME_BINDING_TYPE)
+            .collect();
+        rows.sort_by(|left, right| left.key.name.cmp(&right.key.name));
+        rows
+    }
+
+    /// The reconciliation facts the assertions read: (name, generation).
+    fn generations(rows: &[StoredDesiredResource]) -> Vec<(String, u64)> {
+        rows.iter().map(|row| (row.key.name.clone(), row.generation)).collect()
+    }
+
+    // The producing half (U14): the pass a real verb owns commits what the
+    // seam admitted, a second pass over an unchanged parent commits nothing
+    // new, and what the admitted set no longer names is retired.
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn an_admitted_relationship_commits_one_row_a_second_pass_does_not_duplicate() {
+        let fake = RecordingRuntime::new();
+        fake.set_admitted(admitted_for_row());
+        let manager = RecordingManagerEndpoint::new();
+        let mut f = fixture(test_row(&canonical_row_bytes()), manager.clone());
+        let mut d = driver(fake.clone()).await;
+
+        assert_eq!(reconcile_to_children(&mut d, &mut f).await, ReconcileOutcome::Satisfied);
+
+        let derived = canonical_binding_children(&admitted_for_row()).expect("derived rows");
+        let committed = committed_bindings(&manager);
+        assert_eq!(committed.len(), derived.len(), "one row per admitted relationship");
+        for (child, relationship) in derived.iter().zip(&admitted_for_row()) {
+            let row = manager
+                .row(&binding_key(&child.name))
+                .unwrap_or_else(|| panic!("{} is committed under its KTD3 name", child.name));
+            assert_eq!(row.spec, child.spec, "the committed row is the consumer's request");
+            assert_eq!(row.owner_uid, Some(ROW_UID), "the deriving Volume owns the row");
+            // The committed row is what the graph reads back: the manager's
+            // own relation-index decoder resolves it to this exact
+            // relationship, with the consumer slot and rights the admission
+            // decided.
+            let decoded = DecodedBindingRequest::decode(VOLUME_BINDING_TYPE, &row.spec)
+                .unwrap_or_else(|| panic!("{} is not an indexable relationship", child.name));
+            assert_eq!(decoded.source_ref(), relationship.request().source_ref());
+            assert_eq!(decoded.consumer_ref(), relationship.request().consumer_ref());
+            assert_eq!(decoded.slot(), relationship.request().slot());
+            assert_eq!(decoded.rights(), relationship.request().requested_rights());
+            assert_eq!(decoded.fingerprint(), &relationship.request().fingerprint());
+        }
+        assert_eq!(
+            *f.ctx.status::<VolumeDriverStatus>().expect("status"),
+            VolumeDriverStatus::ServingChildren {
+                desired: derived.len(),
+                converged: true,
+                canonical: CanonicalBindingState::Committed { relationships: derived.len() },
+            }
+        );
+
+        // A second pass over an unchanged parent re-ensures the same rows, so
+        // the manager answers `Unchanged`: no row is rewritten and no second
+        // row is minted.
+        let before = generations(&committed);
+        let passes = fake.admission_passes();
+        let calls = manager.call_order().len();
+        assert_eq!(d.reconcile(&mut f.ctx).await.expect("second pass"), ReconcileOutcome::Satisfied);
+        assert_eq!(fake.admission_passes(), passes + 1, "each pass asks the seam again");
+        let after = committed_bindings(&manager);
+        assert_eq!(generations(&after), before, "an unchanged parent rewrites no row");
+        assert_eq!(after.len(), derived.len(), "no second row is minted");
+        assert_eq!(
+            manager.call_order()[calls..]
+                .iter()
+                .filter(|call| call.starts_with("delete:"))
+                .count(),
+            0,
+            "an unchanged parent retires nothing: the attachment-shaped diff leaves the \
+             canonical rows it does not own alone"
+        );
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_relationship_the_admitted_set_no_longer_names_is_retired_with_its_owner() {
+        let fake = RecordingRuntime::new();
+        fake.set_admitted(admitted_for_row());
+        let manager = RecordingManagerEndpoint::new();
+        let mut f = fixture(test_row(&canonical_row_bytes()), manager.clone());
+        let mut d = driver(fake.clone()).await;
+        assert_eq!(reconcile_to_children(&mut d, &mut f).await, ReconcileOutcome::Satisfied);
+
+        // The Guest withdraws its block presentation: one relationship still
+        // admits, one no longer does.
+        let admitted = admitted_for_row();
+        let kept = admitted
+            .iter()
+            .find(|admitted| admitted.request().consumer_ref().name().as_str() == "worker")
+            .expect("the filesystem relationship")
+            .clone();
+        let dropped = admitted
+            .iter()
+            .find(|admitted| admitted.request().consumer_ref().name().as_str() == "work-vm")
+            .expect("the device relationship");
+        let dropped_name = canonical_binding_row(dropped).expect("row").name().as_str().to_owned();
+        let kept_name =
+            canonical_binding_row(&kept).expect("row").name().as_str().to_owned();
+        let kept_before = manager
+            .row(&binding_key(&kept_name))
+            .expect("the kept row is committed")
+            .generation;
+        fake.set_admitted(vec![kept]);
+
+        let calls = manager.call_order().len();
+        assert_eq!(d.reconcile(&mut f.ctx).await.expect("shrunk pass"), ReconcileOutcome::Satisfied);
+        assert!(
+            manager.row(&binding_key(&dropped_name)).is_none(),
+            "a row the admitted set no longer names is retired with its owner"
+        );
+        assert_eq!(
+            manager.call_order()[calls..]
+                .iter()
+                .filter(|call| call.starts_with("delete:"))
+                .cloned()
+                .collect::<Vec<String>>(),
+            vec![format!("delete:VolumeBinding/{dropped_name}")],
+            "exactly the row the admission dropped is retired"
+        );
+        let kept_row = manager
+            .row(&binding_key(&kept_name))
+            .expect("the relationship that still admits keeps its row");
+        assert_eq!(kept_row.generation, kept_before, "the surviving row is not rewritten");
+        assert_eq!(
+            *f.ctx.status::<VolumeDriverStatus>().expect("status"),
+            VolumeDriverStatus::ServingChildren {
+                desired: 1,
+                converged: true,
+                canonical: CanonicalBindingState::Committed { relationships: 1 },
+            }
+        );
+    }
+
+    // The negative cases: no evidence commits no row, and no evidence
+    // retires none.
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn without_admission_evidence_no_row_is_committed_and_a_committed_one_survives() {
+        let fake = RecordingRuntime::new();
+        let manager = RecordingManagerEndpoint::new();
+        let mut f = fixture(test_row(&canonical_row_bytes()), manager.clone());
+        let mut d = driver(fake.clone()).await;
+
+        assert_eq!(reconcile_to_children(&mut d, &mut f).await, ReconcileOutcome::Satisfied);
+        assert!(committed_bindings(&manager).is_empty(), "no evidence, no committed row");
+        assert!(
+            !manager.call_order().iter().any(|call| call.starts_with("ensure:VolumeBinding/")),
+            "the pass never reaches the child surface without evidence"
+        );
+        assert_eq!(
+            *f.ctx.status::<VolumeDriverStatus>().expect("status"),
+            VolumeDriverStatus::ServingChildren {
+                desired: 0,
+                converged: true,
+                canonical: CanonicalBindingState::EvidenceAbsent(BindingEvidenceAbsent::new(vec![
+                    BindingAdmissionEvidence::Authorization,
+                    BindingAdmissionEvidence::FreshnessFence,
+                ])),
+            }
+        );
+
+        // With evidence on the seam, the relationships commit.
+        fake.set_admitted(admitted_for_row());
+        assert_eq!(d.reconcile(&mut f.ctx).await.expect("evidenced pass"), ReconcileOutcome::Satisfied);
+        let committed = generations(&committed_bindings(&manager));
+        assert_eq!(committed.len(), 2);
+
+        // Losing the evidence is not evidence that a relationship ended: the
+        // pass commits nothing new and retires nothing.
+        fake.withdraw_evidence();
+        assert_eq!(d.reconcile(&mut f.ctx).await.expect("unevidenced pass"), ReconcileOutcome::Satisfied);
+        assert_eq!(
+            generations(&committed_bindings(&manager)),
+            committed,
+            "an absent grant is not evidence that a relationship ended"
+        );
+        assert!(
+            !manager.call_order().iter().any(|call| call.starts_with("delete:VolumeBinding/")),
+            "no owned row is retired without an admission that dropped it"
+        );
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_relationship_naming_another_source_is_refused_instead_of_committed_here() {
+        let fake = RecordingRuntime::new();
+        // The seam answers for a relationship this row is not the source of.
+        fake.set_admitted(admitted_set());
+        let manager = RecordingManagerEndpoint::new();
+        let mut f = fixture(test_row(&canonical_row_bytes()), manager.clone());
+        let mut d = driver(fake.clone()).await;
+
+        let first = d.reconcile(&mut f.ctx).await.expect("reconcile spawns the effect");
+        assert!(matches!(first, ReconcileOutcome::InProgress { .. }), "{first:?}");
+        let _ = f.effects.recv().await.expect("typed completion");
+        let failure = d
+            .reconcile(&mut f.ctx)
+            .await
+            .expect_err("a relationship for another source is refused");
+        assert_eq!(failure.class(), FailureClass::Terminal);
+        assert!(
+            committed_bindings(&manager).is_empty(),
+            "a row naming another source is never minted under this parent"
+        );
     }
 
     #[test]

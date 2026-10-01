@@ -24,11 +24,12 @@ pub mod facets;
 pub mod test_support;
 
 pub use binding::{
-    DEVICE_BINDING_TYPE_NAME, DeviceBindingDriver, DeviceBindingDriverArgs,
-    DeviceBindingDriverFactory,
+    BindingProduction, BindingProductionError, BindingProductionRefusal, DEVICE_BINDING_TYPE_NAME,
+    DeviceBindingDriver, DeviceBindingDriverArgs, DeviceBindingDriverFactory,
     DeviceBindingDriverStatus, DeviceBindingEffects, DeviceBindingEffectsService,
-    DeviceBindingRow, UnattachedReason, capability_backed, device_attachment_support,
-    device_binding_descriptor, device_binding_spec_decoder,
+    DeviceBindingRow, DeviceDeclaredBindings, UnattachedReason, binding_operation_id,
+    binding_row_name, capability_backed, device_attachment_support, device_binding_descriptor,
+    device_binding_spec_decoder, produce_binding_rows,
 };
 pub use driver::{
     DEVICE_REGISTRATIONS, DEVICE_RESYNC, DEVICE_TYPE_NAME, DeviceComponent, DeviceDriverArgs,

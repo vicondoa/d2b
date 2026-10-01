@@ -363,6 +363,145 @@ pub fn canonical_binding_rows(
     }])
 }
 
+/// Why one derived delivery row is not committed.
+///
+/// A derived row is a candidate, not an authority: it becomes a committed
+/// relationship only when it survives every bound the source row's own
+/// committed spec imposes, and a row that does not is refused here rather than
+/// committed and served. Every variant names which bound refused. None carries
+/// a credential reference, an audience, or a Provider identity, so a refusal
+/// reads the same whether it came from a committed spec or from a derivation
+/// fault (R42).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialBindingCommitRefusal {
+    /// The derived bytes are not this family's own `CredentialBinding` row.
+    RowContract(BindingContractError),
+    /// The derived row is bound to a `Credential` other than the one deriving
+    /// it.
+    SourceMismatch,
+    /// The derived row delivers somewhere the source row's own scope does not
+    /// admit. The consumer is the source's `scope.executionRef` and never its
+    /// `consumerRef`: that Provider is the fence a delivery session is minted
+    /// against, not the party the material reaches.
+    ConsumerNotScoped,
+    /// The derived row's committed name is not the name these identities
+    /// derive, which is the name fence the serving driver reads back.
+    RowNameNotDerived,
+    /// The derived row names a delivery operation the source's own policy
+    /// does not grant.
+    OperationNotAdmitted(CredentialOperation),
+    /// The derived row asks for a lease longer than the source's own
+    /// `maxLeaseLifetimeMs` ceiling.
+    LifetimeAboveCeiling {
+        /// The lease the row asks for.
+        lifetime_ms: u64,
+        /// The ceiling the source row's own policy imposes.
+        ceiling_ms: u64,
+    },
+}
+
+impl CredentialBindingCommitRefusal {
+    /// The stable code this refusal reports under.
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::RowContract(_) => "credential-binding-row-contract-refused",
+            Self::SourceMismatch => "credential-binding-source-mismatch",
+            Self::ConsumerNotScoped => "credential-binding-consumer-not-scoped",
+            Self::RowNameNotDerived => "credential-binding-row-name-not-derived",
+            Self::OperationNotAdmitted(_) => "credential-binding-operation-not-admitted",
+            Self::LifetimeAboveCeiling { .. } => "credential-binding-lifetime-above-ceiling",
+        }
+    }
+}
+
+impl core::fmt::Display for CredentialBindingCommitRefusal {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(self.code())
+    }
+}
+
+impl std::error::Error for CredentialBindingCommitRefusal {}
+
+/// Re-check one derived delivery row against the `Credential` row that
+/// derived it, before it may be committed.
+///
+/// Six closed checks, every one of them read from the source row's own
+/// committed spec through the family's own vocabulary:
+///
+/// - the bytes are the family's `CredentialBinding` row, not a look-alike;
+/// - the row is bound to this very `Credential`;
+/// - the row delivers to the source's `scope.executionRef`. Its
+///   `consumerRef` is never the consumer: that Provider is the fence a
+///   delivery session is minted against, so a row that delivered to it would
+///   send the material to the wrong destination;
+/// - the row's name is the name its own identities derive, which is the
+///   fence [`credential_binding_row_name`] mints and the serving driver reads
+///   back;
+/// - every operation the row names is one the source's
+///   `allowedOperations` grants, read through
+///   [`CredentialSourcePolicy::admits_class`];
+/// - the row's lifetime fits inside the source's own `maxLeaseLifetimeMs`
+///   ceiling, where a zero ceiling leaves only the contract's own bound in
+///   force.
+///
+/// The checks run on the bytes that would be committed, not on the inputs
+/// they came from, so a row that reached this call by any other route is held
+/// to exactly the same bounds as one the derivation just produced.
+pub fn admitted_delivery_row(
+    credential_ref: &ResourceRef,
+    spec: &CredentialSpec,
+    row: &CanonicalCredentialBinding,
+) -> Result<(), CredentialBindingCommitRefusal> {
+    let decoded: CredentialBindingSpec = serde_json::from_slice(&row.spec).map_err(|_| {
+        CredentialBindingCommitRefusal::RowContract(BindingContractError::InvalidField)
+    })?;
+    if decoded.credential_ref() != credential_ref {
+        return Err(CredentialBindingCommitRefusal::SourceMismatch);
+    }
+    if spec.scope().execution_ref() != Some(decoded.execution_ref()) {
+        return Err(CredentialBindingCommitRefusal::ConsumerNotScoped);
+    }
+    let derived = credential_binding_row_name(&decoded)
+        .map_err(|error| CredentialBindingCommitRefusal::RowContract(error))?;
+    if derived.as_str() != row.name {
+        return Err(CredentialBindingCommitRefusal::RowNameNotDerived);
+    }
+    let policy = CredentialSourcePolicy::from_spec(spec);
+    for operation in decoded.operations() {
+        if !policy.admits_class(operation_class(*operation)) {
+            return Err(CredentialBindingCommitRefusal::OperationNotAdmitted(*operation));
+        }
+    }
+    let ceiling = policy.max_lease_lifetime_ms();
+    if ceiling != 0 && decoded.lifetime_ms() > ceiling {
+        return Err(CredentialBindingCommitRefusal::LifetimeAboveCeiling {
+            lifetime_ms: decoded.lifetime_ms(),
+            ceiling_ms: ceiling,
+        });
+    }
+    Ok(())
+}
+
+/// Derive the delivery rows one committed `Credential` row owns and hold each
+/// of them to that row's own policy before any of them may be committed.
+///
+/// The derivation is [`canonical_binding_rows`] - the same one a boundary and
+/// the serving driver agree on - and the returned rows are the exact bytes and
+/// name this call site commits. One row outside the source's admitted
+/// operations or above its lifetime ceiling refuses the whole set, so a pass
+/// commits either every relationship the source declares or none of them.
+pub fn admitted_binding_rows(
+    credential_ref: &ResourceRef,
+    spec: &CredentialSpec,
+) -> Result<Vec<CanonicalCredentialBinding>, CredentialBindingCommitRefusal> {
+    let rows = canonical_binding_rows(credential_ref, spec)
+        .map_err(CredentialBindingCommitRefusal::RowContract)?;
+    for row in &rows {
+        admitted_delivery_row(credential_ref, spec, row)?;
+    }
+    Ok(rows)
+}
+
 /// The delivery lifetime one `Credential` row commits to, in milliseconds.
 ///
 /// A zero cap is the Provider default, which leaves the binding contract's

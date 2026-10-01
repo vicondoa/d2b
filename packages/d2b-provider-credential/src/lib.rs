@@ -25,12 +25,14 @@
 //!
 //! The crate also owns the `CredentialBinding` realization
 //! ([`binding`]): the source-side policy a `Credential` row admits delivery
-//! under, and the typed private delivery authority that mints a delivery
+//! under, the typed private delivery authority that mints a delivery
 //! session only while the admitted audience, operations, component
-//! generation, dependency revisions, and lifetime still hold. No credential
-//! material leaves that module: the graph spec, the generic binding status,
-//! the audit record, and the publication snapshot carry identity, policy,
-//! and state only.
+//! generation, dependency revisions, and lifetime still hold, and the
+//! derivation the `Credential` driver commits from together with the
+//! admission check every derived row must pass before it is committed. No
+//! credential material leaves that module: the graph spec, the generic
+//! binding status, the audit record, and the publication snapshot carry
+//! identity, policy, and state only.
 
 #![deny(missing_docs)]
 
@@ -45,13 +47,15 @@ pub mod test_support;
 
 pub use binding::{
     CREDENTIAL_BINDING_TYPE_NAME, CREDENTIAL_DELIVERY_SLOT, CanonicalCredentialBinding,
-    CredentialBindingAdmission, CredentialBindingDriver, CredentialBindingDriverArgs,
+    CredentialBindingAdmission, CredentialBindingCommitRefusal, CredentialBindingDriver,
+    CredentialBindingDriverArgs,
     CredentialBindingDriverFactory, CredentialBindingDriverStatus,
     CredentialBindingEffects, CredentialBindingEffectsService, CredentialBindingStatus,
     CredentialDeliveryAuthority, CredentialDeliveryEvidence, CredentialDeliveryFence,
-    CredentialDeliveryLeg, CredentialDeliveryRefusal, UndeliveredReason, canonical_binding_rows,
-    credential_binding_descriptor, credential_binding_row_name, credential_binding_spec_decoder,
-    credential_binding_support, credential_source_decision, delivery_operation,
+    CredentialDeliveryLeg, CredentialDeliveryRefusal, UndeliveredReason, admitted_binding_rows,
+    admitted_delivery_row, canonical_binding_rows, credential_binding_descriptor,
+    credential_binding_row_name, credential_binding_spec_decoder, credential_binding_support,
+    credential_source_decision, delivery_operation,
 };
 pub use driver::{
     CONTROLLER_PROVIDER_GENERATION_ANNOTATION, CONTROLLER_PROVIDER_REF_ANNOTATION,

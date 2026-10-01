@@ -122,6 +122,34 @@ pub fn recorded_spec(component: DeviceComponent) -> d2b_contracts_resource::v3::
     .expect("the recorded Device spec is always valid")
 }
 
+/// A [`DeviceInventorySource`] over one explicitly built inventory.
+///
+/// The recording double above answers with the family's whole declared
+/// vocabulary present. This one serves exactly the observation a test hands
+/// it, so a test can observe a capability the host no longer backs without
+/// restating the host device-node matrix.
+#[derive(Clone)]
+pub struct FixedInventory {
+    inventory: DeviceInventory,
+}
+
+impl FixedInventory {
+    /// Serve this inventory for every row.
+    pub fn new(inventory: DeviceInventory) -> Self {
+        Self { inventory }
+    }
+}
+
+#[async_trait]
+impl DeviceInventorySource for FixedInventory {
+    async fn device_inventory(
+        &self,
+        _request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<DeviceInventory, SharedProviderEffectError> {
+        Ok(self.inventory.clone())
+    }
+}
+
 /// Recording [`DeviceRuntime`] double: answers Pending/Complete for every
 /// effect call and records the driven components, so `d2bd`'s plane tests
 /// can build a facet set without a daemon.
@@ -167,5 +195,16 @@ pub fn recording_facets(runtime: Arc<RecordingRuntime>) -> DeviceEffectFacets {
     DeviceEffectFacets {
         runtime,
         inventory: Arc::new(RecordingInventory),
+    }
+}
+
+/// Build a Device facet set whose inventory is the caller's own observation.
+pub fn fixed_facets(
+    runtime: Arc<RecordingRuntime>,
+    inventory: DeviceInventory,
+) -> DeviceEffectFacets {
+    DeviceEffectFacets {
+        runtime,
+        inventory: Arc::new(FixedInventory::new(inventory)),
     }
 }
