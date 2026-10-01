@@ -610,7 +610,7 @@ fn an_operation_binds_a_declared_implementation() {
 
     assert_eq!(
         OperationImplementation::provider_method(
-            d2b_contracts_resource::v3::ResourceRef::parse("Command/worker").expect("command"),
+            d2b_contracts_resource::v3::ResourceRef::parse("Role/worker").expect("role"),
             token("controller"),
             token("serve-view"),
         ),

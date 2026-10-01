@@ -27,7 +27,6 @@ pub const RESOURCE_TYPE_VALUES: &[&str] = &[
     "Endpoint",
     "ResourceExport",
     "ResourceImport",
-    "Command",
     "Operation",
     "SeccompProfile",
     "ExecutionPolicy",

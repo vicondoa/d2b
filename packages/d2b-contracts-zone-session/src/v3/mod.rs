@@ -42,10 +42,7 @@ pub use component_session::{
 pub use emergency_policy::*;
 pub use resource_export::*;
 pub use resource_import::*;
-pub use role::{
-    PrincipalRef, RoleConditionType, RoleMount, RoleMountPath, RoleNamespaces, RolePosture,
-    RoleResourceVerb, RoleRule, RoleSessionVerb, RoleSpec,
-};
+pub use role::{RoleConditionType, RoleResourceVerb, RoleRule, RoleSessionVerb};
 pub use role_binding::{
     BINDABLE_SUBJECT_TYPES, ExternalPrincipalSelector, RelayAuthority, RoleBindingConditionType,
     RoleBindingSpec, ScopeNarrowing,

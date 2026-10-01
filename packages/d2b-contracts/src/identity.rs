@@ -34,7 +34,7 @@ const RESOURCE_TYPE_QUALIFIER: &str = ".d2bus.org.";
 pub const SYSTEM_ZONE_NAME: &str = "system";
 
 /// The complete standard ResourceType catalog.
-pub const STANDARD_RESOURCE_TYPES: [&str; 24] = [
+pub const STANDARD_RESOURCE_TYPES: [&str; 23] = [
     "Zone",
     "ZoneLink",
     "Provider",
@@ -57,7 +57,6 @@ pub const STANDARD_RESOURCE_TYPES: [&str; 24] = [
     "ResourceImport",
     // The controller family's policy types: unqualified, always-committed
     // vocabulary whose rows the foundation seed writes.
-    "Command",
     "Operation",
     "SeccompProfile",
     // The confinement row an instance selects: canonical under the

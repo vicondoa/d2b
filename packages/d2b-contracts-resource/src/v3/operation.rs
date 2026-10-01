@@ -868,10 +868,10 @@ mod tests {
     }
 
     #[test]
-    fn a_command_row_is_not_an_implementation() {
+    fn a_non_provider_row_is_not_an_implementation() {
         assert_eq!(
             OperationImplementation::provider_method(
-                ResourceRef::parse("Command/rm").expect("command"),
+                ResourceRef::parse("Role/worker").expect("role"),
                 BoundedToken::parse("controller").expect("component"),
                 BoundedToken::parse("serve-view").expect("method"),
             ),

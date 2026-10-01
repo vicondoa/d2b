@@ -18,9 +18,9 @@
 //!    authority quietly dropped: a row carrying a mount, a namespace set, a
 //!    cgroup set, or a device-node bind never becomes a policy row at all.
 //!
-//! The unchanged production foundation publication still writes the
-//! pre-cutover posture and Command-materialized rows. That path is the
-//! cutover's to replace and is deliberately not exercised here.
+//! The foundation seed publishes posture and Command-materialized rows no
+//! longer; the retired Role facets are asserted to refuse decoding rather
+//! than to be silently dropped.
 
 use d2b_contracts_resource::v3::{
     ALL_CONFINEMENT_FACETS, AdmissionStage, AdmissionDecision, AuthoritySubject,
@@ -286,11 +286,11 @@ fn operation_implementation_and_policy_selection_resolve_through_the_admitted_gr
     assert_eq!(
         implementation.provider().to_canonical_string(),
         "Provider/system-minijail",
-        "an operation's implementation names the declaring provider, not a Command"
+        "an operation's implementation names the declaring provider"
     );
     assert_eq!(
         OperationImplementation::provider_method(
-            reference("Command/virtiofsd-worker"),
+            reference(ROLE),
             token("execution-policy"),
             token("admit"),
         ),

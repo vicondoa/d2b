@@ -661,8 +661,6 @@ impl PendingRow {
     }
 }
 
-/// One materialized spawn operation.
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -759,9 +757,6 @@ fn self_binding_spec(
             reason: "the self-binding spec is invalid",
         })
 }
-
-/// The canonical operation name one command materializes.
-///
 /// `Operation/process-run-<command>`: the resource-name grammar has no dot,
 /// so the dotted spawn-operation spelling of the design is carried by the
 /// hyphen. A command whose materialized name would exceed the bound refuses.
@@ -1785,13 +1780,6 @@ fn bound_binding_name(
     })
 }
 
-/// The canonical operation name one command materializes, as a bootstrap
-/// refusal when the seed would refuse it.
-/// The exact foundation rows that authorize command materialization.
-///
-/// Materialization is authorized by a committed self-binding alone (the
-/// seed refuses an operator binding for the same purpose), so the plan
-/// requires exactly the controller's own bindings and nothing else.
 // ---------------------------------------------------------------------------
 // The deployment identity switch (U31, KTD6-KTD7)
 // ---------------------------------------------------------------------------

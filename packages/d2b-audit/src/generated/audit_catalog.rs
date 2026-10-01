@@ -39,7 +39,6 @@ pub const RESOURCE_TYPES: &[&str] = &[
     "EmergencyPolicy",
     "ResourceExport",
     "ResourceImport",
-    "Command",
     "Operation",
     "SeccompProfile",
     "ExecutionPolicy",

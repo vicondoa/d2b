@@ -1539,12 +1539,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 systemd step",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/foundation_seed.rs",
-        token: "process_systemd",
-        family: "system-systemd",
-        retires_with: "U12 systemd step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/exec_reconcile.rs",
         token: "transport_unix",
         family: "transport-unix",
@@ -6438,10 +6432,9 @@ const ALLOWED_SHARED_PROVIDER_DEPENDENCY_EDGES: &[(&str, &str)] = &[
     // U4: the quota status projection the manager backend reads lives in
     // d2b-provider-quota.
     ("packages/d2b-resource-api", "d2b-provider-quota"),
-    // U4: the daemon composes and seeds the re-homed command, operation,
+    // U4: the daemon composes and seeds the re-homed operation,
     // seccomp-profile, endpoint, host, and user shapes from their owning
     // crates.
-    ("packages/d2bd", "d2b-provider-command"),
     ("packages/d2bd", "d2b-provider-endpoint"),
     ("packages/d2bd", "d2b-provider-operation"),
     ("packages/d2bd", "d2b-provider-seccomp-profile"),
