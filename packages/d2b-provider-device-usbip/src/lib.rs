@@ -21,6 +21,7 @@ mod lifecycle;
 mod process;
 mod production;
 pub mod reconcile_state;
+mod realization;
 mod state_machine;
 pub mod vocabulary;
 mod workers;
@@ -45,9 +46,9 @@ pub use controller::{
 };
 pub use d2b_contracts::usbip::validate_bus_id;
 pub use driver::{
-    USBIP_BINDING_CONTROLLER_REF, USBIP_REGISTRATIONS, USBIP_RESYNC, USBIP_SERVICE_CONTROLLER_REF,
-    UsbipComponent, UsbipDriverArgs, UsbipDriverEffects, declared_dependency_refs,
-    usbip_descriptors,
+    USBIP_BINDING_CONTROLLER_REF, USBIP_RELAY_CONTROLLER_REF, USBIP_REGISTRATIONS,
+    USBIP_RESYNC, USBIP_SERVICE_CONTROLLER_REF, UsbipComponent, UsbipDriverArgs,
+    UsbipDriverEffects, declared_dependency_refs, usbip_descriptors,
 };
 pub use firewall::{
     ClaimProjectionFence, FirewallConfirmation, FirewallConfirmationKind, FirewallDigest,
@@ -61,6 +62,7 @@ pub use lifecycle::{
     ServicePort, ServiceRelayLease, SupervisorFinalizeError, UsbipSupervisor,
     binding_child_resources,
 };
+pub use realization::{UsbipServiceRealization, UsbipServiceRealizations};
 
 pub use process::{AttachSource, EphemeralProcessIntent, EphemeralProcessKind, UsbipDaemonProcess};
 pub use production::{ProductionPort, UsbipBrokerDispatcher};

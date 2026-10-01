@@ -1057,7 +1057,7 @@ impl UsbipController {
     ) -> Result<(), UsbipControllerError>
     where
         L: BoundDeviceLeg + ?Sized,
-        P: UsbipClaimPort,
+        P: UsbipClaimPort + ?Sized,
     {
         let UsbipServiceClaim {
             zone,
@@ -1182,7 +1182,7 @@ impl UsbipController {
     /// Returns [`UsbipControllerError::InvalidState`] when a claim is held
     /// without a recorded network, and the port's error when a teardown step
     /// does not confirm.
-    pub fn finalize_claim<P: UsbipClaimPort>(
+    pub fn finalize_claim<P: UsbipClaimPort + ?Sized>(
         &mut self,
         port: &mut P,
     ) -> Result<(), UsbipControllerError> {

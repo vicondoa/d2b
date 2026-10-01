@@ -53,6 +53,15 @@ pub const USBIP_SERVICE_CONTROLLER_REF: &str = "Process/device-usbip-service-con
 /// The controller reference the Binding row's effects bind.
 pub const USBIP_BINDING_CONTROLLER_REF: &str = "Process/device-usbip-binding-controller";
 
+/// The controller reference the per-Network relay worker realizes.
+///
+/// The relay is the helper this family's `DeviceBindingRequest` names as its
+/// consumer's bounded leg: the Service claims the backing `Device` once, and
+/// this worker realizes it ([`crate::USBIP_RELAY_OPERATIONS`]). It is the
+/// family's own worker vocabulary, so a Service row states it without the
+/// daemon supplying it.
+pub const USBIP_RELAY_CONTROLLER_REF: &str = "Process/usbip-relay";
+
 /// Preserved self-resync for the USB rows (old shared Runner repair interval).
 pub const USBIP_RESYNC: Duration = Duration::from_secs(30);
 
@@ -129,12 +138,15 @@ pub struct UsbipDriverArgs {
 /// The family's declarations and typed Provider effect.
 struct UsbipFamily {
     effects: Arc<dyn UsbipDriverEffects>,
+    /// The converted `Device` realization of one committed USB Service row
+    /// (U20).
+    converted: crate::realization::UsbipServiceRealizations,
 }
 
 #[async_trait]
 impl SharedProviderFamily for UsbipFamily {
     type Component = UsbipComponent;
-    type State = ();
+    type State = crate::realization::UsbipServiceRealization;
 
     fn rows(&self) -> &'static [ProviderRow<Self::Component>] {
         &USBIP_REGISTRATIONS
@@ -177,16 +189,27 @@ impl SharedProviderFamily for UsbipFamily {
         &self,
         component: UsbipComponent,
         request: &SharedProviderEffectRequest<'_>,
-        _state: &(),
+        state: &Self::State,
     ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
-        self.effects.reconcile_usbip(component, request).await
+        match component {
+            // The Service holds the `Device` claim, so this is where the
+            // bounded helper leg is reached: the family's own controller
+            // verifies the daemon-minted claim and leg and drives the port,
+            // rather than the row deciding its own device.
+            UsbipComponent::Service => self
+                .converted
+                .reconcile_service(state, request)
+                .await
+                .map(SharedProviderEffectOutcome::phase),
+            UsbipComponent::Binding => self.effects.reconcile_usbip(component, request).await,
+        }
     }
 
     async fn finalize(
         &self,
         component: UsbipComponent,
         request: &SharedProviderEffectRequest<'_>,
-        _state: &(),
+        _state: &Self::State,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
         self.effects.finalize(component, request).await
     }
@@ -214,12 +237,17 @@ const USBIP_BINDING_READS: &[WellKnownType] = &[WellKnownType::USB_SERVICE, Well
 /// alone (U8):the family hosts one effects service per zone; a Binding
 /// descriptor declares none.
 pub fn usbip_descriptors(args: UsbipDriverArgs) -> [DriverDescriptor; 2] {
+    let converted = crate::realization::UsbipServiceRealizations::new(
+        Arc::clone(&args.facets.admission),
+        Arc::clone(&args.facets.claims),
+    );
     let factory: Arc<dyn d2b_resource_runtime::driver::ResourceDriverFactory> =
         Arc::new(SharedProviderDriverFactory::new(SharedProviderDriverArgs {
             zone: args.zone,
             controller_generation: args.controller_generation,
             family: Arc::new(UsbipFamily {
                 effects: Arc::new(crate::effects_service::UsbipEffects::new(args.facets)),
+                converted,
             }),
         }));
     let descriptor = |resource_type: WellKnownType,

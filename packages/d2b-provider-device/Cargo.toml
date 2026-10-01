@@ -41,6 +41,7 @@ required-features = ["test-support"]
 [[test]]
 name = "device_binding"
 path = "tests/device_binding.rs"
+required-features = ["test-support"]
 
 [[test]]
 name = "binding_production"

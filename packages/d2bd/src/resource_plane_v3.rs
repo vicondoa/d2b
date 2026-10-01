@@ -2119,6 +2119,15 @@ impl ConstructionInputs {
                     Arc::clone(state),
                 )),
             },
+            // U20: the bounded helper leg and the claim port. Both refuse by
+            // name and grant nothing, because the daemon has no legitimate
+            // source of `BindingAuthorization` or a `FreshnessTuple` at the
+            // effects seam yet: the verified deployment graph is per-deployment
+            // and this admission is per-Zone. A USB binding whose device
+            // cannot be proven is visibly unadmitted rather than served from a
+            // fabricated grant.
+            admission: Arc::new(d2b_provider_device_usbip::facets::UnwiredUsbipHelperLegs),
+            claims: Arc::new(d2b_provider_device_usbip::facets::UnwiredUsbipClaimPorts),
         };
         let security_key_facets =
             d2b_provider_device_security_key::facets::SecurityKeyEffectFacets {
@@ -2126,6 +2135,14 @@ impl ConstructionInputs {
                     as Arc<
                         dyn d2b_provider_device_security_key::facets::SecurityKeyRuntime,
                     >,
+                // U20: as for USB, the helper leg and claim port refuse by
+                // name until the daemon can produce real binding authority.
+                admission: Arc::new(
+                    d2b_provider_device_security_key::facets::UnwiredSecurityKeyHelperLegs,
+                ),
+                claims: Arc::new(
+                    d2b_provider_device_security_key::facets::UnwiredSecurityKeyClaimPorts,
+                ),
             };
         let device_facets = d2b_provider_device::facets::DeviceEffectFacets {
             runtime: Arc::clone(&shared_provider_effects)

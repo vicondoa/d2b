@@ -587,6 +587,31 @@ impl SecurityKeyLease {
         })
     }
 
+    /// Construct an empty lease for the converted path.
+    ///
+    /// The converted path takes its physical backing from the admitted
+    /// `Device` claim itself rather than from a separate Core admission, so
+    /// this lease holds no backing claim and no holder evidence of its own.
+    /// Nothing is admitted until [`Self::admit_relay_claim`] checks the claim
+    /// and its leg against the Zone, the backing `Device`, the store
+    /// incarnation, and the relay helper, and the pre-graph
+    /// [`Self::acquire`] refuses a lease that was never given one.
+    pub const fn new_admitted(device_uid: ResourceUid) -> Self {
+        Self {
+            holder: device_uid,
+            backing: None,
+            authorized_device: None,
+            authorized_holder: None,
+            state: LeaseState::Idle,
+            session: None,
+            authority_lease: None,
+            relay_ticket: None,
+            claim: None,
+            relay_helper: None,
+            source_released: false,
+        }
+    }
+
     /// Return the current lifecycle state.
     pub const fn state(&self) -> LeaseState {
         self.state
@@ -649,7 +674,7 @@ impl SecurityKeyLease {
     ) -> Result<(), SecurityKeyLeaseError>
     where
         L: BoundDeviceLeg + ?Sized,
-        P: SecurityKeyClaimPort,
+        P: SecurityKeyClaimPort + ?Sized,
     {
         let SecurityKeyClaimRequest {
             zone,
@@ -728,7 +753,7 @@ impl SecurityKeyLease {
     /// Returns [`SecurityKeyLeaseError::InvalidTransition`] when no bounded
     /// session is active and [`SecurityKeyLeaseError::Effect`] when the relay
     /// stop or the claim release does not confirm.
-    pub fn complete_bound<P: SecurityKeyClaimPort>(
+    pub fn complete_bound<P: SecurityKeyClaimPort + ?Sized>(
         &mut self,
         port: &mut P,
     ) -> Result<(), SecurityKeyLeaseError> {
@@ -743,7 +768,7 @@ impl SecurityKeyLease {
     /// Returns [`SecurityKeyLeaseError::InvalidTransition`] when no bounded
     /// session is active and [`SecurityKeyLeaseError::Effect`] when the relay
     /// stop or the claim release does not confirm.
-    pub fn cancel_bound<P: SecurityKeyClaimPort>(
+    pub fn cancel_bound<P: SecurityKeyClaimPort + ?Sized>(
         &mut self,
         port: &mut P,
     ) -> Result<(), SecurityKeyLeaseError> {
@@ -758,7 +783,7 @@ impl SecurityKeyLease {
     /// Returns [`SecurityKeyLeaseError::InvalidTransition`] when no bounded
     /// session is active and [`SecurityKeyLeaseError::Effect`] when the relay
     /// stop or the claim release does not confirm.
-    pub fn expire_bound<P: SecurityKeyClaimPort>(
+    pub fn expire_bound<P: SecurityKeyClaimPort + ?Sized>(
         &mut self,
         port: &mut P,
     ) -> Result<(), SecurityKeyLeaseError> {
@@ -1017,7 +1042,7 @@ impl SecurityKeyLease {
     /// The order is the contract: the reservation stays held until the relay is
     /// down, so there is no window in which a stopped claim is still serving
     /// traffic or a live relay is holding a released one.
-    fn finish_bound<P: SecurityKeyClaimPort>(
+    fn finish_bound<P: SecurityKeyClaimPort + ?Sized>(
         &mut self,
         terminal: LeaseState,
         port: &mut P,

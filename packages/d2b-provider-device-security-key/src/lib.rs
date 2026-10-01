@@ -15,6 +15,7 @@ mod lease;
 mod process;
 mod relay;
 mod relay_service;
+mod realization;
 pub mod vocabulary;
 
 #[cfg(any(test, feature = "test-support"))]
@@ -44,6 +45,7 @@ pub use lease::{
     SecurityKeyClaimRequest, SecurityKeyLease, SecurityKeyLeaseError, SecurityKeySessionId,
     security_key_device_request,
 };
+pub use realization::{SecurityKeyBindingRealization, SecurityKeyBindingRealizations};
 pub use process::{
     FrontendProcessDeclaration, ProcessDeclarationError, RelayProcessDeclaration,
     SecurityKeyProcessRole, security_key_process_name,

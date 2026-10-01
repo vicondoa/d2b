@@ -232,12 +232,15 @@ pub struct SecurityKeyDriverArgs {
 /// The family's declarations and typed Provider effect.
 struct SecurityKeyFamily {
     effects: Arc<dyn SecurityKeyDriverEffects>,
+    /// The converted `Device` realization of one committed security-key
+    /// Binding row (U20).
+    converted: crate::realization::SecurityKeyBindingRealizations,
 }
 
 #[async_trait]
 impl SharedProviderFamily for SecurityKeyFamily {
     type Component = SecurityKeyComponent;
-    type State = ();
+    type State = crate::realization::SecurityKeyBindingRealization;
 
     fn rows(&self) -> &'static [ProviderRow<Self::Component>] {
         &SECURITY_KEY_REGISTRATIONS
@@ -335,16 +338,29 @@ impl SharedProviderFamily for SecurityKeyFamily {
         &self,
         component: SecurityKeyComponent,
         request: &SharedProviderEffectRequest<'_>,
-        _state: &(),
+        state: &Self::State,
     ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
-        self.effects.reconcile_security_key(component, request).await
+        match component {
+            // The Binding rides the Service's `Device` claim, so this is where
+            // the bounded helper leg is reached: the family's own lease
+            // verifies the daemon-minted claim and leg and drives the port,
+            // rather than the row deciding which key it may open.
+            SecurityKeyComponent::Binding => self
+                .converted
+                .reconcile_binding(state, request)
+                .await
+                .map(SharedProviderEffectOutcome::phase),
+            SecurityKeyComponent::Service => {
+                self.effects.reconcile_security_key(component, request).await
+            }
+        }
     }
 
     async fn finalize(
         &self,
         component: SecurityKeyComponent,
         request: &SharedProviderEffectRequest<'_>,
-        _state: &(),
+        _state: &Self::State,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
         self.effects.finalize(component, request).await
     }
@@ -374,12 +390,17 @@ const SECURITY_KEY_BINDING_READS: &[WellKnownType] =
 /// hosts one effects service per zone; a Binding descriptor declares
 /// none.
 pub fn security_key_descriptors(args: SecurityKeyDriverArgs) -> [DriverDescriptor; 2] {
+    let converted = crate::realization::SecurityKeyBindingRealizations::new(
+        Arc::clone(&args.facets.admission),
+        Arc::clone(&args.facets.claims),
+    );
     let factory: Arc<dyn d2b_resource_runtime::driver::ResourceDriverFactory> =
         Arc::new(SharedProviderDriverFactory::new(SharedProviderDriverArgs {
             zone: args.zone,
             controller_generation: args.controller_generation,
             family: Arc::new(SecurityKeyFamily {
                 effects: Arc::new(crate::effects_service::SecurityKeyEffects::new(args.facets)),
+                converted,
             }),
         }));
     let descriptor = |resource_type: WellKnownType,

@@ -353,27 +353,27 @@
     },
     {
       "file": "packages/d2b-provider-device-security-key/src/test_support.rs",
-      "line": 45,
+      "line": 48,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-device-security-key/src/test_support.rs",
-      "line": 47,
+      "line": 50,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-device-security-key/src/test_support.rs",
-      "line": 59,
+      "line": 62,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-device-security-key/src/test_support.rs",
-      "line": 83,
+      "line": 86,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-device-security-key/src/test_support.rs",
-      "line": 95,
+      "line": 98,
       "reason": "test-support recorder lock"
     },
     {
@@ -403,32 +403,32 @@
     },
     {
       "file": "packages/d2b-provider-device-usbip/src/test_support.rs",
-      "line": 48,
+      "line": 51,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-device-usbip/src/test_support.rs",
-      "line": 49,
+      "line": 52,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-device-usbip/src/test_support.rs",
-      "line": 61,
+      "line": 64,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-device-usbip/src/test_support.rs",
-      "line": 62,
+      "line": 65,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-device-usbip/src/test_support.rs",
-      "line": 86,
+      "line": 89,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-device-usbip/src/test_support.rs",
-      "line": 98,
+      "line": 101,
       "reason": "test-support recorder lock"
     },
     {
@@ -888,7 +888,7 @@
     },
     {
       "file": "packages/d2bd/src/resource_plane_v3.rs",
-      "line": 7040,
+      "line": 7057,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
