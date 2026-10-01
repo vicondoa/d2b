@@ -405,7 +405,6 @@ pub const fn device_effect_operations(component: DeviceComponent) -> &'static [D
 /// relay/worker Endpoints, and the Services the USBIP and security-key
 /// Device rows are admitted by.
 const DEVICE_READS: &[WellKnownType] = &[
-    WellKnownType::DEVICE_BINDING,
     WellKnownType::GUEST,
     WellKnownType::HOST,
     WellKnownType::VOLUME,

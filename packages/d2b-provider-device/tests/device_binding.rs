@@ -10,19 +10,21 @@
 //! revokes exactly the use an absence observation affects.
 
 use d2b_contracts_resource::v3::{
-    AdmissionStage, BindingAuthorization, BindingLifecycleState, BindingRealizationSupport,
-    BindingRefusal, BindingSlot, DeviceArbitration, DeviceAuthorityArbitration, DeviceAuthorityKey,
-    DeviceBindingRequest, DeviceClaimRequest, DeviceClass, DeviceEffectOperation, DeviceFunction,
-    DeviceSpec, DesiredDigest, DesiredRevision, FreshnessTuple, InventorySelector, InventorySpec,
-    RefusalReason, RequestedRights, ResourceRef, ResourceUid, StoreIncarnation, ZoneId,
-    execution_policy::BoundedToken,
+    AdmissionStage, BindingArbitration, BindingAuthorization, BindingContractError, BindingKind,
+    BindingLifecycleState, BindingRealizationFacet, BindingRealizationSupport, BindingRefusal,
+    BindingRowError, BindingSlot, DeviceArbitration, DeviceAuthorityArbitration, DeviceAuthorityKey,
+    DeviceBindingRequest, DeviceBindingSpec, DeviceClaimRequest, DeviceClass, DeviceEffectOperation,
+    DeviceFunction, DeviceSpec, DesiredDigest, DesiredRevision, FreshnessTuple, InventorySelector,
+    InventorySpec, RefusalReason, RequestedRights, ResourceRef, ResourceUid, StoreIncarnation, ZoneId,
+    admit_binding_row_refs, execution_policy::BoundedToken,
 };
 use d2b_provider_device::binding::{
-    DeviceAdmissionGrant, DeviceAdmissionSource, DeviceBindingFate,
+    DeviceAdmissionGrant, DeviceAdmissionSource, DeviceBindingDerivationError, DeviceBindingFate,
     DeviceHelperLeg, DeviceInventory, DeviceInventoryEntry, DevicePresence, DeviceUseOutcome,
-    LiveDeviceBinding, admit_device_request, binding_row_name, canonical_binding_row,
-    decide_presence, device_attachment_support, leg_outcome, parsed_consumer_request,
+    LiveDeviceBinding, admit_device_request, binding_row_name, canonical_binding_rows,
+    decide_presence, device_attachment_support, leg_outcome,
 };
+use d2b_provider_device::{DeviceComponent, declared_device_functions};
 
 /// The store generation every admission in this file is fenced against.
 fn store() -> StoreIncarnation {
@@ -722,75 +724,278 @@ fn device_disappearance_revokes_only_the_affected_use() {
     );
 }
 
-/// The committed `DeviceBinding` row is the request the consumer authored.
+/// One committed `Device` row implies one `DeviceBinding` row per claim it
+/// admits.
 ///
-/// The row name derives from the KTD3 identities rather than a declaration
-/// position, so reordering declarations cannot churn it, and the committed
-/// bytes read back as the same request rather than a second description.
+/// Each row is the family's own `DeviceBindingSpec`: the identities the
+/// consumer authored plus the source's accepted decision. The decision admits
+/// the right the row claims, realizes the attachment facet, and re-derives the
+/// same KTD3 key the source admitted, so a reader and the graph cannot
+/// disagree about what was admitted. The row name comes from those identities
+/// rather than from a declaration position, so two claims never share one row.
 #[test]
-fn the_committed_row_is_the_request_the_consumer_authored() {
+fn each_admitted_claim_mints_one_row_carrying_the_source_decision() {
     let device_ref = reference("Device/gpu-zero");
     let spec = drm_spec();
     let inventory = drm_inventory();
+    let support = device_attachment_support();
+    let authorization = BindingAuthorization::granted();
+    let dependencies = fence(
+        &device_ref,
+        &[
+            (GPU_WORKER, uid(GPU_WORKER_UID)),
+            (VIDEO_WORKER, uid(VIDEO_WORKER_UID)),
+        ],
+    );
+    let operations = operations();
+    let evidence = SourceEvidence::new(&support, &authorization, &dependencies, &operations);
+    let admitted_source = evidence.source(&device_ref, &spec, &inventory);
+
+    // Two named capabilities on two physical authorities: neither claim
+    // competes with the other, so both belong to this one Device row.
+    let render = admit_device_request(
+        &admitted_source,
+        &uid(GPU_WORKER_UID),
+        &exclusive_request(&device_ref, &reference(GPU_WORKER), "render-node", "render-node"),
+        &[],
+    )
+    .expect("an exclusive claim on a free authority is admitted");
+    let uvm = admit_device_request(
+        &admitted_source,
+        &uid(VIDEO_WORKER_UID),
+        &exclusive_request(&device_ref, &reference(VIDEO_WORKER), "uvm", "nvidia-uvm"),
+        &[],
+    )
+    .expect("the second named capability is a second physical authority");
+    let admitted = [render, uvm];
+
+    let rows = canonical_binding_rows(DeviceComponent::Gpu, &spec, &inventory, &admitted)
+        .expect("the committed Device row mints its admitted relationships");
+    assert_eq!(
+        rows.len(),
+        admitted.len(),
+        "one row per (device, consumer, slot) claim"
+    );
+    assert_ne!(rows[0].name(), rows[1].name(), "two claims never share one row");
+
+    for (row, binding) in rows.iter().zip(&admitted) {
+        assert_eq!(row.name(), &binding_row_name(binding.key()).expect("a row name"));
+        let decoded: DeviceBindingSpec = serde_json::from_slice(row.spec())
+            .expect("the committed bytes decode through the family's own wire decoder");
+        admit_binding_row_refs(
+            BindingKind::Device,
+            decoded.device_ref(),
+            decoded.execution_ref(),
+        )
+        .expect("the row's own references are admitted for this binding kind");
+        assert_eq!(decoded.device_ref(), &device_ref);
+        assert_eq!(decoded.execution_ref(), binding.request().consumer_ref());
+        assert_eq!(decoded.function(), binding.function());
+        assert_eq!(decoded.claim(), &binding.request().claim());
+        assert_eq!(decoded.slot().as_str(), binding.key().slot().as_str());
+        assert_eq!(
+            decoded
+                .key(
+                    zone(),
+                    device_uid(),
+                    binding.key().consumer_uid().clone(),
+                )
+                .expect("the committed row derives its own key"),
+            *binding.key(),
+            "the committed row reaches exactly the relationship the source admitted"
+        );
+
+        let decision = decoded.source();
+        assert!(
+            decision
+                .admitted_rights()
+                .contains(&decoded.claim().requested_rights()),
+            "the source decision admits the right this row claims"
+        );
+        assert_eq!(decision.arbitration(), BindingArbitration::Exclusive);
+        assert_eq!(decision.realized_facets(), support.facets());
+        assert!(
+            decision
+                .realized_facets()
+                .contains(&BindingRealizationFacet::DeviceAttachment),
+            "a device binding is delivered as an attachment or a descriptor"
+        );
+
+        let rendered = String::from_utf8(row.spec().to_vec()).expect("canonical bytes are utf-8");
+        assert!(
+            !rendered.contains("/dev/") && !rendered.contains("uid="),
+            "the committed row carries no device node path or numerical principal: {rendered}"
+        );
+    }
+}
+
+/// The capability vocabulary is the source row's, not the inventory's.
+///
+/// The trusted inventory says which named capabilities the host backs right
+/// now; the committed row says which ones this Provider can deliver. A claim
+/// outside the second is refused at the row rather than committed as a
+/// declaration no family realizes, and the row's own `providerRef` is what
+/// selects the vocabulary.
+#[test]
+fn a_claim_outside_the_source_rows_vocabulary_is_refused() {
+    let device_ref = reference("Device/gpu-zero");
+    let spec = drm_spec();
+    // The observed DRM inventory also resolves a hidraw node: the trusted
+    // inventory is an observation, not this family's capability vocabulary.
+    let inventory = DeviceInventory::new(vec![
+        DeviceInventoryEntry::new(
+            function("render-node"),
+            DeviceAuthorityKey::from_core(DRM_KEY),
+            DeviceAuthorityArbitration::Exclusive,
+            DevicePresence::Present,
+        ),
+        DeviceInventoryEntry::new(
+            function("hidraw"),
+            DeviceAuthorityKey::from_core(UVM_KEY),
+            DeviceAuthorityArbitration::Exclusive,
+            DevicePresence::Present,
+        ),
+    ])
+    .expect("the observed inventory is well formed");
+    let declared = declared_device_functions(DeviceComponent::Gpu, &spec);
+    assert!(
+        declared.contains(&function("render-node")) && !declared.contains(&function("hidraw")),
+        "the GPU family delivers DRM capabilities, not a security-key node"
+    );
+
     let support = device_attachment_support();
     let authorization = BindingAuthorization::granted();
     let dependencies = fence(&device_ref, &[(GPU_WORKER, uid(GPU_WORKER_UID))]);
     let operations = operations();
     let evidence = SourceEvidence::new(&support, &authorization, &dependencies, &operations);
     let admitted_source = evidence.source(&device_ref, &spec, &inventory);
-    let request = exclusive_request(
-        &device_ref,
-        &reference(GPU_WORKER),
-        "render-node",
-        "render-node",
-    );
-    let admitted =
-        admit_device_request(&admitted_source, &uid(GPU_WORKER_UID), &request, &[]).expect("admitted");
-
-    let row = canonical_binding_row(&admitted).expect("the row renders");
-    assert_eq!(row.name(), &binding_row_name(admitted.key()).expect("a row name"));
-    assert_eq!(
-        parsed_consumer_request(row.spec()).expect("the committed row decodes"),
-        request,
-        "the committed row declares exactly the request the consumer authored"
-    );
-    let rendered = String::from_utf8(row.spec().to_vec()).expect("canonical bytes are utf-8");
-    assert!(
-        !rendered.contains("/dev/") && !rendered.contains("uid="),
-        "the committed request carries no device node path or numerical principal: {rendered}"
-    );
-
-    // The row name identifies the relationship, not its position: two
-    // consumers with distinct identities and slots get distinct rows, and
-    // the same relationship always names the same row. The second consumer is
-    // admitted once the first has release evidence, so the two rows are
-    // compared after a real succession rather than through a live conflict.
-    let successor = exclusive_request(
-        &device_ref,
-        &reference(OTHER_WORKER),
-        "render-node",
-        "render-node",
-    );
-    let released = [LiveDeviceBinding::new(admitted.clone(), BindingLifecycleState::Released)];
-    let successor = admit_device_request(
+    let undeclared = admit_device_request(
         &admitted_source,
-        &uid(OTHER_WORKER_UID),
-        &successor,
-        &released,
+        &uid(GPU_WORKER_UID),
+        &exclusive_request(&device_ref, &reference(GPU_WORKER), "hidraw-node", "hidraw"),
+        &[],
     )
-    .expect("a released relationship hands the authority to its successor");
-    assert_ne!(
-        binding_row_name(successor.key()).expect("a row name"),
-        binding_row_name(admitted.key()).expect("a row name"),
-        "two relationships never share one row"
+    .expect("the inventory backed the node, so the claim itself is admitted");
+
+    assert_eq!(
+        canonical_binding_rows(
+            DeviceComponent::Gpu,
+            &spec,
+            &inventory,
+            std::slice::from_ref(&undeclared),
+        )
+            .expect_err("a capability this row does not declare mints no row"),
+        DeviceBindingDerivationError::FunctionNotDeclared
+    );
+    assert!(
+        declared_device_functions(DeviceComponent::SecurityKey, &spec).is_empty(),
+        "the security-key family does not bind a DRM bus class"
     );
     assert_eq!(
-        binding_row_name(admitted.key()).expect("a row name"),
-        canonical_binding_row(&admitted)
-            .expect("the row renders")
-            .name()
-            .clone(),
-        "the same relationship always names the same row"
+        canonical_binding_rows(DeviceComponent::SecurityKey, &spec, &inventory, &[undeclared])
+            .expect_err("a family that binds no capability of this row declares nothing"),
+        DeviceBindingDerivationError::FunctionNotDeclared
+    );
+}
+
+/// A Device row that backs no claim mints no row.
+///
+/// Zero admitted relationships is not a row with a default attachment, and a
+/// relationship whose named capability the trusted inventory no longer backs
+/// is not committed either: the source keeps holding that claim until release
+/// evidence arrives, but there is no attachment to declare for a capability
+/// the host cannot deliver, so that one retires while its peers stay.
+#[test]
+fn a_source_row_that_backs_no_claim_mints_no_row() {
+    let device_ref = reference("Device/gpu-zero");
+    let spec = drm_spec();
+    let inventory = drm_inventory();
+    let support = device_attachment_support();
+    let authorization = BindingAuthorization::granted();
+    let dependencies = fence(
+        &device_ref,
+        &[
+            (GPU_WORKER, uid(GPU_WORKER_UID)),
+            (VIDEO_WORKER, uid(VIDEO_WORKER_UID)),
+        ],
+    );
+    let operations = operations();
+    let evidence = SourceEvidence::new(&support, &authorization, &dependencies, &operations);
+    let admitted_source = evidence.source(&device_ref, &spec, &inventory);
+    let render = admit_device_request(
+        &admitted_source,
+        &uid(GPU_WORKER_UID),
+        &exclusive_request(&device_ref, &reference(GPU_WORKER), "render-node", "render-node"),
+        &[],
+    )
+    .expect("an exclusive claim on a free authority is admitted");
+    let uvm = admit_device_request(
+        &admitted_source,
+        &uid(VIDEO_WORKER_UID),
+        &exclusive_request(&device_ref, &reference(VIDEO_WORKER), "uvm", "nvidia-uvm"),
+        &[],
+    )
+    .expect("the second named capability is a second physical authority");
+    let admitted = [render, uvm];
+
+    assert!(
+        canonical_binding_rows(DeviceComponent::Gpu, &spec, &inventory, &[])
+            .expect("an empty relationship set is an answer, not a refusal")
+            .is_empty(),
+        "a Device row that admits no claim mints no row"
+    );
+
+    let uvm_gone = inventory
+        .with_presence(&function("nvidia-uvm"), DevicePresence::Absent)
+        .expect("the inventory resolved the UVM node");
+    let rows = canonical_binding_rows(DeviceComponent::Gpu, &spec, &uvm_gone, &admitted)
+        .expect("a revoked capability retires its row rather than refusing the source");
+    assert_eq!(
+        rows.len(),
+        1,
+        "only the capability the host still backs keeps a row"
+    );
+    let decoded: DeviceBindingSpec =
+        serde_json::from_slice(rows[0].spec()).expect("the retained row decodes");
+    assert_eq!(decoded.function(), &function("render-node"));
+
+    let all_gone = uvm_gone
+        .with_presence(&function("render-node"), DevicePresence::Absent)
+        .expect("the inventory resolved the render node");
+    assert!(
+        canonical_binding_rows(DeviceComponent::Gpu, &spec, &all_gone, &admitted)
+            .expect("every relationship is revoked, not refused")
+            .is_empty(),
+        "a Device row whose capabilities are all gone mints no row at all"
+    );
+}
+
+/// A consumer this binding kind does not admit never reaches a row.
+///
+/// The Device kind admits every binding consumer, so the only consumer refusal
+/// is a reference that is not a consumer at all. It is refused where the
+/// relationship is authored and again by the rule the committed row itself is
+/// checked against, so no derived row can name one.
+#[test]
+fn a_consumer_this_kind_does_not_admit_never_reaches_a_row() {
+    let device_ref = reference("Device/gpu-zero");
+    let not_a_consumer = reference("Volume/data");
+    assert_eq!(
+        DeviceBindingRequest::new(
+            device_ref.clone(),
+            not_a_consumer.clone(),
+            slot("render-node"),
+            function("render-node"),
+            DeviceClaimRequest::Exclusive,
+            d2b_contracts_resource::v3::DeviceAttachmentMode::Descriptor,
+        )
+        .expect_err("a Volume is not a binding consumer"),
+        BindingContractError::WrongResourceType
+    );
+    assert_eq!(
+        admit_binding_row_refs(BindingKind::Device, &device_ref, &not_a_consumer)
+            .expect_err("the row's own consumer reference is refused too"),
+        BindingRowError::WrongConsumerType
     );
 }
 

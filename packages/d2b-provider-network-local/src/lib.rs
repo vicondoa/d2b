@@ -38,9 +38,11 @@ pub mod test_support;
 
 pub use binding::{
     AdmittedMembership, FabricRealization, FabricRelease, FabricView, HostStateObservation,
-    MembershipAdmission, MembershipPolicy, MembershipReadiness, NetworkBindingError,
-    NetworkBindingRegistry, NetworkFabricKey, NetworkFabricTarget, NetworkMembershipCeiling,
-    NmUnmanagedObservation, ParentInputOutcome, membership_interface, network_binding_support,
+    MembershipAdmission, MembershipPolicy, MembershipReadiness, NetworkAdmittedConsumer,
+    NetworkBindingError, NetworkBindingRegistry, NetworkBindingRow, NetworkBindingSource,
+    NetworkFabricKey, NetworkFabricTarget, NetworkMembershipCeiling, NmUnmanagedObservation,
+    ParentInputOutcome, binding_row_name, canonical_binding_rows, membership_interface,
+    network_binding_support,
 };
 pub use driver::{
     NETWORK_CONTROLLER_REF, NETWORK_CREATIONS, NETWORK_FAMILY_NAME, NETWORK_PROVIDER_REF, NETWORK_REGISTRATIONS,

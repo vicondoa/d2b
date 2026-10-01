@@ -42,11 +42,7 @@ pub const RESOURCE_TYPES: &[&str] = &[
     "ResourceImport",
     "Operation",
     "SeccompProfile",
-    "CredentialBinding",
-    "DeviceBinding",
-    "EndpointBinding",
     "ExecutionPolicy",
-    "NetworkBinding",
 ];
 /// The typed nouns and the resource type each addresses.
 pub const TYPED_NOUNS: &[(&str, &str)] = &[

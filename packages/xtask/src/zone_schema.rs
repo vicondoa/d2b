@@ -1093,38 +1093,6 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
             ),
         ),
         (
-            "DeviceBinding",
-            dto_resource_schema::<d2b_contracts_resource::v3::device_binding::DeviceBindingSpec>(
-                "DeviceBinding",
-                "Durable device function attachment binding to one execution target.",
-                true,
-            ),
-        ),
-        (
-            "EndpointBinding",
-            dto_resource_schema::<d2b_contracts_resource::v3::endpoint_binding::EndpointBindingSpec>(
-                "EndpointBinding",
-                "Durable exact-endpoint delivery binding to one execution target.",
-                true,
-            ),
-        ),
-        (
-            "NetworkBinding",
-            dto_resource_schema::<d2b_contracts_resource::v3::network_binding::NetworkBindingSpec>(
-                "NetworkBinding",
-                "Durable network fabric membership binding to one execution target.",
-                true,
-            ),
-        ),
-        (
-            "CredentialBinding",
-            dto_resource_schema::<d2b_contracts_resource::v3::credential_binding::CredentialBindingSpec>(
-                "CredentialBinding",
-                "Durable credential delivery binding to one execution target.",
-                true,
-            ),
-        ),
-        (
             "Network",
             dto_resource_schema::<d2b_contracts_resource::v3::network::NetworkSpec>(
                 "Network",

@@ -18,6 +18,14 @@
 //! (R37), and releasing one membership never removes a fabric another member
 //! still uses (R36).
 //!
+//! The committed `NetworkBinding` row is the other half of that model. This
+//! module derives it from the committed `Network` row: one row per attached
+//! consumer, each naming the two rows the relationship joins, the
+//! presentation the consumer declared, and this provider's own decision
+//! about it ([`canonical_binding_rows`]). The derived row states a
+//! relationship and a decision; it never restates the traffic policy, which
+//! stays the source's admitted membership state.
+//!
 //! # What a ceiling is not
 //!
 //! A Host or Guest's child target-support ceiling bounds what a child of that
@@ -33,13 +41,13 @@ use d2b_contracts_resource::v3::{
     BoundedToken, BindingArbitration, BindingAuthorization, BindingConsumerKind,
     BindingContractError, BindingEvidence, BindingKey, BindingKind, BindingLifecycleState,
     BindingObservation, BindingRealizationFacet, BindingRealizationSupport, BindingRefusal,
-    BindingSlot, BindingSlotAddress, BindingSlotDecision, BindingSlotIndex,
-    BindingSpecFingerprint, ChildSupportCeiling, CompletionCondition, FreshnessTuple, IfName,
-    MAX_PORTS, NetworkBindingRequest, NetworkIfRole, NetworkPresentation, NetworkProvenance,
-    NetworkSpec, PortProtocol, PortSpec, PrimitiveSpecError, RefusalReason, ReleaseOutcome,
-    RequestedRights, ResourceGeneration, ResourceRef, ResourceUid, SourceAdmission,
-    SourceReservation, ZoneId, admit_binding_request, derive_network_ifname,
-    network_binding::NetworkExecutionParentInput,
+    BindingRowError, BindingSlot, BindingSlotAddress, BindingSlotDecision, BindingSlotIndex,
+    BindingSourceDecision, BindingSpecFingerprint, ChildSupportCeiling, CompletionCondition,
+    FreshnessTuple, IfName, MAX_PORTS, NetworkBindingRequest, NetworkBindingSpec,
+    NetworkIfRole, NetworkPresentation, NetworkProvenance, NetworkSpec, PortProtocol, PortSpec,
+    PrimitiveSpecError, RefusalReason, ReleaseOutcome, RequestedRights, ResourceGeneration,
+    ResourceRef, ResourceUid, SourceAdmission, SourceReservation, ZoneId, admit_binding_request,
+    canonical_json_bytes, derive_network_ifname, network_binding::NetworkExecutionParentInput,
 };
 
 use crate::controller::{NetworkAdmissionIntent, NetworkAdmissionProof};
@@ -58,6 +66,20 @@ const NETWORK_BINDING_FACETS: [BindingRealizationFacet; 2] = [
     BindingRealizationFacet::SharedFabric,
     BindingRealizationFacet::NamespaceInterface,
 ];
+
+/// How this source arbitrates one network membership.
+///
+/// The fabric is shared, so a membership is admitted alongside its peers and
+/// never as an exclusive claim on the Network. The admission path and the
+/// committed row name it here, so a boundary rebuilding the accepted graph
+/// from a row cannot read a different arbitration than admission decided.
+const NETWORK_MEMBERSHIP_ARBITRATION: BindingArbitration = BindingArbitration::Shared;
+
+/// Lowercase hexadecimal digits one derived row name is spelled from.
+const HEX_DIGITS: [u8; 16] = *b"0123456789abcdef";
+
+/// Bytes of the relationship digest a derived row name is spelled from.
+const ROW_NAME_DIGEST_BYTES: usize = 12;
 
 /// Bytes of the consumer slot folded into one source-owned reservation token.
 ///
@@ -137,6 +159,19 @@ impl From<BindingContractError> for NetworkBindingError {
             }
             BindingContractError::UnexpectedState => Self::UnexpectedState,
             _ => Self::InvalidRequest,
+        }
+    }
+}
+
+impl From<BindingRowError> for NetworkBindingError {
+    fn from(error: BindingRowError) -> Self {
+        match error {
+            BindingRowError::WrongSourceType
+            | BindingRowError::WrongConsumerType
+            | BindingRowError::ConsumerNotAdmitted => Self::WrongResourceType,
+            BindingRowError::InvalidOperations
+            | BindingRowError::DuplicateOperation
+            | BindingRowError::LifetimeOutOfBounds => Self::InvalidRequest,
         }
     }
 }
@@ -302,6 +337,281 @@ pub fn membership_interface(
         Some(consumer_uid),
     )
     .map_err(|_| NetworkBindingError::InvalidRequest)
+}
+
+// ---------------------------------------------------------------------------
+// Committed Network row -> committed NetworkBinding rows
+// ---------------------------------------------------------------------------
+
+/// One consumer the accepted graph admitted onto one Network's shared fabric.
+///
+/// A committed `Network` row names the execution targets it attaches but
+/// cannot carry their store identities, so the derivation reads both halves:
+/// the row decides which consumers join its fabric, and this record supplies
+/// each one's identity and the presentation its own request declared. The
+/// firewall is the Network's one ownership slot, so a membership's traffic
+/// policy stays out of this record entirely - it is resolved against the
+/// source's admitted membership at realization time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkAdmittedConsumer {
+    target: NetworkFabricTarget,
+    consumer_uid: ResourceUid,
+    presentation: NetworkPresentation,
+}
+
+impl NetworkAdmittedConsumer {
+    /// Record one admitted execution target and the presentation it asks for.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a reference that is not an execution parent, a consumer kind
+    /// [`BindingKind::Network`] does not admit, and a presentation whose
+    /// required realization facet this provider does not declare.
+    pub fn new(
+        target: ResourceRef,
+        consumer_uid: ResourceUid,
+        presentation: NetworkPresentation,
+    ) -> Result<Self, NetworkBindingError> {
+        let target = NetworkFabricTarget::new(target)?;
+        let kind =
+            BindingConsumerKind::from_resource_type(target.reference().resource_type().as_str())
+                .ok_or(NetworkBindingError::WrongResourceType)?;
+        if !BindingKind::Network.admits_consumer(kind) {
+            return Err(NetworkBindingError::WrongResourceType);
+        }
+        if presentation
+            .required_facets()
+            .iter()
+            .any(|facet| !network_binding_support().realizes(*facet))
+        {
+            return Err(NetworkBindingError::UnsupportedFacet);
+        }
+        Ok(Self {
+            target,
+            consumer_uid,
+            presentation,
+        })
+    }
+
+    /// Borrow the execution target that joins the fabric.
+    pub const fn target(&self) -> &NetworkFabricTarget {
+        &self.target
+    }
+
+    /// Borrow the consumer's store-assigned identity.
+    pub const fn consumer_uid(&self) -> &ResourceUid {
+        &self.consumer_uid
+    }
+
+    /// Borrow the consumer-side presentation its own request declared.
+    pub const fn presentation(&self) -> &NetworkPresentation {
+        &self.presentation
+    }
+}
+
+/// The committed `Network` row one binding derivation reads.
+///
+/// Every field is a fact the source already holds: the row's own reference
+/// and Zone, the immutable identity tuple the root host admission admitted,
+/// the committed base spec whose attachments are the execution targets that
+/// join the fabric, and the consumers the accepted graph admitted onto it.
+pub struct NetworkBindingSource<'a> {
+    /// The committed Network row's exact reference.
+    pub network_ref: &'a ResourceRef,
+    /// The Zone the relationships belong to.
+    pub zone: &'a ZoneId,
+    /// The immutable identity tuple the host admission admitted.
+    pub provenance: &'a NetworkProvenance,
+    /// The committed Network base spec, whose attachments are the execution
+    /// targets that join the fabric.
+    pub spec: &'a NetworkSpec,
+    /// The consumers the accepted graph admitted. It may name a consumer the
+    /// committed row does not attach: a source row implies no relationship
+    /// for a consumer it does not declare, so such a consumer derives no row.
+    pub consumers: &'a [NetworkAdmittedConsumer],
+}
+
+impl core::fmt::Debug for NetworkBindingSource<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("NetworkBindingSource")
+            .field("network_ref", &self.network_ref)
+            .field("zone", &self.zone)
+            .field("provenance", &self.provenance)
+            .field("attachment_count", &self.spec.attachments().len())
+            .field("admitted_consumer_count", &self.consumers.len())
+            .finish()
+    }
+}
+
+/// One canonical `NetworkBinding` row a committed `Network` row implies.
+///
+/// The committed bytes are the neutral binding contract: the two rows this
+/// relationship joins, the presentation the consumer declared, and this
+/// provider's own decision about it. The row carries no port, egress, or
+/// other per-consumer traffic policy, so the Network's single firewall slot
+/// keeps its one owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkBindingRow {
+    name: BoundedToken,
+    spec: Vec<u8>,
+    fabric_interface: IfName,
+}
+
+impl NetworkBindingRow {
+    /// Borrow the deterministic row name.
+    pub const fn name(&self) -> &BoundedToken {
+        &self.name
+    }
+
+    /// Borrow the canonical desired bytes committed as the row's spec.
+    pub fn spec(&self) -> &[u8] {
+        &self.spec
+    }
+
+    /// Borrow the interface this membership holds on the shared fabric.
+    pub const fn fabric_interface(&self) -> &IfName {
+        &self.fabric_interface
+    }
+}
+
+/// Derive the canonical `NetworkBinding` rows one committed `Network` row
+/// implies.
+///
+/// One row per attached consumer, named from the KTD3 key the committed
+/// identities produce rather than from a declaration position, so the same
+/// relationship keeps one identity across restarts and two relationships
+/// never collide by ordering. A Network that attaches nothing implies no
+/// relationship and derives no row: the empty result is the answer, never a
+/// default membership.
+///
+/// # Errors
+///
+/// Returns [`NetworkBindingError::NotAuthorized`] when a committed attachment
+/// names no admitted consumer, [`NetworkBindingError::SlotOccupied`] when
+/// two attachments claim one consumer slot, and any refusal
+/// [`canonical_binding_row`] raises for that relationship.
+pub fn canonical_binding_rows(
+    source: &NetworkBindingSource<'_>,
+) -> Result<Vec<NetworkBindingRow>, NetworkBindingError> {
+    let mut rows = Vec::with_capacity(source.spec.attachments().len());
+    let mut claimed: BTreeSet<&ResourceRef> = BTreeSet::new();
+    for attachment in source.spec.attachments() {
+        let consumer = source
+            .consumers
+            .iter()
+            .find(|candidate| candidate.target().reference() == attachment.execution_ref())
+            .ok_or(NetworkBindingError::NotAuthorized)?;
+        // A committed row's slot is derived from the consumer, so a second
+        // attachment for one consumer is a second declaration for one slot
+        // rather than a second relationship.
+        if !claimed.insert(consumer.target().reference()) {
+            return Err(NetworkBindingError::SlotOccupied);
+        }
+        rows.push(canonical_binding_row(source, consumer)?);
+    }
+    Ok(rows)
+}
+
+/// Derive one canonical `NetworkBinding` row from one admitted relationship.
+///
+/// The interface this membership holds on the fabric is this family's own
+/// derivation ([`membership_interface`]) - the one the host admission
+/// reserves the tap with and the serving driver presents - so a relationship
+/// whose committed identity does not derive one is refused here instead of
+/// being committed as a promise nothing could keep. The row's source
+/// decision is the rights this family's own rule admits, the arbitration
+/// [`admit_source_membership`] applies, and the facets this provider
+/// declares it can realize, so a boundary rebuilding the accepted graph from
+/// committed rows alone reads back exactly what admission would decide.
+///
+/// # Errors
+///
+/// Returns [`NetworkBindingError::SourcePolicyRefused`] when this family
+/// admits no right for a network relationship, [`NetworkBindingError::WrongResourceType`]
+/// when the source reference is not a `Network` or the consumer is not one
+/// this kind admits, and [`NetworkBindingError::InvalidRequest`] when the
+/// presentation names an interface the realization cannot present, the
+/// committed identity does not derive the membership's fabric interface, or
+/// the derived row name is not a bounded token.
+fn canonical_binding_row(
+    source: &NetworkBindingSource<'_>,
+    consumer: &NetworkAdmittedConsumer,
+) -> Result<NetworkBindingRow, NetworkBindingError> {
+    let right = network_membership_right()?;
+    let fabric_interface = membership_interface(source.provenance, consumer.consumer_uid())?;
+    if let NetworkPresentation::NamespaceInterface { name } = consumer.presentation() {
+        // A namespace presentation is realized by presenting the interface
+        // the consumer named, so a name the kernel could never present is
+        // refused here rather than committed as an unreachable promise.
+        IfName::parse(name.as_str()).map_err(|_| NetworkBindingError::InvalidRequest)?;
+    }
+    let spec = NetworkBindingSpec::new(
+        source.network_ref.clone(),
+        consumer.target().reference().clone(),
+        consumer.presentation().clone(),
+        BindingSourceDecision::new(
+            vec![right],
+            NETWORK_MEMBERSHIP_ARBITRATION,
+            NETWORK_BINDING_FACETS.to_vec(),
+        )?,
+    )?;
+    let key = spec.key(
+        source.zone.clone(),
+        source.provenance.network_uid().clone(),
+        consumer.consumer_uid().clone(),
+    )?;
+    Ok(NetworkBindingRow {
+        name: binding_row_name(&key)?,
+        spec: canonical_json_bytes(&spec).map_err(|_| NetworkBindingError::InvalidRequest)?,
+        fabric_interface,
+    })
+}
+
+/// The right this family admits one network relationship under.
+///
+/// Derived from [`BindingKind::admits_rights`] rather than restated, so a
+/// committed row can never claim a right this family would refuse.
+fn network_membership_right() -> Result<RequestedRights, NetworkBindingError> {
+    RequestedRights::ALL
+        .into_iter()
+        .find(|right| BindingKind::Network.admits_rights(*right))
+        .ok_or(NetworkBindingError::SourcePolicyRefused)
+}
+
+/// The deterministic row name this source mints for one relationship.
+///
+/// The name derives from the relationship's committed identities - Zone, the
+/// source reference and identity, the consumer reference and identity, and
+/// the stable slot - under this family's own domain, never from a declaration
+/// index or an attachment order, so reordering attachments never churns
+/// identities and two relationships cannot collide by position.
+///
+/// # Errors
+///
+/// Returns [`NetworkBindingError::InvalidRequest`] when the derived name is
+/// not a bounded token.
+pub fn binding_row_name(key: &BindingKey) -> Result<BoundedToken, NetworkBindingError> {
+    let mut input = Vec::new();
+    push_digest(&mut input, b"d2b/network/binding-row/v1");
+    for part in [
+        key.zone().to_canonical_string(),
+        key.source_ref().to_canonical_string(),
+        key.source_uid().to_canonical_string(),
+        key.consumer_ref().to_canonical_string(),
+        key.consumer_uid().to_canonical_string(),
+        key.slot().as_str().to_owned(),
+    ] {
+        push_digest(&mut input, part.as_bytes());
+    }
+    let digest = digest_bytes(&input);
+    let mut name = String::with_capacity("net-binding-".len() + ROW_NAME_DIGEST_BYTES * 2);
+    name.push_str("net-binding-");
+    for byte in digest.iter().copied().take(ROW_NAME_DIGEST_BYTES) {
+        name.push(char::from(HEX_DIGITS[usize::from(byte >> 4)]));
+        name.push(char::from(HEX_DIGITS[usize::from(byte & 0x0f)]));
+    }
+    BoundedToken::parse(name).map_err(|_| NetworkBindingError::InvalidRequest)
 }
 
 /// The NetworkManager unmanaged state observed for one Zone.
@@ -1511,7 +1821,7 @@ fn admit_source_membership(
     SourceAdmission::new(
         key.clone(),
         vec![request.requested_rights()],
-        BindingArbitration::Shared,
+        NETWORK_MEMBERSHIP_ARBITRATION,
     )
     .map_err(NetworkBindingError::from)
 }

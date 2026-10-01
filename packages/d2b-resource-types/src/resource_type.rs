@@ -49,14 +49,6 @@ impl WellKnownType {
     /// that list is the projection of the generated converted-type
     /// authority, and registering the type there is the cutover unit's
     /// change, not a second edit here.
-    /// The `DeviceBinding` resource type name.
-    pub const DEVICE_BINDING: Self = Self("DeviceBinding");
-    /// The `CredentialBinding` resource type name.
-    pub const CREDENTIAL_BINDING: Self = Self("CredentialBinding");
-    /// The `NetworkBinding` resource type name.
-    pub const NETWORK_BINDING: Self = Self("NetworkBinding");
-    /// The `EndpointBinding` resource type name.
-    pub const ENDPOINT_BINDING: Self = Self("EndpointBinding");
     /// A USB/IP service instance.
     pub const USB_SERVICE: Self = Self("usb.d2bus.org.UsbService");
     /// The binding that attaches a USB backing to a guest.

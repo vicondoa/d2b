@@ -27,5 +27,14 @@ The launch argv is fenced: a worker addresses its admitted destination or a
 declared inherited descriptor, never an independently computed host source
 path.
 
-`RunnerIsolationSpec::presentation` is `None` for launches the broker has not yet
-classified, which keeps the unchanged entry point on its historical behaviour.
+`RunnerIsolationSpec::presentation` is not optional: every launch states the
+realization it is launched under. The `spawn-process` kernel DERIVES it from
+the launch row's own mount policy, so a row declaring anything the broker must
+realize in a mount namespace (a mount namespace of its own, a read-only or
+writable path, a device bind, a cross-domain bind, the read-only Nix closure,
+or default device-node hiding) launches under `FilesystemPresentation` with
+that policy actually applied, and a row declaring none of those keeps
+`NamespaceFirstServiceSource` with nothing to skip. Naming the namespace-first
+posture for a row that asks for a mount is what `presentation-requires-mount-
+realization` refuses, so the derivation is the enforcement rather than a
+hardcoded assumption.

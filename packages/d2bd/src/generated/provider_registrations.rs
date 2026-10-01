@@ -30,16 +30,8 @@ pub(crate) const PROVIDER_REGISTRATIONS: &[ProviderRegistration] = &[
         services: &["credential.d2bus.org/effects"],
     },
     ProviderRegistration {
-        provider_ref: "credential-binding",
-        services: &["credential-binding.d2bus.org/effects"],
-    },
-    ProviderRegistration {
         provider_ref: "device",
         services: &["device.d2bus.org/effects"],
-    },
-    ProviderRegistration {
-        provider_ref: "device-binding",
-        services: &["device-binding.d2bus.org/effects"],
     },
     ProviderRegistration {
         provider_ref: "device-security-key",
@@ -54,20 +46,12 @@ pub(crate) const PROVIDER_REGISTRATIONS: &[ProviderRegistration] = &[
         services: &["endpoint.d2bus.org/effects"],
     },
     ProviderRegistration {
-        provider_ref: "endpoint-binding",
-        services: &["endpoint-binding.d2bus.org/effects"],
-    },
-    ProviderRegistration {
         provider_ref: "guest",
         services: &["guest.d2bus.org/effects"],
     },
     ProviderRegistration {
         provider_ref: "host",
         services: &["host.d2bus.org/effects"],
-    },
-    ProviderRegistration {
-        provider_ref: "network-binding",
-        services: &[],
     },
     ProviderRegistration {
         provider_ref: "network-local",

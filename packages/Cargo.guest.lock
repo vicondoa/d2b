@@ -1657,62 +1657,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2b-provider-device-binding"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "d2b-contracts-resource",
- "d2b-resource-runtime",
- "d2b-resource-types",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "d2b-provider-endpoint-binding"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "d2b-contracts-resource",
- "d2b-provider-endpoint",
- "d2b-provider-toolkit",
- "d2b-resource-runtime",
- "d2b-resource-types",
- "schemars",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "d2b-provider-network-binding"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "d2b-contracts-resource",
- "d2b-resource-runtime",
- "d2b-resource-types",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "d2b-provider-credential-binding"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "d2b-contracts-resource",
- "d2b-resource-runtime",
- "d2b-resource-types",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "d2b-provider-volume-binding"
 version = "0.0.0-bootstrap"
 dependencies = [

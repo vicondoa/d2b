@@ -62,6 +62,24 @@ realization.
 carries it with the decoder, the type's verbs, execution domains, reads, and
 the `BUILTIN | STARTUP` allowed-source mask.
 
+## Binding rows
+
+The endpoint owner, not a consumer, mints the `EndpointBinding` rows its
+committed `Endpoint` row implies. `canonical_binding_rows` takes the Zone, the
+endpoint's own `EndpointSpec`, the endpoint reference, and the deliveries that
+row declares, and commits exactly one canonical `EndpointBindingSpec` row per
+delivery; the request the row was derived from travels beside the row bytes,
+so the admission and the row a boundary reads back are one derivation rather
+than two descriptions that can drift. Each row carries the source's own
+`BindingSourceDecision`: the right the attachment kind requests, shared
+arbitration, and the realized facets the kind's own `required_facets()` names
+- a connect or a listen commits the endpoint descriptor alone, an attach
+commits the descriptor and the private presentation. A source row that
+declares no delivery derives no row, and a delivery the endpoint's own policy
+does not admit is refused rather than committed. `binding_row_name` mints the
+deterministic row name from the KTD3 slot address rather than a declaration
+position, so one relationship keeps one identity across restarts.
+
 ## Placement and dependencies
 
 `Endpoint` names no placement anchor, so an endpoint row is reconciled on its

@@ -51,22 +51,38 @@
 //! Only a parent's own consumption becomes a relationship here; a parent's
 //! defaults shape one named child's request and grant the parent nothing
 //! (R16, AE31-AE33).
+//!
+//! # What a source row derives
+//!
+//! An `EndpointBinding` is a committed row of its own type, and the endpoint
+//! owner is what mints it: [`canonical_binding_rows`] turns one committed
+//! `Endpoint` row plus the deliveries it declares into exactly the rows the
+//! endpoint's own declaration admits, each carrying the source's own
+//! [`BindingSourceDecision`](d2b_contracts_resource::v3::BindingSourceDecision).
+//! The realized facets are the attachment kind's own
+//! [`required_facets`](EndpointAttachmentKind::required_facets) rather than a
+//! fixed pair, so a connect or a listen commits the endpoint descriptor alone
+//! while an attach commits the descriptor and the private presentation. A
+//! source row that declares no delivery derives no row.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
 use d2b_contracts_resource::v3::{
-    AdmissionStage, BindingArbitration, BindingAuthorization, BindingContractError,
-    BindingEvidence, BindingKey, BindingKind, BindingLifecycleState, BindingObservation,
-    BindingRealizationFacet, BindingRealizationSupport, BindingRefusal, BindingSlotAddress,
-    BindingSlotDecision, BindingSlotIndex, BindingSpecFingerprint, BindingSupportEntry,
-    BoundedToken, ChildSupportCeiling, CompletionCondition, EndpointAttachmentKind,
-    EndpointBindingRequest, FreshnessTuple, PrimitiveSpecError,
-    RefusalReason, ReleaseOutcome, RequestedRights, ResourceGeneration, ResourceRef, ResourceUid,
-    SourceAdmission, SourceReservation, ZoneId, admit_binding_request, redacted_debug,
+    AdmissionStage, BindingArbitration, BindingAuthorization, BindingConsumerKind,
+    BindingContractError, BindingEvidence, BindingKey, BindingKind, BindingLifecycleState,
+    BindingObservation, BindingRealizationFacet, BindingRealizationSupport, BindingRefusal,
+    BindingSlot, BindingSlotAddress, BindingSlotDecision, BindingSlotIndex,
+    BindingSourceDecision, BindingSpecFingerprint, BindingSupportEntry, BoundedToken,
+    ChildSupportCeiling, CompletionCondition, EndpointAttachmentKind, EndpointBindingRequest,
+    FreshnessTuple, PrimitiveSpecError, RefusalReason, ReleaseOutcome, RequestedRights,
+    ResourceGeneration, ResourceRef, ResourceUid, SourceAdmission, SourceReservation, ZoneId,
+    admit_binding_request, canonical_json_bytes, redacted_debug,
 };
 
-use d2b_contracts_resource::v3::endpoint_binding::EndpointExecutionParentInput;
+use d2b_contracts_resource::v3::endpoint_binding::{
+    EndpointBindingSpec, EndpointExecutionParentInput,
+};
 
 use crate::endpoint::{
     EndpointClass, EndpointConsumerPolicy, EndpointLocality, EndpointOperation, EndpointSpec,
@@ -1015,6 +1031,326 @@ impl core::fmt::Debug for AdmittedEndpointBinding {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Source row -> committed `EndpointBinding` rows
+// ---------------------------------------------------------------------------
+
+/// The arbitration every admitted endpoint relationship carries.
+///
+/// An endpoint delivers the same exact inode to every consumer its own
+/// declaration names, so the source admits each of them alongside its peers
+/// and never alone: one endpoint is not a resource a second consumer
+/// displaces the first from. The endpoint's own attachment ceiling, not the
+/// arbitration, is what bounds how many may hold it at once.
+const ENDPOINT_BINDING_ARBITRATION: BindingArbitration = BindingArbitration::Shared;
+
+/// The domain tag framing one derived `EndpointBinding` row name.
+const BINDING_ROW_NAME_DOMAIN: &str = "d2b:v3:endpoint-binding-row";
+
+/// Bytes of the framed digest one derived row name carries.
+const BINDING_ROW_NAME_BYTES: usize = 12;
+
+/// One delivery a committed `Endpoint` row declares for one consumer.
+///
+/// A delivery names the consumer, the consumer's own stable slot, and how
+/// that consumer reaches the exact endpoint. The endpoint reference and the
+/// bounded purpose are NOT its own: both come from the committed `Endpoint`
+/// row it is declared against, so a delivery cannot reach a different
+/// endpoint or invent a purpose the endpoint never published.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DeclaredEndpointBinding {
+    consumer: EndpointConsumerTarget,
+    slot: BindingSlot,
+    attachment: EndpointAttachmentKind,
+}
+
+impl DeclaredEndpointBinding {
+    /// Declare one delivery of the exact endpoint to one consumer.
+    pub const fn new(
+        consumer: EndpointConsumerTarget,
+        slot: BindingSlot,
+        attachment: EndpointAttachmentKind,
+    ) -> Self {
+        Self {
+            consumer,
+            slot,
+            attachment,
+        }
+    }
+
+    /// Borrow the consumer this delivery is declared for.
+    pub const fn consumer(&self) -> &EndpointConsumerTarget {
+        &self.consumer
+    }
+
+    /// Borrow the consumer's own stable slot for the relationship.
+    pub const fn slot(&self) -> &BindingSlot {
+        &self.slot
+    }
+
+    /// Return how this consumer reaches the exact endpoint.
+    pub const fn attachment(&self) -> EndpointAttachmentKind {
+        self.attachment
+    }
+}
+
+impl core::fmt::Debug for DeclaredEndpointBinding {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("DeclaredEndpointBinding")
+            .field("consumer", &self.consumer)
+            .field("slot", &self.slot)
+            .field("attachment", &self.attachment)
+            .finish()
+    }
+}
+
+/// One source-owned `EndpointBinding` row the source mints for one admitted
+/// relationship.
+///
+/// The row's spec is the canonical `EndpointBindingSpec` bytes: the exact
+/// endpoint, the consumer, the consumer's slot, the attachment kind, and the
+/// source's own decision about the relationship. The request the row was
+/// derived from travels beside those bytes, so the admission that mints the
+/// relationship and the row a boundary reads back are two views of ONE
+/// derivation rather than two descriptions that can drift apart.
+#[derive(Clone, PartialEq, Eq)]
+pub struct EndpointBindingRow {
+    name: BoundedToken,
+    request: EndpointBindingRequest,
+    spec: Vec<u8>,
+}
+
+impl EndpointBindingRow {
+    /// Borrow the deterministic row name.
+    pub const fn name(&self) -> &BoundedToken {
+        &self.name
+    }
+
+    /// Borrow the exact request this row was derived from.
+    ///
+    /// It is the request [`EndpointBindingRegistry::admit`] is evaluated
+    /// against, so the consumer's declaration the source admitted and the row
+    /// the graph reads back cannot name different consumers, slots, or
+    /// attachment kinds.
+    pub const fn request(&self) -> &EndpointBindingRequest {
+        &self.request
+    }
+
+    /// Borrow the canonical desired bytes committed as the row's spec.
+    pub fn spec(&self) -> &[u8] {
+        &self.spec
+    }
+}
+
+impl core::fmt::Debug for EndpointBindingRow {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("EndpointBindingRow")
+            .field("name", &self.name)
+            .field("request", &self.request)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Derive the committed `EndpointBinding` rows one source row implies.
+///
+/// Every declared delivery becomes exactly one row, named from the
+/// relationship's KTD3 slot address rather than from a declaration position,
+/// so the same delivery keeps one identity across restarts and two deliveries
+/// never collide by ordering. A source row that declares no delivery derives
+/// NO row: there is no default relationship to commit, and an absent fact
+/// stays absent.
+///
+/// # Errors
+///
+/// Returns [`EndpointBindingError::InvalidRequest`] when two deliveries claim
+/// the one consumer slot: the slot address IS the relationship, so a second
+/// claim on it is not a second relationship. Every other refusal is the one
+/// [`canonical_binding_row`] names for the delivery itself.
+pub fn canonical_binding_rows(
+    zone: &ZoneId,
+    spec: &EndpointSpec,
+    endpoint_ref: &ResourceRef,
+    deliveries: &[DeclaredEndpointBinding],
+) -> Result<Vec<EndpointBindingRow>, EndpointBindingError> {
+    let mut rows = Vec::with_capacity(deliveries.len());
+    let mut minted: BTreeSet<BoundedToken> = BTreeSet::new();
+    for delivery in deliveries {
+        let row = canonical_binding_row(zone, spec, endpoint_ref, delivery)?;
+        // The row name IS the relationship identity, so a second delivery
+        // claiming it is the same relationship declared twice - refused here
+        // rather than committed as two rows over one slot.
+        if !minted.insert(row.name().clone()) {
+            return Err(EndpointBindingError::InvalidRequest);
+        }
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
+/// The committed `EndpointBinding` row one delivery implies.
+///
+/// The endpoint's own declaration decides, in the same order
+/// [`EndpointBindingRegistry::admit`] consults it: the consumer must be one
+/// this binding kind admits at all (a `Host` never is, because the host-side
+/// delivery is an admitted realization leg of the binding whose consumer is
+/// that helper), then the endpoint's subject allowlist, then the operation
+/// the attachment kind performs, then the endpoint's own attachment capacity.
+/// The delivery then rides on the facets its own kind requires - a connect or
+/// a listen through the verified descriptor alone, an attach through the
+/// descriptor and the private presentation - and the committed decision
+/// records the right that kind requests, the shared arbitration, and exactly
+/// those facets.
+///
+/// No host path, socket name, or numerical host principal is added: the
+/// exact endpoint's locator stays with the owner that resolved it.
+///
+/// # Errors
+///
+/// Returns [`EndpointBindingError::WrongResourceType`] for a consumer that is
+/// not a binding consumer at all,
+/// [`EndpointBindingError::InvalidRequest`] for a consumer this kind does not
+/// admit, [`EndpointBindingError::ConsumerNotAllowed`] for a consumer the
+/// endpoint's own policy does not name,
+/// [`EndpointBindingError::OperationNotAllowed`] for an operation that policy
+/// does not admit, [`EndpointBindingError::AttachmentRefused`] for an `attach`
+/// the endpoint declares no capacity for, and
+/// [`EndpointBindingError::UnsupportedFacet`] for a facet this family does not
+/// declare it can realize. The typed request and decision constructors keep
+/// their own refusals, so a bound capability that is not an `Endpoint` and a
+/// decision whose right or facets are not a valid set surface as
+/// [`EndpointBindingError::Contract`].
+pub fn canonical_binding_row(
+    zone: &ZoneId,
+    spec: &EndpointSpec,
+    endpoint_ref: &ResourceRef,
+    delivery: &DeclaredEndpointBinding,
+) -> Result<EndpointBindingRow, EndpointBindingError> {
+    let attachment = delivery.attachment();
+    let consumer = delivery.consumer().as_ref();
+    let consumer_kind =
+        BindingConsumerKind::from_resource_type(consumer.resource_type().as_str())
+            .ok_or(EndpointBindingError::WrongResourceType)?;
+    // The kind's own admitted set is the rule rather than a per-family list,
+    // so a `Process` or an `EphemeralProcess` helper is derivable and a
+    // `Host` never is.
+    if !BindingKind::Endpoint.admits_consumer(consumer_kind) {
+        return Err(EndpointBindingError::InvalidRequest);
+    }
+    let policy = spec.consumer_policy();
+    if !policy.admits_subject(consumer) {
+        return Err(EndpointBindingError::ConsumerNotAllowed);
+    }
+    if !policy.admits_operation(EndpointConsumerPolicy::operation_for(attachment)) {
+        return Err(EndpointBindingError::OperationNotAllowed);
+    }
+    if attachment == EndpointAttachmentKind::Attach
+        && !spec.attachment_policy().admits_attachment(0)
+    {
+        return Err(EndpointBindingError::AttachmentRefused);
+    }
+    // The decision commits what the delivery rides on, so a facet the
+    // family cannot realize is refused here rather than committed as a fact
+    // no implementation here could honour.
+    ensure_realizable(attachment.required_facets())?;
+    let request = EndpointBindingRequest::new(
+        endpoint_ref.clone(),
+        consumer.clone(),
+        delivery.slot().clone(),
+        attachment,
+        spec.purpose().clone(),
+    )?;
+    let decision = BindingSourceDecision::new(
+        vec![request.requested_rights()],
+        ENDPOINT_BINDING_ARBITRATION,
+        attachment.required_facets().to_vec(),
+    )?;
+    // Both references are already settled above - the request refused a bound
+    // capability that is not an `Endpoint`, and the kind refused a consumer
+    // it does not admit - so the only failure this check can still report is
+    // the wrong bound capability, and the refusal stays field-free.
+    let row = EndpointBindingSpec::new(
+        endpoint_ref.clone(),
+        consumer.clone(),
+        attachment,
+        BoundedToken::parse(delivery.slot().as_str())?,
+        decision,
+    )
+    .map_err(|_| EndpointBindingError::WrongResourceType)?;
+    Ok(EndpointBindingRow {
+        name: binding_row_name(zone, endpoint_ref, consumer, delivery.slot())?,
+        request,
+        // A typed specification over canonical references always renders; a
+        // failure here is a programming error in this crate, never a
+        // consumer's declaration, so it is refused rather than committed.
+        spec: canonical_json_bytes(&row).map_err(|_| EndpointBindingError::InvalidRequest)?,
+    })
+}
+
+/// Refuse a facet set this family does not declare it can realize.
+///
+/// The Endpoint family realizes a relationship through a verified descriptor
+/// for the one admitted inode, and through a private presentation of that
+/// same inode where a backend requires a name. Nothing here realizes access
+/// to the directory that happens to contain the socket, so a decision naming
+/// any other facet is refused rather than committed: a committed facet is
+/// read back as something the source admitted through, and this crate can
+/// carry only the two it declares.
+///
+/// # Errors
+///
+/// Returns [`EndpointBindingError::UnsupportedFacet`] when any named facet is
+/// outside [`endpoint_binding_support`].
+pub fn ensure_realizable(facets: &[BindingRealizationFacet]) -> Result<(), EndpointBindingError> {
+    let support = endpoint_binding_support();
+    if facets.iter().all(|facet| support.realizes(*facet)) {
+        Ok(())
+    } else {
+        Err(EndpointBindingError::UnsupportedFacet)
+    }
+}
+
+/// The deterministic row name one relationship mints.
+///
+/// The name derives from the KTD3 slot address - the bound endpoint, the
+/// consumer, and the consumer's own stable slot - and never from a
+/// declaration index or an attachment order, so reordering declarations
+/// never churns row identities and two relationships never collide by
+/// position. The attachment kind is deliberately not part of it: a consumer
+/// that reaches the same endpoint differently in the same slot is the SAME
+/// relationship, which is what makes such a change one relationship rather
+/// than a second one.
+///
+/// # Errors
+///
+/// Returns [`BindingContractError::InvalidField`] when the derived row name is
+/// not a bounded token.
+pub fn binding_row_name(
+    zone: &ZoneId,
+    endpoint_ref: &ResourceRef,
+    execution_ref: &ResourceRef,
+    slot: &BindingSlot,
+) -> Result<BoundedToken, BindingContractError> {
+    let mut digest = framed_digest(BINDING_ROW_NAME_DOMAIN.as_bytes());
+    for part in [
+        zone.as_str().to_owned(),
+        endpoint_ref.to_canonical_string(),
+        execution_ref.to_canonical_string(),
+        slot.as_str().to_owned(),
+    ] {
+        let next = framed_digest(part.as_bytes());
+        for (byte, part_byte) in digest.iter_mut().zip(next) {
+            *byte ^= part_byte;
+        }
+    }
+    BoundedToken::parse(format!(
+        "endpoint-binding-{}",
+        digest_into_hex(digest, BINDING_ROW_NAME_BYTES)
+    ))
+    .map_err(|_| BindingContractError::InvalidField)
+}
+
 /// One relationship's readiness, with source preparation and consumer-side
 /// completion reported separately.
 ///
@@ -1309,14 +1645,7 @@ impl EndpointBindingRegistry {
         )?;
         let source = admit_source_endpoint(&key, &admission)?;
         let support = endpoint_binding_support();
-        if !admission
-            .request
-            .required_facets()
-            .iter()
-            .all(|facet| support.realizes(*facet))
-        {
-            return Err(EndpointBindingError::UnsupportedFacet);
-        }
+        ensure_realizable(admission.request.required_facets())?;
         if !fence_names_both_parties(
             &admission.dependencies,
             &admission.source_uid,

@@ -8,15 +8,19 @@
 //! cached admission outliving the dependency revisions it was fenced against.
 
 use d2b_contracts_resource::v3::{
-    BindingAuthorization, BindingKey, BindingKind, BindingLifecycleState, BindingSlot,
-    BindingSupportEntry, BoundedToken, ChildSupportCeiling, CompletionCondition, DesiredDigest,
-    DesiredRevision, FreshnessTuple, Ipv4Cidr, NetworkBindingRequest, NetworkMembership,
-    NetworkPresentation, NetworkSpec, PortProtocol, PortSpec, RequestedRights, ResourceGeneration,
-    ResourceRef, ResourceUid, StoreIncarnation, ZoneId, network_binding::NetworkExecutionParentInput,
+    BindingArbitration, BindingAuthorization, BindingKey, BindingKind, BindingLifecycleState,
+    BindingRealizationFacet, BindingSlot, BindingSupportEntry, BoundedToken, ChildSupportCeiling,
+    CompletionCondition, DesiredDigest, DesiredRevision, DhcpSpec, DnsSpec, FreshnessTuple,
+    Ipv4Cidr, IsolationSpec, MdnsSpec, NetworkAttachmentEntry, NetworkBindingRequest,
+    NetworkBindingSpec, NetworkMembership, NetworkPresentation, NetworkProvenance, NetworkSpec,
+    PortProtocol, PortSpec, RequestedRights, ResourceGeneration, ResourceRef, ResourceUid,
+    RoutingSpec, StoreIncarnation, ZoneId, admit_binding_row_refs,
+    network_binding::NetworkExecutionParentInput,
 };
 use d2b_provider_network_local::{
-    HostStateObservation, MembershipAdmission, NetworkBindingError, NetworkBindingRegistry,
-    NetworkFabricTarget, NetworkMembershipCeiling, NmUnmanagedObservation, ParentInputOutcome,
+    HostStateObservation, MembershipAdmission, NetworkAdmittedConsumer, NetworkBindingError,
+    NetworkBindingRegistry, NetworkBindingSource, NetworkFabricTarget, NetworkMembershipCeiling,
+    NmUnmanagedObservation, ParentInputOutcome, canonical_binding_rows,
     controller::{NetworkAdmissionIntent, NetworkAdmissionKey, render_membership_config},
     membership_interface,
     nftables::{SharedNftTable, SharedTableEntry},
@@ -838,4 +842,438 @@ fn a_slot_can_be_checked_before_the_row_is_committed() {
         "checking does not record, so the same candidate still reads as free"
     );
     assert_eq!(registry.fabric_count(), 0);
+}
+
+/// The Zone every derived relationship belongs to, held for the whole test so
+/// a derived source can borrow it.
+static ZONE_ID: std::sync::LazyLock<ZoneId> =
+    std::sync::LazyLock::new(|| ZoneId::parse(ZONE).expect("zone"));
+
+// ---------------------------------------------------------------------------
+// Committed Network row -> committed NetworkBinding rows
+// ---------------------------------------------------------------------------
+
+const HOST_UID: &str = "523e4567-e89b-42d3-a456-426614174004";
+
+/// A committed Network row whose attachments are the execution targets that
+/// join its fabric.
+fn attached_network_spec(attachments: &[(&str, u8)]) -> NetworkSpec {
+    NetworkSpec::new(
+        Ipv4Cidr::parse("10.20.0.0/24").expect("lan cidr"),
+        Ipv4Cidr::parse("10.20.1.0/30").expect("uplink cidr"),
+        None,
+        false,
+        IsolationSpec::default(),
+        RoutingSpec::default(),
+        DhcpSpec::default(),
+        DnsSpec::default(),
+        None,
+        MdnsSpec::default(),
+        None,
+        token("net-vm"),
+        attachments
+            .iter()
+            .map(|(target, index)| {
+                NetworkAttachmentEntry::new(reference(target), *index, None)
+                    .expect("reserved attachment entry")
+            })
+            .collect(),
+    )
+    .expect("network spec declaring its attached consumers")
+}
+
+fn provenance() -> NetworkProvenance {
+    host_intent(3, 7).key().provenance()
+}
+
+fn admitted_consumer(
+    target: &str,
+    identity: &str,
+    presentation: NetworkPresentation,
+) -> NetworkAdmittedConsumer {
+    NetworkAdmittedConsumer::new(reference(target), uid(identity), presentation)
+        .expect("admitted fabric consumer")
+}
+
+/// The committed Network row a derivation reads, for one attachment set and
+/// one admitted consumer set.
+fn binding_source<'a>(
+    network_ref: &'a ResourceRef,
+    spec: &'a NetworkSpec,
+    provenance: &'a NetworkProvenance,
+    consumers: &'a [NetworkAdmittedConsumer],
+) -> NetworkBindingSource<'a> {
+    NetworkBindingSource {
+        network_ref,
+        zone: &ZONE_ID,
+        provenance,
+        spec,
+        consumers,
+    }
+}
+
+/// The committed Network row of the primary fixture: a Host and a Guest both
+/// attached, each with its own store identity and presentation.
+fn attached_lan() -> (ResourceRef, NetworkSpec, NetworkProvenance, Vec<NetworkAdmittedConsumer>) {
+    let network_ref = reference("Network/lan");
+    let spec = attached_network_spec(&[("Host/system", 2), ("Guest/work-vm", 3)]);
+    let provenance = provenance();
+    let consumers = vec![
+        admitted_consumer(
+            "Host/system",
+            HOST_UID,
+            NetworkPresentation::shared_fabric(),
+        ),
+        admitted_consumer(
+            "Guest/work-vm",
+            GUEST_UID,
+            NetworkPresentation::namespace_interface("eth0").expect("namespace presentation"),
+        ),
+    ];
+    (network_ref, spec, provenance, consumers)
+}
+
+/// One committed Network row implies one committed binding row per attached
+/// consumer, and the committed bytes read back as that family's own strict
+/// row contract.
+#[test]
+fn a_committed_network_row_commits_one_binding_row_per_attached_consumer() {
+    let (network_ref, spec, provenance, consumers) = attached_lan();
+    let source = binding_source(&network_ref, &spec, &provenance, &consumers);
+    let rows = canonical_binding_rows(&source)
+        .expect("the committed row derives its binding rows");
+
+    assert_eq!(rows.len(), 2, "one row per consumer that joins the fabric");
+    let names: std::collections::BTreeSet<&str> =
+        rows.iter().map(|row| row.name().as_str()).collect();
+    assert_eq!(names.len(), rows.len(), "two consumers, two row names");
+
+    for (row, consumer) in rows.iter().zip(&consumers) {
+        let decoded: NetworkBindingSpec =
+            serde_json::from_slice(row.spec()).expect("the committed bytes are a NetworkBinding row");
+        assert_eq!(decoded.network_ref(), &network_ref);
+        assert_eq!(decoded.execution_ref(), consumer.target().reference());
+        assert_eq!(decoded.presentation(), consumer.presentation());
+        admit_binding_row_refs(
+            BindingKind::Network,
+            decoded.network_ref(),
+            decoded.execution_ref(),
+        )
+        .expect("the row names a Network and a consumer this kind admits");
+        assert_eq!(
+            row.fabric_interface().as_str(),
+            membership_interface(&provenance, consumer.consumer_uid())
+                .expect("membership interface")
+                .as_str(),
+            "the row holds the interface the family derives, not a second one"
+        );
+    }
+
+    // The Host reaches the provider-owned fabric directly; the Guest reaches
+    // its own membership under the name its own request declared.
+    let guest: NetworkBindingSpec =
+        serde_json::from_slice(rows[1].spec()).expect("the Guest's committed row");
+    assert_eq!(
+        guest.presentation(),
+        &NetworkPresentation::namespace_interface("eth0").expect("namespace presentation")
+    );
+    assert_eq!(
+        guest
+            .source()
+            .realized_facets()
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>(),
+        [
+            BindingRealizationFacet::SharedFabric,
+            BindingRealizationFacet::NamespaceInterface
+        ]
+        .into_iter()
+        .collect(),
+        "the committed decision declares both facets this provider realizes"
+    );
+    for facet in guest.presentation().required_facets() {
+        assert!(
+            guest.source().realized_facets().contains(facet),
+            "the committed decision realizes the presentation the row asks for"
+        );
+    }
+    assert_eq!(
+        guest.source().admitted_rights(),
+        [RequestedRights::Consume],
+        "the source admits exactly the right the family admits"
+    );
+    assert_eq!(
+        guest.source().arbitration(),
+        BindingArbitration::Shared,
+        "a membership is admitted alongside its peers, never exclusively"
+    );
+}
+
+/// The committed row is the source provider's decision, so it carries the
+/// membership and nothing else: a second per-consumer ruleset in the row
+/// would fork the Network's one firewall slot.
+#[test]
+fn a_committed_row_carries_no_traffic_policy() {
+    let (network_ref, spec, provenance, consumers) = attached_lan();
+    let source = binding_source(&network_ref, &spec, &provenance, &consumers);
+    let rows = canonical_binding_rows(&source)
+        .expect("derived rows");
+    let committed: serde_json::Value =
+        serde_json::from_slice(rows[1].spec()).expect("committed row value");
+    let fields: std::collections::BTreeSet<&String> = committed
+        .as_object()
+        .expect("a JSON object row")
+        .keys()
+        .collect();
+    assert_eq!(
+        fields,
+        ["networkRef", "executionRef", "presentation", "source"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<std::collections::BTreeSet<String>>()
+            .iter()
+            .collect(),
+        "no ports, no egress, no ruleset: the membership policy is the source's \
+         admitted state, never restated by the row"
+    );
+}
+
+/// Deriving again from the same committed row changes nothing, so a restart
+/// re-ensures the same rows instead of churning identities.
+#[test]
+fn a_relationship_keeps_one_row_across_passes() {
+    let (network_ref, spec, provenance, consumers) = attached_lan();
+    let source = binding_source(&network_ref, &spec, &provenance, &consumers);
+    let first = canonical_binding_rows(&source).expect("derived rows");
+    let second = canonical_binding_rows(&source).expect("derived rows");
+    assert_eq!(first, second);
+}
+
+/// A derived row is something this family's own admission accepts: the
+/// relationship key, the admitted right, and the arbitration the row
+/// committed are the ones admission decides, and the interface it holds is
+/// the one admission realizes.
+#[test]
+fn a_derived_row_is_admitted_by_this_familys_own_admission_path() {
+    let (network_ref, spec, provenance, consumers) = attached_lan();
+    let source = binding_source(&network_ref, &spec, &provenance, &consumers);
+    let rows = canonical_binding_rows(&source)
+        .expect("derived rows");
+    let row = &rows[1];
+    let guest: NetworkBindingSpec =
+        serde_json::from_slice(row.spec()).expect("the Guest's committed row");
+
+    let consumer_uid = uid(GUEST_UID);
+    let mut registry = NetworkBindingRegistry::new(zone());
+    let admitted = registry
+        .admit(MembershipAdmission {
+            zone: zone(),
+            source_uid: uid(NETWORK_UID),
+            consumer_uid: consumer_uid.clone(),
+            target: NetworkFabricTarget::new(guest.execution_ref().clone())
+                .expect("the Guest is an execution target"),
+            request: NetworkBindingRequest::new(
+                guest.network_ref().clone(),
+                guest.execution_ref().clone(),
+                BindingSlot::parse("fabric").expect("the row's own consumer slot"),
+                NetworkMembership::new(Vec::new(), false).expect("an empty membership"),
+                guest.presentation().clone(),
+ )
+            .expect("the committed row is an admissible request"),
+            host_intent: host_intent(3, 7).proof(),
+            ceiling: NetworkMembershipCeiling::new(true, 8),
+            authorization: BindingAuthorization::granted(),
+            dependencies: vec![
+                network_freshness(),
+                consumer_freshness("Guest/work-vm", GUEST_UID),
+            ],
+            observation: HostStateObservation::empty(),
+        })
+        .expect("the derived row is admitted by the source's own path");
+
+    assert_eq!(
+        admitted.key(),
+        &guest
+            .key(zone(), uid(NETWORK_UID), consumer_uid)
+            .expect("the committed row's relationship key"),
+        "admission reaches exactly the key the committed row derives"
+    );
+    assert_eq!(
+        admitted.evidence().admission().rights(),
+        guest.source().admitted_rights()[0],
+        "the right admission grants is the right the row committed"
+    );
+    assert_eq!(
+        admitted.evidence().admission().arbitration(),
+        guest.source().arbitration(),
+        "the arbitration admission applied is the one the row committed"
+    );
+    assert_eq!(
+        admitted.policy().fabric_interface(),
+        row.fabric_interface(),
+        "the interface admission holds is the one the derived row names"
+    );
+    assert_eq!(
+        admitted.policy().presented_interface().as_str(),
+        "eth0",
+        "the consumer still reaches its membership under its own name"
+    );
+    assert!(
+        admitted.policy().ports().is_empty(),
+        "the row restated no traffic policy, so admission granted none"
+    );
+}
+
+/// A Network that attaches nothing implies no relationship, so it commits no
+/// row at all rather than a default membership.
+#[test]
+fn a_network_that_attaches_nothing_commits_no_row() {
+    let network_ref = reference("Network/lan");
+    let spec = attached_network_spec(&[]);
+    let provenance = provenance();
+    let consumers = vec![admitted_consumer(
+        "Host/system",
+        HOST_UID,
+        NetworkPresentation::shared_fabric(),
+    )];
+    let source = binding_source(&network_ref, &spec, &provenance, &consumers);
+
+    assert!(
+        canonical_binding_rows(&source)
+            .expect("an unadmitted consumer is simply not a relationship")
+            .is_empty(),
+        "zero relationships derives zero rows"
+    );
+}
+
+/// A committed attachment the accepted graph authorized nobody for is not a
+/// relationship: it is refused rather than committed as an unbacked
+/// membership.
+#[test]
+fn a_committed_attachment_without_an_admitted_consumer_is_refused() {
+    let (network_ref, spec, provenance, consumers) = attached_lan();
+    let unattached = vec![consumers[0].clone()];
+    let source = binding_source(&network_ref, &spec, &provenance, &unattached);
+
+    assert_eq!(
+        canonical_binding_rows(&source).unwrap_err(),
+        NetworkBindingError::NotAuthorized
+    );
+}
+
+/// A consumer that can hold no fabric membership cannot enter the admitted
+/// set. The neutral row contract admits every consumer kind for this family,
+/// so the execution-parent bound is enforced where the row is minted: a
+/// fabric is keyed by execution target, and the serving driver refuses a row
+/// naming anything else terminally.
+#[test]
+fn a_consumer_that_cannot_hold_a_fabric_membership_is_refused() {
+    assert_eq!(
+        NetworkAdmittedConsumer::new(
+            reference("Process/worker"),
+            uid(FIRST_UID),
+            NetworkPresentation::shared_fabric(),
+        )
+        .unwrap_err(),
+        NetworkBindingError::WrongResourceType,
+        "a Process consumes a target's membership; it is never the target itself"
+    );
+    assert_eq!(
+        NetworkAdmittedConsumer::new(
+            reference("Volume/state"),
+            uid(FIRST_UID),
+            NetworkPresentation::shared_fabric(),
+        )
+        .unwrap_err(),
+        NetworkBindingError::WrongResourceType,
+        "a Volume is not a binding consumer at all"
+    );
+    assert_eq!(
+        admit_binding_row_refs(
+            BindingKind::Network,
+            &reference("Network/lan"),
+            &reference("Volume/state"),
+        )
+        .unwrap_err(),
+        d2b_contracts_resource::v3::BindingRowError::WrongConsumerType,
+        "the row contract refuses the same reference the source does"
+    );
+    assert!(
+        admit_binding_row_refs(
+            BindingKind::Network,
+            &reference("Network/lan"),
+            &reference("Process/worker"),
+        )
+        .is_ok(),
+        "the neutral contract admits a Process here, which is exactly why the \
+         source refuses to mint the row: no fabric realizes it"
+    );
+}
+
+/// A namespace presentation is realized by presenting the interface the
+/// consumer named, so a name the kernel could never present is refused here
+/// rather than committed as an unreachable promise. The name is a valid
+/// bounded token, so only the realization can refuse it.
+#[test]
+fn a_row_naming_an_unpresentable_interface_is_refused() {
+    let network_ref = reference("Network/lan");
+    let spec = attached_network_spec(&[("Guest/work-vm", 2)]);
+    let provenance = provenance();
+    let consumers = vec![admitted_consumer(
+        "Guest/work-vm",
+        GUEST_UID,
+        NetworkPresentation::namespace_interface("an-interface-name-far-longer-than-the-kernel-allows")
+            .expect("a bounded token naming no Linux interface"),
+    )];
+    let source = binding_source(&network_ref, &spec, &provenance, &consumers);
+
+    assert_eq!(
+        canonical_binding_rows(&source).unwrap_err(),
+        NetworkBindingError::InvalidRequest
+    );
+}
+
+/// A source row that is not a `Network` cannot commit a Network binding: the
+/// row contract refuses it, and the derivation surfaces that refusal.
+#[test]
+fn a_source_row_that_is_not_a_network_is_refused() {
+    let (network_ref, spec, provenance, consumers) = attached_lan();
+    let volume_ref = reference("Volume/state");
+    let source = binding_source(&volume_ref, &spec, &provenance, &consumers);
+
+    assert_eq!(
+        canonical_binding_rows(&source).unwrap_err(),
+        NetworkBindingError::WrongResourceType
+    );
+    let rows = canonical_binding_rows(&binding_source(
+        &network_ref,
+        &spec,
+        &provenance,
+        &consumers,
+ ))
+    .expect("the same committed row read as a Network derives its rows");
+    let host: NetworkBindingSpec = serde_json::from_slice(rows[0].spec()).expect("Host row");
+    assert_eq!(host.network_ref(), &network_ref);
+}
+
+/// The row's consumer slot is derived from the consumer, so two committed
+/// attachments for one consumer are a second declaration for one slot rather
+/// than a second relationship.
+#[test]
+fn two_attachments_for_one_consumer_collide_on_one_slot() {
+    let network_ref = reference("Network/lan");
+    let spec = attached_network_spec(&[("Guest/work-vm", 2), ("Guest/work-vm", 3)]);
+    let provenance = provenance();
+    let consumers = vec![admitted_consumer(
+        "Guest/work-vm",
+        GUEST_UID,
+        NetworkPresentation::shared_fabric(),
+    )];
+    let source = binding_source(&network_ref, &spec, &provenance, &consumers);
+
+    assert_eq!(
+        canonical_binding_rows(&source).unwrap_err(),
+        NetworkBindingError::SlotOccupied
+    );
 }

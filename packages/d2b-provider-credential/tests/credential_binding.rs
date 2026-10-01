@@ -22,23 +22,28 @@ use d2b_contracts_provider::v3::credential::{
 };
 use d2b_contracts_resource::v3::{
     AdmissionStage, BindingArbitration, BindingAuthorization, BindingContractError, BindingKey,
-    BindingKind, BindingLifecycleState, BindingSlot, BindingSpecFingerprint, CredentialBindingRequest,
-    CredentialLifetime, CredentialOperation, DesiredDigest, DesiredRevision, FreshnessTuple,
-    RefusalReason, RequestedRights, ResourceGeneration, ResourceRef, ResourceUid, SourceAdmission,
-    StoreIncarnation, ZoneId,
+    BindingKind, BindingLifecycleState, BindingRealizationFacet, BindingRealizationSupport,
+    BindingRowError, BindingSlot, BindingSpecFingerprint, CredentialBindingRequest,
+    CredentialBindingSpec, CredentialLifetime, CredentialOperation, DesiredDigest, DesiredRevision,
+    FreshnessTuple, MAX_CREDENTIAL_LIFETIME_MS, MIN_CREDENTIAL_LIFETIME_MS, RefusalReason,
+    RequestedRights, ResourceGeneration, ResourceRef, ResourceUid, SourceAdmission,
+    StoreIncarnation, ZoneId, admit_binding_row_refs, canonical_json_bytes,
 };
 use d2b_provider_credential::{
-    CredentialBindingAdmission, CredentialDeliveryAuthority, CredentialDeliveryEvidence,
-    CredentialSourcePolicy, credential_binding_support,
+    CREDENTIAL_DELIVERY_SLOT, CredentialBindingAdmission, CredentialDeliveryAuthority,
+    CredentialDeliveryEvidence, CredentialSourcePolicy, canonical_binding_rows,
+    credential_binding_support, credential_source_decision, delivery_operation,
 };
 use d2b_provider_credential::{CredentialRevocationOutcome, CredentialRevocationReport};
 
 const ZONE: &str = "work";
 const CREDENTIAL: &str = "Credential/api-key";
 const CONSUMER: &str = "Process/web";
+const GUEST: &str = "Guest/work-vm";
 const CONSUMER_PROVIDER: &str = "Provider/secret-service";
 const CREDENTIAL_UID: &str = "1b4e28ba-2fa1-41d2-883f-0016d3cca427";
 const CONSUMER_UID: &str = "9c5b94d1-6470-4b1a-9a41-0016d3cca427";
+const GUEST_UID: &str = "123e4567-e89b-42d3-a456-426614174000";
 const AUDIENCE: &str = "azure-resource-manager";
 const ROUTE_DIGEST: &str =
     "sha256:6f1c1b6f2a6f2cbb1f2e5b2f0c3a7a2b6c9d0e1f2a3b4c5d6e7f809a1b2c3d4e";
@@ -94,6 +99,34 @@ fn credential_spec(operations: &[OperationClass], max_lease_lifetime_ms: u64) ->
         CredentialScope::new(Some(resource("Host/studio")), None, None).expect("scope"),
         audience(),
         None,
+        operations.to_vec(),
+        RotationSpec::new(
+            RotationPolicyClass::OnExpiry,
+            None,
+            max_lease_lifetime_ms,
+        )
+        .expect("rotation"),
+        ExpirySpec::new(0).expect("expiry"),
+        RevocationSpec::default(),
+        None,
+        None,
+    )
+    .expect("credential spec")
+}
+
+/// One `Credential` row whose placement is declared by its own scope.
+///
+/// A scope names a Host or a Guest, which is the whole of the row's consumer
+/// declaration; `None` is a row that declares none.
+fn credential_spec_scoped(
+    execution_ref: Option<&str>,
+    operations: &[OperationClass],
+    max_lease_lifetime_ms: u64,
+) -> CredentialSpec {
+    CredentialSpec::new(
+        CredentialScope::new(execution_ref.map(resource), None, None).expect("scope"),
+        audience(),
+        Some(resource(CONSUMER_PROVIDER)),
         operations.to_vec(),
         RotationSpec::new(
             RotationPolicyClass::OnExpiry,
@@ -197,16 +230,6 @@ fn evidence() -> CredentialDeliveryEvidence {
     ], NOW + 1_000)
 }
 
-/// The three delivery operation classes, filtered out of a service operation
-/// set: revocation and metadata inspection have no delivery session.
-fn delivery_operation(class: OperationClass) -> Option<CredentialOperation> {
-    match class {
-        OperationClass::AcquireToken => Some(CredentialOperation::AcquireToken),
-        OperationClass::RefreshToken => Some(CredentialOperation::RefreshToken),
-        OperationClass::SignChallenge => Some(CredentialOperation::SignChallenge),
-        _ => None,
-    }
-}
 
 /// The sorted field names of one rendered object.
 fn object_keys(value: &serde_json::Value) -> Vec<String> {
@@ -1037,4 +1060,351 @@ fn the_family_authority_drives_the_shared_admission_gate() {
         .code(),
         "credential-delivery-session-superseded"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The committed rows a `Credential` row derives
+// ---------------------------------------------------------------------------
+
+/// One committed delivery relationship derived from one committed row.
+struct DerivedRow {
+    name: String,
+    row: CredentialBindingSpec,
+}
+
+/// Derive the one row a `Credential` row commits to, decoding it back through
+/// the family's own row contract.
+fn derived_row(spec: &CredentialSpec) -> DerivedRow {
+    let derived = canonical_binding_rows(&resource(CREDENTIAL), spec)
+        .expect("derivable Credential row")
+        .into_iter()
+        .map(|child| DerivedRow {
+            name: child.name,
+            row: serde_json::from_slice::<CredentialBindingSpec>(&child.spec)
+                .expect("committed bytes decode through the row contract"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(derived.len(), 1, "a Guest-scoped row commits exactly one");
+    derived.into_iter().next().expect("the committed row")
+}
+
+/// The delivery request a committed row declares, restated in the request
+/// vocabulary its own admission path is reached through.
+fn request_for(spec: &CredentialSpec, row: &CredentialBindingSpec) -> CredentialBindingRequest {
+    let policy = CredentialSourcePolicy::from_spec(spec);
+    let lifetime = format!("{}ms", row.lifetime_ms());
+    CredentialBindingRequest::new(
+        row.credential_ref().clone(),
+        row.execution_ref().clone(),
+        BindingSlot::parse(row.slot().as_str()).expect("slot"),
+        d2b_contracts_resource::v3::execution_policy::BoundedToken::parse(
+            policy.audience().as_str(),
+        )
+        .expect("audience token"),
+        row.operations().to_vec(),
+        CredentialLifetime::new(lifetime.clone(), lifetime).expect("lifetime"),
+    )
+    .expect("request")
+}
+
+#[test]
+fn a_credential_row_commits_the_delivery_it_actually_declares() {
+    let spec = credential_spec_scoped(
+        Some(GUEST),
+        &[
+            OperationClass::AcquireToken,
+            OperationClass::RefreshToken,
+            OperationClass::SignChallenge,
+            OperationClass::RevokeToken,
+            OperationClass::InspectMetadata,
+        ],
+        600_000,
+    );
+    let derived = derived_row(&spec);
+
+    assert_eq!(derived.row.credential_ref(), &resource(CREDENTIAL));
+    assert_eq!(derived.row.execution_ref(), &resource(GUEST));
+    assert_eq!(derived.row.slot().as_str(), CREDENTIAL_DELIVERY_SLOT);
+    // Every delivery class the row grants, and neither protocol operation:
+    // revocation and metadata inspection establish no delivery session.
+    assert_eq!(
+        derived.row.operations(),
+        [
+            CredentialOperation::AcquireToken,
+            CredentialOperation::RefreshToken,
+            CredentialOperation::SignChallenge,
+        ],
+    );
+    assert_eq!(derived.row.lifetime_ms(), 600_000);
+    assert!((MIN_CREDENTIAL_LIFETIME_MS..=MAX_CREDENTIAL_LIFETIME_MS)
+        .contains(&derived.row.lifetime_ms()));
+
+    let decision = derived.row.source();
+    assert_eq!(decision.admitted_rights(), [RequestedRights::Consume]);
+    assert_eq!(
+        decision.realized_facets(),
+        credential_binding_support().facets(),
+    );
+
+    // The committed bytes are the row contract, and the row contract admits
+    // the consumer the source derived it for.
+    admit_binding_row_refs(
+        BindingKind::Credential,
+        derived.row.credential_ref(),
+        derived.row.execution_ref(),
+    )
+    .expect("the committed consumer is admitted by the row contract");
+
+    // Nothing but what is delivered, to whom, for how long, and with which
+    // operations: the audience, the Provider, the generations, and the route
+    // digest stay out of the row.
+    let rendered: serde_json::Value =
+        serde_json::from_slice(&canonical_json_bytes(&derived.row).expect("bytes"))
+            .expect("canonical row value");
+    assert_eq!(
+        object_keys(&rendered),
+        [
+            "credentialRef",
+            "executionRef",
+            "lifetimeMs",
+            "operations",
+            "slot",
+            "source",
+        ]
+        .map(str::to_owned),
+    );
+    assert_eq!(
+        object_keys(&rendered["source"]),
+        ["admittedRights", "arbitration", "realizedFacets"].map(str::to_owned),
+    );
+    assert_no_secret_shaped_field(&rendered);
+}
+
+#[test]
+fn one_relationship_keeps_one_row_name_as_the_row_narrows() {
+    let wide = credential_spec_scoped(
+        Some(GUEST),
+        &[OperationClass::AcquireToken, OperationClass::RefreshToken],
+        600_000,
+    );
+    let narrow = credential_spec_scoped(
+        Some(GUEST),
+        &[OperationClass::AcquireToken],
+        600_000,
+    );
+    let shorter = credential_spec_scoped(
+        Some(GUEST),
+        &[OperationClass::AcquireToken, OperationClass::RefreshToken],
+        60_000,
+    );
+
+    // Deriving twice from the same row changes nothing, so a restart re-ensures
+    // the same row instead of churning its identity.
+    let first = derived_row(&wide);
+    let again = derived_row(&wide);
+    assert_eq!(first.name, again.name);
+    assert_eq!(first.row, again.row);
+
+    // Narrowing the operations or the lease updates the one relationship
+    // rather than minting a second row beside it: the name is minted from the
+    // identities the row carries, not from its mutable payload.
+    assert_eq!(derived_row(&narrow).name, first.name);
+    assert_eq!(derived_row(&shorter).name, first.name);
+    assert_ne!(derived_row(&narrow).row, first.row);
+}
+
+#[test]
+fn the_derived_row_is_admitted_by_the_familys_own_admission_path() {
+    let spec = credential_spec_scoped(
+        Some(GUEST),
+        &[OperationClass::AcquireToken, OperationClass::SignChallenge],
+        600_000,
+    );
+    let derived = derived_row(&spec);
+    let request = request_for(&spec, &derived.row);
+    let decision = credential_source_decision();
+
+    // The row's own key and the request's key are the same relationship: a
+    // boundary evaluating the committed row reaches exactly the key the source
+    // admitted.
+    assert_eq!(
+        derived
+            .row
+            .key(zone(), uid(CREDENTIAL_UID), uid(GUEST_UID))
+            .expect("row key"),
+        request
+            .key(zone(), uid(CREDENTIAL_UID), uid(GUEST_UID))
+            .expect("request key"),
+    );
+
+    let source = SourceAdmission::new(
+        request
+            .key(zone(), uid(CREDENTIAL_UID), uid(GUEST_UID))
+            .expect("key"),
+        decision.admitted_rights().to_vec(),
+        decision.arbitration(),
+    )
+    .expect("source admission");
+    let admitted = CredentialDeliveryAuthority::admit(
+        request,
+        CredentialBindingAdmission::new(
+            zone(),
+            uid(CREDENTIAL_UID),
+            uid(GUEST_UID),
+            CredentialSourcePolicy::from_spec(&spec),
+            BindingSpecFingerprint::from_request(&spec),
+            BindingAuthorization::granted(),
+            source,
+            credential_binding_support(),
+            vec![dependency()],
+            resource(CREDENTIAL),
+            generation(3),
+            resource(CONSUMER_PROVIDER),
+            generation(7),
+            generation(11),
+            4,
+            CredentialSourcePolicy::from_spec(&spec)
+                .audience()
+                .clone(),
+            route_digest(),
+            4096,
+            NOW,
+        ),
+    )
+    .expect("the derived row's relationship is admitted");
+
+    assert_eq!(admitted.deadline_unix_ms(), NOW + 600_000);
+    assert_eq!(admitted.expiry_unix_ms(), NOW + 600_000);
+    for operation in derived.row.operations() {
+        assert!(admitted.admits_operation(*operation));
+    }
+}
+
+#[test]
+fn a_credential_row_that_declares_no_relationship_commits_no_row() {
+    // A host-level need is a child target-support ceiling, not a binding row.
+    assert!(canonical_binding_rows(
+        &resource(CREDENTIAL),
+        &credential_spec_scoped(
+            Some("Host/studio"),
+            &[OperationClass::AcquireToken],
+            600_000,
+        ),
+    )
+    .expect("derivable row")
+    .is_empty());
+    // A row that places itself nowhere names no consumer.
+    assert!(canonical_binding_rows(
+        &resource(CREDENTIAL),
+        &credential_spec_scoped(None, &[OperationClass::AcquireToken], 600_000),
+    )
+    .expect("derivable row")
+    .is_empty());
+    // A row granting only the two protocol operations establishes no delivery
+    // session and therefore names no `CredentialBinding` relationship.
+    assert!(canonical_binding_rows(
+        &resource(CREDENTIAL),
+        &credential_spec_scoped(
+            Some(GUEST),
+            &[OperationClass::RevokeToken, OperationClass::InspectMetadata],
+            600_000,
+        ),
+    )
+    .expect("derivable row")
+    .is_empty());
+}
+
+#[test]
+fn a_row_naming_an_unadmitted_consumer_is_refused() {
+    // The kind admits every consumer kind except the Host, and the row
+    // contract enforces it rather than leaving it to a call site.
+    assert_eq!(
+        admit_binding_row_refs(BindingKind::Credential, &resource(CREDENTIAL), &resource("Host/studio"))
+            .expect_err("a Host is not a credential consumer"),
+        BindingRowError::ConsumerNotAdmitted,
+    );
+    assert_eq!(
+        CredentialBindingSpec::new(
+            resource(CREDENTIAL),
+            resource("Host/studio"),
+            vec![CredentialOperation::AcquireToken],
+            600_000,
+            d2b_contracts_resource::v3::execution_policy::BoundedToken::parse(
+                CREDENTIAL_DELIVERY_SLOT,
+            )
+            .expect("slot token"),
+            credential_source_decision(),
+        )
+        .expect_err("a Host is not a credential consumer"),
+        BindingRowError::ConsumerNotAdmitted,
+    );
+}
+
+#[test]
+fn a_delivery_outside_the_declared_facets_is_refused() {
+    // The derived row commits exactly the facets the family declares.
+    assert_eq!(
+        credential_source_decision().realized_facets(),
+        credential_binding_support().facets(),
+    );
+
+    // A realization that never claimed credential delivery refuses the
+    // relationship at prepare rather than approximating the delivery.
+    let spec = credential_spec_scoped(Some(GUEST), &[OperationClass::AcquireToken], 600_000);
+    let derived = derived_row(&spec);
+    let request = request_for(&spec, &derived.row);
+    let refusal = CredentialDeliveryAuthority::admit(
+        request,
+        CredentialBindingAdmission::new(
+            zone(),
+            uid(CREDENTIAL_UID),
+            uid(GUEST_UID),
+            CredentialSourcePolicy::from_spec(&spec),
+            BindingSpecFingerprint::from_request(&spec),
+            BindingAuthorization::granted(),
+            source_admission_for(&derived.row),
+            BindingRealizationSupport::new(vec![BindingRealizationFacet::FilesystemPresentation])
+                .expect("support set"),
+            vec![dependency()],
+            resource(CREDENTIAL),
+            generation(3),
+            resource(CONSUMER_PROVIDER),
+            generation(7),
+            generation(11),
+            4,
+            CredentialSourcePolicy::from_spec(&spec)
+                .audience()
+                .clone(),
+            route_digest(),
+            4096,
+            NOW,
+        ),
+    )
+    .expect_err("a delivery with no declared realization is refused");
+    assert_eq!(refusal.stage(), AdmissionStage::Prepare);
+    assert_eq!(refusal.reason(), RefusalReason::MandatoryFacetUnsupported);
+}
+
+#[test]
+fn a_lease_ceiling_within_no_representable_lifetime_is_refused() {
+    assert_eq!(
+        canonical_binding_rows(
+            &resource(CREDENTIAL),
+            &credential_spec_scoped(Some(GUEST), &[OperationClass::AcquireToken], 500),
+        )
+        .expect_err("a ceiling below the contract's own floor commits no row"),
+        BindingContractError::OutOfRange,
+    );
+}
+
+/// The source admission a committed row's own decision implies.
+fn source_admission_for(row: &CredentialBindingSpec) -> SourceAdmission {
+    let decision = credential_source_decision();
+    SourceAdmission::new(
+        row.key(zone(), uid(CREDENTIAL_UID), uid(GUEST_UID))
+            .expect("row key"),
+        decision.admitted_rights().to_vec(),
+        decision.arbitration(),
+    )
+    .expect("source admission")
 }

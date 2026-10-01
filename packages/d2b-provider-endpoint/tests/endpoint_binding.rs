@@ -22,26 +22,29 @@
 //! consumer-slot index, and the dependency fence.
 
 use d2b_contracts_resource::v3::{
-    AdmissionStage, BindingAuthorization, BindingConsumerKind, BindingContractError, BindingKey,
-    BindingKind, BindingLifecycleState, BindingRealizationFacet, BindingSlot,
-    BindingSupportEntry, ChildSupportCeiling,
+    AdmissionStage, BindingArbitration, BindingAuthorization, BindingConsumerKind,
+    BindingContractError, BindingKey, BindingKind, BindingLifecycleState, BindingRealizationFacet,
+    BindingSlot, BindingSupportEntry, ChildSupportCeiling,
     BoundedToken, ChildRequestDefaults, DesiredDigest, DesiredRevision, EndpointAttachmentKind,
-    DefaultedSource, EndpointBindingRequest, FreshnessTuple, RequestedRights,
+    DefaultedSource, EndpointBindingRequest, FreshnessTuple, RefusalReason, RequestedRights,
     ResourceGeneration, ResourceRef, ResourceUid, StoreIncarnation, ZoneId,
+    admit_binding_row_refs,
 };
 use d2b_provider_endpoint::endpoint::{
     EndpointAttachmentPolicy, EndpointClass, EndpointConsumerPolicy, EndpointLifecyclePolicy,
     EndpointLocality, EndpointOperation, EndpointSpec, EndpointTransport, EndpointVisibility,
 };
-use d2b_contracts_resource::v3::endpoint_binding::EndpointExecutionParentInput;
+use d2b_contracts_resource::v3::endpoint_binding::{
+    EndpointBindingSpec, EndpointExecutionParentInput,
+};
 use d2b_provider_endpoint::{
-    BindingReadiness, DeliveryFenceViolation, DeliveryForm, EndpointAccessObservation,
-    EndpointBindingAdmission, EndpointBindingError, EndpointBindingRegistry,
-    EndpointConsumerTarget, EndpointDelivery, EndpointProvenance, EndpointSocketIdentity,
-    ParentInputOutcome, declared_delivery_form, endpoint_binding_support,
-    endpoint_binding_support_ceiling, fence_delivery_environment,
-    fence_delivery_environment_all, fence_delivery_payload, fence_delivery_payload_all,
-    required_right_bits,
+    BindingReadiness, DeclaredEndpointBinding, DeliveryFenceViolation, DeliveryForm,
+    EndpointAccessObservation, EndpointBindingAdmission, EndpointBindingError,
+    EndpointBindingRegistry, EndpointConsumerTarget, EndpointDelivery, EndpointProvenance,
+    EndpointSocketIdentity, ParentInputOutcome, canonical_binding_row, canonical_binding_rows,
+    declared_delivery_form, endpoint_binding_support, endpoint_binding_support_ceiling,
+    ensure_realizable, fence_delivery_environment, fence_delivery_environment_all,
+    fence_delivery_payload, fence_delivery_payload_all, required_right_bits,
 };
 
 const ZONE: &str = "work";
@@ -1183,6 +1186,444 @@ fn lifecycle_steps_out_of_order_are_refused_and_stay_path_free() {
     assert!(!rendered.contains("run/user"), "{rendered} must not echo a path");
     assert!(!rendered.contains("wayland"), "{rendered} must not echo a socket");
     assert!(!rendered.contains("0x"), "{rendered} must not echo an inode");
+}
+
+// ---------------------------------------------------------------------------
+// Source row -> committed `EndpointBinding` rows
+// ---------------------------------------------------------------------------
+
+/// The compositor endpoint, with the policy and attachment capacity the case
+/// under test needs.
+fn compositor_spec_with(
+    policy: EndpointConsumerPolicy,
+    attachments: EndpointAttachmentPolicy,
+) -> EndpointSpec {
+    EndpointSpec::new(
+        reference("Provider/display"),
+        reference("Process/compositor"),
+        EndpointClass::Service,
+        EndpointTransport::Unix,
+        token("compositor"),
+        None,
+        EndpointLocality::HostLocal,
+        EndpointVisibility::Owner,
+        attachments,
+        policy,
+        EndpointLifecyclePolicy::RecycleWithProducer,
+    )
+    .expect("endpoint spec")
+}
+
+/// The three consumer kinds the endpoint family admits, all named by the
+/// endpoint's own subject allowlist.
+fn declared_consumers() -> Vec<ResourceRef> {
+    vec![
+        reference("Process/frontend"),
+        reference("EphemeralProcess/helper"),
+        reference("Guest/work-vm"),
+    ]
+}
+
+/// A policy that names every consumer above and admits the operations the
+/// three attachment kinds perform.
+fn declared_consumer_policy() -> EndpointConsumerPolicy {
+    EndpointConsumerPolicy::new(declared_consumers(), Vec::new(), Vec::new())
+        .expect("consumer policy")
+}
+
+fn declared_endpoint() -> ResourceRef {
+    reference("Endpoint/compositor")
+}
+
+/// Three deliveries over the three attachment kinds: one connect, one listen,
+/// and one attach, each to a different consumer in its own slot.
+fn three_deliveries() -> [DeclaredEndpointBinding; 3] {
+    [
+        DeclaredEndpointBinding::new(
+            target("Process/frontend"),
+            slot("compositor"),
+            EndpointAttachmentKind::Connect,
+        ),
+        DeclaredEndpointBinding::new(
+            target("EphemeralProcess/helper"),
+            slot("display"),
+            EndpointAttachmentKind::Listen,
+        ),
+        DeclaredEndpointBinding::new(
+            target("Guest/work-vm"),
+            slot("seat"),
+            EndpointAttachmentKind::Attach,
+        ),
+    ]
+}
+
+/// Every declared delivery becomes exactly one committed row, and each row
+/// carries the source's own decision about the relationship it rides on.
+#[test]
+fn every_declared_delivery_commits_exactly_one_row() {
+    let spec = compositor_spec_with(
+        declared_consumer_policy(),
+        EndpointAttachmentPolicy::new(true, 2).expect("attachment policy"),
+    );
+    let deliveries = three_deliveries();
+    let rows = canonical_binding_rows(&zone(), &spec, &declared_endpoint(), &deliveries)
+        .expect("derived rows");
+    assert_eq!(rows.len(), deliveries.len());
+
+    for (row, delivery) in rows.iter().zip(&deliveries) {
+        // The committed bytes decode back through the family's own strict
+        // wire decoder, and describe the delivery the source declared.
+        let decoded: EndpointBindingSpec =
+            serde_json::from_slice(row.spec()).expect("canonical EndpointBindingSpec bytes");
+        assert_eq!(decoded.endpoint_ref(), &declared_endpoint());
+        assert_eq!(decoded.execution_ref(), delivery.consumer().as_ref());
+        assert_eq!(decoded.slot().as_str(), delivery.slot().as_str());
+        assert_eq!(decoded.attachment(), &delivery.attachment());
+        assert_eq!(row.request().slot(), delivery.slot());
+        // The row's own references are the ones the shared row rule admits.
+        admit_binding_row_refs(BindingKind::Endpoint, decoded.endpoint_ref(), decoded.execution_ref())
+            .expect("a row naming a consumer the kind does not admit is refused here");
+        // The decision is the source's own: the right the kind requests, the
+        // shared arbitration, and exactly the facets the delivery rides on.
+        let decision = decoded.source();
+        assert_eq!(
+            decision.admitted_rights(),
+            [delivery.attachment().requested_rights()].as_slice()
+        );
+        assert_eq!(decision.arbitration(), BindingArbitration::Shared);
+        assert_eq!(
+            decision.realized_facets(),
+            delivery.attachment().required_facets()
+        );
+    }
+
+    // A connect and a listen reach the endpoint through the verified
+    // descriptor alone, so neither commits the private pathname the family
+    // declares; an attach addresses a display or a stream by name and commits
+    // both.
+    let facets: Vec<&[BindingRealizationFacet]> = rows
+        .iter()
+        .map(|row| row.request().required_facets())
+        .collect();
+    assert_eq!(
+        facets,
+        [
+            &[BindingRealizationFacet::EndpointDescriptor][..],
+            &[BindingRealizationFacet::EndpointDescriptor][..],
+            &[
+                BindingRealizationFacet::EndpointDescriptor,
+                BindingRealizationFacet::EndpointPathname
+            ][..],
+        ]
+    );
+    for row in &rows {
+        let decoded: EndpointBindingSpec =
+            serde_json::from_slice(row.spec()).expect("canonical EndpointBindingSpec bytes");
+        assert_eq!(decoded.source().realized_facets(), row.request().required_facets());
+    }
+}
+
+/// The row the source derives is admitted by this family's own admission
+/// path: the relationship that gets minted and the row a boundary reads back
+/// are the same relationship, reached by the same key.
+#[test]
+fn the_derived_row_is_admitted_by_this_familys_own_admission_path() {
+    let spec = compositor_spec_with(
+        declared_consumer_policy(),
+        EndpointAttachmentPolicy::new(true, 2).expect("attachment policy"),
+    );
+    for delivery in three_deliveries() {
+        let row = canonical_binding_row(&zone(), &spec, &declared_endpoint(), &delivery)
+            .expect("derived row");
+        let mut registry = registry_for(&spec);
+        let consumer = delivery.consumer().as_ref().to_canonical_string();
+        let admitted = registry
+            .admit(EndpointBindingAdmission::new(
+                zone(),
+                uid(ENDPOINT_UID),
+                uid(CONSUMER_UID),
+                row.request().clone(),
+                provenance_for(&spec),
+                spec.clone(),
+                None,
+                target("Host/desktop"),
+                BindingAuthorization::granted(),
+                vec![
+                    endpoint_freshness(),
+                    consumer_freshness(&consumer, CONSUMER_UID, DesiredRevision::INITIAL),
+                ],
+            ))
+            .expect("this family's admission accepts the row it derived");
+        let decoded: EndpointBindingSpec =
+            serde_json::from_slice(row.spec()).expect("canonical EndpointBindingSpec bytes");
+        assert_eq!(
+            admitted.key(),
+            &decoded
+                .key(zone(), uid(ENDPOINT_UID), uid(CONSUMER_UID))
+                .expect("the committed row's own KTD3 key"),
+            "the admitted relationship and the committed row are one relationship"
+        );
+        assert_eq!(
+            decoded.source().admitted_rights(),
+            [admitted.evidence().admission().rights()].as_slice(),
+            "the committed decision is the admission the source minted"
+        );
+        assert_eq!(
+            decoded.source().arbitration(),
+            admitted.evidence().admission().arbitration()
+        );
+    }
+}
+
+/// A source row that declares no delivery commits no row: the absence of a
+/// declared relationship stays absent rather than becoming a default one.
+#[test]
+fn a_source_row_that_declares_no_delivery_commits_no_row() {
+    let spec = compositor_spec_with(
+        declared_consumer_policy(),
+        EndpointAttachmentPolicy::new(true, 2).expect("attachment policy"),
+    );
+    assert!(
+        canonical_binding_rows(&zone(), &spec, &declared_endpoint(), &[])
+            .expect("no delivery, no refusal")
+            .is_empty()
+    );
+    // The same source row with its deliveries derives them, so the empty
+    // result is the absence of a declaration and not a policy that admits
+    // nothing.
+    assert_eq!(
+        canonical_binding_rows(&zone(), &spec, &declared_endpoint(), &three_deliveries())
+            .expect("derived rows")
+            .len(),
+        3
+    );
+}
+
+/// The consumer is whatever the kind admits and never the `Host`: a
+/// `Process` frontend and an `EphemeralProcess` helper are both derivable,
+/// and a host-side need is an admitted realization leg rather than a binding
+/// whose consumer is the Host.
+#[test]
+fn the_consumer_is_anything_the_kind_admits_but_never_the_host() {
+    let spec = compositor_spec_with(
+        declared_consumer_policy(),
+        EndpointAttachmentPolicy::new(true, 2).expect("attachment policy"),
+    );
+    for consumer in [
+        "Process/frontend",
+        "EphemeralProcess/helper",
+        "Guest/work-vm",
+    ] {
+        let row = canonical_binding_row(
+            &zone(),
+            &spec,
+            &declared_endpoint(),
+            &DeclaredEndpointBinding::new(
+                target(consumer),
+                slot("compositor"),
+                EndpointAttachmentKind::Connect,
+            ),
+        )
+        .unwrap_or_else(|error| panic!("{consumer} is an admitted consumer: {error}"));
+        let decoded: EndpointBindingSpec =
+            serde_json::from_slice(row.spec()).expect("canonical EndpointBindingSpec bytes");
+        assert_eq!(decoded.execution_ref(), &reference(consumer));
+    }
+    assert_eq!(
+        canonical_binding_row(
+            &zone(),
+            &spec,
+            &declared_endpoint(),
+            &DeclaredEndpointBinding::new(
+                target("Host/desktop"),
+                slot("compositor"),
+                EndpointAttachmentKind::Connect,
+            ),
+        )
+        .expect_err("a Host is never the consumer of an EndpointBinding"),
+        EndpointBindingError::InvalidRequest
+    );
+}
+
+/// The endpoint's own declaration refuses the deliveries it does not admit:
+/// a consumer it does not name, an operation it never declared, an endpoint
+/// with no attachment capacity, and a bound capability that is not an
+/// `Endpoint`.
+#[test]
+fn the_endpoints_own_declaration_refuses_what_it_does_not_admit() {
+    let attachments = EndpointAttachmentPolicy::new(true, 2).expect("attachment policy");
+    // A consumer the endpoint's subject allowlist does not name, even though
+ // the binding kind admits its resource type.
+    let one_consumer = compositor_spec_with(
+        EndpointConsumerPolicy::new(vec![reference("Process/frontend")], Vec::new(), Vec::new())
+            .expect("consumer policy"),
+        attachments,
+    );
+    assert_eq!(
+        canonical_binding_row(
+            &zone(),
+            &one_consumer,
+            &declared_endpoint(),
+            &DeclaredEndpointBinding::new(
+                target("EphemeralProcess/helper"),
+                slot("compositor"),
+                EndpointAttachmentKind::Connect,
+            ),
+        )
+        .expect_err("the endpoint names one consumer"),
+        EndpointBindingError::ConsumerNotAllowed
+    );
+    // An `attach` reaches the endpoint through the `attach` operation, which
+ // this endpoint never declared.
+    let resolve_only = compositor_spec_with(
+        EndpointConsumerPolicy::new(
+            declared_consumers(),
+            Vec::new(),
+            vec![EndpointOperation::Resolve],
+        )
+        .expect("consumer policy"),
+        attachments,
+    );
+    assert_eq!(
+        canonical_binding_row(
+            &zone(),
+            &resolve_only,
+            &declared_endpoint(),
+            &DeclaredEndpointBinding::new(
+                target("Process/frontend"),
+                slot("compositor"),
+                EndpointAttachmentKind::Attach,
+            ),
+        )
+        .expect_err("the endpoint declares no attach operation"),
+        EndpointBindingError::OperationNotAllowed
+    );
+    // An endpoint that declares no attachment capacity admits no attachment.
+    let no_attachments = compositor_spec_with(
+        declared_consumer_policy(),
+        EndpointAttachmentPolicy::new(false, 0).expect("attachment policy"),
+    );
+    assert_eq!(
+        canonical_binding_row(
+            &zone(),
+            &no_attachments,
+            &declared_endpoint(),
+            &DeclaredEndpointBinding::new(
+                target("Process/frontend"),
+                slot("compositor"),
+                EndpointAttachmentKind::Attach,
+            ),
+        )
+        .expect_err("the endpoint admits no attachment"),
+        EndpointBindingError::AttachmentRefused
+    );
+    // A bound capability that is not an `Endpoint` is not this family's row.
+    assert_eq!(
+        canonical_binding_row(
+            &zone(),
+            &unrestricted_spec(),
+            &reference("Volume/state"),
+            &DeclaredEndpointBinding::new(
+                target("Process/frontend"),
+                slot("compositor"),
+                EndpointAttachmentKind::Connect,
+            ),
+        )
+        .expect_err("an endpoint binding binds an Endpoint"),
+        EndpointBindingError::Contract(d2b_contracts_resource::v3::BindingRefusal::new(
+            AdmissionStage::Admit,
+            RefusalReason::IdentityNotAuthorized,
+        ))
+    );
+}
+
+/// A facet this family never declared cannot be committed, and a set that
+/// mixes a declared facet with an undeclared one is refused whole rather
+/// than committed in part.
+#[test]
+fn a_facet_this_family_never_declared_is_refused() {
+    assert_eq!(
+        ensure_realizable(&[
+            BindingRealizationFacet::EndpointDescriptor,
+            BindingRealizationFacet::EndpointPathname,
+        ]),
+        Ok(())
+    );
+    for facet in [
+        BindingRealizationFacet::FilesystemPresentation,
+        BindingRealizationFacet::ConsumerDeviceSlot,
+        BindingRealizationFacet::DeviceAttachment,
+        BindingRealizationFacet::NamespaceInterface,
+        BindingRealizationFacet::SharedFabric,
+        BindingRealizationFacet::CredentialDelivery,
+    ] {
+        assert_eq!(
+            ensure_realizable(&[facet]),
+            Err(EndpointBindingError::UnsupportedFacet),
+            "{facet:?} is not a facet this family can realize"
+        );
+    }
+    assert_eq!(
+        ensure_realizable(&[
+            BindingRealizationFacet::EndpointDescriptor,
+            BindingRealizationFacet::FilesystemPresentation,
+        ]),
+        Err(EndpointBindingError::UnsupportedFacet)
+    );
+}
+
+/// A relationship keeps one row name across passes, reordering the
+ /// declarations never churns an identity, and two deliveries claiming one
+ /// consumer slot are one relationship declared twice rather than two.
+#[test]
+fn a_relationship_keeps_one_row_name_and_one_slot_holds_one_row() {
+    let spec = compositor_spec_with(
+        declared_consumer_policy(),
+        EndpointAttachmentPolicy::new(true, 2).expect("attachment policy"),
+    );
+    let deliveries = three_deliveries();
+    let first =
+        canonical_binding_rows(&zone(), &spec, &declared_endpoint(), &deliveries).expect("rows");
+    // Deriving again from the same committed source row changes nothing, so a
+    // restart re-ensures the same rows instead of churning identities.
+    assert_eq!(
+        first,
+        canonical_binding_rows(&zone(), &spec, &declared_endpoint(), &deliveries).expect("rows")
+    );
+    // Declaration order is not identity: the same three relationships in
+    // another order keep the same three row names.
+    let reordered = [deliveries[2].clone(), deliveries[0].clone(), deliveries[1].clone()];
+    let mut names: Vec<String> = first
+        .iter()
+        .map(|row| row.name().as_str().to_owned())
+        .collect();
+    let mut reordered_names: Vec<String> =
+        canonical_binding_rows(&zone(), &spec, &declared_endpoint(), &reordered)
+            .expect("rows")
+            .iter()
+            .map(|row| row.name().as_str().to_owned())
+            .collect();
+    names.sort();
+    reordered_names.sort();
+    assert_eq!(names, reordered_names);
+    assert_eq!(names.len(), 3, "distinct relationships never collide");
+    assert!(names.iter().all(|name| name.starts_with("endpoint-binding-")));
+
+    // The slot address IS the relationship: a second delivery claiming the one
+ // consumer slot is refused rather than committed as a second row.
+    let twice = [
+        deliveries[0].clone(),
+        DeclaredEndpointBinding::new(
+            target("Process/frontend"),
+            slot("compositor"),
+            EndpointAttachmentKind::Listen,
+        ),
+    ];
+    assert_eq!(
+        canonical_binding_rows(&zone(), &spec, &declared_endpoint(), &twice)
+            .expect_err("one consumer slot holds one relationship"),
+        EndpointBindingError::InvalidRequest
+    );
 }
 
 fn key_ref(key: &BindingKey) -> &BindingKey {

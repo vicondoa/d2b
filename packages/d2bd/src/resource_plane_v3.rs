@@ -3842,6 +3842,11 @@ use d2b_provider_system_core::MinijailPlatformGate;
             "view": "controller",
             "access": "read-only",
             "mountPath": "/state",
+            "source": {
+                "admittedRights": ["consume"],
+                "arbitration": "shared",
+                "realizedFacets": ["filesystem-presentation"],
+            },
         })
     }
 
@@ -5574,6 +5579,11 @@ HOST_EFFECTS_SERVICE.id,
             "view": "controller",
             "access": "read-only",
             "mountPath": "/state",
+            "source": {
+                "admittedRights": ["consume"],
+                "arbitration": "shared",
+                "realizedFacets": ["filesystem-presentation"],
+            },
         });
         // The stored envelope is the neutral binding plus the serving
         // Provider reference, exactly as the Volume driver mints it.

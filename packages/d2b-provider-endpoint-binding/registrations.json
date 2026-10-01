@@ -1,7 +1,0 @@
-{
-  "crate": "d2b-provider-endpoint-binding",
-  "provider": "endpoint-binding",
-  "services": [
-    "endpoint-binding.d2bus.org/effects"
-  ]
-}

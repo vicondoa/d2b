@@ -33,14 +33,19 @@
 
 use d2b_contracts_provider::v3::credential::{
     AdmittedCredentialDelivery, AudienceToken, CredentialDeliveryEvidence as ObservedDeliveryEvidence,
-    CredentialMethod, DeliveryIdentity, DeliveryRouteDigest, DeliverySessionParams, OperationClass,
+    CredentialMethod, CredentialSpec, DeliveryIdentity, DeliveryRouteDigest, DeliverySessionParams,
+    OperationClass,
 };
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 use d2b_contracts_resource::v3::{
-    AdmissionStage, BindingAdmission, BindingAuthorization, BindingKey, BindingLifecycleState,
-    BindingRealizationFacet, BindingRealizationSupport, BindingRefusal, BindingSpecFingerprint,
-    CredentialBindingRequest, CredentialLifetime, CredentialOperation, FreshnessTuple, RefusalReason,
-    ResourceGeneration, ResourceRef, ResourceUid, SourceAdmission, ZoneId, admit_binding_request,
+    AdmissionStage, BindingAdmission, BindingArbitration, BindingAuthorization,
+    BindingConsumerKind, BindingContractError, BindingKey, BindingKind, BindingLifecycleState,
+    BindingRealizationFacet, BindingRealizationSupport, BindingRefusal, BindingRowError,
+    BindingSourceDecision, BindingSpecFingerprint, CredentialBindingRequest, CredentialBindingSpec,
+    CredentialLifetime, CredentialOperation, FreshnessTuple, MAX_CREDENTIAL_LIFETIME_MS,
+    MIN_CREDENTIAL_LIFETIME_MS, RefusalReason, RequestedRights, ResourceGeneration, ResourceRef,
+    ResourceUid, SourceAdmission, ZoneId, admit_binding_request, canonical_json_bytes,
+    framed_canonical_digest,
 };
 
 use crate::driver::CredentialSourcePolicy;
@@ -166,6 +171,207 @@ const fn delivery_method(operation: CredentialOperation) -> CredentialMethod {
 pub fn credential_binding_support() -> BindingRealizationSupport {
     BindingRealizationSupport::new(vec![BindingRealizationFacet::CredentialDelivery])
         .expect("one declared binding facet is unique by construction")
+}
+
+/// The domain the deterministic `CredentialBinding` row name is minted under.
+const BINDING_ROW_DOMAIN: &str = "d2b:v3:credential-binding-row";
+
+/// The delivery operation class one service operation class names.
+///
+/// `None` for the two protocol operations - revocation and metadata
+/// inspection - which run against the `Credential` row itself, establish no
+/// delivery session, and therefore name no `CredentialBinding` relationship
+/// at all. This is the exact inverse of the mapping a delivery session mints
+/// through, so the classes a row grants and the classes a committed row names
+/// cannot drift apart.
+pub const fn delivery_operation(class: OperationClass) -> Option<CredentialOperation> {
+    match class {
+        OperationClass::AcquireToken => Some(CredentialOperation::AcquireToken),
+        OperationClass::RefreshToken => Some(CredentialOperation::RefreshToken),
+        OperationClass::SignChallenge => Some(CredentialOperation::SignChallenge),
+        OperationClass::RevokeToken | OperationClass::InspectMetadata => None,
+    }
+}
+
+/// The stable consumer slot a `Credential` row's delivery occupies.
+///
+/// A `Credential` row names at most one consumer and declares no second
+/// delivery to that consumer, so the relationship it implies occupies exactly
+/// one slot. The name is a literal rather than a digest because nothing about
+/// it varies: it is the consumer's own local name for "the credential this
+/// row delivers".
+pub const CREDENTIAL_DELIVERY_SLOT: &str = "delivery";
+
+/// The source's committed decision for one credential delivery relationship.
+///
+/// The admitted right is the kind's own: a `CredentialBinding` delivers, so
+/// it consumes. The realized facets are read back from
+/// [`credential_binding_support`] rather than spelled a second time, so what
+/// a committed row declares cannot drift from what admission enforces.
+pub fn credential_source_decision() -> BindingSourceDecision {
+    BindingSourceDecision::new(
+        vec![RequestedRights::Consume],
+        BindingArbitration::Shared,
+        credential_binding_support().facets().to_vec(),
+    )
+    .expect("one admitted right and the family's declared facets are unique by construction")
+}
+
+/// One canonical `CredentialBinding` row a committed `Credential` row owns.
+///
+/// The row is the binding family's committed shape of the relationship, so it
+/// carries the source's own decision about it rather than a bare request: a
+/// boundary rebuilding the accepted graph reads the admitted rights, the
+/// arbitration, and the realized facets off the row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanonicalCredentialBinding {
+    /// Deterministic row name derived from the relationship's identities.
+    pub name: String,
+    /// Exact canonical row bytes committed as this row's base spec.
+    pub spec: Vec<u8>,
+}
+
+/// The deterministic row name one committed delivery relationship is minted
+/// under.
+///
+/// The name derives from the identities the row itself carries - the bound
+/// `Credential`, the consumer, and the stable slot - and never from the
+/// operation set, the lifetime, or a declaration position. Widening the
+/// admitted operations or shortening the lease therefore updates one
+/// relationship instead of minting a second row beside it, and two
+/// relationships cannot collide by ordering.
+///
+/// # Errors
+///
+/// Returns [`BindingContractError::InvalidField`] when the identities do not
+/// render canonical bytes or the minted name is not a bounded token.
+pub fn credential_binding_row_name(
+    row: &CredentialBindingSpec,
+) -> Result<BoundedToken, BindingContractError> {
+    let identities = [
+        row.credential_ref().to_canonical_string(),
+        row.execution_ref().to_canonical_string(),
+        row.slot().as_str().to_owned(),
+    ];
+    let digest = framed_canonical_digest(
+        BINDING_ROW_DOMAIN,
+        &canonical_json_bytes(&identities).map_err(|_| BindingContractError::InvalidField)?,
+    );
+    BoundedToken::parse(format!("cred-binding-{}", &digest[7..31]))
+        .map_err(|_| BindingContractError::InvalidField)
+}
+
+/// Derive the canonical `CredentialBinding` rows one committed `Credential`
+/// row owns.
+///
+/// A row implies a delivery relationship only where it actually declares one.
+/// The row's scope names where the material may be used and names a `Host` or
+/// a `Guest`; the `Credential` binding kind admits every consumer kind except
+/// the `Host`, because a host-level need there is a child target-support
+/// ceiling rather than a binding row. So a row scoped to a `Guest` implies
+/// exactly one row delivering that Guest the operations the row grants for
+/// the longest lifetime the row's own ceiling admits, and a row scoped to
+/// the `Host`, an unscoped row, and a row granting only the two non-delivery
+/// service operations each imply no relationship and yield no rows.
+///
+/// Every fact on the emitted row is read through the family's own
+/// [`CredentialSourcePolicy`] and operation vocabulary: the admitted classes
+/// come from [`CredentialSourcePolicy::admits_class`] through the same
+/// service-operation mapping the delivery session mints through, and the
+/// lifetime is the row's own `maxLeaseLifetimeMs` ceiling held inside the
+/// binding contract's bounds. A row's `consumerRef` Provider is deliberately
+/// not the consumer here: that Provider is the fence a delivery session is
+/// minted against, not a binding consumer.
+///
+/// The emitted bytes are the row contract itself ([`CredentialBindingSpec`]),
+/// which admits the consumer through `admit_binding_row_refs`, so a row
+/// naming a consumer the kind does not admit is refused here rather than
+/// committed and served.
+///
+/// # Errors
+///
+/// Returns [`BindingContractError`] when the declared consumer names no
+/// consumer kind at all, when the derived row does not survive the row
+/// contract, or when the row's own lifetime ceiling has no representation
+/// between [`MIN_CREDENTIAL_LIFETIME_MS`] and [`MAX_CREDENTIAL_LIFETIME_MS`].
+pub fn canonical_binding_rows(
+    credential_ref: &ResourceRef,
+    spec: &CredentialSpec,
+) -> Result<Vec<CanonicalCredentialBinding>, BindingContractError> {
+    let policy = CredentialSourcePolicy::from_spec(spec);
+    let Some(consumer) = spec.scope().execution_ref() else {
+        return Ok(Vec::new());
+    };
+    let Some(kind) = BindingConsumerKind::from_resource_type(consumer.resource_type().as_str())
+    else {
+        return Err(BindingContractError::WrongResourceType);
+    };
+    if !BindingKind::Credential.admits_consumer(kind) {
+        return Ok(Vec::new());
+    }
+    // The operation set is what the row grants, read through the family's own
+    // vocabulary. It is ordered here rather than relying on the row having
+    // stored its own set sorted, so the committed row is canonical however the
+    // source authored it.
+    let mut operations: Vec<CredentialOperation> = policy
+        .allowed_operations()
+        .iter()
+        .copied()
+        .filter_map(delivery_operation)
+        .collect();
+    operations.sort_unstable();
+    if operations.is_empty() {
+        return Ok(Vec::new());
+    }
+    let row = CredentialBindingSpec::new(
+        credential_ref.clone(),
+        consumer.clone(),
+        operations,
+        delivery_lifetime_ms(policy.max_lease_lifetime_ms())?,
+        BoundedToken::parse(CREDENTIAL_DELIVERY_SLOT)
+            .map_err(|_| BindingContractError::InvalidField)?,
+        credential_source_decision(),
+    )
+    .map_err(refuse_row)?;
+    let name = credential_binding_row_name(&row)?;
+    let bytes = canonical_json_bytes(&row).map_err(|_| BindingContractError::InvalidField)?;
+    Ok(vec![CanonicalCredentialBinding {
+        name: name.as_str().to_owned(),
+        spec: bytes,
+    }])
+}
+
+/// The delivery lifetime one `Credential` row commits to, in milliseconds.
+///
+/// A zero cap is the Provider default, which leaves the binding contract's
+/// own bound in force; a declared cap is the row's own ceiling, so the row
+/// requests the longest lifetime it admits and no longer. A ceiling shorter
+/// than the contract's own floor admits no lifetime the row could express,
+/// which is a refusal rather than a silently widened bound.
+fn delivery_lifetime_ms(max_lease_lifetime_ms: u64) -> Result<u64, BindingContractError> {
+    let ceiling = if max_lease_lifetime_ms == 0 {
+        MAX_CREDENTIAL_LIFETIME_MS
+    } else {
+        max_lease_lifetime_ms.min(MAX_CREDENTIAL_LIFETIME_MS)
+    };
+    if ceiling < MIN_CREDENTIAL_LIFETIME_MS {
+        return Err(BindingContractError::OutOfRange);
+    }
+    Ok(ceiling)
+}
+
+/// The family-wide refusal one row-contract refusal is reported as.
+const fn refuse_row(refusal: BindingRowError) -> BindingContractError {
+    match refusal {
+        BindingRowError::WrongSourceType => BindingContractError::WrongResourceType,
+        BindingRowError::WrongConsumerType | BindingRowError::ConsumerNotAdmitted => {
+            BindingContractError::UnsupportedConsumerKind
+        }
+        BindingRowError::InvalidOperations | BindingRowError::DuplicateOperation => {
+            BindingContractError::InvalidCollection
+        }
+        BindingRowError::LifetimeOutOfBounds => BindingContractError::OutOfRange,
+    }
 }
 
 /// The exact source-side identity one delivery authority is fenced against.

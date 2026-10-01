@@ -45,13 +45,14 @@ pub use effects_service::{
 pub use facets::{DeviceWorkerEvidenceSource, EndpointEffectFacets, EndpointSocketSource, GuestVmmEvidenceSource};
 
 pub use binding::{
-    AdmittedEndpointBinding, BindingReadiness, DeliveryFenceViolation, DeliveryForm,
-    EndpointAccessObservation, EndpointBindingAdmission, EndpointBindingError,
-    EndpointBindingRegistry, EndpointConsumerTarget, EndpointDelivery, EndpointProvenance,
-    EndpointSocketIdentity, EndpointSourceKey, EndpointTeardown, ParentInputOutcome,
+    AdmittedEndpointBinding, BindingReadiness, DeclaredEndpointBinding, DeliveryFenceViolation,
+    DeliveryForm, EndpointAccessObservation, EndpointBindingAdmission, EndpointBindingError,
+    EndpointBindingRegistry, EndpointBindingRow, EndpointConsumerTarget, EndpointDelivery,
+    EndpointProvenance, EndpointSocketIdentity, EndpointSourceKey, EndpointTeardown,
+    ParentInputOutcome, binding_row_name, canonical_binding_row, canonical_binding_rows,
     declared_delivery_form, endpoint_binding_support, endpoint_binding_support_ceiling,
-    endpoint_grants_observe, fence_delivery_environment, fence_delivery_environment_all,
-    fence_delivery_payload, fence_delivery_payload_all,
+    endpoint_grants_observe, ensure_realizable, fence_delivery_environment,
+    fence_delivery_environment_all, fence_delivery_payload, fence_delivery_payload_all,
     required_right_bits,
 };
 

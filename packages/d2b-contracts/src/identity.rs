@@ -34,7 +34,7 @@ const RESOURCE_TYPE_QUALIFIER: &str = ".d2bus.org.";
 pub const SYSTEM_ZONE_NAME: &str = "system";
 
 /// The complete standard ResourceType catalog.
-pub const STANDARD_RESOURCE_TYPES: [&str; 27] = [
+pub const STANDARD_RESOURCE_TYPES: [&str; 23] = [
     "Zone",
     "ZoneLink",
     "Provider",
@@ -48,10 +48,6 @@ pub const STANDARD_RESOURCE_TYPES: [&str; 27] = [
     "EphemeralProcess",
     "Volume",
     "VolumeBinding",
-    "CredentialBinding",
-    "NetworkBinding",
-    "EndpointBinding",
-    "DeviceBinding",
     "Network",
     "Device",
     "User",

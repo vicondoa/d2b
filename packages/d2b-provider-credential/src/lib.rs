@@ -44,9 +44,11 @@ mod session;
 pub mod test_support;
 
 pub use binding::{
-    CredentialBindingAdmission, CredentialBindingStatus, CredentialDeliveryAuthority,
-    CredentialDeliveryEvidence, CredentialDeliveryFence, CredentialDeliveryLeg,
-    CredentialDeliveryRefusal, credential_binding_support,
+    CREDENTIAL_DELIVERY_SLOT, CanonicalCredentialBinding, CredentialBindingAdmission,
+    CredentialBindingStatus, CredentialDeliveryAuthority, CredentialDeliveryEvidence,
+    CredentialDeliveryFence, CredentialDeliveryLeg, CredentialDeliveryRefusal,
+    canonical_binding_rows, credential_binding_row_name, credential_binding_support,
+    credential_source_decision, delivery_operation,
 };
 pub use driver::{
     CONTROLLER_PROVIDER_GENERATION_ANNOTATION, CONTROLLER_PROVIDER_REF_ANNOTATION,

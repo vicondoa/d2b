@@ -1212,19 +1212,18 @@ mod tests {
         let decision = d2b_contracts_resource::v3::BindingSourceDecision::new(
             vec![RequestedRights::Consume],
             BindingArbitration::Shared,
-            vec![BindingRealizationFacet::DeviceAttachment],
+            vec![BindingRealizationFacet::FilesystemPresentation],
         )
         .expect("decision validates");
-        let spec = DeviceBindingSpec::new(
-            reference("Device/gpu0"),
-            reference("Process/worker"),
-            d2b_contracts_resource::v3::device_binding::DeviceFunction::parse("gpu0")
-                .expect("function"),
-            d2b_contracts_resource::v3::device_binding::DeviceClaimRequest::Exclusive,
-            d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("slot0").unwrap(),
+        let spec = VolumeBindingSpec::new(
+            reference("Volume/work"),
+            reference("Guest/worker"),
+            "root",
+            d2b_contracts_resource::v3::volume::AttachmentAccess::ReadOnly,
+            "/mnt/work",
             decision,
         )
-        .expect("a device binding row validates");
+        .expect("a volume binding row validates");
         let bytes = CanonicalJsonObject::parse(
             &d2b_contracts_resource::v3::resource_schema::canonical_json_bytes(&spec)
                 .expect("the row renders canonically"),
@@ -1233,7 +1232,7 @@ mod tests {
 
         let source_uid = ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap();
         let consumer_uid = ResourceUid::parse("22222222-2222-4222-8222-222222222222").unwrap();
-        let row_ref = reference("DeviceBinding/gpu0");
+        let row_ref = reference("VolumeBinding/work");
         let graph = AcceptedGraph::from_canonical_rows(
             zone(),
             StoreIncarnation::parse("store-1").unwrap(),
@@ -1252,7 +1251,7 @@ mod tests {
             .expect("the row derives its own key");
         let source = graph.source(&key).expect("the rebuilt source is present");
         assert_eq!(source.admission().admitted_rights(), &[RequestedRights::Consume]);
-        assert!(source.support().realizes(BindingRealizationFacet::DeviceAttachment));
+        assert!(source.support().realizes(BindingRealizationFacet::FilesystemPresentation));
     }
 
     /// A row whose identity the projection did not resolve contributes
@@ -1262,25 +1261,24 @@ mod tests {
         let decision = d2b_contracts_resource::v3::BindingSourceDecision::new(
             vec![RequestedRights::Consume],
             BindingArbitration::Shared,
-            vec![BindingRealizationFacet::DeviceAttachment],
+            vec![BindingRealizationFacet::FilesystemPresentation],
         )
         .expect("decision validates");
-        let spec = DeviceBindingSpec::new(
-            reference("Device/gpu0"),
-            reference("Process/worker"),
-            d2b_contracts_resource::v3::device_binding::DeviceFunction::parse("gpu0")
-                .expect("function"),
-            d2b_contracts_resource::v3::device_binding::DeviceClaimRequest::Exclusive,
-            d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("slot0").unwrap(),
+        let spec = VolumeBindingSpec::new(
+            reference("Volume/work"),
+            reference("Guest/worker"),
+            "root",
+            d2b_contracts_resource::v3::volume::AttachmentAccess::ReadOnly,
+            "/mnt/work",
             decision,
         )
-        .expect("a device binding row validates");
+        .expect("a volume binding row validates");
         let bytes = CanonicalJsonObject::parse(
             &d2b_contracts_resource::v3::resource_schema::canonical_json_bytes(&spec)
                 .expect("the row renders canonically"),
         )
         .expect("the canonical bytes are a JSON object");
-        let row_ref = reference("DeviceBinding/gpu0");
+        let row_ref = reference("VolumeBinding/work");
         let graph = AcceptedGraph::from_canonical_rows(
             zone(),
             StoreIncarnation::parse("store-1").unwrap(),

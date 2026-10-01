@@ -1,7 +1,0 @@
-{
-  "crate": "d2b-provider-credential-binding",
-  "provider": "credential-binding",
-  "services": [
-    "credential-binding.d2bus.org/effects"
-  ]
-}

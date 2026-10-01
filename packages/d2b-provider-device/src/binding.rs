@@ -28,18 +28,21 @@
 //!   every other owner's claim exactly where it was (R36).
 //!
 //! The admitted relationship is then materialized as one source-owned
-//! `DeviceBinding` row whose desired bytes are the request itself, so a
+//! `DeviceBinding` row: the family's own `DeviceBindingSpec`, carrying the
+//! consumer's request identities and the source's accepted decision, so a
 //! reader and the graph cannot disagree about what was admitted.
 
+use crate::driver::{DeviceComponent, declared_device_functions};
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 use d2b_contracts_resource::v3::{
     AdmissionStage, BindingAdmission, BindingArbitration, BindingAuthorization, BindingContractError,
     BindingKey, BindingLifecycleState, BindingRealizationFacet, BindingRealizationSupport,
-    BindingRefusal, BindingSpecFingerprint, DeviceArbitration, DeviceAuthorityArbitration,
-    DeviceAuthorityDescriptor, DeviceAuthorityKey, DeviceBindingRequest, DeviceClaimRequest,
-    DeviceEffectOperation, DeviceFunction, DeviceSpec, FreshnessTuple, RefusalReason, ResourceRef,
-    ResourceUid, SourceAdmission, SourceReservation, StoreIncarnation, ZoneId,
-    admit_binding_request, canonical_json_bytes, framed_canonical_digest,
+    BindingRefusal, BindingRowError, BindingSourceDecision, BindingSpecFingerprint,
+    DeviceArbitration, DeviceAuthorityArbitration, DeviceAuthorityDescriptor, DeviceAuthorityKey,
+    DeviceBindingRequest, DeviceBindingSpec, DeviceClaimRequest, DeviceEffectOperation,
+    DeviceFunction, DeviceSpec, FreshnessTuple, RefusalReason, ResourceRef, ResourceUid,
+    SourceAdmission, SourceReservation, StoreIncarnation, ZoneId, admit_binding_request,
+    canonical_json_bytes, framed_canonical_digest,
 };
 
 /// The upper bound on named functions one Device source resolves.
@@ -1066,34 +1069,141 @@ impl core::fmt::Debug for DeviceBindingRow {
     }
 }
 
+/// Why one committed `Device` row's binding derivation refused.
+///
+/// The two shared contract rejections travel beside the family's own refusal
+/// rather than inside it, and both are field-free, so a refusal echoes no
+/// device node path, resource identity, or caller-supplied text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceBindingDerivationError {
+    /// The relationship names a capability this source row's declared
+    /// vocabulary does not back.
+    FunctionNotDeclared,
+    /// The row's own source and consumer references were refused by the
+    /// binding kind.
+    RowRefs(BindingRowError),
+    /// The consumer slot, the row name, or the canonical bytes did not render.
+    Contract(BindingContractError),
+}
+
+impl core::fmt::Display for DeviceBindingDerivationError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::FunctionNotDeclared => {
+                formatter.write_str("the named capability is not declared")
+            }
+            Self::RowRefs(refused) => {
+                write!(formatter, "the row's own references are refused: {refused}")
+            }
+            Self::Contract(refused) => {
+                write!(formatter, "the row does not render: {refused}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for DeviceBindingDerivationError {}
+
+impl From<BindingContractError> for DeviceBindingDerivationError {
+    fn from(error: BindingContractError) -> Self {
+        Self::Contract(error)
+    }
+}
+
+impl From<BindingRowError> for DeviceBindingDerivationError {
+    fn from(error: BindingRowError) -> Self {
+        Self::RowRefs(error)
+    }
+}
+
+/// The committed `DeviceBinding` rows one committed `Device` row implies.
+///
+/// Every admitted relationship becomes exactly one row, named from the KTD3
+/// key rather than from a declaration position, so the same relationship keeps
+/// one identity across restarts and two relationships never collide by
+/// ordering. A source row that admits no relationship implies no row at all:
+/// there is no default attachment to fall back on.
+///
+/// The capability vocabulary is the family's, read off the committed row
+/// rather than off the trusted inventory. The inventory says which named
+/// capabilities the host backs right now; the row says which ones this
+/// Provider can deliver, and a claim outside the second is refused here
+/// instead of committed as a row no family realizes. A relationship whose
+/// named capability the inventory no longer backs is likewise not committed:
+/// the source keeps holding that claim until release evidence arrives, but a
+/// capability the host cannot deliver has no row to declare, so this one
+/// retires.
+///
+/// # Errors
+///
+/// Returns [`DeviceBindingDerivationError::FunctionNotDeclared`] when a
+/// relationship names a capability this source row's declared vocabulary does
+/// not back, and the row contract's own refusals when a row's references,
+/// consumer slot, or canonical bytes do not render.
+pub fn canonical_binding_rows(
+    component: DeviceComponent,
+    spec: &DeviceSpec,
+    inventory: &DeviceInventory,
+    admitted: &[AdmittedDeviceBinding],
+) -> Result<Vec<DeviceBindingRow>, DeviceBindingDerivationError> {
+    let declared = declared_device_functions(component, spec);
+    let support = device_attachment_support();
+    let live: Vec<LiveDeviceBinding> = admitted
+        .iter()
+        .cloned()
+        .map(|binding| LiveDeviceBinding::new(binding, BindingLifecycleState::Admitted))
+        .collect();
+    let fates = decide_presence(&live, inventory);
+    let mut rows = Vec::with_capacity(admitted.len());
+    for binding in admitted {
+        if !declared.contains(binding.function()) {
+            return Err(DeviceBindingDerivationError::FunctionNotDeclared);
+        }
+        let revoked = fates
+            .iter()
+            .any(|fate| fate.key() == binding.key() && fate.outcome() == DeviceUseOutcome::Revoked);
+        if !revoked {
+            rows.push(binding_row(binding, &support)?);
+        }
+    }
+    Ok(rows)
+}
+
 /// The committed `DeviceBinding` row one admitted relationship mints.
 ///
-/// The row's desired bytes are the canonical request, so the durable record
-/// of the relationship is the declaration the consumer authored rather than
-/// a second description of it. No device node path, host permission bit, or
+/// The row is the family's own `DeviceBindingSpec`: the request's identities
+/// plus the source's accepted decision, read off the admission rather than
+/// recomputed, so the committed row cannot describe a different grant than
+/// the one that was evaluated. The realized facets are this family's declared
+/// attachment support, so a row is never committed against a realization the
+/// family does not drive. No device node path, host permission bit, or
 /// numerical principal is added.
 ///
 /// # Errors
 ///
-/// Returns [`BindingContractError::InvalidField`] when the request does not
-/// render canonical bytes or the derived row name is not a bounded token.
-pub fn canonical_binding_row(
+/// Returns the row contract's refusal when the row's own references, the
+/// consumer slot, or the canonical bytes do not render.
+fn binding_row(
     admitted: &AdmittedDeviceBinding,
-) -> Result<DeviceBindingRow, BindingContractError> {
-    let spec =
-        canonical_json_bytes(admitted.request()).map_err(|_| BindingContractError::InvalidField)?;
+    support: &BindingRealizationSupport,
+) -> Result<DeviceBindingRow, DeviceBindingDerivationError> {
+    let request = admitted.request();
+    let decision = BindingSourceDecision::new(
+        vec![admitted.admission().rights()],
+        admitted.admission().arbitration(),
+        support.facets().to_vec(),
+    )?;
+    let spec = DeviceBindingSpec::new(
+        request.source_ref().clone(),
+        request.consumer_ref().clone(),
+        request.function().clone(),
+        request.claim(),
+        BoundedToken::parse(request.slot().as_str())
+            .map_err(|_| BindingContractError::InvalidField)?,
+        decision,
+    )?;
     Ok(DeviceBindingRow {
         name: binding_row_name(admitted.key())?,
-        spec,
+        spec: canonical_json_bytes(&spec).map_err(|_| BindingContractError::InvalidField)?,
     })
-}
-
-/// Read one committed `DeviceBinding` row back as the request it declares.
-///
-/// # Errors
-///
-/// Returns [`BindingContractError::InvalidField`] when the committed bytes do
-/// not decode as a canonical device binding request.
-pub fn parsed_consumer_request(spec: &[u8]) -> Result<DeviceBindingRequest, BindingContractError> {
-    serde_json::from_slice(spec).map_err(|_| BindingContractError::InvalidField)
 }

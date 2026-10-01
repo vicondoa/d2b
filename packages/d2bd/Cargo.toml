@@ -43,10 +43,6 @@ d2b-provider-telemetry-service = { path = "../d2b-provider-telemetry-service", v
 d2b-provider-telemetry-binding = { path = "../d2b-provider-telemetry-binding", version = "0.0.0-bootstrap" }
 d2b-provider-volume = { path = "../d2b-provider-volume", version = "0.0.0-bootstrap" }
 d2b-provider-volume-binding = { path = "../d2b-provider-volume-binding", version = "0.0.0-bootstrap" }
-d2b-provider-credential-binding = { path = "../d2b-provider-credential-binding", version = "0.0.0-bootstrap" }
-d2b-provider-network-binding = { path = "../d2b-provider-network-binding", version = "0.0.0-bootstrap" }
-d2b-provider-endpoint-binding = { path = "../d2b-provider-endpoint-binding", version = "0.0.0-bootstrap" }
-d2b-provider-device-binding = { path = "../d2b-provider-device-binding", version = "0.0.0-bootstrap" }
 d2b-provider-zone = { path = "../d2b-provider-zone", version = "0.0.0-bootstrap" }
 d2b-provider-zone-link = { path = "../d2b-provider-zone-link", version = "0.0.0-bootstrap" }
 d2b-provider-provider = { path = "../d2b-provider-provider", version = "0.0.0-bootstrap" }
