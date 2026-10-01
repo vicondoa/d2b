@@ -215,6 +215,10 @@
           cp -r ${./packages/d2b-provider-user} $out/packages/d2b-provider-user
           cp -r ${./packages/d2b-provider-volume} $out/packages/d2b-provider-volume
           cp -r ${./packages/d2b-provider-volume-binding} $out/packages/d2b-provider-volume-binding
+          cp -r ${./packages/d2b-provider-credential-binding} $out/packages/d2b-provider-credential-binding
+          cp -r ${./packages/d2b-provider-network-binding} $out/packages/d2b-provider-network-binding
+          cp -r ${./packages/d2b-provider-endpoint-binding} $out/packages/d2b-provider-endpoint-binding
+          cp -r ${./packages/d2b-provider-device-binding} $out/packages/d2b-provider-device-binding
           cp -r ${./packages/d2b-provider-volume-local} $out/packages/d2b-provider-volume-local
           cp -r ${./packages/d2b-provider-volume-virtiofs} $out/packages/d2b-provider-volume-virtiofs
           cp -r ${./packages/d2b-provider-wayland-policy} $out/packages/d2b-provider-wayland-policy
