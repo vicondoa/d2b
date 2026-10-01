@@ -20,7 +20,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use d2b_contracts_resource::v3::{
-    AdmissionStage, AuthoritySubject, AuthoritySubjectKind, ExecutionPolicySpec, PayloadSchema,
+    AdmissionStage, AuthoritySubject, AuthoritySubjectKind, ExecutionPolicySpec,
     RefusalReason, ResourceRef, StoreIncarnation, ZoneId, canonical_json_bytes,
     execution_policy_resource::EXECUTION_POLICY_RESOURCE_TYPE,
 };
@@ -32,12 +32,10 @@ use d2b_core::resource_authority::{
 use d2b_contracts_broker::broker_wire::{
     AuthorityCursor, AuthorityProjectionRow, AuthoritySnapshot,
 };
-use d2b_provider_command::command::{ CommandSpec };
-use d2b_provider_operation::operation::{ OperationSpec };
 use d2b_contracts_resource::v3::{CanonicalJsonObject, CanonicalJsonValue, DesiredDigest};
 use d2b_core::resource_authority::ProjectionRow;
 use d2b_provider_seccomp_profile::{ SECCOMP_PROFILE_RESOURCE_TYPE, SeccompProfileSpec };
-use d2b_contracts_zone_session::v3::{RoleBindingSpec, RoleResourceVerb, RoleSpec};
+use d2b_contracts_zone_session::v3::{RoleBindingSpec, RoleResourceVerb, role::AuthorizedRole};
 use d2b_resource_runtime::identity::ResourceTypeName;
 use d2b_resource_runtime::manager::{
     AdmissionDecision, MutationAdmission, MutationRequest, MutationSubject, deterministic_uid,
@@ -62,7 +60,7 @@ pub const SYSTEM_ZONE: &str = d2b_contracts::identity::SYSTEM_ZONE_NAME;
 /// The zone-control vocabulary (Zone, ZoneLink, Provider, Role, RoleBinding,
 /// Quota, EmergencyPolicy) still travels in each zone's compiled bundle and
 /// joins this set type by type as its rows move onto the seed.
-pub const SYSTEM_HOMED_TYPES: &[&str] = &["Command", "Operation", "SeccompProfile", "ExecutionPolicy"];
+pub const SYSTEM_HOMED_TYPES: &[&str] = &["Operation", "SeccompProfile", "ExecutionPolicy"];
 /// Maximum bytes of one seeded resource name.
 pub const MAX_SEED_NAME_BYTES: usize = 63;
 /// The subject types a RoleBinding may grant, resolved by the session layer.
@@ -141,8 +139,8 @@ pub struct SeedSelfBinding {
 pub struct SeedRole {
     /// Zone-local role name.
     pub name: String,
-    /// The role spec: rules, authority facet, and optional posture facet.
-    pub spec: RoleSpec,
+    /// The authorization-only role spec: rules and declared operations.
+    pub spec: AuthorizedRole,
 }
 
 /// One declared SeccompProfile row.
@@ -170,16 +168,6 @@ pub struct SeedPolicy {
     /// The declared confinement.
     pub spec: ExecutionPolicySpec,
 }
-
-/// One declared Command row.
-#[derive(Debug, Clone)]
-pub struct SeedCommand {
-    /// Zone-local command name.
-    pub name: String,
-    /// The declared launch shape.
-    pub spec: CommandSpec,
-}
-
 /// One declared RoleBinding row.
 #[derive(Debug, Clone)]
 pub struct SeedBinding {
@@ -200,8 +188,6 @@ pub struct FoundationDeclarations {
     pub policies: Vec<SeedPolicy>,
     /// Declared roles.
     pub roles: Vec<SeedRole>,
-    /// Declared launch shapes.
-    pub commands: Vec<SeedCommand>,
     /// Operator bindings from the host contract (provenance `nix`).
     pub operator_bindings: Vec<SeedBinding>,
     /// The process controller whose self-binding authorizes materialization.
@@ -237,7 +223,7 @@ pub fn core_declarations() -> FoundationDeclarations {
         Vec::new(),
     )
     .expect("the publisher rule is valid");
-    let role = RoleSpec::new(vec![rule]).expect("the publisher role is valid");
+    let role = AuthorizedRole::new(vec![rule], Vec::new()).expect("the publisher role is valid");
     FoundationDeclarations {
         providers: vec![SeedProvider {
             provider_ref: provider_ref.clone(),
@@ -258,7 +244,6 @@ pub fn core_declarations() -> FoundationDeclarations {
             name: "operation-publisher".to_owned(),
             spec: role,
         }],
-        commands: Vec::new(),
         operator_bindings: Vec::new(),
         controller: Some(provider_ref),
     }
@@ -356,12 +341,6 @@ impl FoundationSeed {
             committed.insert_row(&row.key, row.spec.clone());
             rows.push(row);
         }
-        // 3. Commands.
-        for command in &self.declarations.commands {
-            let row = PendingRow::new("Command", &command.name, encode(&command.spec)?)?;
-            committed.insert_row(&row.key, row.spec.clone());
-            rows.push(row);
-        }
         // 4. Self-bindings, framework-generated in declaration order.
         for provider in &self.declarations.providers {
             for binding in &provider.self_bindings {
@@ -373,23 +352,6 @@ impl FoundationSeed {
                 rows.push(row);
             }
         }
-        // 5. The controller materializes the spawn operations. Each one is
-        // authorized against the committed bindings and roles, so the
-        // authorization can only come from a committed self-binding.
-        let mut materialized_specs = Vec::new();
-        let mut materialized = Vec::new();
-        for command in &self.declarations.commands {
-            let operation = self.materialize(command, &committed)?;
-            let row = PendingRow::new(
-                "Operation",
-                operation.name(),
-                encode(operation.spec())?,
-            )?;
-            committed.insert_row(&row.key, row.spec.clone());
-            materialized.push(row.reference());
-            materialized_specs.push((row.reference(), operation));
-            rows.push(row);
-        }
         // 6. Operator bindings from the host contract.
         for binding in &self.declarations.operator_bindings {
             let row = PendingRow::new("RoleBinding", &binding.name, encode(&binding.spec)?)?;
@@ -398,7 +360,7 @@ impl FoundationSeed {
         }
         // Declare-then-validate: every reference resolves over the committed
         // set as a whole, before the first write.
-        self.validate(&committed, providers, &materialized_specs, &rows)?;
+        self.validate(&committed, providers, &rows)?;
         // Every seeded row is admitted through the one evaluator before the
         // first write, against the verified deployment graph itself. There
         // is no bootstrap-operation allowlist to extend: the seed's authority
@@ -407,7 +369,7 @@ impl FoundationSeed {
         self.admit_verified(&rows)?;
         let mut report = SeedReport {
             committed: Vec::with_capacity(rows.len()),
-            materialized,
+            materialized: Vec::new(),
             unchanged: 0,
         };
         for row in &rows {
@@ -482,101 +444,6 @@ impl FoundationSeed {
         Ok(())
     }
 
-    // -- Materialization ---------------------------------------------------
-
-    /// Build the spawn operation one command materializes, authorized by the
-    /// controller's committed self-binding alone.
-    fn materialize(
-        &self,
-        command: &SeedCommand,
-        committed: &CommittedSet,
-    ) -> Result<MaterializedOperation, SeedError> {
-        let controller = self
-            .declarations
-            .controller
-            .as_ref()
-            .ok_or(SeedError::UnauthorizedMaterialization {
-                controller: "none".to_owned(),
-                command: command.name.clone(),
-            })?;
-        let command_ref = ResourceRef::parse(format!("Command/{}", command.name).as_str())
-            .map_err(|_| SeedError::InvalidRow {
-                row: "Command",
-                name: command.name.clone(),
-                reason: "the command name is not a resource name",
-            })?;
-        if !self.controller_may_materialize(controller, &command_ref, committed) {
-            return Err(SeedError::UnauthorizedMaterialization {
-                controller: controller.to_canonical_string(),
-                command: command_ref.to_canonical_string(),
-            });
-        }
-        let name = materialized_operation_name(&command.name)?;
-        let spec = OperationSpec::new(
-            Some(command_ref),
-            clone_payload(command.spec.params()),
-            true,
-            secret_access_ceiling(command.spec.params()),
-            audit_facet(command.spec.params()),
-            None,
-            spawn_authority(),
-            Default::default(),
-            Default::default(),
-            d2b_provider_operation::operation::PayloadProvenance::Derived,
-            None,
-        )
-        .map_err(|_| SeedError::InvalidRow {
-            row: "Operation",
-            name: name.clone(),
-            reason: "the materialized operation facets are invalid",
-        })?;
-        Ok(MaterializedOperation { name, spec })
-    }
-
-    /// Whether one committed self-binding grants the controller `create` on
-    /// `Operation` scoped to this command.
-    ///
-    /// Materialization is authorized by the controller's own self-binding
-    /// alone: an operator binding from the host contract is a grant to the
-    /// subject it names, never a second way to authorize the seed to write
-    /// the operation rows a provider's commands materialize.
-    fn controller_may_materialize(
-        &self,
-        controller: &ResourceRef,
-        command: &ResourceRef,
-        committed: &CommittedSet,
-    ) -> bool {
-        let binding_names = self.self_binding_rows();
-        for (name, spec) in &binding_names {
-            if !spec.subjects().contains(controller) {
-                continue;
-            }
-            let Some(role) = self
-                .declarations
-                .roles
-                .iter()
-                .find(|role| format!("Role/{}", role.name) == spec.role_ref().to_canonical_string())
-            else {
-                continue;
-            };
-            if !role.spec.command_refs().contains(command) {
-                continue;
-            }
-            let grants_create = role.spec.rules().iter().any(|rule| {
-                rule.verbs().contains(&RoleResourceVerb::Create)
-                    && rule
-                        .resource_types()
-                        .iter()
-                        .any(|type_name| type_name.as_str() == "Operation")
-            });
-            if grants_create && committed.contains_str(&role_ref(&role.name)) {
-                let _ = name;
-                return true;
-            }
-        }
-        false
-    }
-
     /// Every declared binding row (self-bindings included) as (name, spec).
     fn binding_rows(&self) -> Vec<(String, RoleBindingSpec)> {
         let mut rows = self.self_binding_rows();
@@ -630,7 +497,6 @@ impl FoundationSeed {
         &self,
         committed: &CommittedSet,
         providers: &ProviderDirectory,
-        materialized: &[(String, MaterializedOperation)],
         rows: &[PendingRow],
     ) -> Result<(), SeedError> {
         // A policy's references resolve over the same committed set as every
@@ -671,21 +537,6 @@ impl FoundationSeed {
             for operation in role.spec.operation_refs() {
                 require_committed(committed, &row, "operationRefs", operation)?;
             }
-            for command in role.spec.command_refs() {
-                require_committed(committed, &row, "commandRefs", command)?;
-            }
-            if let Some(posture) = role.spec.posture() {
-                require_committed(committed, &row, "posture.seccompRef", posture.seccomp_ref())?;
-                let principal = posture.principal_ref().name().to_owned();
-                if !valid_principal_name(&principal)
-                    || self.allocation.get(&principal).is_none()
-                {
-                    return Err(SeedError::PrincipalNotAllocated {
-                        row: row.clone(),
-                        principal,
-                    });
-                }
-            }
         }
         // Every declared principal resolves through the committed allocation.
         for provider in &self.declarations.providers {
@@ -697,10 +548,6 @@ impl FoundationSeed {
                     });
                 }
             }
-        }
-        for command in &self.declarations.commands {
-            let row = command_ref(&command.name);
-            require_committed(committed, &row, "roleRef", command.spec.role_ref())?;
         }
         for (name, spec) in self.binding_rows() {
             let row = format!("RoleBinding/{name}");
@@ -751,29 +598,6 @@ impl FoundationSeed {
                 }
             }
         }
-        for (row, operation) in materialized {
-            let Some(owner) = operation.spec().owner_ref() else {
-                continue;
-            };
-            require_committed(committed, row, "ownerRef", owner)?;
-            let Some(command_spec) = self
-                .declarations
-                .commands
-                .iter()
-                .find(|candidate| command_ref(&candidate.name) == owner.to_canonical_string())
-            else {
-                return Err(SeedError::UnresolvedRef {
-                    row: row.clone(),
-                    field: "ownerRef",
-                    missing: owner.to_canonical_string(),
-                });
-            };
-            let declared = encode(command_spec.spec.params())?;
-            let materialized = encode(operation.spec().payload_schema())?;
-            if declared != materialized {
-                return Err(SeedError::MaterializedPayloadDrift { row: row.clone() });
-            }
-        }
         // Every declared row is written exactly once.
         let mut seen = BTreeSet::new();
         for row in rows {
@@ -810,9 +634,6 @@ impl CommittedSet {
         self.specs.contains_key(&reference.to_canonical_string())
     }
 
-    fn contains_str(&self, reference: &str) -> bool {
-        self.specs.contains_key(reference)
-    }
 }
 
 struct PendingRow {
@@ -841,20 +662,6 @@ impl PendingRow {
 }
 
 /// One materialized spawn operation.
-struct MaterializedOperation {
-    name: String,
-    spec: OperationSpec,
-}
-
-impl MaterializedOperation {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn spec(&self) -> &OperationSpec {
-        &self.spec
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -912,7 +719,6 @@ fn static_type(resource_type: &str) -> &'static str {
         "Zone" => "Zone",
         "Role" => "Role",
         "RoleBinding" => "RoleBinding",
-        "Command" => "Command",
         "Operation" => "Operation",
         "SeccompProfile" => "SeccompProfile",
         _ => "unknown",
@@ -921,10 +727,6 @@ fn static_type(resource_type: &str) -> &'static str {
 
 fn role_ref(name: &str) -> String {
     format!("Role/{name}")
-}
-
-fn command_ref(name: &str) -> String {
-    format!("Command/{name}")
 }
 
 fn self_binding_name(
@@ -963,16 +765,6 @@ fn self_binding_spec(
 /// `Operation/process-run-<command>`: the resource-name grammar has no dot,
 /// so the dotted spawn-operation spelling of the design is carried by the
 /// hyphen. A command whose materialized name would exceed the bound refuses.
-fn materialized_operation_name(command: &str) -> Result<String, SeedError> {
-    let name = format!("process-run-{command}");
-    if !valid_resource_name(&name) {
-        return Err(SeedError::MaterializedNameOverBound {
-            command: command.to_owned(),
-        });
-    }
-    Ok(name)
-}
-
 fn require_committed(
     committed: &CommittedSet,
     row: &str,
@@ -1006,59 +798,8 @@ fn verb_spelling(verb: RoleResourceVerb) -> &'static str {
     }
 }
 
-fn clone_payload(schema: &PayloadSchema) -> PayloadSchema {
-    PayloadSchema::parse(schema.as_value().clone()).expect("a validated payload schema clones")
-}
-
 /// The secret-access ceiling a payload implies: a payload with write-only
 /// fields needs at least redacted access, a plain payload none.
-fn secret_access_ceiling(
-    schema: &PayloadSchema,
-) -> d2b_provider_operation::operation::SecretAccess {
-    if schema
-        .property_names()
-        .any(|name| schema.is_write_only(name))
-    {
-        d2b_provider_operation::operation::SecretAccess::RedactedOnly
-    } else {
-        d2b_provider_operation::operation::SecretAccess::None
-    }
-}
-
-fn audit_facet(schema: &PayloadSchema) -> d2b_provider_operation::operation::OperationAudit {
-    use d2b_contracts_resource::v3::{ BoundedText, BoundedToken };
-use d2b_provider_operation::operation::{ AuditMode, OperationAudit };
-    let retained = schema
-        .property_names()
-        .filter(|name| !schema.is_write_only(name))
-        .map(|name| BoundedText::parse(name).expect("payload property names are bounded text"))
-        .collect::<Vec<_>>();
-    let redaction = schema
-        .property_names()
-        .filter(|name| schema.is_write_only(name))
-        .map(|name| BoundedText::parse(name).expect("payload property names are bounded text"))
-        .collect::<Vec<_>>();
-    OperationAudit::new(
-        true,
-        AuditMode::Yes,
-        retained,
-        redaction,
-        BoundedToken::parse("spawn").expect("static token"),
-    )
-    .expect("bounded audit facet")
-}
-
-fn spawn_authority() -> d2b_provider_operation::operation::OperationAuthority {
-    use d2b_contracts_resource::v3::{ BoundedText };
-use d2b_provider_operation::operation::{ BrokerRequirement, OperationAuthority, OperationDomain, OperationSurface };
-    OperationAuthority::new(
-        OperationSurface::Broker,
-        OperationDomain::Host,
-        BoundedText::parse("process-controller").expect("static text"),
-        BrokerRequirement::Yes,
-    )
-}
-
 /// One refused seed run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SeedError {
@@ -1131,27 +872,8 @@ pub enum SeedError {
         /// The refused entry.
         reference: String,
     },
-    /// Materialization was attempted without the controller's self-binding
-    /// authorizing it.
-    UnauthorizedMaterialization {
-        /// The controller identity.
-        controller: String,
-        /// The command being materialized.
-        command: String,
-    },
-    /// A command's materialized operation name exceeds the resource-name
-    /// bound.
-    MaterializedNameOverBound {
-        /// The command.
-        command: String,
-    },
     /// One row reference is declared twice.
     DuplicateRow(String),
-    /// A materialized operation's payload schema diverged from its command's.
-    MaterializedPayloadDrift {
-        /// The materialized operation.
-        row: String,
-    },
     /// One seeded row is refused by the verified deployment graph.
     ///
     /// The seed is admitted, not waved through: a row presented under any
@@ -1217,24 +939,9 @@ impl core::fmt::Display for SeedError {
                 formatter,
                 "foundation seed refused {row}: {field} entry {reference} is outside the role"
             ),
-            Self::UnauthorizedMaterialization { controller, command } => write!(
-                formatter,
-                "foundation seed refused materializing {command}: {controller}'s self-binding \
-                 does not grant it"
-            ),
-            Self::MaterializedNameOverBound { command } => write!(
-                formatter,
-                "foundation seed refused materializing {command}: the operation name exceeds the \
-                 resource-name bound"
-            ),
             Self::DuplicateRow(row) => write!(
                 formatter,
                 "foundation seed refused {row}: the reference is declared twice"
-            ),
-            Self::MaterializedPayloadDrift { row } => write!(
-                formatter,
-                "foundation seed refused {row}: the materialized payload schema drifted from its \
-                 command"
             ),
             Self::GraphRefused { row, stage, reason } => write!(
                 formatter,
@@ -1976,9 +1683,6 @@ impl DeploymentBootstrap {
         for role in &declarations.roles {
             steps.push(PublicationStep::foundation(role_ref(&role.name)));
         }
-        for command in &declarations.commands {
-            steps.push(PublicationStep::foundation(command_ref(&command.name)));
-        }
         // 3. The provider self-bindings, each requiring the role it binds.
         for provider in &declarations.providers {
             for binding in &provider.self_bindings {
@@ -1988,16 +1692,7 @@ impl DeploymentBootstrap {
                     format!("RoleBinding/{name}"),
                     vec![binding.role_ref.to_canonical_string()],
                 ));
-            }
         }
-        // 4. The operations the controller materializes, each requiring the
-        // self-binding that authorizes its materialization.
-        for command in &declarations.commands {
-            steps.push(PublicationStep::step(
-                PublicationLayer::Foundations,
-                format!("Operation/{}", materialized_operation(&command.name)?),
-                materialization_requirements(declarations),
-            ));
         }
         // 5. The operator bindings from the host contract.
         for binding in &declarations.operator_bindings {
@@ -2092,37 +1787,11 @@ fn bound_binding_name(
 
 /// The canonical operation name one command materializes, as a bootstrap
 /// refusal when the seed would refuse it.
-fn materialized_operation(command: &str) -> Result<String, BootstrapRefusal> {
-    materialized_operation_name(command).map_err(|error| BootstrapRefusal::UnresolvedRequirement {
-        step: command_ref(command),
-        requirement: format!("Operation/{error}"),
-    })
-}
-
 /// The exact foundation rows that authorize command materialization.
 ///
 /// Materialization is authorized by a committed self-binding alone (the
 /// seed refuses an operator binding for the same purpose), so the plan
 /// requires exactly the controller's own bindings and nothing else.
-fn materialization_requirements(declarations: &FoundationDeclarations) -> Vec<String> {
-    let Some(controller) = declarations.controller.as_ref() else {
-        return Vec::new();
-    };
-    declarations
-        .providers
-        .iter()
-        .filter(|provider| &provider.provider_ref == controller)
-        .flat_map(|provider| provider.self_bindings.iter())
-        .map(|binding| {
-            format!(
-                "RoleBinding/{}-self-{}",
-                controller.name().as_str(),
-                binding.role_ref.name().as_str()
-            )
-        })
-        .collect()
-}
-
 // ---------------------------------------------------------------------------
 // The deployment identity switch (U31, KTD6-KTD7)
 // ---------------------------------------------------------------------------
@@ -2466,9 +2135,8 @@ impl DeploymentIdentitySwitch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_provider_command::command::{ CommandArgvSlot, CommandExec, CommandIntent };
 use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, SeccompDeviceAccess, SeccompNamespaces };
-    use d2b_contracts_resource::v3::{BoundedText, BoundedToken, CapabilityClass, NamespaceClass, PolicyCapabilities, PolicyIdentity, PolicyNamespaces, PolicyRoot, PolicySeccomp};
+    use d2b_contracts_resource::v3::{BoundedToken, CapabilityClass, NamespaceClass, PolicyCapabilities, PolicyIdentity, PolicyNamespaces, PolicyRoot, PolicySeccomp};
     use d2b_resource_runtime::manager::AdmissionOp;
     use d2b_resource_runtime::spec_store::ResourceProvenance;
     use serde_json::json;
@@ -2491,9 +2159,6 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
         providers
             .register_driver(&d2b_provider_role_binding::role_binding_descriptor())
             .expect("RoleBinding registers");
-        providers
-            .register_driver(&d2b_provider_command::command_descriptor())
-            .expect("Command registers");
         providers
             .register_driver(&d2b_provider_operation::operation_descriptor())
             .expect("Operation registers");
@@ -2535,9 +2200,11 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
         fn factory(
             &self,
         ) -> std::sync::Arc<dyn d2b_resource_runtime::driver::ResourceDriverFactory> {
-            std::sync::Arc::new(d2b_resource_runtime::metadata::MetadataDriverFactory::new(
-                ResourceTypeName::new("Command"),
-            ))
+            std::sync::Arc::new(
+                d2b_resource_runtime::metadata::MetadataDriverFactory::new(
+                    ResourceTypeName::new("Quota"),
+                ),
+            )
         }
     }
 
@@ -2553,43 +2220,9 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
         }
     }
 
-    fn payload() -> PayloadSchema {
-        PayloadSchema::parse(json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["socketPath"],
-            "properties": {
-                "socketPath": { "type": "string" },
-                "supervisorToken": { "type": "string", "writeOnly": true }
-            }
-        }))
-        .expect("payload schema")
-    }
-
-    fn command(name: &str, role: &str) -> SeedCommand {
-        let spec = CommandSpec::new(
-            CommandExec::parse("/usr/lib/d2b/libexec/virtiofsd").expect("exec"),
-            vec![
-                CommandArgvSlot::parse("--socket-path").expect("slot"),
-                CommandArgvSlot::parse("{socketPath}").expect("slot"),
-            ],
-            payload(),
-            ResourceRef::parse(role).expect("role ref"),
-            CommandIntent::new(
-                BoundedText::parse("<zone>/<command>/<name>").expect("grammar"),
-                BoundedToken::parse("per-bundle-entry").expect("mint"),
-            ),
-        )
-        .expect("command spec");
-        SeedCommand {
-            name: name.to_owned(),
-            spec,
-        }
-    }
-
     /// The role the process controller runs under: `create` on `Operation`,
     /// scoped to the declared commands.
-    fn publisher_role(commands: &[SeedCommand]) -> SeedRole {
+    fn publisher_role() -> SeedRole {
         let role = json!({
             "rules": [{
                 "resourceTypes": ["Operation"],
@@ -2600,10 +2233,6 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
                 "executionRefs": [],
                 "sessionVerbs": []
             }],
-            "commandRefs": commands
-                .iter()
-                .map(|command| format!("Command/{}", command.name))
-                .collect::<Vec<_>>(),
         });
         SeedRole {
             name: "operation-publisher".to_owned(),
@@ -2622,16 +2251,7 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
                 "executionRefs": [],
                 "sessionVerbs": []
             }],
-            "posture": {
-                "seccompRef": "SeccompProfile/worker",
-                "principalRef": "Principal/d2b-zonert",
-                "capabilities": [],
-                "namespaces": {},
-                "mounts": [],
-                "umask": null,
-                "userNs": false
-            },
-        });
+                    });
         SeedRole {
             name: "worker".to_owned(),
             spec: serde_json::from_value(role).expect("worker role"),
@@ -2698,13 +2318,12 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
         }
     }
 
-    fn make_declarations(commands: Vec<SeedCommand>, controller: bool) -> FoundationDeclarations {
+    fn make_declarations(controller: bool) -> FoundationDeclarations {
         FoundationDeclarations {
             providers: vec![provider()],
             profiles: vec![profile()],
             policies: vec![policy()],
-            roles: vec![publisher_role(&commands), worker_role()],
-            commands,
+            roles: vec![publisher_role(), worker_role()],
             operator_bindings: Vec::new(),
             controller: controller
                 .then(|| ResourceRef::parse("Provider/system-minijail").expect("controller")),
@@ -2730,8 +2349,7 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn the_seed_commits_the_policy_rows_in_declaration_order() {
         let fixture = make_fixture();
-        let commands = vec![command("virtiofsd-worker", "Role/operation-publisher")];
-        let report = run(&fixture, make_declarations(commands, true))
+        let report = run(&fixture, make_declarations(true))
             .await
             .expect("seed runs");
         assert_eq!(
@@ -2742,180 +2360,58 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
                 "ExecutionPolicy/worker",
                 "Role/operation-publisher",
                 "Role/worker",
-                "Command/virtiofsd-worker",
                 "RoleBinding/system-minijail-self-operation-publisher",
-                "Operation/process-run-virtiofsd-worker",
             ]
         );
-        assert_eq!(
-            report.materialized,
-            vec!["Operation/process-run-virtiofsd-worker"]
-        );
-        // The materialized operation carries the command's payload contract.
-        let operation = row_spec(&fixture.store, "Operation/process-run-virtiofsd-worker")
-            .await
-            .expect("operation row");
-        let spec: OperationSpec = serde_json::from_slice(&operation).expect("operation spec");
-        assert_eq!(
-            spec.owner_ref().map(ResourceRef::to_canonical_string),
-            Some("Command/virtiofsd-worker".to_owned())
-        );
-        assert_eq!(
-            serde_json::to_value(spec.payload_schema()).expect("payload"),
-            serde_json::to_value(payload()).expect("payload")
-        );
-        assert_ne!(
-            spec.secret_access(),
-            d2b_provider_operation::operation::SecretAccess::None
-        );
-        // The role's posture row resolves the committed profile and principal.
-        let role = row_spec(&fixture.store, "Role/worker").await.expect("role row");
-        let spec: RoleSpec = serde_json::from_slice(&role).expect("role spec");
-        assert!(spec.posture().is_some());
         // A restart re-seeds idempotently: every row's bytes are current.
         let second = run(
             &fixture,
-            make_declarations(vec![command("virtiofsd-worker", "Role/operation-publisher")], true),
+            make_declarations(true),
         )
         .await
         .expect("second seed runs");
         assert_eq!(second.unchanged, second.committed.len());
     }
 
+    /// The seed resolves every declared reference before its first write:
+    /// an unresolved `operationRefs` entry and an unallocated provider
+    /// principal are each refused terminally, naming the row and the missing
+    /// target.
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    async fn an_unresolved_command_role_ref_is_refused() {
+    async fn unresolved_operation_refs_and_unallocated_principals_are_refused() {
         let fixture = make_fixture();
-        let error = run(
-            &fixture,
-            make_declarations(vec![command("virtiofsd-worker", "Role/missing")], true),
-        )
-        .await
-        .expect_err("unresolved role reference");
-        assert_eq!(
-            error,
-            SeedError::UnresolvedRef {
-                row: "Command/virtiofsd-worker".to_owned(),
-                field: "roleRef",
-                missing: "Role/missing".to_owned(),
-            }
-        );
-    }
-
-    #[tokio::test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    async fn unresolved_seccomp_and_principal_refs_are_refused() {
-        let fixture = make_fixture();
-        let commands = vec![command("virtiofsd-worker", "Role/operation-publisher")];
-        let mut declarations = make_declarations(commands.clone(), true);
-        // This case is about the Role's own posture reference, so the
-        // ExecutionPolicy row that selects the same profile is dropped too;
-        // its own unresolved-selection refusal is covered separately.
-        declarations.profiles.clear();
-        declarations.policies.clear();
-        let error = run(&fixture, declarations)
-            .await
-            .expect_err("unresolved seccomp reference");
-        assert_eq!(
-            error,
-            SeedError::UnresolvedRef {
-                row: "Role/worker".to_owned(),
-                field: "posture.seccompRef",
-                missing: "SeccompProfile/worker".to_owned(),
-            }
-        );
-
-        let mut declarations = make_declarations(commands, true);
+        let mut declarations = make_declarations(true);
         let role = json!({
             "rules": [{
                 "resourceTypes": ["Operation"], "verbs": ["create"], "subresources": [],
                 "resourceNames": [], "zones": [], "executionRefs": [], "sessionVerbs": []
             }],
-            "posture": {
-                "seccompRef": "SeccompProfile/worker",
-                "principalRef": "Principal/not-allocated",
-                "capabilities": [], "namespaces": {}, "mounts": [], "umask": null, "userNs": false
-            },
+            "operationRefs": ["Operation/absent"],
         });
-        declarations.roles[1].spec = serde_json::from_value(role).expect("role with posture");
+        declarations.roles[1].spec = serde_json::from_value(role).expect("role with operation ref");
+        let error = run(&fixture, declarations)
+            .await
+            .expect_err("unresolved operation reference");
+        assert_eq!(
+            error,
+            SeedError::UnresolvedRef {
+                row: "Role/worker".to_owned(),
+                field: "operationRefs",
+                missing: "Operation/absent".to_owned(),
+            }
+        );
+
+        let mut declarations = make_declarations(true);
+        declarations.providers[0].principals = vec!["not-allocated".to_owned()];
         let error = run(&fixture, declarations)
             .await
             .expect_err("unallocated principal");
         assert_eq!(
             error,
             SeedError::PrincipalNotAllocated {
-                row: "Role/worker".to_owned(),
+                row: "Provider/system-minijail".to_owned(),
                 principal: "not-allocated".to_owned(),
-            }
-        );
-    }
-
-    #[tokio::test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    async fn materialization_requires_the_controller_self_binding() {
-        let fixture = make_fixture();
-        let commands = vec![command("virtiofsd-worker", "Role/operation-publisher")];
-        // No controller identity at all: nothing materializes.
-        let error = run(&fixture, make_declarations(commands.clone(), false))
-            .await
-            .expect_err("missing controller");
-        assert!(matches!(
-            error,
-            SeedError::UnauthorizedMaterialization { .. }
-        ));
-        // A controller whose role carries no commandRefs cannot materialize.
-        let mut unscoped = make_declarations(commands.clone(), true);
-        let role = json!({
-            "rules": [{
-                "resourceTypes": ["Operation"], "verbs": ["create"], "subresources": [],
-                "resourceNames": [], "zones": [], "executionRefs": [], "sessionVerbs": []
-            }]
-        });
-        unscoped.roles[0].spec = serde_json::from_value(role).expect("role without commandRefs");
-        let error = run(&fixture, unscoped)
-            .await
-            .expect_err("unscoped controller");
-        assert!(matches!(
-            error,
-            SeedError::UnauthorizedMaterialization { .. }
-        ));
-        // The declared self-binding authorizes exactly the scoped command.
-        let report = run(&fixture, make_declarations(commands, true))
-            .await
-            .expect("authorized materialization");
-        assert_eq!(report.materialized.len(), 1);
-    }
-
-    #[tokio::test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    async fn materialization_is_not_authorized_by_an_operator_binding() {
-        let fixture = make_fixture();
-        let mut declarations = make_declarations(
-            vec![command("virtiofsd-worker", "Role/operation-publisher")],
-            true,
-        );
-        // The controller keeps its identity but loses its self-binding, and
-        // an operator binding names the same controller against a role that
-        // carries the commandRefs and `create` on Operation: the operator
-        // binding is a grant to its subject, not the seed's authority to
-        // write the materialized operation rows.
-        declarations.providers[0].self_bindings.clear();
-        declarations.operator_bindings = vec![SeedBinding {
-            name: "operator".to_owned(),
-            spec: serde_json::from_value(json!({
-                "roleRef": "Role/operation-publisher",
-                "subjects": ["Provider/system-minijail"]
-            }))
-            .expect("operator binding"),
-        }];
-        let error = run(&fixture, declarations)
-            .await
-            .expect_err("an operator binding must not authorize materialization");
-        assert_eq!(
-            error,
-            SeedError::UnauthorizedMaterialization {
-                controller: "Provider/system-minijail".to_owned(),
-                command: "Command/virtiofsd-worker".to_owned(),
             }
         );
     }
@@ -2925,7 +2421,7 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
     async fn undeclared_verbs_and_unknown_types_are_refused() {
         let fixture = make_fixture();
         let mut declarations =
-            make_declarations(vec![command("virtiofsd-worker", "Role/operation-publisher")], true);
+            make_declarations(true);
         let role = json!({
             "rules": [
                 {
@@ -2937,7 +2433,6 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
                     "resourceNames": [], "zones": [], "executionRefs": [], "sessionVerbs": []
                 }
             ],
-            "commandRefs": ["Command/virtiofsd-worker"]
         });
         declarations.roles[0].spec =
             serde_json::from_value(role).expect("role with undeclared verb");
@@ -2955,7 +2450,7 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
 
         let fixture = make_fixture();
         let mut declarations =
-            make_declarations(vec![command("virtiofsd-worker", "Role/operation-publisher")], true);
+            make_declarations(true);
         let role = json!({
             "rules": [
                 {
@@ -2967,7 +2462,6 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
                     "resourceNames": [], "zones": [], "executionRefs": [], "sessionVerbs": []
                 }
             ],
-            "commandRefs": ["Command/virtiofsd-worker"]
         });
         declarations.roles[0].spec = serde_json::from_value(role).expect("role with unknown type");
         let error = run(&fixture, declarations)
@@ -2986,10 +2480,7 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn self_binding_scope_escapes_and_scope_outside_the_role_are_refused() {
         let fixture = make_fixture();
-        let mut declarations = make_declarations(
-            vec![command("virtiofsd-worker", "Role/operation-publisher")],
-            true,
-        );
+        let mut declarations = make_declarations(true);
         declarations.providers[0].self_bindings[0].role_ref =
             ResourceRef::parse("Role/other").expect("role");
         let error = run(&fixture, declarations)
@@ -2998,10 +2489,7 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
         assert!(matches!(error, SeedError::SelfBindingEscaped { .. }));
 
         let fixture = make_fixture();
-        let mut declarations = make_declarations(
-            vec![command("virtiofsd-worker", "Role/operation-publisher")],
-            true,
-        );
+        let mut declarations = make_declarations(true);
         declarations.operator_bindings = vec![SeedBinding {
             name: "operator".to_owned(),
             spec: serde_json::from_value(json!({
@@ -3034,7 +2522,7 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
         let fixture = make_fixture();
         let report = run(
             &fixture,
-            make_declarations(vec![command("virtiofsd-worker", "Role/operation-publisher")], true),
+            make_declarations(true),
         )
         .await
         .expect("seed runs");
@@ -3100,10 +2588,7 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn an_unresolved_execution_policy_selection_is_refused_before_any_write() {
         let fixture = make_fixture();
-        let mut declarations = make_declarations(
-            vec![command("virtiofsd-worker", "Role/operation-publisher")],
-            true,
-        );
+        let mut declarations = make_declarations(true);
         declarations.policies[0].spec = ExecutionPolicySpec::new(
             PolicyNamespaces::new(vec![NamespaceClass::User]).expect("namespace set"),
             PolicyCapabilities::new(Vec::new()).expect("capability ceiling"),

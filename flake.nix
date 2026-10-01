@@ -170,7 +170,6 @@
           cp -r ${./packages/d2b-provider-audio-pipewire} $out/packages/d2b-provider-audio-pipewire
           cp -r ${./packages/d2b-provider-audio-service} $out/packages/d2b-provider-audio-service
           cp -r ${./packages/d2b-provider-clipboard-wayland} $out/packages/d2b-provider-clipboard-wayland
-          cp -r ${./packages/d2b-provider-command} $out/packages/d2b-provider-command
           cp -r ${./packages/d2b-provider-config-nixos} $out/packages/d2b-provider-config-nixos
           cp -r ${./packages/d2b-provider-credential} $out/packages/d2b-provider-credential
           cp -r ${./packages/d2b-provider-credential-entra} $out/packages/d2b-provider-credential-entra

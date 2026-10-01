@@ -32,7 +32,7 @@ pub use d2b_contracts_resource::v3::{
 use d2b_contracts_zone_session::v3::{
     component_session::{EndpointPolicy, EndpointRole},
     resource_bundle::ResourceBundle,
-    role::RoleSpec,
+    role::AuthorizedRole,
     role_binding::RoleBindingSpec,
 };
 use d2b_core_controller::{
@@ -550,7 +550,7 @@ pub fn compile_committed_policy_with_subjects(
                     );
                     return Err(ResourceRuntimeError::AuthorizationUnavailable);
                 }
-                let role_spec = serde_json::from_slice::<RoleSpec>(&spec).map_err(|error| {
+                let role_spec = serde_json::from_slice::<AuthorizedRole>(&spec).map_err(|error| {
                     tracing::warn!(
                         zone = zone.as_str(),
                         resource = resource.resource_ref.to_canonical_string(),
@@ -599,7 +599,7 @@ pub fn compile_committed_policy_with_subjects(
                             return None;
                         }
                         let spec = envelope.spec().base().to_canonical_bytes();
-                        serde_json::from_slice::<RoleSpec>(&spec).ok()
+                        serde_json::from_slice::<AuthorizedRole>(&spec).ok()
                     })
                     .ok_or_else(|| {
                         tracing::warn!(

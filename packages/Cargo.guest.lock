@@ -989,14 +989,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2b-provider-command"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-resource-types",
- "tokio",
-]
-
-[[package]]
 name = "d2b-provider-config-nixos"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1935,7 +1927,6 @@ dependencies = [
  "d2b-provider-audio-pipewire",
  "d2b-provider-audio-service",
  "d2b-provider-clipboard-wayland",
- "d2b-provider-command",
  "d2b-provider-config-nixos",
  "d2b-provider-credential",
  "d2b-provider-credential-entra",

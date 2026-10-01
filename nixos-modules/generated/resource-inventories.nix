@@ -102,7 +102,6 @@
 
   # Standard ResourceType -> its committed schema artifact.
   coreSchemaPointers = {
-    "Command" = "core.d2bus.org_Command.schema.json";
     "Credential" = "core.d2bus.org_Credential.schema.json";
     "Device" = "core.d2bus.org_Device.schema.json";
     "EmergencyPolicy" = "core.d2bus.org_EmergencyPolicy.schema.json";

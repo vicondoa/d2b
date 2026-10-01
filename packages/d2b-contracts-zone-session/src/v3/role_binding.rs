@@ -152,7 +152,7 @@ impl ScopeNarrowing {
     }
 
     /// Validate that this narrowing does not grant outside a Role.
-    pub fn is_subset_of(&self, role: &super::role::RoleSpec) -> bool {
+    pub fn is_subset_of(&self, role: &super::role::AuthorizedRole) -> bool {
         self.rules.iter().all(|narrowed| {
             role.rules().iter().any(|allowed| {
                 narrowed
@@ -384,7 +384,7 @@ impl RoleBindingSpec {
     /// Validate the optional narrowing against the referenced Role's rules.
     pub fn validate_scope_against_role(
         &self,
-        role: &super::role::RoleSpec,
+        role: &super::role::AuthorizedRole,
     ) -> Result<(), RoleBindingContractError> {
         if self
             .scope_narrowing
@@ -463,7 +463,7 @@ pub enum RoleBindingConditionType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v3::role::{RoleResourceVerb, RoleRule, RoleSpec};
+    use crate::v3::role::{AuthorizedRole, RoleResourceVerb, RoleRule};
     use d2b_contracts_resource::v3::{ResourceRef, ResourceTypeName};
 
     #[test]
@@ -495,7 +495,7 @@ mod tests {
 
     #[test]
     fn scope_narrowing_is_a_subset_operation() {
-        let allowed = RoleSpec::new(vec![
+        let allowed = AuthorizedRole::new(vec![
             RoleRule::new(
                 vec![ResourceTypeName::parse("Process").unwrap()],
                 vec![RoleResourceVerb::Get],
@@ -506,7 +506,7 @@ mod tests {
                 vec![],
             )
             .unwrap(),
-        ])
+        ], Vec::new())
         .unwrap();
         let narrower = ScopeNarrowing::new(vec![
             RoleRule::new(

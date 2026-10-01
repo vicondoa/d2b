@@ -92,7 +92,6 @@ test_suite(
         "//packages/d2b-provider-emergency-policy:all-tests",
         "//packages/d2b-provider-resource-export:all-tests",
         "//packages/d2b-provider-resource-import:all-tests",
-        "//packages/d2b-provider-command:all-tests",
         "//packages/d2b-provider-config-nixos:all-tests",
         "//packages/d2b-provider-operation:all-tests",
         "//packages/d2b-provider-seccomp-profile:all-tests",

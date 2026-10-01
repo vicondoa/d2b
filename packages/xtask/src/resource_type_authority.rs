@@ -124,7 +124,6 @@ const COMMITTED_NIX_STANDARD_ORDER: &[&str] = &[
     "Endpoint",
     "ResourceExport",
     "ResourceImport",
-    "Command",
     "Operation",
     "SeccompProfile",
 ];
@@ -172,7 +171,6 @@ const COMMITTED_V3_ORDER: &[&str] = &[
     "EmergencyPolicy",
     "ResourceExport",
     "ResourceImport",
-    "Command",
     "Operation",
     "SeccompProfile",
 ];
@@ -1630,7 +1628,6 @@ mod tests {
         "  \"Endpoint\"\n",
         "  \"ResourceExport\"\n",
         "  \"ResourceImport\"\n",
-        "  \"Command\"\n",
         "  \"Operation\"\n",
         "  \"SeccompProfile\"\n",
         "]\n",
@@ -1661,7 +1658,6 @@ mod tests {
             "Endpoint",
             "ResourceExport",
             "ResourceImport",
-            "Command",
             "Operation",
             "SeccompProfile",
         ];

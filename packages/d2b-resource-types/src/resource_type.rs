@@ -88,8 +88,6 @@ impl WellKnownType {
     pub const RESOURCE_EXPORT: Self = Self("ResourceExport");
     /// A resource imported from another zone.
     pub const RESOURCE_IMPORT: Self = Self("ResourceImport");
-    /// A declared launch shape a `Process` instance references.
-    pub const COMMAND: Self = Self("Command");
     /// A committed broker operation with its handler reference.
     pub const OPERATION: Self = Self("Operation");
     /// A committed seccomp posture a role references.
