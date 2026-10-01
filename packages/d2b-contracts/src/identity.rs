@@ -48,10 +48,10 @@ pub const STANDARD_RESOURCE_TYPES: [&str; 27] = [
     "EphemeralProcess",
     "Volume",
     "VolumeBinding",
-    "DeviceBinding",
-    "EndpointBinding",
-    "NetworkBinding",
     "CredentialBinding",
+    "NetworkBinding",
+    "EndpointBinding",
+    "DeviceBinding",
     "Network",
     "Device",
     "User",
@@ -59,13 +59,8 @@ pub const STANDARD_RESOURCE_TYPES: [&str; 27] = [
     "Endpoint",
     "ResourceExport",
     "ResourceImport",
-    // The controller family's policy types: unqualified, always-committed
-    // vocabulary whose rows the foundation seed writes.
     "Operation",
     "SeccompProfile",
-    // The confinement row an instance selects: canonical under the
-    // unified resource graph, and the vocabulary entry that makes an
-    // `ExecutionPolicy/<name>` reference resolvable.
     "ExecutionPolicy",
 ];
 
