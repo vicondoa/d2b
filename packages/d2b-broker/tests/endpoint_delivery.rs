@@ -231,7 +231,7 @@ fn isolation_for(user: bool) -> RunnerIsolationSpec {
         pre_opened_device_fds: Vec::new(),
         memlock_limit_bytes: None,
         activation_stdin: None,
-        presentation: Some(PresentationRealization::FilesystemPresentation),
+        presentation: PresentationRealization::FilesystemPresentation,
         private_execution_root: None,
         presentation_binds: Vec::new(),
     }
