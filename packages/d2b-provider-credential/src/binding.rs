@@ -31,25 +31,47 @@
 //!   An unconfirmed remote revoke can never project `Released`; it leaves the
 //!   relationship outstanding so cleanup stays withheld.
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use d2b_contracts_provider::v3::credential::{
-    AdmittedCredentialDelivery, AudienceToken, CredentialDeliveryEvidence as ObservedDeliveryEvidence,
-    CredentialMethod, CredentialSpec, DeliveryIdentity, DeliveryRouteDigest, DeliverySessionParams,
-    OperationClass,
+    AdmittedCredentialDelivery, AudienceToken,
+    CredentialDeliveryEvidence as ObservedDeliveryEvidence, CredentialLeaseState, CredentialMethod,
+    CredentialSpec, DeliveryIdentity, DeliveryRouteDigest, DeliverySessionParams, OperationClass,
 };
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 use d2b_contracts_resource::v3::{
     AdmissionStage, BindingAdmission, BindingArbitration, BindingAuthorization,
     BindingConsumerKind, BindingContractError, BindingKey, BindingKind, BindingLifecycleState,
     BindingRealizationFacet, BindingRealizationSupport, BindingRefusal, BindingRowError,
-    BindingSourceDecision, BindingSpecFingerprint, CredentialBindingRequest, CredentialBindingSpec,
-    CredentialLifetime, CredentialOperation, FreshnessTuple, MAX_CREDENTIAL_LIFETIME_MS,
-    MIN_CREDENTIAL_LIFETIME_MS, RefusalReason, RequestedRights, ResourceGeneration, ResourceRef,
-    ResourceUid, SourceAdmission, ZoneId, admit_binding_request, canonical_json_bytes,
-    framed_canonical_digest,
+    BindingSourceDecision, BindingSpecFingerprint, ControllerGeneration, CredentialBindingRequest,
+    CredentialBindingSpec, CredentialLifetime, CredentialOperation, FreshnessTuple,
+    MAX_CREDENTIAL_LIFETIME_MS, MIN_CREDENTIAL_LIFETIME_MS, RefusalReason, RequestedRights,
+    ResourceGeneration, ResourceRef, ResourceSpec, ResourceUid, SourceAdmission, ZoneId,
+    admit_binding_request, canonical_json_bytes, framed_canonical_digest,
+    identity::ReconnectGeneration,
+};
+use d2b_resource_runtime::context::{
+    ResourceContext, RowLookup, SpecDecoder, WatchCondition, typed_spec_decoder,
+};
+use d2b_resource_runtime::driver::{
+    DynResourceDriver, ReconcileOutcome, RecoveryOutcome, ResourceDriver, ResourceDriverFactory,
+};
+use d2b_resource_runtime::error::{
+    DriverFailure, DriverOp, FailureClass, FailureComparison, FailureDetail, FailureKind,
+    FailureKinds,
+};
+use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
+use d2b_resource_types::{
+    AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType,
 };
 
-use crate::driver::CredentialSourcePolicy;
-use crate::session::CredentialRevocationReport;
+use crate::driver::{CredentialDependencyFacts, CredentialLeaseFacts, CredentialSourcePolicy};
+use crate::session::{
+    CredentialResourceRuntimeError, CredentialRevocationInputs, CredentialRevocationOutcome,
+    CredentialRevocationReport, CredentialRevocationRequest, CredentialSession,
+    is_credential_provider_ref,
+};
 
 /// A closed delivery refusal from the Credential binding realization.
 ///
@@ -1190,5 +1212,1175 @@ impl AdmittedCredentialDelivery for CredentialDeliveryAuthority {
             .and_then(|()| self.check_lifetime(evidence.now_unix_ms()))
             .err()
             .map(|refusal| BindingRefusal::new(refusal.stage(), refusal.reason()))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The `CredentialBinding` serving driver (U37)
+// ---------------------------------------------------------------------------
+//
+// The driver serves the committed row the source admitted: it decodes the
+// neutral contract through the row's own wire decoder, enforces the committed
+// `BindingSourceDecision`, resolves the parent `Credential` row and the
+// consumer row through the manager behind their fences, and drives what the
+// family can honestly realize through [`CredentialBindingEffects`].
+//
+// # Which verbs of the realization this driver can honestly serve
+//
+// The `CredentialDelivery` realization is one facet, and separating what exists
+// from what does not separates the verbs cleanly:
+//
+// - **`clock` IS routed.** Every lifetime bound is compared against the
+//   observation clock, and it rides the port rather than the process clock so
+//   the family holds no ambient authority and a test can pin the answer.
+//
+// - **`revoke` IS routed, through the preserved protocol call.** The daemon
+//   holds an authenticated Credential session per Provider
+//   ([`CredentialSession`](crate::session::CredentialSession)) whose
+//   `revoke_credential` issues the `RevokeToken` ttrpc call on
+//   `d2b.credential.v3.CredentialService`
+//   (`packages/d2bd/src/credential_resource_runtime.rs:81`). This driver
+//   builds a [`CredentialRevocationRequest`] through the same
+//   [`CredentialRevocationInputs`] the `Credential` row's own teardown uses and
+//   calls that same method, so there is one revocation authority rather than
+//   two.
+//
+// - **`deliver` IS NOT routable, and this driver does not pretend otherwise.**
+//   Minting delivery evidence is source-side and runs through
+//   [`CredentialDeliveryAuthority::mint`], which takes the whole
+//   [`CredentialBindingAdmission`]: the credential generation, the consumer
+//   component generation, the Provider generation, the credential rotation
+//   generation, the admitted dependency revisions, the audience, the delivery
+//   route digest, and the token ceiling, and refuses when any of them moved.
+//   None of that is reconstructible from a committed row plus a manager read -
+//   the admitted dependency revisions and the delivery route digest in
+//   particular exist only inside the source's admission. The receiving side
+//   does not exist either: `CredentialSession` has exactly two methods,
+//   `session_generation` and `revoke_credential`, so there is no
+//   `AcquireToken`/`RefreshToken`/`SignChallenge` client to hand minted
+//   [`DeliverySessionParams`] to.
+//
+//   The minimal broker-side surface that would close this is one method on
+//   `CredentialSession`, plus the daemon-side delivery mint it forwards:
+//
+//   ```text
+//   async fn deliver(
+//       &self,
+//       params: &DeliverySessionParams,
+//       method: CredentialMethod,
+//   ) -> Result<CredentialResponse, CredentialResourceRuntimeError>;
+//   ```
+//
+//   where `params` is exactly what `CredentialDeliveryAuthority::mint`
+//   produced and the daemon forwards it as the matching ttrpc method on
+//   `d2b.credential.v3.CredentialService`. The method-name table and the
+//   response shape already exist in the Provider server
+//   (`d2b-provider-toolkit`, `server/credential.rs:331-335` and
+//   `CredentialResponse::AcquireToken`); what is missing is the client side
+//   and the mint, which are source-side by construction. Until both exist the
+//   driver reports the delivery as a named refusal rather than as a delivery,
+//   and there is no `deliver` verb on the port to imply otherwise.
+
+/// The `Credential` ResourceType the committed relationship's source is.
+const CREDENTIAL_RESOURCE_TYPE: &str = "Credential";
+
+/// Canonical `CredentialBinding` ResourceType name.
+pub const CREDENTIAL_BINDING_TYPE_NAME: &str =
+    d2b_contracts_resource::v3::credential_binding::CREDENTIAL_BINDING_RESOURCE_TYPE;
+
+/// The re-check cadence while the committed relationship is not serving.
+///
+/// The generations the source's own fence compares - the credential rotation
+/// generation above all - reach this actor as no watch delivery on the binding
+/// row, so an unserved relationship re-checks on this interval. The same shape
+/// the Endpoint and Volume binding drivers use while their delivery is not yet
+/// provable.
+const CREDENTIAL_BINDING_RESYNC: Duration = Duration::from_secs(5);
+
+/// Closed, field-free classifications of a serving failure on this row.
+///
+/// No variant carries a credential reference, an audience, a route digest, or a
+/// generation: a failure names which check refused and nothing else (R42).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BindingDriverErrorKind {
+    /// The durable spec did not decode as the strict neutral binding
+    /// contract, or the row name is not the one this source derives.
+    SpecInvalid,
+    /// The committed `BindingSourceDecision` does not admit what the row
+    /// claims: an admitted-right set without the consuming right, realized
+    /// facets without the delivery facet, a facet outside the family's
+    /// declared support, or an arbitration this family never commits.
+    DecisionRefused,
+    /// The parent `Credential` row is present but its owner uid differs from
+    /// this binding's owner: the manager would silently re-parent. Terminal.
+    OwnerMismatch,
+    /// The parent `Credential` row is not observable yet, or holds no usable
+    /// credential spec. The former defers retryably (issue #511); the latter
+    /// is terminal because the committed row cannot converge by retrying.
+    ParentUnavailable,
+    /// The parent row decodes, but its own source policy no longer admits this
+    /// relationship's operation set or its lifetime.
+    ParentPolicyRefused,
+    /// The named consumer row is not observable yet (retryable) or does not
+    /// exist at all (terminal).
+    ConsumerUnavailable,
+    /// The protocol revocation call could not be confirmed, so cleanup stays
+    /// withheld (R36).
+    RevocationUnconfirmed,
+}
+
+impl BindingDriverErrorKind {
+    const fn class(self) -> FailureClass {
+        match self {
+            Self::ParentUnavailable
+            | Self::ConsumerUnavailable
+            | Self::RevocationUnconfirmed => FailureClass::Retryable,
+            Self::SpecInvalid
+            | Self::DecisionRefused
+            | Self::OwnerMismatch
+            | Self::ParentPolicyRefused => FailureClass::Terminal,
+        }
+    }
+
+    /// The registered failure kind this classification reports.
+    const fn failure_kind(self) -> FailureKind {
+        match self {
+            Self::SpecInvalid | Self::DecisionRefused => FailureKinds::BINDING_SPEC_INVALID,
+            Self::OwnerMismatch => FailureKinds::BINDING_OWNER_MISMATCH,
+            Self::ParentUnavailable => FailureKinds::BINDING_PARENT_UNAVAILABLE,
+            Self::ParentPolicyRefused => FailureKinds::BINDING_PLAN_DERIVATION_INVALID,
+            Self::ConsumerUnavailable => FailureKinds::BINDING_PARENT_UNAVAILABLE,
+            Self::RevocationUnconfirmed => FailureKinds::BINDING_SERVING_EFFECT_FAILED,
+        }
+    }
+}
+
+/// Typed serving failure, mapped onto the structured failure surface at the
+/// erased boundary through [`ResourceDriver::classify_error`].
+#[derive(Debug, Clone)]
+pub struct BindingDriverError {
+    kind: BindingDriverErrorKind,
+    op: DriverOp,
+    detail: FailureDetail,
+}
+
+impl BindingDriverError {
+    fn new(kind: BindingDriverErrorKind, op: DriverOp) -> Self {
+        Self { kind, op, detail: FailureDetail::new() }
+    }
+
+    fn with_detail(mut self, detail: FailureDetail) -> Self {
+        self.detail = detail;
+        self
+    }
+}
+
+impl core::fmt::Display for BindingDriverError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self.kind {
+            BindingDriverErrorKind::SpecInvalid => "binding-spec-invalid",
+            BindingDriverErrorKind::DecisionRefused => "binding-decision-refused",
+            BindingDriverErrorKind::OwnerMismatch => "binding-owner-mismatch",
+            BindingDriverErrorKind::ParentUnavailable => "binding-parent-unavailable",
+            BindingDriverErrorKind::ParentPolicyRefused => "binding-parent-policy-refused",
+            BindingDriverErrorKind::ConsumerUnavailable => "binding-consumer-unavailable",
+            BindingDriverErrorKind::RevocationUnconfirmed => "binding-revocation-unconfirmed",
+        })
+    }
+}
+
+impl std::error::Error for BindingDriverError {}
+
+/// Typed in-memory status projection (R11: never persisted).
+///
+/// Every field is a bound or a state. There is no field a credential byte
+/// could occupy, so an audit record, a status API, and a publication snapshot
+/// all read the same closed shape and none of them can leak one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CredentialBindingDriverStatus {
+    /// The relationship is fenced: pre-drain ran and new use is refused while
+    /// the outstanding session drains.
+    Draining {
+        /// The absolute expiry the row's own lifetime bounds to.
+        expiry_unix_ms: u64,
+    },
+    /// No delivery session is standing.
+    ///
+    /// There is deliberately no "admitted" or "delivered" variant: the delivery
+    /// facet is the only facet this family commits and the mint path cannot be
+    /// driven from a committed row, so a row that is structurally perfect still
+    /// reports undelivered rather than a delivery this driver cannot mint. See
+    /// the module section on which verbs the family can honestly serve.
+    Undelivered {
+        /// Closed, field-free: why no delivery session is standing.
+        reason: UndeliveredReason,
+    },
+}
+
+/// The closed set of reasons a delivery session is not standing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UndeliveredReason {
+    /// The row's own lifetime has elapsed against the observation clock, so no
+    /// delivery may be minted for it.
+    LifetimeElapsed,
+    /// The mint path is source-side and needs the full admission evidence, and
+    /// no acquire client exists to receive what it mints. Named rather than
+    /// approximated: the family does not claim a delivery it cannot mint.
+    MintPathUnroutable,
+}
+
+// ---------------------------------------------------------------------------
+// Decoded spec envelope
+// ---------------------------------------------------------------------------
+
+/// The spec-store envelope for one `CredentialBinding` row, exactly as
+/// persisted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BindingSpecEnvelope {
+    base: d2b_contracts_resource::v3::CanonicalJsonObject,
+}
+
+/// The manager-wired decode hook for `CredentialBinding` rows.
+pub fn credential_binding_spec_decoder() -> Arc<dyn SpecDecoder> {
+    typed_spec_decoder(|bytes| {
+        serde_json::from_slice::<ResourceSpec>(bytes).map(|spec| BindingSpecEnvelope {
+            base: spec.base().clone(),
+        })
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Provider effect port
+// ---------------------------------------------------------------------------
+
+/// The live-host surfaces the `CredentialBinding` serving driver needs.
+///
+/// No verb here carries credential material. There is deliberately no
+/// `deliver` verb: the mint path cannot be driven from a committed row, and
+/// declaring a verb the daemon cannot honour would be a surface nothing can
+/// reach.
+#[async_trait::async_trait]
+pub trait CredentialBindingEffects: Send + Sync + 'static {
+    /// The observation clock in unix milliseconds.
+    ///
+    /// Every lifetime bound this driver evaluates is compared against this
+    /// clock rather than the process clock, so the family holds no ambient
+    /// authority and a test can pin the answer.
+    fn now_unix_ms(&self) -> u64;
+
+    /// Provider + execution-target facts, the same read the `Credential`
+    /// driver's own teardown binds its revocation request against.
+    ///
+    /// `Ok(None)` when the Provider row is not observable; `Err` when the
+    /// dependency read itself failed, so a failed read is never answered as
+    /// absence.
+    async fn dependency_facts(
+        &self,
+        provider_ref: &ResourceRef,
+        execution_ref: &ResourceRef,
+    ) -> Result<Option<CredentialDependencyFacts>, CredentialResourceRuntimeError>;
+
+    /// Provider-side lease facts for one `Credential` row.
+    ///
+    /// `None` is exactly the "no lease state" case, in which the revocation is
+    /// skipped - the same skip the `Credential` row's own teardown performs.
+    async fn lease_facts(&self, credential_ref: &ResourceRef) -> Option<CredentialLeaseFacts>;
+
+    /// The live Provider session generation for one Credential Provider.
+    ///
+    /// `Ok(None)` means no session surface exists at all, and the inner `None`
+    /// means the session exists but is not live. Both fail a revocation closed
+    /// rather than letting it bind a zero generation (R28).
+    async fn session_generation(
+        &self,
+        provider_ref: &ResourceRef,
+    ) -> Result<Option<ReconnectGeneration>, CredentialResourceRuntimeError>;
+
+    /// Revoke one credential lease through the authenticated Provider
+    /// session.
+    ///
+    /// This is the preserved protocol call, not a second authority: the
+    /// production implementation is the daemon's
+    /// [`CredentialSession`](crate::session::CredentialSession), whose
+    /// `revoke_credential` issues the `RevokeToken` ttrpc call on
+    /// `d2b.credential.v3.CredentialService`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialResourceRuntimeError`] when the session refuses the
+    /// request's identity, no session surface exists, or the Provider cannot
+    /// confirm the revocation. The caller withholds cleanup on any of them
+    /// (R36).
+    async fn revoke_credential(
+        &self,
+        request: &CredentialRevocationRequest,
+    ) -> Result<CredentialRevocationOutcome, CredentialResourceRuntimeError>;
+}
+
+/// The provider-owned binding effects, built from the daemon-supplied facet
+/// set this family already declares (R2).
+///
+/// The clock is the one host fact read without a facet: it is the process
+/// observation every lifetime bound is measured against, and the composition
+/// root holds no daemon type this could otherwise borrow.
+pub struct CredentialBindingEffectsService {
+    runtime: Arc<dyn crate::facets::CredentialRuntime>,
+}
+
+impl CredentialBindingEffectsService {
+    /// Build the binding effects from one zone's daemon-supplied facet set.
+    pub fn new(facets: crate::facets::CredentialEffectFacets) -> Self {
+        Self { runtime: facets.runtime }
+    }
+}
+
+#[async_trait::async_trait]
+impl CredentialBindingEffects for CredentialBindingEffectsService {
+    fn now_unix_ms(&self) -> u64 {
+        #[allow(clippy::disallowed_methods, reason = "observation clock read")]
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis().min(u128::from(u64::MAX)) as u64)
+            .unwrap_or(0)
+    }
+
+    async fn dependency_facts(
+        &self,
+        provider_ref: &ResourceRef,
+        execution_ref: &ResourceRef,
+    ) -> Result<Option<CredentialDependencyFacts>, CredentialResourceRuntimeError> {
+        self.runtime.dependency_facts(provider_ref, execution_ref).await
+    }
+
+    async fn lease_facts(&self, credential_ref: &ResourceRef) -> Option<CredentialLeaseFacts> {
+        self.runtime.lease_facts(credential_ref).await
+    }
+
+    async fn session_generation(
+        &self,
+        provider_ref: &ResourceRef,
+    ) -> Result<Option<ReconnectGeneration>, CredentialResourceRuntimeError> {
+        Ok(self.effects_session(provider_ref)?.session_generation())
+    }
+
+    async fn revoke_credential(
+        &self,
+        request: &CredentialRevocationRequest,
+    ) -> Result<CredentialRevocationOutcome, CredentialResourceRuntimeError> {
+        self.effects_session(&request.provider_ref)?
+            .revoke_credential(request)
+            .await
+    }
+}
+
+impl CredentialBindingEffectsService {
+    /// The authenticated Provider session one Provider reference names.
+    ///
+    /// This is the daemon's own `ProviderSupervisor` handoff registry, read
+    /// through the family facet. `None` means no session surface exists at
+    /// all, so a revocation bound to it fails closed rather than guessing
+    /// (R28).
+    fn effects_session(
+        &self,
+        provider_ref: &ResourceRef,
+    ) -> Result<Arc<dyn CredentialSession>, CredentialResourceRuntimeError> {
+        self.runtime
+            .session(provider_ref)
+            .ok_or(CredentialResourceRuntimeError::InvalidResource)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Factory
+// ---------------------------------------------------------------------------
+
+/// Everything the plane must construct to instantiate the `CredentialBinding`
+/// driver factory for one zone: the zone, the zone-authority controller
+/// generation folded into every revocation request (KTD7), and the
+/// daemon-supplied facet set the family's own effects implementation is built
+/// from (R2).
+pub struct CredentialBindingDriverArgs {
+    /// The zone this driver's rows live in.
+    pub zone: ZoneId,
+    /// Zone controller generation folded into every revocation request.
+    pub controller_generation: ControllerGeneration,
+    /// The daemon-supplied facet set. The family never receives a
+    /// daemon-built effect port.
+    pub facets: crate::facets::CredentialEffectFacets,
+}
+
+/// [`ResourceDriverFactory`] for the `CredentialBinding` resource type.
+/// Construction is infallible by contract (R3).
+pub struct CredentialBindingDriverFactory {
+    types: [ResourceTypeName; 1],
+    args: CredentialBindingDriverArgs,
+}
+
+impl CredentialBindingDriverFactory {
+    /// Build the factory for one zone's plane.
+    pub fn new(args: CredentialBindingDriverArgs) -> Self {
+        Self {
+            types: [ResourceTypeName::new(CREDENTIAL_BINDING_TYPE_NAME)],
+            args,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ResourceDriverFactory for CredentialBindingDriverFactory {
+    fn resource_types(&self) -> &[ResourceTypeName] {
+        &self.types
+    }
+
+    async fn create(&self, _key: &ResourceKey) -> Box<dyn DynResourceDriver> {
+        Box::new(CredentialBindingDriver::new(CredentialBindingDriverArgs {
+            zone: self.args.zone.clone(),
+            controller_generation: self.args.controller_generation,
+            facets: self.args.facets.clone(),
+        }))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Driver
+// ---------------------------------------------------------------------------
+
+/// The parent `Credential` row's store-assigned identity, read through the
+/// manager.
+///
+/// The revocation request binds the Credential row's uid and generation, so
+/// they are read here rather than derived from the binding row: a binding row
+/// carries the Credential's *reference*, never its identity, and inventing the
+/// uid would let a request ride a credential the source never admitted.
+struct ParentIdentity {
+    uid: ResourceUid,
+    generation: ResourceGeneration,
+}
+
+/// One committed `CredentialBinding` row's driver.
+///
+/// The driver holds no host state and no credential material: the Provider
+/// session, the protocol revocation call, the dependency reads, and the
+/// observation clock all arrive through [`CredentialBindingEffects`], which the
+/// composition root builds from this family's already-declared facets.
+pub struct CredentialBindingDriver {
+    zone: ZoneId,
+    controller_generation: ControllerGeneration,
+    effects: Arc<dyn CredentialBindingEffects>,
+    /// Rows this driver already registered a dependency watch on (R12/R17).
+    /// Runtime-only (R6/R11): one registration per target keeps the dependency
+    /// edge that wakes the actor on a dependency's death or readiness without
+    /// accumulating manager watch entries.
+    watched: Vec<ResourceKey>,
+}
+
+impl CredentialBindingDriver {
+    fn new(args: CredentialBindingDriverArgs) -> Self {
+        // The driver builds its effects from the declared facets; no externally
+        // built port appears at this construction site (R2).
+        let effects = Arc::new(CredentialBindingEffectsService::new(args.facets));
+        Self {
+            zone: args.zone,
+            controller_generation: args.controller_generation,
+            effects,
+            watched: Vec::new(),
+        }
+    }
+
+    fn error(&self, kind: BindingDriverErrorKind, op: DriverOp) -> BindingDriverError {
+        BindingDriverError::new(kind, op)
+    }
+
+    /// Decode the stored envelope into the strict neutral binding contract.
+    ///
+    /// The wire decoder is the contract's own, so a stored row that is not
+    /// canonical `CredentialBinding` bytes - an unknown field, a consumer this
+    /// kind does not admit, a duplicate operation, a lifetime out of bounds -
+    /// is refused here rather than half-read.
+    fn decoded_binding(
+        &self,
+        ctx: &ResourceContext,
+        op: DriverOp,
+    ) -> Result<CredentialBindingSpec, BindingDriverError> {
+        let envelope = ctx
+            .spec::<BindingSpecEnvelope>()
+            .map_err(|_| self.error(BindingDriverErrorKind::SpecInvalid, op))?;
+        let binding = serde_json::from_slice::<CredentialBindingSpec>(
+            &envelope.base.to_canonical_bytes(),
+        )
+        .map_err(|_| self.error(BindingDriverErrorKind::SpecInvalid, op))?;
+        self.check_row_name(ctx, &binding, op)?;
+        Ok(binding)
+    }
+
+    /// The row's own name must be the one this source derives.
+    ///
+    /// [`credential_binding_row_name`] is a deterministic function of the
+    /// identities the row itself carries, so a committed row whose name is
+    /// anything else was not minted by this source's admission. Checking it
+    /// here is what makes the row a boundary reads back and the admission that
+    /// minted it two views of ONE derivation rather than two descriptions that
+    /// can drift.
+    fn check_row_name(
+        &self,
+        ctx: &ResourceContext,
+        binding: &CredentialBindingSpec,
+        op: DriverOp,
+    ) -> Result<(), BindingDriverError> {
+        let derived = credential_binding_row_name(binding)
+            .map_err(|_| self.error(BindingDriverErrorKind::SpecInvalid, op))?;
+        if derived.as_str() != ctx.key().name {
+            return Err(self
+                .error(BindingDriverErrorKind::SpecInvalid, op)
+                .with_detail(FailureDetail::at("spec/rowName").comparison(
+                    FailureComparison::new("binding.rowName", derived.as_str(), &ctx.key().name),
+                )));
+        }
+        Ok(())
+    }
+
+    /// The committed `BindingSourceDecision` must admit what the row claims.
+    ///
+    /// Four refusals, all terminal, all read back out of the committed bytes:
+    ///
+    /// - an arbitration this family never commits. A `Credential` row names at
+    ///   most one consumer and admits each delivery alongside its peers, so a
+    ///   row claiming exclusivity was not minted here.
+    /// - an admitted-right set that does not cover the consuming right. A
+    ///   `CredentialBinding` delivers, so it consumes; a row admitted for
+    ///   observation alone was not minted by this family.
+    /// - realized facets that do not cover the delivery facet. A row committed
+    ///   without the delivery facet declares no realization this family drives.
+    /// - a facet the source committed that this family does not declare it can
+    ///   realize. A committed facet is read back as something the source
+    ///   admitted through, and the source may only commit what it can deliver.
+    fn check_committed_decision(
+        &self,
+        binding: &CredentialBindingSpec,
+        op: DriverOp,
+    ) -> Result<(), BindingDriverError> {
+        let source = binding.source();
+        let support = credential_binding_support();
+        if source.arbitration() != BindingArbitration::Shared {
+            return Err(self.decision_error(op, "source.arbitration", "shared", "exclusive"));
+        }
+        let claimed = RequestedRights::Consume;
+        if !source.admitted_rights().contains(&claimed) {
+            return Err(self.decision_error(
+                op,
+                "source.admittedRights",
+                wire(&claimed),
+                "absent",
+            ));
+        }
+        let required = BindingRealizationFacet::CredentialDelivery;
+        if !source.realized_facets().contains(&required) {
+            return Err(self.decision_error(
+                op,
+                "source.realizedFacets",
+                wire(&required),
+                "absent",
+            ));
+        }
+        if let Some(unsupported) = source
+            .realized_facets()
+            .iter()
+            .find(|facet| !support.facets().contains(facet))
+        {
+            return Err(self.decision_error(
+                op,
+                "source.realizedFacets",
+                support
+                    .facets()
+                    .iter()
+                    .map(wire)
+                    .collect::<Vec<_>>()
+                    .join(","),
+                wire(unsupported),
+            ));
+        }
+        Ok(())
+    }
+
+    /// The refusal detail for one committed decision that does not admit the
+    /// row's own claim.
+    fn decision_error(
+        &self,
+        op: DriverOp,
+        field: &'static str,
+        expected: impl core::fmt::Display,
+        observed: impl core::fmt::Display,
+    ) -> BindingDriverError {
+        self.error(BindingDriverErrorKind::DecisionRefused, op)
+            .with_detail(
+                FailureDetail::at(match field {
+                    "source.arbitration" => "spec/source.arbitration",
+                    "source.admittedRights" => "spec/source.admittedRights",
+                    _ => "spec/source.realizedFacets",
+                })
+                .comparison(FailureComparison::new(
+                    field,
+                    expected.to_string(),
+                    observed.to_string(),
+                )),
+            )
+    }
+
+    /// The key of the parent `Credential` this binding declares.
+    ///
+    /// The key is built in this driver's own Zone, so a cross-Zone source is
+    /// structurally unnameable rather than checked for: a primitive binding is
+    /// same-Zone, and the Zone this row reconciles in is the Zone both sides
+    /// live in.
+    fn parent_credential_key(&self, binding: &CredentialBindingSpec) -> ResourceKey {
+        ResourceKey::new(
+            self.zone.as_str(),
+            CREDENTIAL_RESOURCE_TYPE,
+            binding.credential_ref().name().as_str(),
+        )
+    }
+
+    /// The key of the consumer this binding delivers to.
+    fn consumer_key(&self, binding: &CredentialBindingSpec) -> ResourceKey {
+        ResourceKey::new(
+            self.zone.as_str(),
+            binding.execution_ref().resource_type().as_str(),
+            binding.execution_ref().name().as_str(),
+        )
+    }
+
+    /// The parent `Credential` row through the manager (R2: the driver never
+    /// touches the spec store), with the same-Zone and owner fences.
+    ///
+    /// The binding's declared `Credential` must be the row the manager reports
+    /// as this resource's owner: the Credential source is what mints the
+    /// relationship, so a binding whose owner is a different row is one the
+    /// manager would silently re-parent.
+    async fn parent_credential(
+        &self,
+        ctx: &mut ResourceContext,
+        binding: &CredentialBindingSpec,
+        op: DriverOp,
+    ) -> Result<(ParentIdentity, CredentialSpec), BindingDriverError> {
+        let key = self.parent_credential_key(binding);
+        let lookup = ctx.lookup(&key).await;
+        let row = match lookup {
+            RowLookup::Present { row, .. } => row,
+            _ => {
+                // A non-present read defers: the row may not be committed yet,
+                // and an unreadable payload is not terminal by itself (#511).
+                let mut detail = FailureDetail::at("parent/lookup");
+                if let Some(comparison) = lookup.failure_comparison("parent.credential", "present")
+                {
+                    detail = detail.comparison(comparison);
+                }
+                if let Some(error) = lookup.error_detail() {
+                    detail = detail.with_note(error);
+                }
+                return Err(self
+                    .error(BindingDriverErrorKind::ParentUnavailable, op)
+                    .with_detail(detail));
+            }
+        };
+        if let Some(owner) = ctx.owner()
+            && owner != &row.uid
+        {
+            return Err(self
+                .error(BindingDriverErrorKind::OwnerMismatch, op)
+                .with_detail(FailureDetail::at("parent/owner").comparison(
+                    FailureComparison::new("parent.ownerUid", uid_hex(owner), uid_hex(&row.uid)),
+                )));
+        }
+        let identity = ParentIdentity {
+            uid: ResourceUid::from_bytes(&row.uid).map_err(|_| {
+                self.error(BindingDriverErrorKind::ParentUnavailable, op)
+                    .with_detail(Self::parent_row_detail("parent.uid"))
+            })?,
+            generation: ResourceGeneration::new(row.generation).map_err(|_| {
+                self.error(BindingDriverErrorKind::ParentUnavailable, op)
+                    .with_detail(Self::parent_row_detail("parent.generation"))
+            })?,
+        };
+        let envelope = serde_json::from_slice::<ResourceSpec>(&row.spec)
+            .map_err(|_| self.parent_spec_invalid(op))?;
+        let spec = serde_json::from_slice::<CredentialSpec>(&envelope.base().to_canonical_bytes())
+            .map_err(|_| self.parent_spec_invalid(op))?;
+        Ok((identity, spec))
+    }
+
+    /// The terminal classification for a present parent row whose stored spec
+    /// does not decode (issue #508: this is not an ownership mismatch).
+    fn parent_spec_invalid(&self, op: DriverOp) -> BindingDriverError {
+        self.error(BindingDriverErrorKind::ParentUnavailable, op)
+            .with_detail(Self::parent_row_detail("parent.spec"))
+    }
+
+    /// The comparison naming which part of the parent row was unusable.
+    fn parent_row_detail(field: &'static str) -> FailureDetail {
+        FailureDetail::at("parent/decode")
+            .comparison(FailureComparison::new(field, "a canonical Credential row", "decode failed"))
+    }
+
+    /// The consumer row through the manager, with the same-Zone fence.
+    ///
+    /// The consumer is not this row's owner - it is the party the delivery is
+    /// made to - so there is no owner fence here. What is read back is the
+    /// store-assigned identity the KTD3 key is derived from, so a consumer that
+    /// was replaced under the same name produces a different key rather than
+    /// silently continuing the old relationship.
+    async fn consumer_uid(
+        &self,
+        ctx: &mut ResourceContext,
+        binding: &CredentialBindingSpec,
+        op: DriverOp,
+    ) -> Result<ResourceUid, BindingDriverError> {
+        let key = self.consumer_key(binding);
+        let lookup = ctx.lookup(&key).await;
+        match lookup {
+            RowLookup::Present { row, .. } => ResourceUid::from_bytes(&row.uid)
+                .map_err(|_| self.error(BindingDriverErrorKind::ConsumerUnavailable, op)),
+            _ => {
+                let mut detail = FailureDetail::at("consumer/lookup");
+                if let Some(comparison) =
+                    lookup.failure_comparison("consumer.executionRef", "present")
+                {
+                    detail = detail.comparison(comparison);
+                }
+                if let Some(error) = lookup.error_detail() {
+                    detail = detail.with_note(error);
+                }
+                Err(self
+                    .error(BindingDriverErrorKind::ConsumerUnavailable, op)
+                    .with_detail(detail))
+            }
+        }
+    }
+
+    /// The parent's own source policy must still admit this relationship.
+    ///
+    /// The committed decision on the binding row records what the source
+    /// admitted; this is the second, independent half - the `Credential` row's
+    /// own policy - and it is the half a consumer cannot influence. Every
+    /// delivery class the row names must be one the row grants, and the row's
+    /// lifetime must fit inside the parent's own ceiling.
+    fn check_parent_policy(
+        &self,
+        credential: &CredentialSpec,
+        binding: &CredentialBindingSpec,
+        op: DriverOp,
+    ) -> Result<(), BindingDriverError> {
+        let policy = CredentialSourcePolicy::from_spec(credential);
+        let refused = |field: &'static str, expected: String| {
+            self.error(BindingDriverErrorKind::ParentPolicyRefused, op)
+                .with_detail(FailureDetail::at("parent/policy").comparison(
+                    FailureComparison::new(field, expected, "absent"),
+                ))
+        };
+        for operation in binding.operations() {
+            // `operation_class` is the same total mapping `canonical_binding_rows`
+            // derives the row's own operation set through, so the check reads
+            // the source policy in the vocabulary the row was minted in rather
+            // than translating twice.
+            if !policy.admits_class(operation_class(*operation)) {
+                return Err(refused(
+                    "credential.allowedOperations",
+                    wire(operation),
+                ));
+            }
+        }
+        let ceiling = policy.max_lease_lifetime_ms();
+        if ceiling != 0 && binding.lifetime_ms() > ceiling {
+            return Err(refused("credential.maxLeaseLifetimeMs", ceiling.to_string()));
+        }
+        Ok(())
+    }
+
+    /// Every check a serving pass runs before it touches the protocol: the
+    /// wire decode, the committed decision, the parent row behind its owner
+    /// fence, that row's own policy, and the consumer row.
+    async fn resolved(
+        &self,
+        ctx: &mut ResourceContext,
+        op: DriverOp,
+    ) -> Result<(CredentialBindingSpec, ParentIdentity, CredentialSpec), BindingDriverError> {
+        let binding = self.decoded_binding(ctx, op)?;
+        self.check_committed_decision(&binding, op)?;
+        let (identity, credential) = self.parent_credential(ctx, &binding, op).await?;
+        self.check_parent_policy(&credential, &binding, op)?;
+        self.consumer_uid(ctx, &binding, op).await?;
+        Ok((binding, identity, credential))
+    }
+
+    /// Register one dependency watch, at most once per target (R12/R17).
+    async fn watch_once(&mut self, ctx: &mut ResourceContext, target: ResourceKey) {
+        if self.watched.contains(&target) {
+            return;
+        }
+        if ctx.watch(target.clone(), WatchCondition::Ready).await.is_ok() {
+            self.watched.push(target);
+        }
+    }
+
+    /// The absolute expiry the committed row's own lifetime bounds to.
+    ///
+    /// The row carries one bounded lifetime and the contract holds the hard
+    /// deadline at or before the absolute expiry, so one instant carries both
+    /// bounds. Deriving it from the committed value is what makes the status a
+    /// projection of the row rather than a second policy.
+    fn expiry_unix_ms(&self, binding: &CredentialBindingSpec) -> u64 {
+        self.effects
+            .now_unix_ms()
+            .saturating_add(binding.lifetime_ms())
+    }
+
+    /// The delivery state this pass observes.
+    ///
+    /// One closed class is decided here with real evidence: a row whose own
+    /// lifetime has elapsed against the observation clock admits no delivery.
+    /// The other is the mint path itself - it is source-side, needs the full
+    /// admission evidence, and has no acquire client to receive what it mints -
+    /// so it is reported as named rather than approximated. A row that passes
+    /// every structural check still lands here, which is the honest answer and
+    /// not a defect in the checks.
+    fn delivery_state(
+        &self,
+        ctx: &mut ResourceContext,
+        binding: &CredentialBindingSpec,
+    ) -> CredentialBindingDriverStatus {
+        let expiry_unix_ms = self.expiry_unix_ms(binding);
+        if expiry_unix_ms <= self.effects.now_unix_ms() {
+            return undelivered(UndeliveredReason::LifetimeElapsed);
+        }
+        // The fence lives in the in-memory status slot rather than a durable
+        // field (R11), so a pre-drain that ran is still read back as fenced on
+        // the next pass instead of being re-admitted.
+        if matches!(
+            ctx.status::<CredentialBindingDriverStatus>(),
+            Some(CredentialBindingDriverStatus::Draining { .. })
+        ) {
+            return CredentialBindingDriverStatus::Draining { expiry_unix_ms };
+        }
+        undelivered(UndeliveredReason::MintPathUnroutable)
+    }
+}
+
+/// The hex spelling one compared uid renders as.
+fn uid_hex(bytes: &[u8; 16]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// The canonical wire spelling one committed vocabulary value renders as.
+///
+/// Read back through the contract's own serde rename rather than a second
+/// hand-written spelling, so a failure detail cannot drift from the bytes the
+/// row was decoded from.
+fn wire<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|rendered| rendered.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "unrenderable".to_owned())
+}
+
+/// The status an unserved relationship publishes, with the driver converging.
+fn undelivered(reason: UndeliveredReason) -> CredentialBindingDriverStatus {
+    CredentialBindingDriverStatus::Undelivered { reason }
+}
+
+#[async_trait::async_trait]
+impl ResourceDriver for CredentialBindingDriver {
+    type Error = BindingDriverError;
+
+    fn classify_error(&self, error: &BindingDriverError) -> DriverFailure {
+        let failure = match error.kind {
+            BindingDriverErrorKind::SpecInvalid
+            | BindingDriverErrorKind::DecisionRefused
+            | BindingDriverErrorKind::OwnerMismatch
+            | BindingDriverErrorKind::ParentPolicyRefused => {
+                DriverFailure::refused(error.op, error.kind.failure_kind())
+            }
+            BindingDriverErrorKind::ParentUnavailable
+            | BindingDriverErrorKind::ConsumerUnavailable => {
+                DriverFailure::not_yet(error.op, error.kind.failure_kind())
+            }
+            BindingDriverErrorKind::RevocationUnconfirmed => {
+                DriverFailure::error(error.op, error.kind.failure_kind(), error.kind.class())
+            }
+        };
+        failure.with_detail(error.detail.clone())
+    }
+
+    /// Structural validation: the wire decode, the committed decision, the
+    /// parent `Credential` row behind its owner fence, that row's own source
+    /// policy, and the named consumer row.
+    async fn validate(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        self.resolved(ctx, DriverOp::Validate).await?;
+        Ok(())
+    }
+
+    /// Adoption of the pre-restart incarnation (F2).
+    ///
+    /// A relationship with no minted delivery session has nothing to adopt: the
+    /// mint path never persists a session this actor could find, and adopting a
+    /// delivery it cannot prove would be the restart-adoption failure R41
+    /// exists to prevent. So a restart reports `Missing` and the next reconcile
+    /// pass re-derives the relationship from the committed row.
+    async fn recover(&mut self, ctx: &mut ResourceContext) -> Result<RecoveryOutcome, Self::Error> {
+        self.resolved(ctx, DriverOp::Recover).await?;
+        Ok(RecoveryOutcome::Missing)
+    }
+
+    /// One reconcile pass: resolve the committed relationship through its
+    /// fences and publish the in-memory status (R11).
+    ///
+    /// An unserved relationship re-checks on the preserved resync cadence,
+    /// because the generations the source's fence compares - the credential
+    /// rotation generation above all - reach this actor as no watch delivery on
+    /// the binding row.
+    async fn reconcile(
+        &mut self,
+        ctx: &mut ResourceContext,
+    ) -> Result<ReconcileOutcome, Self::Error> {
+        let op = DriverOp::Reconcile;
+        let (binding, _identity, _credential) = self.resolved(ctx, op).await?;
+        // Dependency edges (R12/R17): the Credential row and the consumer row
+        // both wake this actor when they change.
+        self.watch_once(ctx, self.parent_credential_key(&binding)).await;
+        self.watch_once(ctx, self.consumer_key(&binding)).await;
+        let status = self.delivery_state(ctx, &binding);
+        ctx.set_status(status);
+        if matches!(
+            ctx.status::<CredentialBindingDriverStatus>(),
+            Some(CredentialBindingDriverStatus::Undelivered { .. })
+        ) {
+            ctx.requeue_after(CREDENTIAL_BINDING_RESYNC);
+        }
+        // `Satisfied` is the driver's own convergence: this pass did its work
+        // and published its result. The serving state itself is the typed
+        // status, and an unserved relationship re-checks above rather than
+        // deferring the row, so a consumer's own launch never forms a startup
+        // cycle with the observation that it can see the relationship.
+        Ok(ReconcileOutcome::Satisfied)
+    }
+
+    /// Pre-drain (KTD10, R36): block NEW use before anything else is torn
+    /// down.
+    ///
+    /// The fence is the driver's own in-memory status (R11): a relationship
+    /// that has run pre-drain keeps reporting
+    /// [`CredentialBindingDriverStatus::Draining`] so the next reconcile pass
+    /// does not hand it back an undelivered-but-open state. The protocol's own
+    /// revocation is what retires the lease, and that is [`Self::delete`]'s
+    /// work. Idempotent under retry, and a row whose spec no longer decodes
+    /// converges without effects.
+    async fn pre_drain(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        let op = DriverOp::Delete;
+        let Ok((binding, _identity, _credential)) = self.resolved(ctx, op).await else {
+            // Nothing durable to fence: converged without effects.
+            return Ok(());
+        };
+        let expiry_unix_ms = self.expiry_unix_ms(&binding);
+        ctx.set_status(CredentialBindingDriverStatus::Draining { expiry_unix_ms });
+        Ok(())
+    }
+
+    /// Drain step (R10, F3): the relationship owns no child rows, so this is
+    /// the generic children-first finalization and it converges immediately.
+    async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        ctx.finalize_owned_resources()
+            .await
+            .map_err(|_| self.error(BindingDriverErrorKind::ParentUnavailable, DriverOp::Delete))?;
+        Ok(())
+    }
+
+    /// Teardown: revoke the bound credential's lease through the authenticated
+    /// Provider session.
+    ///
+    /// The call is the preserved protocol `RevokeToken`, built from the same
+    /// [`CredentialRevocationInputs`] the `Credential` row's own teardown uses
+    /// and issued through the same [`CredentialSession`] method, so there is
+    /// one revocation authority rather than two. An unconfirmed revoke withholds
+    /// cleanup (R36): the row keeps its durable deleting mark and the pass
+    /// retries rather than reporting a release it cannot prove. Idempotent
+    /// under retry - a confirmed revoke replays as
+    /// [`CredentialRevocationOutcome::AlreadyRevoked`], which is confirmed - and
+    /// a row whose spec no longer decodes converges without effects.
+    async fn delete(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        let op = DriverOp::Delete;
+        let Ok((binding, identity, credential)) = self.resolved(ctx, op).await else {
+            // Nothing durable to clean up; converged without effects.
+            return Ok(());
+        };
+        self.revoke(&binding, &identity, &credential, op).await
+    }
+}
+
+impl CredentialBindingDriver {
+    /// One confirmed-or-withheld revocation through the authenticated Provider
+    /// session.
+    ///
+    /// The three facts a revocation request binds that the driver cannot
+    /// invent are read, not derived: the Credential row's own uid and
+    /// generation come from the parent manager read, the Provider row's
+    /// generation from the dependency facet, and the live session generation
+    /// from the session itself. A missing one fails closed rather than
+    /// defaulting, because a revocation bound to a zero generation is exactly
+    /// the request that must never reach a Provider (R28).
+    async fn revoke(
+        &self,
+        binding: &CredentialBindingSpec,
+        identity: &ParentIdentity,
+        credential: &CredentialSpec,
+        op: DriverOp,
+    ) -> Result<(), BindingDriverError> {
+        // The old runner's gate, byte for byte: only an `Active` or `Unknown`
+        // lease is revoked, and `Expired`, `Revoked`, and "no lease fact"
+        // skip it. A relationship that delivered nothing has nothing to retire.
+        let lease = self.effects.lease_facts(binding.credential_ref()).await;
+        if !matches!(
+            lease.map(|facts| facts.state),
+            Some(CredentialLeaseState::Active | CredentialLeaseState::Unknown)
+        ) {
+            return Ok(());
+        }
+        let unconfirmed =
+            || self.error(BindingDriverErrorKind::RevocationUnconfirmed, op);
+        let invalid = || {
+            self.error(BindingDriverErrorKind::ParentPolicyRefused, op)
+                .with_detail(FailureDetail::at("delete/revokeIdentity").comparison(
+                    FailureComparison::new(
+                        "revocation.identity",
+                        "a live provider session",
+                        "unavailable",
+                    ),
+                ))
+        };
+        // A `Credential` row names the Provider its delivery is scoped to; a
+        // row that names none has no authenticated Provider to revoke through.
+        let provider_ref = credential.consumer_ref().cloned().ok_or_else(invalid)?;
+        if !is_credential_provider_ref(&provider_ref) {
+            return Err(invalid());
+        }
+        let facts = self
+            .effects
+            .dependency_facts(&provider_ref, binding.execution_ref())
+            .await
+            .map_err(|_| unconfirmed())?
+            .ok_or_else(invalid)?;
+        let provider_generation =
+            ResourceGeneration::new(facts.provider_generation).map_err(|_| invalid())?;
+        // The session generation is the Provider's own live evidence. The
+        // session is reached through the effect port's own request, so a
+        // revoked relationship that cannot name a live session fails closed
+        // instead of defaulting to a zero generation.
+        let session_generation = self
+            .live_session_generation(&provider_ref)
+            .await
+            .ok_or_else(invalid)?;
+        let rotation_generation = lease
+            .map(|facts| facts.rotation_generation)
+            .filter(|generation| *generation != 0)
+            .unwrap_or(1);
+        let request = CredentialRevocationRequest::new(CredentialRevocationInputs {
+            zone: ZoneId::parse(self.zone.as_str()).map_err(|_| invalid())?,
+            credential_ref: binding.credential_ref().clone(),
+            credential_uid: identity.uid.clone(),
+            credential_generation: identity.generation,
+            user_ref: credential.scope().user_ref().cloned(),
+            provider_ref,
+            provider_generation,
+            controller_generation: self.controller_generation,
+            session_generation,
+            rotation_generation,
+        })
+        .map_err(|_| invalid())?;
+        let outcome = self.effects.revoke_credential(&request).await.map_err(|_| {
+            self.error(BindingDriverErrorKind::RevocationUnconfirmed, op)
+                .with_detail(
+                    FailureDetail::at("delete/revoke")
+                        .comparison(FailureComparison::new(
+                            "binding.revocation",
+                            "confirmed",
+                            "unconfirmed",
+                        )),
+                )
+        })?;
+        if outcome.is_confirmed() {
+            tracing::info!(
+                credential = %binding.credential_ref().to_canonical_string(),
+                confirmed = true,
+                "credential binding lease revocation confirmed",
+            );
+            return Ok(());
+        }
+        tracing::warn!(
+            credential = %binding.credential_ref().to_canonical_string(),
+            "credential binding lease revocation unconfirmed; cleanup withheld",
+        );
+        Err(unconfirmed())
+    }
+
+    /// The live Provider session generation one revocation binds.
+    ///
+    /// `None` means no live session surface exists at all, which fails the
+    /// revocation closed rather than binding a zero generation (R28).
+    async fn live_session_generation(
+        &self,
+        provider_ref: &ResourceRef,
+    ) -> Option<ReconnectGeneration> {
+        self.effects
+            .session_generation(provider_ref)
+            .await
+            .unwrap_or_default()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Registration: the type's driver declaration
+// ---------------------------------------------------------------------------
+
+/// The execution domains the `CredentialBinding` type can be reconciled in.
+///
+/// Derived from the placement contract: `CredentialBinding` names no placement
+/// anchor (`PlacementAnchor::canonical_for` resolves none), so a relationship
+/// row never carries the canonical `spec.executionRef` and the plane reconciles
+/// it on its containing Zone's Host. The consumer reference in the spec selects
+/// the Guest or Process that receives the delivery, never where the
+/// relationship row itself is reconciled.
+const CREDENTIAL_BINDING_EXECUTION_DOMAINS: &[&str] = &["host"];
+
+/// The resource types the binding driver reads while reconciling.
+///
+/// Derived from the driver's row reads: the bound `Credential` row for its own
+/// policy and the owner fence, and the consumer row for the store-assigned
+/// identity the KTD3 key is derived from.
+const CREDENTIAL_BINDING_READS: &[WellKnownType] = &[WellKnownType::CREDENTIAL];
+
+/// The `CredentialBinding` type's driver declaration.
+///
+/// `CredentialBinding` is `BUILTIN | STARTUP` (no RUNTIME bit): the plane
+/// cannot serve a committed delivery relationship without it, so it must be
+/// registered before the plane opens. The type is not exportable:
+/// `ResourceExport` admits only qualified `*.d2bus.org.*Service` types, so a
+/// relationship can never be an export subject. The driver serves no broker
+/// operations, mints no children, contributes no startup steps, and declares no
+/// hosted effects service: a relationship delivers one credential to one
+/// consumer and owns nothing else, and a `ServiceDecl` with no host behind it
+/// would be a surface nothing can reach.
+pub fn credential_binding_descriptor(
+    args: CredentialBindingDriverArgs,
+) -> DriverDescriptor {
+    DriverDescriptor {
+        resource_type: WellKnownType::CREDENTIAL_BINDING,
+        allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
+        verbs: CONVERTED_TYPE_VERBS,
+        execution: CREDENTIAL_BINDING_EXECUTION_DOMAINS,
+        exportable: false,
+        reads: CREDENTIAL_BINDING_READS,
+        operations: &[],
+        creations: &[],
+        startup: &[],
+        services: &[],
+        decoder: credential_binding_spec_decoder(),
+        factory: Arc::new(CredentialBindingDriverFactory::new(args)),
     }
 }

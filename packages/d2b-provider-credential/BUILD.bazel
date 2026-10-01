@@ -72,7 +72,9 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        ":d2b_provider_credential",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        ":d2b_provider_credential_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

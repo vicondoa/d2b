@@ -238,12 +238,7 @@
     },
     {
       "file": "packages/d2b-provider-credential/src/test_support.rs",
-      "line": 103,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2b-provider-credential/src/test_support.rs",
-      "line": 104,
+      "line": 108,
       "reason": "test-support recorder lock"
     },
     {
@@ -253,7 +248,7 @@
     },
     {
       "file": "packages/d2b-provider-credential/src/test_support.rs",
-      "line": 110,
+      "line": 114,
       "reason": "test-support recorder lock"
     },
     {
@@ -263,42 +258,47 @@
     },
     {
       "file": "packages/d2b-provider-credential/src/test_support.rs",
-      "line": 116,
+      "line": 120,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-credential/src/test_support.rs",
-      "line": 169,
+      "line": 121,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-credential/src/test_support.rs",
-      "line": 248,
+      "line": 192,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-credential/src/test_support.rs",
-      "line": 249,
+      "line": 272,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-credential/src/test_support.rs",
-      "line": 254,
+      "line": 273,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-credential/src/test_support.rs",
-      "line": 255,
+      "line": 278,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-credential/src/test_support.rs",
-      "line": 260,
+      "line": 279,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-credential/src/test_support.rs",
-      "line": 261,
+      "line": 284,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2b-provider-credential/src/test_support.rs",
+      "line": 285,
       "reason": "test-support recorder lock"
     },
     {
@@ -433,32 +433,52 @@
     },
     {
       "file": "packages/d2b-provider-endpoint/src/test_support.rs",
-      "line": 73,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2b-provider-endpoint/src/test_support.rs",
       "line": 78,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-endpoint/src/test_support.rs",
-      "line": 84,
+      "line": 83,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-endpoint/src/test_support.rs",
-      "line": 123,
+      "line": 89,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-endpoint/src/test_support.rs",
-      "line": 132,
+      "line": 128,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-endpoint/src/test_support.rs",
-      "line": 142,
+      "line": 137,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2b-provider-endpoint/src/test_support.rs",
+      "line": 147,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2b-provider-endpoint/src/test_support.rs",
+      "line": 256,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2b-provider-endpoint/src/test_support.rs",
+      "line": 273,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2b-provider-endpoint/src/test_support.rs",
+      "line": 289,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2b-provider-endpoint/src/test_support.rs",
+      "line": 306,
       "reason": "test-support recorder lock"
     },
     {

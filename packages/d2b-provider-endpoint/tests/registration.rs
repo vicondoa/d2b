@@ -3,9 +3,10 @@
 //! from it.
 
 use d2b_provider_endpoint::{
-    ENDPOINT_EFFECTS_SERVICE, EndpointDriverArgs, endpoint_descriptor,
+    ENDPOINT_EFFECTS_SERVICE, EndpointBindingDriverArgs, EndpointDriverArgs, binding_descriptor,
+    endpoint_descriptor,
 };
-use d2b_provider_endpoint::test_support::FakeSocketEffects;
+use d2b_provider_endpoint::test_support::{FakeBindingEffects, FakeSocketEffects};
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::provider::{ProviderDirectory, ProviderDirectoryError};
 use d2b_resource_types::{AllowedSources, WellKnownType};
@@ -124,4 +125,78 @@ async fn the_declaration_cannot_be_registered_after_the_plane_opens() {
         ProviderDirectoryError::RequiredBeforeOpen { type_name }
             if type_name == &endpoint_type()
     ));
+}
+
+/// The relationship type the same crate serves: the endpoint owner mints an
+/// `EndpointBinding` row and this crate's own driver serves it, so both types
+/// are declared here and neither reaches the registry through a second crate.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn the_binding_declaration_registers_the_relationship_type() {
+    let descriptor = binding_descriptor(EndpointBindingDriverArgs {
+        zone: d2b_contracts_resource::v3::ZoneId::parse("work").expect("zone"),
+        facets: FakeBindingEffects::realized().facet_set(),
+    });
+    assert_eq!(descriptor.resource_type, WellKnownType::ENDPOINT_BINDING);
+    assert_eq!(
+        descriptor.allowed_sources,
+        AllowedSources::BUILTIN | AllowedSources::STARTUP,
+        "the plane cannot serve a committed relationship without this driver"
+    );
+    assert!(!descriptor.exportable, "a relationship is never an export subject");
+    assert_eq!(
+        descriptor.execution,
+        &["host"],
+        "a relationship row carries no execution anchor; its consumer reference selects \
+         the Guest or Process that receives the endpoint, not where the row reconciles"
+    );
+    assert_eq!(
+        descriptor.reads,
+        &[WellKnownType::ENDPOINT],
+        "the driver resolves the exact admitted Endpoint and the consumer row"
+    );
+    assert_eq!(
+        descriptor.verbs,
+        &[
+            "get",
+            "list",
+            "watch",
+            "create",
+            "update-spec",
+            "update-status",
+            "update-metadata",
+            "update-finalizers",
+            "delete",
+        ]
+    );
+    assert!(descriptor.operations.is_empty());
+    assert!(descriptor.creations.is_empty());
+    assert!(
+        descriptor.services.is_empty(),
+        "the delivery effects ride the driver's effect port; there is no hostable \
+         zone-plane method behind them, and a declared service with no host is a \
+         surface nothing can reach"
+    );
+
+    let mut providers = ProviderDirectory::new();
+    providers
+        .register_driver(&endpoint_descriptor(EndpointDriverArgs {
+            zone: "work".to_owned(),
+            facets: FakeSocketEffects::new().facet_set(),
+        }))
+        .expect("register the endpoint type");
+    providers.register_driver(&descriptor).expect("register the relationship type");
+    let binding_type = WellKnownType::ENDPOINT_BINDING.to_resource_type_name();
+    assert!(providers.registered_types().contains(&binding_type));
+    assert!(
+        providers.decoders().contains_key(&binding_type),
+        "the registry serves the relationship's decoder from the declaration"
+    );
+    let factory = providers
+        .lookup(&binding_type)
+        .expect("the registry serves the declared factory");
+    assert_eq!(factory.resource_types(), std::slice::from_ref(&binding_type));
+    factory
+        .create(&ResourceKey::new("work", "EndpointBinding", "relationship"))
+        .await;
 }

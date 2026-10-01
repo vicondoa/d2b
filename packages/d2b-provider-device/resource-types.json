@@ -8,6 +8,14 @@
       "execution": ["host"],
       "exportable": false,
       "reads": ["Guest", "Host", "Volume", "Process", "Endpoint", "usb.d2bus.org.UsbService", "security-key.d2bus.org.SecurityKeyService"]
+    },
+    {
+      "resourceType": "DeviceBinding",
+      "allowedSources": ["builtin", "startup", "runtime"],
+      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete"],
+      "execution": ["host"],
+      "exportable": false,
+      "reads": ["Device"]
     }
   ],
   "provides": ["Process/device-tpm-controller", "Process/device-usbip-controller", "Process/device-security-key-controller", "Process/device-gpu-controller"],

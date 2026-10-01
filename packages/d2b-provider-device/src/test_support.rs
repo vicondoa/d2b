@@ -25,6 +25,40 @@ use crate::facets::{DeviceEffectFacets, DeviceInventorySource, DeviceRuntime};
 #[derive(Default)]
 pub struct RecordingInventory;
 
+impl RecordingInventory {
+    /// The inventory this double resolves for one Provider reference, using
+    /// the same path the effect itself takes.
+    ///
+    /// Exposing it lets a test compare a driver's published authority against
+    /// the one this double mints, rather than against a literal the test and
+    /// the double could drift apart on.
+    pub fn resolved_for(
+        &self,
+        provider_ref: &str,
+    ) -> Result<DeviceInventory, SharedProviderEffectError> {
+        let component = component_for_provider(provider_ref)
+            .ok_or(SharedProviderEffectError::InvalidResource)?;
+        let spec = recorded_spec(component);
+        DeviceInventory::new(
+            declared_device_functions(component, &spec)
+                .into_iter()
+                .enumerate()
+                .map(|(index, function)| {
+                    DeviceInventoryEntry::new(
+                        function,
+                        d2b_contracts_resource::v3::DeviceAuthorityKey::from_core(
+                            [index as u8 + 1; 32],
+                        ),
+                        d2b_contracts_resource::v3::DeviceAuthorityArbitration::Exclusive,
+                        DevicePresence::Present,
+                    )
+                })
+                .collect(),
+        )
+        .map_err(|_| SharedProviderEffectError::InvalidResource)
+    }
+}
+
 #[async_trait]
 impl DeviceInventorySource for RecordingInventory {
     async fn device_inventory(

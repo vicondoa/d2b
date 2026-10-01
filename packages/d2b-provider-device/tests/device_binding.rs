@@ -15,16 +15,31 @@ use d2b_contracts_resource::v3::{
     BindingRowError, BindingSlot, DeviceArbitration, DeviceAuthorityArbitration, DeviceAuthorityKey,
     DeviceBindingRequest, DeviceBindingSpec, DeviceClaimRequest, DeviceClass, DeviceEffectOperation,
     DeviceFunction, DeviceSpec, DesiredDigest, DesiredRevision, FreshnessTuple, InventorySelector,
-    InventorySpec, RefusalReason, RequestedRights, ResourceRef, ResourceUid, StoreIncarnation, ZoneId,
-    admit_binding_row_refs, execution_policy::BoundedToken,
+    ControllerGeneration, InventorySpec, RefusalReason, RequestedRights, ResourceRef, ResourceUid,
+    StoreIncarnation, ZoneId, admit_binding_row_refs, execution_policy::BoundedToken,
 };
 use d2b_provider_device::binding::{
     DeviceAdmissionGrant, DeviceAdmissionSource, DeviceBindingDerivationError, DeviceBindingFate,
     DeviceHelperLeg, DeviceInventory, DeviceInventoryEntry, DevicePresence, DeviceUseOutcome,
     LiveDeviceBinding, admit_device_request, binding_row_name, canonical_binding_rows,
-    decide_presence, device_attachment_support, leg_outcome,
+    decide_presence, device_attachment_support, device_binding_spec_decoder, leg_outcome,
 };
-use d2b_provider_device::{DeviceComponent, declared_device_functions};
+use d2b_provider_device::test_support::{RecordingInventory, RecordingRuntime, recording_facets};
+use d2b_provider_device::{
+    DeviceBindingDriverArgs, DeviceBindingDriverStatus, DeviceComponent, UnattachedReason,
+    declared_device_functions, device_binding_descriptor,
+};
+use d2b_provider_toolkit::testing::fakes::{RecordingManagerEndpoint, RecordingRequeue};
+use d2b_resource_runtime::context::ResourceContext;
+use d2b_resource_runtime::driver::{
+    DynResourceDriver, ReconcileOutcome, RecoveryOutcome,
+};
+use d2b_resource_runtime::error::{FailureClass, FailureKinds};
+use d2b_resource_runtime::identity::{
+    ResourceKey, ResourceProvenance, StoredDesiredResource,
+};
+use d2b_resource_runtime::manager::deterministic_uid;
+use std::sync::Arc;
 
 /// The store generation every admission in this file is fenced against.
 fn store() -> StoreIncarnation {
@@ -131,6 +146,22 @@ fn drm_inventory() -> DeviceInventory {
 }
 
 const GPU_WORKER: &str = "Process/gpu-zero";
+/// The consumer row name `GPU_WORKER` resolves to.
+const GPU_WORKER_NAME: &str = "gpu-zero";
+/// The zone every row in this file lives in.
+const ZONE: &str = "dev";
+/// The GPU Provider the parent `Device` row's own `providerRef` names.
+const GPU_PROVIDER: &str = d2b_provider_device_gpu::PROVIDER_REF;
+
+/// The decision a committed row carries when the source admitted it normally:
+/// the claim's own right plus the family's declared attachment facet.
+fn committed_decision() -> serde_json::Value {
+    serde_json::json!({
+        "admittedRights": ["exclusive"],
+        "arbitration": "exclusive",
+        "realizedFacets": ["device-attachment"],
+    })
+}
 const GPU_WORKER_UID: &str = "223e4567-e89b-42d3-a456-426614174001";
 const VIDEO_WORKER: &str = "Process/video-zero";
 const VIDEO_WORKER_UID: &str = "323e4567-e89b-42d3-a456-426614174002";
@@ -1038,3 +1069,443 @@ fn an_inventory_must_be_bounded_and_name_each_capability_once() {
     assert!(inventory.resolves(&function("render-node")));
     assert!(!inventory.resolves(&function("dri")));
 }
+
+// ---------------------------------------------------------------------------
+// The `DeviceBinding` serving driver (U16)
+// ---------------------------------------------------------------------------
+//
+// The driver is driven through the composition root's own construction: the
+// factory builds its effects from the declared `DeviceEffectFacets`, so a test
+// supplying the recording runtime and the recording inventory is exercising
+// the production wiring rather than a substituted port.
+//
+// The properties under test are the ones the serving half has to earn:
+//
+// 1. A committed row reaches `validate` and `reconcile` through every fence:
+//    the wire decode, the committed decision, the parent row behind its owner
+//    fence, that row's own declared capability vocabulary, and the consumer
+//    row.
+// 2. The committed `BindingSourceDecision` is enforced, not trusted.
+// 3. A capability the trusted inventory no longer backs is reported as
+//    revoked through the family's own `capability_backed` observation, never
+//    as served.
+// 4. The attachment this driver cannot route is named, never claimed.
+
+/// One committed `DeviceBinding` row, carrying the decision the source's own
+/// `canonical_binding_rows` commits.
+fn committed_binding_row(
+    name: &str,
+    source: serde_json::Value,
+    function: &str,
+    claim: DeviceClaimRequest,
+) -> StoredDesiredResource {
+    StoredDesiredResource {
+        key: ResourceKey::new(ZONE, "DeviceBinding", name),
+        uid: deterministic_uid(&ResourceKey::new(ZONE, "DeviceBinding", name)),
+        generation: 1,
+        owner_uid: Some(deterministic_uid(&ResourceKey::new(ZONE, "Device", "gpu-zero"))),
+        provenance: ResourceProvenance::Resource,
+        deleting: false,
+        spec: serde_json::json!({
+            "deviceRef": "Device/gpu-zero",
+            "executionRef": GPU_WORKER,
+            "function": function,
+            "claim": serde_json::to_value(claim).expect("claim wire"),
+            "slot": "gpu-render",
+            "source": source,
+        })
+        .to_string()
+        .into_bytes(),
+        metadata: Vec::new(),
+        created_at: 0,
+    }
+}
+
+/// The driver context plus the manager endpoint and requeue it records.
+struct Fixture {
+    ctx: ResourceContext,
+    manager: RecordingManagerEndpoint,
+}
+
+fn binding_fixture(row: StoredDesiredResource, manager: RecordingManagerEndpoint) -> Fixture {
+    let (effects_tx, _effects_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
+    let requeue = RecordingRequeue::default();
+    let ctx = ResourceContext::new(
+        row,
+        device_binding_spec_decoder(),
+        Arc::new(manager.clone()),
+        Arc::new(requeue.clone()),
+        effects_tx,
+        notify_tx,
+    );
+    let _ = requeue;
+    Fixture { ctx, manager }
+}
+
+/// One seeded manager row.
+fn seeded(key: ResourceKey, spec: Vec<u8>) -> StoredDesiredResource {
+    StoredDesiredResource {
+        uid: deterministic_uid(&key),
+        generation: 2,
+        owner_uid: None,
+        provenance: ResourceProvenance::Resource,
+        deleting: false,
+        spec,
+        metadata: Vec::new(),
+        created_at: 0,
+        key,
+    }
+}
+
+/// The parent `Device` row: the stored envelope carries the Provider its
+/// delivery is scoped to, which is what selects the realizing component.
+///
+/// The fixture is written in the contract's WIRE spelling rather than
+/// round-tripped through its `Serialize` impl: `DeviceSpec` serializes the DRM
+/// selector's `pci_slot` field as written while its own `Deserialize` admits
+/// only `pciSlot`, so a round-tripped value would not decode. Spelling the row
+/// the way the store persists it is what makes this a fixture for the driver's
+/// real decode rather than a second opinion about it.
+fn parent_device_bytes(provider_ref: &str) -> Vec<u8> {
+    serde_json::json!({
+        "providerRef": provider_ref,
+        "deviceClass": "physical",
+        "arbitration": "exclusive",
+        "maxConcurrentClaims": 1,
+        // The label the recording inventory's own spec resolves under, so the
+        // capabilities it backs are the ones this row's named function is
+        // compared against.
+        "inventory": { "selector": { "busClass": "drm", "label": "recorded", "pciSlot": null } }
+    })
+    .to_string()
+    .into_bytes()
+}
+
+/// A manager holding the parent `Device` row and the consumer row, so every
+/// fence has something real to resolve.
+fn serving_manager() -> RecordingManagerEndpoint {
+    RecordingManagerEndpoint::new()
+        .with_row(seeded(
+            ResourceKey::new(ZONE, "Device", "gpu-zero"),
+            parent_device_bytes(GPU_PROVIDER),
+        ))
+        .with_row(seeded(
+            ResourceKey::new(ZONE, "Process", GPU_WORKER_NAME),
+            b"{}".to_vec(),
+        ))
+}
+
+/// The driver over the production facet construction.
+async fn binding_driver() -> Box<dyn DynResourceDriver> {
+    device_binding_descriptor(DeviceBindingDriverArgs {
+        zone: ZoneId::parse(ZONE).expect("zone"),
+        controller_generation: ControllerGeneration::new(1).expect("controller generation"),
+        facets: recording_facets(Arc::new(RecordingRuntime::default())),
+    })
+    .factory
+    .create(&ResourceKey::new(ZONE, "DeviceBinding", "row"))
+    .await
+}
+
+/// A committed row reaches validate and reconcile through every fence, and the
+/// pass reports the attachment it cannot route by name rather than claiming
+/// one.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn a_committed_row_reaches_validate_and_reconcile() {
+    let manager = serving_manager();
+    let mut f = binding_fixture(
+        committed_binding_row(
+            "dev-binding-row",
+            committed_decision(),
+            "render-node",
+            DeviceClaimRequest::Exclusive,
+        ),
+        manager.clone(),
+    );
+    let mut d = binding_driver().await;
+
+    d.validate(&mut f.ctx).await.expect("validate");
+
+    assert_eq!(d.reconcile(&mut f.ctx).await.expect("reconcile"), ReconcileOutcome::Satisfied);
+    // The admitted state names the component the parent's own `providerRef`
+    // selected and the opaque authority the trusted inventory resolved for the
+    // row's named capability. The authority is asserted as "the one the
+    // inventory resolved for THIS row", not as a literal: the digest is the
+    // inventory's to mint, and pinning it here would pin a test double's
+    // arithmetic rather than the driver's wiring.
+    let inventory = RecordingInventory
+        .resolved_for(GPU_PROVIDER)
+        .expect("the recording inventory resolves the parent's declared selector");
+    let resolved = inventory
+        .entries()
+        .iter()
+        .find(|entry| entry.function().as_str() == "render-node")
+        .expect("the recording inventory resolves the named capability");
+    assert_eq!(
+        f.ctx.status::<DeviceBindingDriverStatus>(),
+        Some(&DeviceBindingDriverStatus::Admitted {
+            component: DeviceComponent::Gpu,
+            authority: resolved.authority_key().clone(),
+        }),
+        "the capability is declared and the recording inventory backs it",
+    );
+    // Both dependency edges were registered: the Device row and the consumer
+    // row (R12/R17).
+    let order = f.manager.call_order();
+    assert!(order.iter().any(|entry| entry.contains("watch:Device/gpu-zero")), "{order:?}");
+    assert!(order.iter().any(|entry| entry.contains("watch:Process/")), "{order:?}");
+}
+
+/// The committed `BindingSourceDecision` is enforced, not trusted: a row whose
+/// admitted rights do not cover its own claim, that drops the attachment
+/// facet, or that commits a facet outside the family's declared support is
+/// refused terminally.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn a_committed_decision_that_does_not_admit_the_row_is_refused() {
+    let manager = serving_manager();
+    let refused: Vec<(&str, serde_json::Value)> = vec![
+        (
+            "observe-only",
+            serde_json::json!({
+                "admittedRights": ["observe"],
+                "arbitration": "shared",
+                "realizedFacets": ["device-attachment"],
+            }),
+        ),
+        (
+            "no-attachment-facet",
+            serde_json::json!({
+                "admittedRights": ["exclusive"],
+                "arbitration": "exclusive",
+                "realizedFacets": ["filesystem-presentation"],
+            }),
+        ),
+        (
+            "unsupported-facet",
+            serde_json::json!({
+                "admittedRights": ["exclusive"],
+                "arbitration": "exclusive",
+                "realizedFacets": ["device-attachment", "namespace-interface"],
+            }),
+        ),
+    ];
+
+    for (label, decision) in refused {
+        let mut f = binding_fixture(
+            committed_binding_row(
+                "dev-binding-row",
+                decision,
+                "render-node",
+                DeviceClaimRequest::Exclusive,
+            ),
+            manager.clone(),
+        );
+        let mut d = binding_driver().await;
+        let failure = d
+            .validate(&mut f.ctx)
+            .await
+            .expect_err("a decision that does not admit the row is refused");
+        assert_eq!(failure.kind(), FailureKinds::BINDING_SPEC_INVALID, "{label}");
+        assert_eq!(failure.class(), FailureClass::Terminal, "{label} cannot converge by retrying");
+    }
+}
+
+/// A parent row whose owner uid differs from this binding's owner is refused
+/// terminally: the manager would silently re-parent.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn a_parent_whose_owner_differs_is_refused() {
+    let manager = RecordingManagerEndpoint::new().with_row(StoredDesiredResource {
+        key: ResourceKey::new(ZONE, "Device", "gpu-zero"),
+        uid: deterministic_uid(&ResourceKey::new(ZONE, "Process", GPU_WORKER_NAME)),
+        generation: 2,
+        owner_uid: None,
+        provenance: ResourceProvenance::Resource,
+        deleting: false,
+        spec: parent_device_bytes(GPU_PROVIDER),
+        metadata: Vec::new(),
+        created_at: 0,
+    });
+    let mut f = binding_fixture(
+        committed_binding_row(
+            "dev-binding-row",
+            committed_decision(),
+            "render-node",
+            DeviceClaimRequest::Exclusive,
+        ),
+        manager,
+    );
+    let mut d = binding_driver().await;
+
+    let failure = d
+        .validate(&mut f.ctx)
+        .await
+        .expect_err("a re-parenting row is refused");
+    assert_eq!(failure.kind(), FailureKinds::BINDING_OWNER_MISMATCH);
+    assert_eq!(failure.class(), FailureClass::Terminal);
+}
+
+/// A parent row that is not observable yet defers retryably rather than failing
+/// the binding terminal (issue #511).
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn an_unobservable_parent_defers_retryably() {
+    let mut f = binding_fixture(
+        committed_binding_row(
+            "dev-binding-row",
+            committed_decision(),
+            "render-node",
+            DeviceClaimRequest::Exclusive,
+        ),
+        RecordingManagerEndpoint::new(),
+    );
+    let mut d = binding_driver().await;
+
+    let failure = d
+        .validate(&mut f.ctx)
+        .await
+        .expect_err("an absent parent is not observable");
+    assert_eq!(failure.kind(), FailureKinds::BINDING_PARENT_UNAVAILABLE);
+    assert_eq!(failure.class(), FailureClass::Retryable);
+}
+
+/// A parent row whose declared vocabulary does not back the capability the row
+/// names is refused: the row says which ones this Provider can deliver, and a
+/// claim outside it was never admitted here.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn a_capability_outside_the_parents_vocabulary_is_refused() {
+    let manager = serving_manager();
+    let mut f = binding_fixture(
+        committed_binding_row(
+            "dev-binding-row",
+            committed_decision(),
+            "not-a-declared-capability",
+            DeviceClaimRequest::Exclusive,
+        ),
+        manager,
+    );
+    let mut d = binding_driver().await;
+
+    let failure = d
+        .validate(&mut f.ctx)
+        .await
+        .expect_err("an undeclared capability is refused");
+    assert_eq!(failure.kind(), FailureKinds::BINDING_PARENT_UNAVAILABLE);
+    assert_eq!(failure.class(), FailureClass::Terminal);
+}
+
+/// A parent row naming no Provider this family serves selects no component, so
+/// no realization is reachable and the row is refused rather than dispatched
+/// on a guess.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn a_parent_naming_a_foreign_provider_is_refused() {
+    let manager = RecordingManagerEndpoint::new()
+        .with_row(seeded(
+            ResourceKey::new(ZONE, "Device", "gpu-zero"),
+            parent_device_bytes("Provider/not-a-device-provider"),
+        ))
+        .with_row(seeded(
+            ResourceKey::new(ZONE, "Process", GPU_WORKER_NAME),
+            b"{}".to_vec(),
+        ));
+    let mut f = binding_fixture(
+        committed_binding_row(
+            "dev-binding-row",
+            committed_decision(),
+            "render-node",
+            DeviceClaimRequest::Exclusive,
+        ),
+        manager,
+    );
+    let mut d = binding_driver().await;
+
+    let failure = d
+        .validate(&mut f.ctx)
+        .await
+        .expect_err("no component resolves");
+    assert_eq!(failure.kind(), FailureKinds::BINDING_PARENT_UNAVAILABLE);
+    assert_eq!(failure.class(), FailureClass::Terminal);
+}
+
+/// A restart adopts nothing: no host effect persists a claim this actor could
+/// find, and adopting an attachment it cannot prove is exactly the failure R41
+/// exists to prevent.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn recover_adopts_nothing_it_cannot_prove() {
+    let mut f = binding_fixture(
+        committed_binding_row(
+            "dev-binding-row",
+            committed_decision(),
+            "render-node",
+            DeviceClaimRequest::Exclusive,
+        ),
+        serving_manager(),
+    );
+    let mut d = binding_driver().await;
+
+    assert_eq!(d.recover(&mut f.ctx).await.expect("recover"), RecoveryOutcome::Missing);
+}
+
+/// A pre-drain fences the relationship and the next pass reads the fence back
+/// out of the in-memory status rather than re-admitting it.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn pre_drain_fences_and_the_next_pass_reads_the_fence_back() {
+    let mut f = binding_fixture(
+        committed_binding_row(
+            "dev-binding-row",
+            committed_decision(),
+            "render-node",
+            DeviceClaimRequest::Exclusive,
+        ),
+        serving_manager(),
+    );
+    let mut d = binding_driver().await;
+
+    d.pre_drain(&mut f.ctx).await.expect("pre_drain");
+    assert_eq!(
+        f.ctx.status::<DeviceBindingDriverStatus>(),
+        Some(&DeviceBindingDriverStatus::Draining { component: DeviceComponent::Gpu }),
+    );
+
+    d.reconcile(&mut f.ctx).await.expect("reconcile after the fence");
+    assert_eq!(
+        f.ctx.status::<DeviceBindingDriverStatus>(),
+        Some(&DeviceBindingDriverStatus::Draining { component: DeviceComponent::Gpu }),
+        "the fence survives the next pass (R11: the status slot is the fence)",
+    );
+}
+
+/// Teardown converges idempotently and converges on every retry: a
+/// relationship this driver never attached has nothing to release, and the
+/// status it leaves behind says so rather than claiming a withdrawal.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn teardown_is_idempotent_and_claims_no_withdrawal() {
+    let mut f = binding_fixture(
+        committed_binding_row(
+            "dev-binding-row",
+            committed_decision(),
+            "render-node",
+            DeviceClaimRequest::Exclusive,
+        ),
+        serving_manager(),
+    );
+    let mut d = binding_driver().await;
+
+    d.delete(&mut f.ctx).await.expect("delete");
+    assert_eq!(
+        f.ctx.status::<DeviceBindingDriverStatus>(),
+        Some(&DeviceBindingDriverStatus::Unattached {
+            reason: UnattachedReason::AttachDispatchUnroutable,
+        }),
+    );
+    d.delete(&mut f.ctx).await.expect("a retried delete converges");
+}
+

@@ -26,7 +26,7 @@ use d2b_contracts_broker::kernel_client::{
     KernelInvocation, KernelInvokeError, envelope_invoke_kernel,
 };
 use d2b_contracts_resource::v3::{
-    IfName, NetworkIfRole, NetworkProvenance, ResourceBundleGenerationId, ResourceUid,
+    IfName, NetworkIfRole, NetworkProvenance, ResourceBundleGenerationId, ResourceRef, ResourceUid,
     network::{AttachmentGenerationFence, AttachmentHandle, NetworkSpec},
 };
 use d2b_core::bundle_resolver::{
@@ -1465,6 +1465,164 @@ impl NetworkBroker for KernelNetworkBroker {
             }),
         )
     }
+}
+
+// ---------------------------------------------------------------------------
+// The per-consumer membership tap kernels (U17)
+// ---------------------------------------------------------------------------
+//
+// A committed `NetworkBinding` row carries exactly four fields: the Network
+// reference, the consumer reference, the presentation, and the source's
+// decision. It names no VM, no process role, and no bundle TAP intent
+// reference - and it cannot, because none of those is a property of a
+// relationship between a Network and an execution target. The broker's
+// `create-persistent-tap` kernel takes all three as required payload fields
+// and re-derives them against the trusted bundle's process DAG
+// (`BundleResolver::resolve_tap_intent`, which resolves a `ProcessNode` by
+// `(vm_id, role_id)` before it derives anything).
+//
+// The kernel therefore cannot be driven from a `NetworkBinding` row. What CAN
+// be driven is the one verb whose identity is the attachment itself: the
+// generation-fenced per-attachment removal already implemented above as
+// `delete-persistent-tap`, keyed by the same opaque attachment id the
+// realization record was filed under.
+
+/// The stable name of the missing broker kernel for per-consumer interface
+/// creation.
+///
+/// This is the operation a `NetworkBinding` realization would need and the
+/// broker does not have. It is named here rather than invented at the call
+/// site so the gap is one grep away, and the driver reports it by this name
+/// instead of a generic refusal.
+pub const MISSING_CREATE_MEMBERSHIP_TAP: &str = "create-membership-tap";
+
+/// The stable name of the missing broker kernel for per-consumer namespace
+/// placement.
+///
+/// Nothing in the broker's network kernel table moves a link into another
+/// network namespace: the thirteen kernels cover bridge, tap, port flags,
+/// firewall, route, sysctl, NetworkManager, hosts, and DHCP state, and no
+/// `netns`/`setns`/`nsenter` path exists anywhere under
+/// `packages/d2b-broker/src/ops/{tap,network}.rs`.
+pub const MISSING_PLACE_MEMBERSHIP_TAP: &str = "place-membership-tap";
+
+/// The stable name of the missing broker kernel for per-consumer interface
+/// fencing.
+///
+/// The membership lifecycle has a `revoke`/`drain`/`release` progression
+/// (see [`crate::binding::NetworkBindingRegistry`]), and the broker offers no
+/// kernel that marks one consumer's interface blocked ahead of its removal.
+pub const MISSING_FENCE_MEMBERSHIP_TAP: &str = "fence-membership-tap";
+
+/// The stable refusal the per-consumer creation path reports.
+pub const MEMBERSHIP_TAP_UNAVAILABLE: &str = "membership-tap-unavailable";
+
+/// The privileged membership effects the `NetworkBinding` serving driver runs.
+///
+/// This is the family's own implementation of
+/// [`NetworkBindingDriverEffects`](crate::binding::NetworkBindingDriverEffects),
+/// built from the same kernel broker every other Network effect runs over.
+///
+/// # What this does not do
+///
+/// Only the release verb reaches the broker today. The creation verb has no
+/// broker operation to call (see [`MISSING_CREATE_MEMBERSHIP_TAP`]), so it
+/// refuses with [`MEMBERSHIP_TAP_UNAVAILABLE`] rather than reaching the kernel
+/// table with an identity the row does not carry. That refusal is the honest
+/// answer, and it is deliberately loud: a `NetworkBinding` row cannot be
+/// served until the kernel exists.
+pub struct NetworkBrokerMembershipEffects {
+    broker: KernelNetworkBroker,
+    admission: Arc<dyn NetworkMembershipAdmission>,
+}
+
+impl NetworkBrokerMembershipEffects {
+    /// Bind the kernel broker and the admission-proof source this family
+    /// realizes memberships over.
+    pub fn new(
+        broker: KernelNetworkBroker,
+        admission: Arc<dyn NetworkMembershipAdmission>,
+    ) -> Self {
+        Self { broker, admission }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::binding::NetworkBindingDriverEffects for NetworkBrokerMembershipEffects {
+    async fn admission(
+        &self,
+        network: &ResourceRef,
+    ) -> Result<NetworkEffectContext, crate::binding::NetworkBindingError> {
+        self.admission.context_for(network).await
+    }
+
+    async fn realize_membership(
+        &self,
+        _context: &NetworkEffectContext,
+        _membership: &crate::binding::DerivedMembership,
+    ) -> Result<(), crate::binding::NetworkBindingError> {
+        // No broker kernel accepts a NetworkBinding row's identity. See the
+        // section comment above: `create-persistent-tap` requires a `vm_id`,
+        // a `role_id`, and a bundle TAP intent reference, none of which a
+        // relationship row states, and the kernel re-derives all three against
+        // the trusted bundle's process DAG before it creates anything.
+        tracing::warn!(
+            provider = "network-local",
+            missing_operation = MISSING_CREATE_MEMBERSHIP_TAP,
+            "NetworkBinding realization has no broker kernel to invoke"
+        );
+        Err(crate::binding::NetworkBindingError::MembershipEffectUnavailable)
+    }
+
+    async fn release_membership(
+        &self,
+        context: &NetworkEffectContext,
+        membership: &crate::binding::DerivedMembership,
+    ) -> Result<(), crate::binding::NetworkBindingError> {
+        let proof = context
+            .network_admission()
+            .ok_or(NetworkBrokerError::NetworkAdmissionRequired)
+            .map_err(crate::binding::NetworkBindingError::from)?;
+        // The attachment id is the consumer identity the realization record was
+        // filed under, and the fence is the parent's committed generation
+        // tuple - so the removal is fenced against exactly the admission the
+        // creation would have been fenced against.
+        let handle = AttachmentHandle::new(
+            membership.key.consumer_uid().clone(),
+            AttachmentGenerationFence::new(
+                proof.key().network_uid().clone(),
+                proof.key().network_generation(),
+                membership.key.consumer_uid().clone(),
+                proof.key().attachment_generation(),
+            ),
+        );
+        self.broker
+            .delete_persistent_tap(context, &handle, handle.generation_fence())
+            .map_err(crate::binding::NetworkBindingError::from)
+    }
+}
+
+/// The daemon-supplied source of the live Network admission proofs the
+/// membership effects are fenced against.
+///
+/// The proof is root-admitted host state (the zone's `HostNetworkAdmissionIndex`
+/// entry), not committed row content: it carries the attachment and bundle
+/// generation fences and the interface set the Network admission intent
+/// reserved. A `NetworkBinding` driver therefore reads it here rather than
+/// assembling a fence itself.
+#[async_trait::async_trait]
+pub trait NetworkMembershipAdmission: Send + Sync + 'static {
+    /// The live effect context for one committed Network row.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::binding::NetworkBindingError::StaleAuthority`] when
+    /// the Zone holds no live proof for that Network, which is the state
+    /// before the Network row has been admitted on this host.
+    async fn context_for(
+        &self,
+        network: &ResourceRef,
+    ) -> Result<NetworkEffectContext, crate::binding::NetworkBindingError>;
 }
 
 /// Map a trusted-bundle Network spec parse failure onto the broker's closed

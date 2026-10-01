@@ -32,17 +32,37 @@
 //! consumer's request identities and the source's accepted decision, so a
 //! reader and the graph cannot disagree about what was admitted.
 
-use crate::driver::{DeviceComponent, declared_device_functions};
+use std::sync::Arc;
+use std::time::Duration;
+
+use crate::driver::{DeviceComponent, component_for_provider, declared_device_functions};
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 use d2b_contracts_resource::v3::{
     AdmissionStage, BindingAdmission, BindingArbitration, BindingAuthorization, BindingContractError,
     BindingKey, BindingLifecycleState, BindingRealizationFacet, BindingRealizationSupport,
     BindingRefusal, BindingRowError, BindingSourceDecision, BindingSpecFingerprint,
-    DeviceArbitration, DeviceAuthorityArbitration, DeviceAuthorityDescriptor, DeviceAuthorityKey,
-    DeviceBindingRequest, DeviceBindingSpec, DeviceClaimRequest, DeviceEffectOperation,
-    DeviceFunction, DeviceSpec, FreshnessTuple, RefusalReason, ResourceRef, ResourceUid,
-    SourceAdmission, SourceReservation, StoreIncarnation, ZoneId, admit_binding_request,
-    canonical_json_bytes, framed_canonical_digest,
+    ControllerGeneration, DeviceArbitration, DeviceAuthorityArbitration, DeviceAuthorityDescriptor,
+    DeviceAuthorityKey, DeviceBindingRequest, DeviceBindingSpec, DeviceClaimRequest,
+    DeviceEffectOperation, DeviceFunction, DeviceSpec, FreshnessTuple, RefusalReason,
+    ResourceGeneration, ResourceRef, ResourceSpec, ResourceUid, SourceAdmission,
+    SourceReservation, StoreIncarnation, ZoneId, admit_binding_request, canonical_json_bytes,
+    framed_canonical_digest,
+};
+use d2b_provider_toolkit::shared_provider::{
+    ContextChildSurface, SharedProviderEffectError, SharedProviderEffectRequest,
+};
+use d2b_resource_runtime::context::{
+    ResourceContext, RowLookup, SpecDecoder, WatchCondition, typed_spec_decoder,
+};
+use d2b_resource_runtime::driver::{
+    DynResourceDriver, ReconcileOutcome, RecoveryOutcome, ResourceDriver, ResourceDriverFactory,
+};
+use d2b_resource_runtime::error::{
+    DriverFailure, DriverOp, FailureComparison, FailureDetail, FailureKind, FailureKinds,
+};
+use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
+use d2b_resource_types::{
+    AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType,
 };
 
 /// The upper bound on named functions one Device source resolves.
@@ -977,10 +997,7 @@ pub fn decide_presence(
     held.iter()
         .map(|live| {
             let function = live.binding().function().clone();
-            let backed = inventory
-                .entry(&function)
-                .is_some_and(|entry| entry.presence() == DevicePresence::Present);
-            let outcome = if !backed {
+            let outcome = if !capability_backed(inventory, &function) {
                 DeviceUseOutcome::Revoked
             } else if !live.lifecycle().proves_effect() {
                 DeviceUseOutcome::Degraded
@@ -994,6 +1011,19 @@ pub fn decide_presence(
             }
         })
         .collect()
+}
+
+/// Whether the trusted inventory currently backs one named capability.
+///
+/// This is the single observation [`decide_presence`] makes, factored out so
+/// the serving driver reads the same predicate rather than re-deriving it from
+/// the inventory a second way. Presence is an observation and never an
+/// authority: a capability the host no longer backs is absent here, and a
+/// claim on it is revoked rather than served (R21, R36).
+pub fn capability_backed(inventory: &DeviceInventory, function: &DeviceFunction) -> bool {
+    inventory
+        .entry(function)
+        .is_some_and(|entry| entry.presence() == DevicePresence::Present)
 }
 
 /// The safe outcome one helper leg gets from its parent's decision.
@@ -1206,4 +1236,982 @@ fn binding_row(
         name: binding_row_name(admitted.key())?,
         spec: canonical_json_bytes(&spec).map_err(|_| BindingContractError::InvalidField)?,
     })
+}
+
+// ---------------------------------------------------------------------------
+// The `DeviceBinding` serving driver (U16)
+// ---------------------------------------------------------------------------
+//
+// The driver serves the committed row the source admitted: it decodes the
+// neutral contract through the row's own wire decoder, enforces the committed
+// `BindingSourceDecision`, resolves the parent `Device` row and the consumer
+// row through the manager behind their fences, and drives what the family can
+// honestly realize through [`DeviceBindingEffects`].
+//
+// # Which verbs of the realization this driver can honestly serve
+//
+// The `DeviceAttachment` realization is one facet, and the audit of the host
+// effects separates what exists from what does not:
+//
+// - **`observe` IS routed, through the trusted inventory facet.** The Device
+//   source already declares [`crate::facets::DeviceInventorySource`], and the
+//   daemon implements it over the verified host device-node matrix
+//   (`packages/d2bd/src/shared_provider_effects.rs`, the
+//   `DeviceInventorySource` impl). It resolves the committed row's own declared
+//   selector into the opaque physical authority each named capability carries
+//   plus the presence observed for it - which is exactly the input
+//   [`capability_backed`] - the same observation [`decide_presence`] makes -
+//   is reachable from the serving half.
+//
+// - **`attach` and `release` are NOT routable, and this driver does not
+//   pretend otherwise.** The host effects that exist are provider-specific and
+//   none of them takes a generic device attachment:
+//
+//     - usbip's [`KernelUsbipDispatcher`](d2b_provider_device_usbip) is
+//     constructed per Service over a [`UsbipBindingContext`](d2b_provider_device_usbip)
+//     whose `physical_key` is the zone ledger's own map key - minted from the
+//     Device row's uid by `UsbipCoreAdapter::physical_usb_backing_key`, NOT the
+//     `DeviceAuthorityKey` the inventory resolves. Its `bind_owned` issues
+//     `BrokerRequest::UsbipBind`, whose `UsbipBindRequest` carries only a
+//     bind-intent reference and no device identity at all; its `start_proxy`
+//     keys the ledger by the `usb.d2bus.org.UsbBinding` row's uid, not by this
+//     row's.
+//   - GPU's [`GpuRuntime::admit_authority`](d2b_provider_device_gpu) is
+//     synchronous and takes an `AuthorityRequest` built by the GPU family from
+//     its own `GpuAuthorityAdmission`. Nothing in the tree constructs one from
+//     a `DeviceBindingSpec`.
+//   - the daemon's [`DeviceRuntime`](crate::facets) dispatches on the
+//     `DeviceComponent` the committed **Device** row's `providerRef` names, and
+//     every branch reads that Device row's own spec. No branch sees a binding
+//     row, and no code anywhere dispatches a host effect on a binding row's
+//     provider.
+//
+//   The dispatch that is missing is one function that, given a committed
+//   `DeviceBinding` row and the parent `Device` row's `providerRef`, selects
+//   the component and drives that component's own attach path. Its signature
+//   would be:
+//
+//   ```text
+//   async fn attach(
+//       &self,
+//       component: DeviceComponent,
+//       binding: &DeviceBindingSpec,
+//       consumer: &ResourceRef,
+//       authority: &DeviceAuthorityKey,
+//   ) -> Result<DeviceAttachmentHandle, SharedProviderEffectError>;
+//   ```
+//
+//   over the existing per-component effects, with the returned handle the thing
+//   `release` takes. Building it here would be inventing a dispatch the
+//   provider-specific effects do not expose, so the driver declares no such
+//   verb and reports the attachment it cannot make as a named refusal.
+//
+// What the driver *can* prove is real and worth serving: the committed row
+// decodes, its decision admits it, the parent and consumer rows resolve behind
+// their fences, the named capability is one this Provider declares, and the
+// trusted inventory still backs it. A row whose capability the host no longer
+// backs is reported as revoked through [`decide_presence`] rather than as
+// served.
+
+/// The `Device` ResourceType the committed relationship's source is.
+const DEVICE_RESOURCE_TYPE: &str = "Device";
+
+/// Canonical `DeviceBinding` ResourceType name.
+pub const DEVICE_BINDING_TYPE_NAME: &str =
+    d2b_contracts_resource::v3::device_binding::DEVICE_BINDING_RESOURCE_TYPE;
+
+/// The re-check cadence while the committed relationship is not serving.
+///
+/// Hardware presence is host-dependent and an absence observation reaches this
+/// actor as no watch delivery on the binding row, so an unattached
+/// relationship re-checks on this interval. The same shape the Endpoint and
+/// Volume binding drivers use while their delivery is not yet provable.
+const DEVICE_BINDING_RESYNC: Duration = Duration::from_secs(30);
+
+/// Closed, field-free classifications of a serving failure on this row.
+///
+/// No variant carries a device node path, a serial, a bus id, or a resource
+/// identity: a failure names which check refused and nothing else (R42).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BindingDriverErrorKind {
+    /// The durable spec did not decode as the strict neutral binding
+    /// contract, or the row name is not the one this source derives.
+    SpecInvalid,
+    /// The committed `BindingSourceDecision` does not admit what the row
+    /// claims: an admitted-right set without the claim's own right, realized
+    /// facets without the attachment facet, or a facet outside the family's
+    /// declared support.
+    DecisionRefused,
+    /// The parent `Device` row is present but its owner uid differs from this
+    /// binding's owner: the manager would silently re-parent. Terminal.
+    OwnerMismatch,
+    /// The parent `Device` row is not observable yet, or holds no usable
+    /// device spec. The former defers retryably (issue #511); the latter is
+    /// terminal because the committed row cannot converge by retrying.
+    ParentUnavailable,
+    /// The parent row decodes, but names no Provider this family serves, or its
+    /// declared vocabulary does not back the capability the row names.
+    ParentPolicyRefused,
+    /// The named consumer row is not observable yet (retryable) or does not
+    /// exist at all (terminal).
+    ConsumerUnavailable,
+    /// The trusted inventory could not be resolved for the committed row.
+    InventoryUnavailable,
+}
+
+impl BindingDriverErrorKind {
+    /// The registered failure kind this classification reports.
+    const fn failure_kind(self) -> FailureKind {
+        match self {
+            Self::SpecInvalid | Self::DecisionRefused => FailureKinds::BINDING_SPEC_INVALID,
+            Self::OwnerMismatch => FailureKinds::BINDING_OWNER_MISMATCH,
+            Self::ParentUnavailable | Self::ParentPolicyRefused => {
+                FailureKinds::BINDING_PARENT_UNAVAILABLE
+            }
+            Self::ConsumerUnavailable => FailureKinds::BINDING_PARENT_UNAVAILABLE,
+            Self::InventoryUnavailable => FailureKinds::BINDING_SERVING_EFFECT_FAILED,
+        }
+    }
+}
+
+/// Typed serving failure, mapped onto the structured failure surface at the
+/// erased boundary through [`ResourceDriver::classify_error`].
+#[derive(Debug, Clone)]
+pub struct BindingDriverError {
+    kind: BindingDriverErrorKind,
+    op: DriverOp,
+    detail: FailureDetail,
+}
+
+impl BindingDriverError {
+    fn new(kind: BindingDriverErrorKind, op: DriverOp) -> Self {
+        Self { kind, op, detail: FailureDetail::new() }
+    }
+
+    fn with_detail(mut self, detail: FailureDetail) -> Self {
+        self.detail = detail;
+        self
+    }
+}
+
+impl core::fmt::Display for BindingDriverError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self.kind {
+            BindingDriverErrorKind::SpecInvalid => "binding-spec-invalid",
+            BindingDriverErrorKind::DecisionRefused => "binding-decision-refused",
+            BindingDriverErrorKind::OwnerMismatch => "binding-owner-mismatch",
+            BindingDriverErrorKind::ParentUnavailable => "binding-parent-unavailable",
+            BindingDriverErrorKind::ParentPolicyRefused => "binding-parent-policy-refused",
+            BindingDriverErrorKind::ConsumerUnavailable => "binding-consumer-unavailable",
+            BindingDriverErrorKind::InventoryUnavailable => "binding-inventory-unavailable",
+        })
+    }
+}
+
+impl std::error::Error for BindingDriverError {}
+
+/// Typed in-memory status projection (R11: never persisted).
+///
+/// Every field is a state, a bound, or an opaque authority digest. No device
+/// node path, serial, bus id, or host permission bit is reachable from it, so
+/// an audit record, a status API, and a publication snapshot all read the same
+/// closed shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeviceBindingDriverStatus {
+    /// The committed relationship is admitted, the trusted inventory still
+    /// backs the capability it names, and the family's own presence decision
+    /// retains it.
+    ///
+    /// This is NOT an attachment. The host effect that would attach it is the
+    /// dispatch this family cannot build - see the module section on which
+    /// verbs the family can honestly serve - so the status deliberately has no
+    /// "attached" variant to reach.
+    Admitted {
+        /// The component the parent `Device` row's own `providerRef` selected.
+        component: DeviceComponent,
+        /// The opaque physical authority the trusted inventory resolved for the
+        /// named capability.
+        authority: DeviceAuthorityKey,
+    },
+    /// The relationship is fenced: pre-drain ran and new use is refused while
+    /// the outstanding claim drains.
+    Draining {
+        /// The component the parent `Device` row's own `providerRef` selected.
+        component: DeviceComponent,
+    },
+    /// The attachment is not standing.
+    ///
+    /// The reason is the closed class the observation landed in.
+    Unattached {
+        /// Closed, field-free: why no attachment is standing.
+        reason: UnattachedReason,
+    },
+}
+
+/// The closed set of reasons an attachment is not standing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnattachedReason {
+    /// The trusted inventory no longer resolves the capability the row names,
+    /// or reports it as gone, so the family's own
+    /// [`capability_backed`] observation is false and the claim is revoked
+    /// rather than served (R21, R36).
+    CapabilityNotBacked,
+    /// The host effect that would attach this capability is not routable from a
+    /// committed row. Named rather than approximated: the family does not
+    /// claim an attachment it cannot make.
+    AttachDispatchUnroutable,
+}
+
+// ---------------------------------------------------------------------------
+// Decoded spec envelope
+// ---------------------------------------------------------------------------
+
+/// The spec-store envelope for one `DeviceBinding` row, exactly as persisted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BindingSpecEnvelope {
+    /// The serving Provider reference the row was committed under, when the
+    /// source named one.
+    provider_ref: Option<ResourceRef>,
+    base: d2b_contracts_resource::v3::CanonicalJsonObject,
+}
+
+/// The manager-wired decode hook for `DeviceBinding` rows.
+pub fn device_binding_spec_decoder() -> Arc<dyn SpecDecoder> {
+    typed_spec_decoder(|bytes| {
+        serde_json::from_slice::<ResourceSpec>(bytes).map(|spec| BindingSpecEnvelope {
+            provider_ref: spec.provider_ref().cloned(),
+            base: spec.base().clone(),
+        })
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Provider effect port
+// ---------------------------------------------------------------------------
+
+/// The live-host surfaces the `DeviceBinding` serving driver needs.
+///
+/// The only verb is the trusted inventory read, and it is routed: the daemon
+/// implements [`crate::facets::DeviceInventorySource`] over the verified host
+/// device-node matrix. There are deliberately no `attach` or `release` verbs -
+/// the provider-specific effects that exist take no generic device attachment
+/// and nothing dispatches on the row's provider, so declaring one would be a
+/// surface nothing can reach.
+#[async_trait::async_trait]
+pub trait DeviceBindingEffects: Send + Sync + 'static {
+    /// Resolve the trusted host inventory for one committed `Device` row.
+    ///
+    /// The committed row is the only input: its declared `DeviceSpec` names
+    /// the inventory selector, and the resolved physical authority keys and
+    /// their presence come from the verified host device-node matrix.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SharedProviderEffectError`] when the committed spec does not
+    /// decode, the declared selector names a bus class with no trusted
+    /// inventory, or the host device-node matrix cannot be read for it.
+    async fn device_inventory(
+        &self,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<DeviceInventory, SharedProviderEffectError>;
+}
+
+/// The provider-owned binding effects, built from the daemon-supplied facet set
+/// this family already declares (R2).
+///
+/// One value serves both: the driver holds it as its typed seam, and the
+/// `Device` driver's own effects service is the value the composition root
+/// already constructs from the same facets.
+pub type DeviceBindingEffectsService = crate::effects_service::DeviceEffects;
+
+#[async_trait::async_trait]
+impl DeviceBindingEffects for DeviceBindingEffectsService {
+    async fn device_inventory(
+        &self,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<DeviceInventory, SharedProviderEffectError> {
+        crate::effects_service::DeviceEffects::device_inventory(self, request).await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Factory
+// ---------------------------------------------------------------------------
+
+/// Everything the plane must construct to instantiate the `DeviceBinding`
+/// driver factory for one zone: the zone, the zone-authority controller
+/// generation the family's effects fold in (KTD7), and the daemon-supplied
+/// facet set.
+pub struct DeviceBindingDriverArgs {
+    /// The zone this driver's rows live in.
+    pub zone: ZoneId,
+    /// Zone controller generation folded into every effect call (KTD7).
+    pub controller_generation: ControllerGeneration,
+    /// The daemon-supplied facet set. The family never receives a
+    /// daemon-built effect port.
+    pub facets: crate::facets::DeviceEffectFacets,
+}
+
+/// [`ResourceDriverFactory`] for the `DeviceBinding` resource type.
+/// Construction is infallible by contract (R3).
+pub struct DeviceBindingDriverFactory {
+    types: [ResourceTypeName; 1],
+    args: DeviceBindingDriverArgs,
+}
+
+impl DeviceBindingDriverFactory {
+    /// Build the factory for one zone's plane.
+    pub fn new(args: DeviceBindingDriverArgs) -> Self {
+        Self {
+            types: [ResourceTypeName::new(DEVICE_BINDING_TYPE_NAME)],
+            args,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ResourceDriverFactory for DeviceBindingDriverFactory {
+    fn resource_types(&self) -> &[ResourceTypeName] {
+        &self.types
+    }
+
+    async fn create(&self, _key: &ResourceKey) -> Box<dyn DynResourceDriver> {
+        // The driver builds its effects from the declared facets; no externally
+        // built port appears at this construction site (R2).
+        let effects = Arc::new(DeviceBindingEffectsService::new(self.args.facets.clone()));
+        Box::new(DeviceBindingDriver {
+            zone: self.args.zone.clone(),
+            effects,
+            watched: Vec::new(),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Driver
+// ---------------------------------------------------------------------------
+
+/// One committed `DeviceBinding` row's driver.
+///
+/// The driver holds no host state: the trusted inventory, and everything the
+/// per-component effects would read behind it, arrive through
+/// [`DeviceBindingEffects`].
+pub struct DeviceBindingDriver {
+    zone: ZoneId,
+    effects: Arc<dyn DeviceBindingEffects>,
+    /// Rows this driver already registered a dependency watch on (R12/R17).
+    /// Runtime-only (R6/R11): one registration per target keeps the dependency
+    /// edge that wakes the actor on a dependency's death or readiness without
+    /// accumulating manager watch entries.
+    watched: Vec<ResourceKey>,
+}
+
+impl DeviceBindingDriver {
+    fn error(&self, kind: BindingDriverErrorKind, op: DriverOp) -> BindingDriverError {
+        BindingDriverError::new(kind, op)
+    }
+
+    /// Decode the stored envelope into the strict neutral binding contract.
+    ///
+    /// The wire decoder is the contract's own, so a stored row that is not
+    /// canonical `DeviceBinding` bytes is refused here rather than half-read.
+    fn decoded_binding(
+        &self,
+        ctx: &ResourceContext,
+        op: DriverOp,
+    ) -> Result<DeviceBindingSpec, BindingDriverError> {
+        let envelope = ctx
+            .spec::<BindingSpecEnvelope>()
+            .map_err(|_| self.error(BindingDriverErrorKind::SpecInvalid, op))?;
+        serde_json::from_slice::<DeviceBindingSpec>(&envelope.base.to_canonical_bytes())
+            .map_err(|_| self.error(BindingDriverErrorKind::SpecInvalid, op))
+    }
+
+    /// The committed `BindingSourceDecision` must admit what the row claims.
+    ///
+    /// Three refusals, all terminal, all read back out of the committed bytes:
+    ///
+    /// - an admitted-right set that does not cover the claim's own right. A
+    ///   shared claim needs the sharing right and an exclusive one the
+    ///   exclusive right; a row admitted for observation alone was not minted
+    ///   by this family.
+    /// - realized facets that do not cover the attachment facet. A row
+    ///   committed without it declares no realization this family drives.
+    /// - a facet the source committed that this family does not declare it can
+    ///   realize. A committed facet is read back as something the source
+    ///   admitted through, and the source may only commit what it can deliver.
+    ///
+    /// The arbitration itself is NOT checked here: a Device source arbitrates
+    /// an exclusive claim against its peers and arbitrates a shared one under
+    /// its own ceiling, so both values are ones this family commits. The
+    /// claim's own requested right is what has to be admitted.
+    fn check_committed_decision(
+        &self,
+        binding: &DeviceBindingSpec,
+        op: DriverOp,
+    ) -> Result<(), BindingDriverError> {
+        let source = binding.source();
+        let support = device_attachment_support();
+        let claimed = binding.claim().requested_rights();
+        if !source.admitted_rights().contains(&claimed) {
+            return Err(self.decision_error(op, "source.admittedRights", wire(&claimed), "absent".to_owned()));
+        }
+        let required = BindingRealizationFacet::DeviceAttachment;
+        if !source.realized_facets().contains(&required) {
+            return Err(self.decision_error(op, "source.realizedFacets", wire(&required), "absent".to_owned()));
+        }
+        if let Some(unsupported) = source
+            .realized_facets()
+            .iter()
+            .find(|facet| !support.facets().contains(facet))
+        {
+            return Err(self.decision_error(
+                op,
+                "source.realizedFacets",
+                support
+                    .facets()
+                    .iter()
+                    .map(wire)
+                    .collect::<Vec<_>>()
+                    .join(","),
+                wire(unsupported),
+            ));
+        }
+        Ok(())
+    }
+
+    /// The refusal detail for one committed decision that does not admit the
+    /// row's own claim.
+    fn decision_error(
+        &self,
+        op: DriverOp,
+        field: &'static str,
+        expected: String,
+        observed: String,
+    ) -> BindingDriverError {
+        self.error(BindingDriverErrorKind::DecisionRefused, op).with_detail(
+            FailureDetail::at(match field {
+                "source.arbitration" => "spec/source.arbitration",
+                "source.admittedRights" => "spec/source.admittedRights",
+                _ => "spec/source.realizedFacets",
+            })
+            .comparison(FailureComparison::new(field, expected, observed)),
+        )
+    }
+
+    /// The key of the parent `Device` this binding declares.
+    ///
+    /// The key is built in this driver's own Zone, so a cross-Zone source is
+    /// structurally unnameable rather than checked for: a primitive binding is
+    /// same-Zone, and the Zone this row reconciles in is the Zone both sides
+    /// live in.
+    fn parent_device_key(&self, binding: &DeviceBindingSpec) -> ResourceKey {
+        ResourceKey::new(
+            self.zone.as_str(),
+            DEVICE_RESOURCE_TYPE,
+            binding.device_ref().name().as_str(),
+        )
+    }
+
+    /// The key of the consumer this binding attaches to.
+    fn consumer_key(&self, binding: &DeviceBindingSpec) -> ResourceKey {
+        ResourceKey::new(
+            self.zone.as_str(),
+            binding.execution_ref().resource_type().as_str(),
+            binding.execution_ref().name().as_str(),
+        )
+    }
+
+    /// The parent `Device` row through the manager (R2: the driver never
+    /// touches the spec store), with the same-Zone and owner fences.
+    ///
+    /// The binding's declared `Device` must be the row the manager reports as
+    /// this resource's owner: the Device source is what mints the
+    /// relationship, so a binding whose owner is a different row is one the
+    /// manager would silently re-parent.
+    ///
+    /// The row's own `providerRef` is returned beside the spec because it is
+    /// the one thing that selects which hardware family realizes this
+    /// relationship - the same selection [`component_for_provider`] makes for
+    /// the `Device` row's own driver, read through the same function rather
+    /// than a second spelling of it.
+    async fn parent_device(
+        &self,
+        ctx: &mut ResourceContext,
+        binding: &DeviceBindingSpec,
+        op: DriverOp,
+    ) -> Result<(DeviceComponent, DeviceSpec), BindingDriverError> {
+        let key = self.parent_device_key(binding);
+        let lookup = ctx.lookup(&key).await;
+        let row = match lookup {
+            RowLookup::Present { row, .. } => row,
+            _ => {
+                // A non-present read defers: the row may not be committed yet,
+                // and an unreadable payload is not terminal by itself (#511).
+                let mut detail = FailureDetail::at("parent/lookup");
+                if let Some(comparison) = lookup.failure_comparison("parent.device", "present") {
+                    detail = detail.comparison(comparison);
+                }
+                if let Some(error) = lookup.error_detail() {
+                    detail = detail.with_note(error);
+                }
+                return Err(self
+                    .error(BindingDriverErrorKind::ParentUnavailable, op)
+                    .with_detail(detail));
+            }
+        };
+        if let Some(owner) = ctx.owner()
+            && owner != &row.uid
+        {
+            return Err(self
+                .error(BindingDriverErrorKind::OwnerMismatch, op)
+                .with_detail(FailureDetail::at("parent/owner").comparison(
+                    FailureComparison::new("parent.ownerUid", uid_hex(owner), uid_hex(&row.uid)),
+                )));
+        }
+        let envelope = serde_json::from_slice::<ResourceSpec>(&row.spec)
+            .map_err(|_| self.parent_spec_invalid(op, "parent.spec"))?;
+        // The envelope's own `providerRef` is the universal desired-state layer
+        // the typed `DeviceSpec` denies, so it is stripped before the base
+        // fields decode - the same strip the daemon's inventory facet performs.
+        let mut base = serde_json::to_value(envelope.base()).map_err(|_| {
+            self.parent_spec_invalid(op, "parent.spec")
+        })?;
+        let provider_ref = envelope
+            .provider_ref()
+            .map(|reference| reference.to_canonical_string())
+            .or_else(|| {
+                base.get("providerRef")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .ok_or_else(|| self.parent_spec_invalid(op, "parent.providerRef"))?;
+        if let Some(object) = base.as_object_mut() {
+            for field in ["providerRef", "updatePolicy", "provider"] {
+                object.remove(field);
+            }
+        }
+        let spec: DeviceSpec =
+            serde_json::from_value(base).map_err(|_| self.parent_spec_invalid(op, "parent.spec"))?;
+        let component = component_for_provider(&provider_ref).ok_or_else(|| {
+            self.error(BindingDriverErrorKind::ParentPolicyRefused, op).with_detail(
+                FailureDetail::at("parent/providerRef")
+                    .comparison(FailureComparison::new(
+                        "device.providerRef",
+                        "a device provider",
+                        "not a device provider",
+                    )),
+            )
+        })?;
+        Ok((component, spec))
+    }
+
+    /// The terminal classification for a present parent row whose stored spec
+    /// does not decode (issue #508: this is not an ownership mismatch).
+    fn parent_spec_invalid(&self, op: DriverOp, field: &'static str) -> BindingDriverError {
+        self.error(BindingDriverErrorKind::ParentUnavailable, op).with_detail(
+            FailureDetail::at("parent/decode").comparison(FailureComparison::new(
+                field,
+                "a canonical Device row",
+                "decode failed",
+            )),
+        )
+    }
+
+    /// The consumer row through the manager, with the same-Zone fence.
+    ///
+    /// The consumer is not this row's owner - it is the party the attachment is
+    /// made to - so there is no owner fence here. What is read back is the
+    /// store-assigned identity the KTD3 key is derived from, so a consumer that
+    /// was replaced under the same name produces a different key rather than
+    /// silently continuing the old relationship.
+    async fn consumer_uid(
+        &self,
+        ctx: &mut ResourceContext,
+        binding: &DeviceBindingSpec,
+        op: DriverOp,
+    ) -> Result<ResourceUid, BindingDriverError> {
+        let key = self.consumer_key(binding);
+        let lookup = ctx.lookup(&key).await;
+        match lookup {
+            RowLookup::Present { row, .. } => ResourceUid::from_bytes(&row.uid)
+                .map_err(|_| self.error(BindingDriverErrorKind::ConsumerUnavailable, op)),
+            _ => {
+                let mut detail = FailureDetail::at("consumer/lookup");
+                if let Some(comparison) =
+                    lookup.failure_comparison("consumer.executionRef", "present")
+                {
+                    detail = detail.comparison(comparison);
+                }
+                if let Some(error) = lookup.error_detail() {
+                    detail = detail.with_note(error);
+                }
+                Err(self
+                    .error(BindingDriverErrorKind::ConsumerUnavailable, op)
+                    .with_detail(detail))
+            }
+        }
+    }
+
+    /// The parent row's own declared vocabulary must back the capability this
+    /// relationship names.
+    ///
+    /// This is the second, independent half of the admission and the half a
+    /// consumer cannot influence: the inventory says which named capabilities
+    /// the host backs right now, and the row says which ones this Provider can
+    /// deliver. A claim outside the second was never admitted here.
+    fn check_parent_policy(
+        &self,
+        component: DeviceComponent,
+        spec: &DeviceSpec,
+        binding: &DeviceBindingSpec,
+        op: DriverOp,
+    ) -> Result<(), BindingDriverError> {
+        if !declared_device_functions(component, spec).contains(binding.function()) {
+            return Err(self.error(BindingDriverErrorKind::ParentPolicyRefused, op).with_detail(
+                FailureDetail::at("parent/declaredFunctions").comparison(
+                    FailureComparison::new(
+                        "device.declaredFunctions",
+                        binding.function().as_str(),
+                        "not declared",
+                    ),
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Every check a serving pass runs before it touches the host: the wire
+    /// decode, the committed decision, the parent row behind its owner fence,
+    /// that row's own vocabulary, and the consumer row.
+    async fn resolved(
+        &self,
+        ctx: &mut ResourceContext,
+        op: DriverOp,
+    ) -> Result<(DeviceBindingSpec, DeviceComponent, DeviceSpec), BindingDriverError> {
+        let binding = self.decoded_binding(ctx, op)?;
+        self.check_committed_decision(&binding, op)?;
+        let (component, spec) = self.parent_device(ctx, &binding, op).await?;
+        self.check_parent_policy(component, &spec, &binding, op)?;
+        self.consumer_uid(ctx, &binding, op).await?;
+        Ok((binding, component, spec))
+    }
+
+    /// Register one dependency watch, at most once per target (R12/R17).
+    async fn watch_once(&mut self, ctx: &mut ResourceContext, target: ResourceKey) {
+        if self.watched.contains(&target) {
+            return;
+        }
+        if ctx.watch(target.clone(), WatchCondition::Ready).await.is_ok() {
+            self.watched.push(target);
+        }
+    }
+
+    /// The trusted inventory the committed `Device` row resolves to.
+    ///
+    /// The request is built from the PARENT row, because the parent is what
+    /// declares the inventory selector: a binding row names a capability and a
+    /// consumer, never a selector. Reading the parent's own envelope here is
+    /// what makes the resolution the same one the `Device` driver's effects
+    /// would make.
+    async fn inventory(
+        &self,
+        ctx: &mut ResourceContext,
+        binding: &DeviceBindingSpec,
+        op: DriverOp,
+    ) -> Result<DeviceInventory, BindingDriverError> {
+        let key = self.parent_device_key(binding);
+        let lookup = ctx.lookup(&key).await;
+        let row = match lookup {
+            RowLookup::Present { row, .. } => row,
+            _ => {
+                return Err(self
+                    .error(BindingDriverErrorKind::InventoryUnavailable, op)
+                    .with_detail(FailureDetail::at("inventory/lookup")));
+            }
+        };
+        let envelope = serde_json::from_slice::<ResourceSpec>(&row.spec).map_err(|_| {
+            self.error(BindingDriverErrorKind::InventoryUnavailable, op)
+                .with_detail(FailureDetail::at("inventory/spec"))
+        })?;
+        // The inventory effect reads the Provider the delivery is scoped to,
+        // and the daemon's own `DeviceInventorySource` impl reads it from
+        // `spec.providerRef` first and `metadata.providerRef` second. The
+        // request is composed the same way here so the two agree on one
+        // spelling rather than the driver's being a second convention.
+        let mut spec_value = serde_json::to_value(envelope.base()).unwrap_or_default();
+        if let (Some(reference), Some(object)) = (envelope.provider_ref(), spec_value.as_object_mut())
+        {
+            object.insert(
+                "providerRef".to_owned(),
+                serde_json::Value::String(reference.to_canonical_string()),
+            );
+        }
+        let surface = ContextChildSurface::new(ctx);
+        let request = SharedProviderEffectRequest {
+            zone: self.zone.clone(),
+            target: key.clone(),
+            uid: ResourceUid::from_bytes(&row.uid).map_err(|_| {
+                self.error(BindingDriverErrorKind::InventoryUnavailable, op)
+                    .with_detail(FailureDetail::at("inventory/uid"))
+            })?,
+            generation: ResourceGeneration::new(row.generation).map_err(|_| {
+                self.error(BindingDriverErrorKind::InventoryUnavailable, op)
+                    .with_detail(FailureDetail::at("inventory/generation"))
+            })?,
+            operation_id: format!("device-binding:{}", key.name),
+            spec: &spec_value,
+            metadata: serde_json::Value::Object(serde_json::Map::new()),
+            status: None,
+            children: &surface,
+        };
+        self.effects
+            .device_inventory(&request)
+            .await
+            .map_err(|_| self.error(BindingDriverErrorKind::InventoryUnavailable, op))
+    }
+}
+
+/// The hex spelling one compared uid renders as.
+fn uid_hex(bytes: &[u8; 16]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// The canonical wire spelling one committed vocabulary value renders as.
+///
+/// Read back through the contract's own serde rename rather than a second
+/// hand-written spelling, so a failure detail cannot drift from the bytes the
+/// row was decoded from.
+fn wire<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|rendered| rendered.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "unrenderable".to_owned())
+}
+
+#[async_trait::async_trait]
+impl ResourceDriver for DeviceBindingDriver {
+    type Error = BindingDriverError;
+
+    fn classify_error(&self, error: &BindingDriverError) -> DriverFailure {
+        let failure = match error.kind {
+            BindingDriverErrorKind::SpecInvalid
+            | BindingDriverErrorKind::DecisionRefused
+            | BindingDriverErrorKind::OwnerMismatch
+            | BindingDriverErrorKind::ParentPolicyRefused => {
+                DriverFailure::refused(error.op, error.kind.failure_kind())
+            }
+            BindingDriverErrorKind::ParentUnavailable
+            | BindingDriverErrorKind::ConsumerUnavailable
+            | BindingDriverErrorKind::InventoryUnavailable => {
+                DriverFailure::not_yet(error.op, error.kind.failure_kind())
+            }
+        };
+        failure.with_detail(error.detail.clone())
+    }
+
+    /// Structural validation: the wire decode, the committed decision, the
+    /// parent `Device` row behind its owner fence, that row's own declared
+    /// capability vocabulary, and the named consumer row.
+    async fn validate(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        self.resolved(ctx, DriverOp::Validate).await?;
+        Ok(())
+    }
+
+    /// Adoption of the pre-restart incarnation (F2).
+    ///
+    /// A relationship with no attachment has nothing to adopt: no host effect
+    /// persists a claim this actor could find, and adopting an attachment it
+    /// cannot prove would be the restart-adoption failure R41 exists to
+    /// prevent. So a restart reports `Missing` and the next reconcile pass
+    /// re-derives the relationship from the committed row.
+    async fn recover(&mut self, ctx: &mut ResourceContext) -> Result<RecoveryOutcome, Self::Error> {
+        self.resolved(ctx, DriverOp::Recover).await?;
+        Ok(RecoveryOutcome::Missing)
+    }
+
+    /// One reconcile pass: resolve the committed relationship through its
+    /// fences, ask the trusted inventory whether the host still backs the
+    /// capability the row names, and publish the in-memory status (R11).
+    ///
+    /// An unattached relationship re-checks on the preserved resync cadence:
+    /// hardware presence is host-dependent and an absence observation reaches
+    /// this actor as no watch delivery on the binding row.
+    async fn reconcile(
+        &mut self,
+        ctx: &mut ResourceContext,
+    ) -> Result<ReconcileOutcome, Self::Error> {
+        let op = DriverOp::Reconcile;
+        let (binding, component, _spec) = self.resolved(ctx, op).await?;
+        // Dependency edges (R12/R17): the Device row and the consumer row both
+        // wake this actor when they change.
+        self.watch_once(ctx, self.parent_device_key(&binding)).await;
+        self.watch_once(ctx, self.consumer_key(&binding)).await;
+        let status = self.attachment_state(ctx, &binding, component).await;
+        let retained = matches!(status, DeviceBindingDriverStatus::Admitted { .. });
+        ctx.set_status(status);
+        if !retained {
+            ctx.requeue_after(DEVICE_BINDING_RESYNC);
+        }
+        // `Satisfied` is the driver's own convergence: this pass did its work
+        // and published its result. The attachment state itself is the typed
+        // status, and an unattached relationship re-checks above rather than
+        // deferring the row, so a consumer's own launch never forms a startup
+        // cycle with the observation that it can see the relationship.
+        Ok(ReconcileOutcome::Satisfied)
+    }
+
+    /// Pre-drain (KTD10, R36): block NEW use before anything else is torn
+    /// down.
+    ///
+    /// The fence is the driver's own in-memory status (R11): a relationship
+    /// that has run pre-drain keeps reporting
+    /// [`DeviceBindingDriverStatus::Draining`] so the next reconcile pass does
+    /// not hand it back an admitted state. The source keeps holding the claim
+    /// until release evidence arrives, so fencing the relationship does not
+    /// free the physical authority for another owner. Idempotent under retry,
+    /// and a row whose spec no longer decodes converges without effects.
+    async fn pre_drain(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        let op = DriverOp::Delete;
+        let Ok((_binding, component, _spec)) = self.resolved(ctx, op).await else {
+            // Nothing durable to fence: converged without effects.
+            return Ok(());
+        };
+        ctx.set_status(DeviceBindingDriverStatus::Draining { component });
+        Ok(())
+    }
+
+    /// Drain step (R10, F3): the relationship owns no child rows, so this is
+    /// the generic children-first finalization and it converges immediately.
+    async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        ctx.finalize_owned_resources()
+            .await
+            .map_err(|_| self.error(BindingDriverErrorKind::ParentUnavailable, DriverOp::Delete))?;
+        Ok(())
+    }
+
+    /// Teardown: release the device claim.
+    ///
+    /// A relationship this driver never attached has nothing to release on the
+    /// host, so the pass converges without a mutation - and it converges the
+    /// same way on every retry, because the attach verb it would undo is not
+    /// one this family can route. That is the honest teardown, not a skipped
+    /// one: the status this driver publishes never claims an attachment, so
+    /// there is no attachment to withdraw.
+    async fn delete(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        let op = DriverOp::Delete;
+        if let Ok((_binding, _component, _spec)) = self.resolved(ctx, op).await {
+            ctx.set_status(DeviceBindingDriverStatus::Unattached {
+                reason: UnattachedReason::AttachDispatchUnroutable,
+            });
+        }
+        Ok(())
+    }
+}
+
+impl DeviceBindingDriver {
+    /// The attachment state this pass observes.
+    ///
+    /// The attachment state this pass observes.
+    ///
+    /// One closed class is decided here with real evidence, through the
+    /// family's own [`capability_backed`] observation: a capability the trusted
+    /// inventory no longer resolves or reports as gone admits no attachment.
+    /// The other is the attach path itself - the provider-specific effects take
+    /// no generic attachment and nothing dispatches on the row's provider - so
+    /// it is reported as named rather than approximated. A row that passes
+    /// every structural check and every presence observation still reaches the
+    /// attach verdict, which is the honest answer and not a defect in the
+    /// checks.
+    async fn attachment_state(
+        &self,
+        ctx: &mut ResourceContext,
+        binding: &DeviceBindingSpec,
+        component: DeviceComponent,
+    ) -> DeviceBindingDriverStatus {
+        let Ok(inventory) = self.inventory(ctx, binding, DriverOp::Reconcile).await else {
+            // An unresolved inventory admits nothing, which is the fail-closed
+            // answer rather than a claim the source could not prove.
+            return unattached(UnattachedReason::CapabilityNotBacked);
+        };
+        // The fence lives in the in-memory status slot rather than a durable
+        // field (R11), so a pre-drain that ran is still read back as fenced on
+        // the next pass.
+        if matches!(
+            ctx.status::<DeviceBindingDriverStatus>(),
+            Some(DeviceBindingDriverStatus::Draining { .. })
+        ) {
+            return DeviceBindingDriverStatus::Draining { component };
+        }
+        let Some(entry) = inventory.entry(binding.function()) else {
+            return unattached(UnattachedReason::CapabilityNotBacked);
+        };
+        if !capability_backed(&inventory, binding.function()) {
+            return unattached(UnattachedReason::CapabilityNotBacked);
+        }
+        // The opaque authority the trusted inventory resolved. It is a digest,
+        // not a node path, so publishing it leaks no host identity.
+        DeviceBindingDriverStatus::Admitted {
+            component,
+            authority: entry.authority_key().clone(),
+        }
+    }
+}
+
+/// The status an unattached relationship publishes, with the driver converging.
+fn unattached(reason: UnattachedReason) -> DeviceBindingDriverStatus {
+    DeviceBindingDriverStatus::Unattached { reason }
+}
+
+// ---------------------------------------------------------------------------
+// Registration: the type's driver declaration
+// ---------------------------------------------------------------------------
+
+/// The execution domains the `DeviceBinding` type can be reconciled in.
+///
+/// Derived from the placement contract: `DeviceBinding` names no placement
+/// anchor (`PlacementAnchor::canonical_for` resolves none), so a relationship
+/// row never carries the canonical `spec.executionRef` and the plane reconciles
+/// it on its containing Zone's Host. The consumer reference in the spec selects
+/// the Guest or Process that receives the attachment, never where the
+/// relationship row itself is reconciled.
+const DEVICE_BINDING_EXECUTION_DOMAINS: &[&str] = &["host"];
+
+/// The resource types the binding driver reads while reconciling.
+///
+/// Derived from the driver's row reads: the bound `Device` row for its own
+/// declared capability vocabulary, its inventory selector, and the owner fence,
+/// and the consumer row for the store-assigned identity the KTD3 key is derived
+/// from.
+const DEVICE_BINDING_READS: &[WellKnownType] = &[WellKnownType::DEVICE];
+
+/// The `DeviceBinding` type's driver declaration.
+///
+/// `DeviceBinding` is `BUILTIN | STARTUP | RUNTIME` (the RUNTIME bit is
+/// present for the same reason the `Device` type carries it): hardware presence
+/// is host-dependent, so a committed relationship may arrive late or find its
+/// capability gone. The type is not exportable: `ResourceExport` admits only
+/// qualified `*.d2bus.org.*Service` types, so a relationship can never be an
+/// export subject. The driver serves no broker operations, mints no children,
+/// contributes no startup steps, and declares no hosted effects service: a
+/// relationship attaches one device capability to one consumer and owns nothing
+/// else, and a `ServiceDecl` with no host behind it would be a surface nothing
+/// can reach.
+pub fn device_binding_descriptor(args: DeviceBindingDriverArgs) -> DriverDescriptor {
+    DriverDescriptor {
+        resource_type: WellKnownType::DEVICE_BINDING,
+        allowed_sources: AllowedSources::BUILTIN
+            | AllowedSources::STARTUP
+            | AllowedSources::RUNTIME,
+        verbs: CONVERTED_TYPE_VERBS,
+        execution: DEVICE_BINDING_EXECUTION_DOMAINS,
+        exportable: false,
+        reads: DEVICE_BINDING_READS,
+        operations: &[],
+        creations: &[],
+        startup: &[],
+        services: &[],
+        decoder: device_binding_spec_decoder(),
+        factory: Arc::new(DeviceBindingDriverFactory::new(args)),
+    }
 }

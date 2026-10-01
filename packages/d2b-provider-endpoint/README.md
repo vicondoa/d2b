@@ -80,6 +80,42 @@ does not admit is refused rather than committed. `binding_row_name` mints the
 deterministic row name from the KTD3 slot address rather than a declaration
 position, so one relationship keeps one identity across restarts.
 
+## Serving the relationship
+
+`binding_descriptor` is the registration surface for the `EndpointBinding`
+type, and the same crate serves it: the endpoint owner mints the row and this
+crate's own driver delivers it. The driver decodes the committed
+`EndpointBindingSpec` through the contract's own strict wire decoder, fences
+the row's name against `binding_row_name`, and enforces the committed
+`BindingSourceDecision` before it touches the host: the arbitration must be the
+shared one this family commits, the admitted rights must cover the right the
+row's own attachment kind requests, and the realized facets must cover the
+ones that kind needs and stay inside `endpoint_binding_support()`. It then
+resolves the parent `Endpoint` row and the consumer row through the manager,
+behind the same-Zone keys and the owner fence that make the endpoint the
+minting owner.
+
+`EndpointSpec` is locator-free by contract, so the exact socket's host path is
+not a committed fact anywhere in the graph - it is a property of the producing
+launch. The driver therefore holds no path derivation of its own: it asks the
+declared `EndpointLocatorSource` whether this daemon privately realized the
+endpoint, and every delivery verb names the endpoint reference, the purpose its
+committed `Endpoint` row publishes, and the consumer reference. Those three are
+what the daemon resolves into a host path and a host principal, over
+`EndpointAccessSource`, `EndpointGrantSource`, and `EndpointRevokeSource`.
+`reconcile` reads what the kernel applies and grants the admitted right only
+when it is not already effective; `recover` observes and never mutates;
+`pre_drain` drops the consumer's entry on the exact socket inode, which is both
+the fence against new use and the release because the kernel enforces that
+entry at `connect(2)`; `delete` repeats the same idempotent revoke. A grant
+that lands but is not EFFECTIVE, a containing directory the consumer may
+enumerate, and an `attach` to an endpoint that is not accepting are all
+reported undelivered rather than delivered.
+
+The driver declares no broker operation, no child creation, no startup step,
+and no hosted service: the delivery effects ride the effect port, so a
+`ServiceDecl` with no host behind it would be a surface nothing can reach.
+
 ## Placement and dependencies
 
 `Endpoint` names no placement anchor, so an endpoint row is reconciled on its
@@ -115,12 +151,23 @@ rather than a best-effort teardown.
 
 ## State and telemetry
 
-The type publishes no durable status: the in-memory `EndpointDriverStatus`
-(`Realizing`, `Realized`) is the only status projection, matching the plane's
-in-memory status rule. Failures travel as registered failure kinds
-(`endpoint-spec-invalid`, `endpoint-shape-unsupported`,
-`endpoint-socket-effect-failed`, `endpoint-drain-pending`) on the structured
-failure surface, which is what the daemon logs and what tests assert.
+The `Endpoint` type publishes no durable status: the in-memory
+`EndpointDriverStatus` (`Realizing`, `Realized`) is the only status
+projection, matching the plane's in-memory status rule.
+
+The `EndpointBinding` type publishes no wire status projection at all. There is
+no committed `EndpointBinding` status contract in `d2b-contracts-resource`, and
+minting one here would be a second contract; the in-memory
+`EndpointBindingDriverStatus` (`Delivered` with the pinned `(dev, ino)`, or
+`Undelivered` with a closed reason) is the whole projection.
+
+Failures travel as registered failure kinds on the structured failure surface,
+which is what the daemon logs and what tests assert: the endpoint type's are
+`endpoint-spec-invalid`, `endpoint-shape-unsupported`,
+`endpoint-socket-effect-failed`, and `endpoint-drain-pending`; the
+relationship type's are `binding-spec-invalid`, `binding-owner-mismatch`,
+`binding-parent-unavailable`, `binding-plan-derivation-invalid`, and
+`binding-serving-effect-failed`.
 
 ## Build and test
 

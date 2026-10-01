@@ -8,6 +8,14 @@
       "execution": ["host"],
       "exportable": false,
       "reads": ["Host", "Guest", "Volume", "Process", "User"]
+    },
+    {
+      "resourceType": "NetworkBinding",
+      "allowedSources": ["builtin", "startup"],
+      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete"],
+      "execution": ["host"],
+      "exportable": false,
+      "reads": ["Network", "Guest"]
     }
   ],
   "provides": ["Provider/network-local", "Process/network-local-controller"],

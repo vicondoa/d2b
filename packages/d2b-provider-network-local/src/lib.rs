@@ -37,12 +37,19 @@ pub mod routes;
 pub mod test_support;
 
 pub use binding::{
-    AdmittedMembership, FabricRealization, FabricRelease, FabricView, HostStateObservation,
-    MembershipAdmission, MembershipPolicy, MembershipReadiness, NetworkAdmittedConsumer,
-    NetworkBindingError, NetworkBindingRegistry, NetworkBindingRow, NetworkBindingSource,
-    NetworkFabricKey, NetworkFabricTarget, NetworkMembershipCeiling, NmUnmanagedObservation,
-    ParentInputOutcome, binding_row_name, canonical_binding_rows, membership_interface,
+    AdmittedMembership, BindingSpecEnvelope, DerivedMembership, FabricRealization, FabricRelease,
+    FabricView, HostStateObservation, MembershipAdmission, MembershipPolicy, MembershipReadiness,
+    NETWORK_BINDING_PROVIDER_REF, NETWORK_BINDING_TYPE_NAME, NetworkAdmittedConsumer,
+    NetworkBindingDriver, NetworkBindingDriverArgs, NetworkBindingDriverFactory, NetworkBindingDriverEffects,
+    BindingDriverStatus, NetworkBindingError, NetworkBindingRegistry, NetworkBindingRow,
+    NetworkBindingSource, NetworkFabricKey, NetworkFabricTarget, NetworkMembershipCeiling,
+    NmUnmanagedObservation, ParentInputOutcome, binding_row_name, canonical_binding_rows,
+    membership_interface, network_binding_descriptor, network_binding_spec_decoder,
     network_binding_support,
+};
+pub use broker::{
+    MEMBERSHIP_TAP_UNAVAILABLE, MISSING_CREATE_MEMBERSHIP_TAP, MISSING_FENCE_MEMBERSHIP_TAP,
+    MISSING_PLACE_MEMBERSHIP_TAP, NetworkBrokerMembershipEffects, NetworkMembershipAdmission,
 };
 pub use driver::{
     NETWORK_CONTROLLER_REF, NETWORK_CREATIONS, NETWORK_FAMILY_NAME, NETWORK_PROVIDER_REF, NETWORK_REGISTRATIONS,

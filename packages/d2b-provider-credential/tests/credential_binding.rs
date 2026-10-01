@@ -14,6 +14,8 @@
 //!    report `Released`.
 //! 4. An expired delivery cannot be renewed through a stale helper leg.
 
+use std::sync::Arc;
+
 use d2b_contracts_provider::v3::credential::{
     AudienceToken, CredentialAuthorization, CredentialDeliveryEvidence as ObservedDeliveryEvidence,
     CredentialLeaseState, CredentialMethod, CredentialScope, CredentialSpec, DeliveryRouteDigest,
@@ -23,24 +25,38 @@ use d2b_contracts_provider::v3::credential::{
 use d2b_contracts_resource::v3::{
     AdmissionStage, BindingArbitration, BindingAuthorization, BindingContractError, BindingKey,
     BindingKind, BindingLifecycleState, BindingRealizationFacet, BindingRealizationSupport,
-    BindingRowError, BindingSlot, BindingSpecFingerprint, CredentialBindingRequest,
-    CredentialBindingSpec, CredentialLifetime, CredentialOperation, DesiredDigest, DesiredRevision,
-    FreshnessTuple, MAX_CREDENTIAL_LIFETIME_MS, MIN_CREDENTIAL_LIFETIME_MS, RefusalReason,
-    RequestedRights, ResourceGeneration, ResourceRef, ResourceUid, SourceAdmission,
-    StoreIncarnation, ZoneId, admit_binding_row_refs, canonical_json_bytes,
+    BindingRowError, BindingSlot, BindingSpecFingerprint, ControllerGeneration,
+    CredentialBindingRequest, CredentialBindingSpec, CredentialLifetime, CredentialOperation,
+    DesiredDigest, DesiredRevision, FreshnessTuple, MAX_CREDENTIAL_LIFETIME_MS,
+    MIN_CREDENTIAL_LIFETIME_MS, RefusalReason, RequestedRights, ResourceGeneration, ResourceRef,
+    ResourceUid, SourceAdmission, StoreIncarnation, ZoneId, admit_binding_row_refs,
+    canonical_json_bytes,
+};
+use d2b_provider_credential::test_support::{
+    RecordingRuntime, RecordingSession, log, recording_facets,
 };
 use d2b_provider_credential::{
-    CREDENTIAL_DELIVERY_SLOT, CredentialBindingAdmission, CredentialDeliveryAuthority,
-    CredentialDeliveryEvidence, CredentialSourcePolicy, canonical_binding_rows,
+    CREDENTIAL_DELIVERY_SLOT, CredentialBindingAdmission, CredentialBindingDriverArgs,
+    CredentialBindingDriverStatus, CredentialDeliveryAuthority, CredentialDeliveryEvidence,
+    CredentialLeaseFacts, CredentialSourcePolicy, UndeliveredReason, canonical_binding_rows,
+    credential_binding_descriptor, credential_binding_row_name, credential_binding_spec_decoder,
     credential_binding_support, credential_source_decision, delivery_operation,
 };
 use d2b_provider_credential::{CredentialRevocationOutcome, CredentialRevocationReport};
+use d2b_provider_toolkit::testing::fakes::{RecordingManagerEndpoint, RecordingRequeue};
+use d2b_resource_runtime::context::ResourceContext;
+use d2b_resource_runtime::driver::{
+    DynResourceDriver, ReconcileOutcome, RecoveryOutcome,
+};
+use d2b_resource_runtime::error::{FailureClass, FailureKinds};
+use d2b_resource_runtime::manager::deterministic_uid;
+use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
 
 const ZONE: &str = "work";
 const CREDENTIAL: &str = "Credential/api-key";
 const CONSUMER: &str = "Process/web";
 const GUEST: &str = "Guest/work-vm";
-const CONSUMER_PROVIDER: &str = "Provider/secret-service";
+const CONSUMER_PROVIDER: &str = d2b_provider_credential::SECRET_SERVICE_PROVIDER_REF;
 const CREDENTIAL_UID: &str = "1b4e28ba-2fa1-41d2-883f-0016d3cca427";
 const CONSUMER_UID: &str = "9c5b94d1-6470-4b1a-9a41-0016d3cca427";
 const GUEST_UID: &str = "123e4567-e89b-42d3-a456-426614174000";
@@ -1407,4 +1423,601 @@ fn source_admission_for(row: &CredentialBindingSpec) -> SourceAdmission {
         decision.arbitration(),
     )
     .expect("source admission")
+}
+
+// ---------------------------------------------------------------------------
+// The `CredentialBinding` serving driver (U37)
+// ---------------------------------------------------------------------------
+//
+// The driver is driven through the composition root's own construction: the
+// factory builds its effects from the declared [`CredentialEffectFacets`], so a
+// test supplying the recording runtime is exercising the production wiring
+// rather than a substituted port. The runtime shares one ordered log with the
+// recording manager endpoint, so the ordering teardown depends on - the
+// revocation call, and the fence read back after a pre-drain - is observed as
+// it happens.
+//
+// The properties under test are the ones the serving half has to earn:
+//
+// 1. A committed row reaches `validate` and `reconcile` through every fence:
+//    the wire decode, the committed decision, the parent row behind its owner
+//    fence, the parent's own policy, and the consumer row.
+// 2. The committed `BindingSourceDecision` is enforced, not trusted.
+// 3. An unmintable delivery is reported as a named refusal, never as one.
+// 4. Teardown revokes through the preserved protocol call with the parent
+//    row's own uid and the live session generation, and withholds cleanup when
+//    the Provider cannot confirm.
+
+/// The parent `Credential` row the binding declares.
+///
+/// The Provider its delivery is scoped to is read off the committed spec,
+/// because that is the reference the revocation request binds.
+fn parent_credential_bytes() -> Vec<u8> {
+    serde_json::json!({
+        "audience": AUDIENCE,
+        "consumerRef": CONSUMER_PROVIDER,
+        "allowedOperations": ["acquire-token"],
+        "rotation": { "policy": "on-expiry", "proactiveWindowMs": null, "maxLeaseLifetimeMs": 0 },
+        "expiry": { "hardDeadlineMs": 0 },
+        "scope": { "executionRef": GUEST, "domainFilter": null, "userRef": null },
+        "identityGuestRef": null,
+        "loginEndpointRef": null
+    })
+    .to_string()
+    .into_bytes()
+}
+
+/// The store-assigned 16-byte uid one `(zone, type, name)` key resolves to.
+///
+/// The store's durable identity is a digest of the key the row was declared
+/// under, so the owner fence is exercised against the same derivation the
+/// manager itself uses rather than a constant.
+fn row_uid(type_name: &str, name: &str) -> [u8; 16] {
+    deterministic_uid(&ResourceKey::new(ZONE, type_name, name))
+}
+
+/// The committed `CredentialBinding` row, carrying the decision the source's own
+/// [`canonical_binding_rows`] commits.
+fn binding_row(name: &str, source: serde_json::Value, lifetime_ms: u64) -> StoredDesiredResource {
+    StoredDesiredResource {
+        key: ResourceKey::new(ZONE, "CredentialBinding", name),
+        uid: row_uid("CredentialBinding", name),
+        generation: 1,
+        owner_uid: Some(row_uid("Credential", "api-key")),
+        provenance: ResourceProvenance::Resource,
+        deleting: false,
+        spec: serde_json::json!({
+            "credentialRef": CREDENTIAL,
+            "executionRef": GUEST,
+            "operations": ["acquire-token"],
+            "lifetimeMs": lifetime_ms,
+            "slot": "delivery",
+            "source": source,
+        })
+        .to_string()
+        .into_bytes(),
+        metadata: Vec::new(),
+        created_at: 0,
+    }
+}
+
+/// The decision the source's own derivation commits, read back through the
+/// family rather than spelled a second time.
+fn committed_decision() -> serde_json::Value {
+    serde_json::to_value(credential_source_decision()).expect("canonical decision")
+}
+
+/// The row name the source's own derivation mints, so the driver's row-name
+/// fence is exercised against the real derivation rather than a constant.
+fn derived_row_name() -> String {
+    let derived = canonical_binding_rows(&resource(CREDENTIAL), &scoped_credential_spec())
+        .expect("source derivation")
+        .remove(0);
+    let row: CredentialBindingSpec =
+        serde_json::from_slice(&derived.spec).expect("canonical binding bytes");
+    credential_binding_row_name(&row)
+        .expect("row name")
+        .as_str()
+        .to_owned()
+}
+
+/// A `Credential` row whose scope names a Guest, so the source derives exactly
+/// one delivery row for it.
+fn scoped_credential_spec() -> CredentialSpec {
+    let base = credential_spec(&[OperationClass::AcquireToken], 0);
+    CredentialSpec::new(
+        CredentialScope::new(Some(resource(GUEST)), None, None).expect("scope"),
+        base.audience().clone(),
+        base.consumer_ref().cloned(),
+        base.allowed_operations().to_vec(),
+        *base.rotation(),
+        ExpirySpec::new(0).expect("expiry"),
+        RevocationSpec::default(),
+        None,
+        None,
+    )
+    .expect("credential spec")
+}
+
+/// The driver context plus the manager endpoint and requeue it records
+/// through, so a test observes one ordering.
+struct Fixture {
+    ctx: ResourceContext,
+    manager: RecordingManagerEndpoint,
+    requeue: RecordingRequeue,
+}
+
+fn binding_fixture(row: StoredDesiredResource, manager: RecordingManagerEndpoint) -> Fixture {
+    let (effects_tx, _effects_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
+    let requeue = RecordingRequeue::default();
+    let ctx = ResourceContext::new(
+        row,
+        credential_binding_spec_decoder(),
+        Arc::new(manager.clone()),
+        Arc::new(requeue.clone()),
+        effects_tx,
+        notify_tx,
+    );
+    Fixture { ctx, manager, requeue }
+}
+
+/// One seeded manager row.
+fn seeded_row(key: ResourceKey, spec: Vec<u8>) -> StoredDesiredResource {
+    StoredDesiredResource {
+        uid: deterministic_uid(&key),
+        generation: 2,
+        owner_uid: None,
+        provenance: ResourceProvenance::Resource,
+        deleting: false,
+        spec,
+        metadata: Vec::new(),
+        created_at: 0,
+        key,
+    }
+}
+
+/// A manager holding the parent `Credential` row and the consumer row, so every
+/// fence has something real to resolve.
+fn serving_manager() -> RecordingManagerEndpoint {
+    RecordingManagerEndpoint::new()
+        .with_row(seeded_row(
+            ResourceKey::new(ZONE, "Credential", "api-key"),
+            parent_credential_bytes(),
+        ))
+        .with_row(seeded_row(
+            ResourceKey::new(ZONE, "Guest", "work-vm"),
+            b"{}".to_vec(),
+        ))
+}
+
+/// A manager holding the parent `Credential` row with a committed spec that
+/// grants only `SignChallenge`, so the parent policy has withdrawn the
+/// operation the binding row still claims.
+fn withdrawing_manager() -> RecordingManagerEndpoint {
+    RecordingManagerEndpoint::new()
+        .with_row(seeded_row(
+            ResourceKey::new(ZONE, "Credential", "api-key"),
+            serde_json::json!({
+                "audience": AUDIENCE,
+                "consumerRef": CONSUMER_PROVIDER,
+                "allowedOperations": ["sign-challenge"],
+                "rotation": { "policy": "on-expiry", "proactiveWindowMs": null, "maxLeaseLifetimeMs": 0 },
+                "expiry": { "hardDeadlineMs": 0 },
+                "scope": { "executionRef": GUEST, "domainFilter": null, "userRef": null },
+                "identityGuestRef": null,
+                "loginEndpointRef": null
+            })
+            .to_string()
+            .into_bytes(),
+        ))
+        .with_row(seeded_row(
+            ResourceKey::new(ZONE, "Guest", "work-vm"),
+            b"{}".to_vec(),
+        ))
+}
+
+/// The driver over the production facet construction.
+async fn binding_driver(runtime: Arc<RecordingRuntime>) -> Box<dyn DynResourceDriver> {
+    credential_binding_descriptor(CredentialBindingDriverArgs {
+        zone: ZoneId::parse(ZONE).expect("zone"),
+        controller_generation: ControllerGeneration::new(1).expect("controller generation"),
+        facets: recording_facets(runtime),
+    })
+    .factory
+    .create(&ResourceKey::new(ZONE, "CredentialBinding", "row"))
+    .await
+}
+
+/// A committed row reaches validate and reconcile through every fence, and the
+/// pass reports the delivery it cannot mint as the named refusal rather than a
+/// delivery.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn a_committed_row_reaches_validate_and_reconcile() {
+    let manager = serving_manager();
+    let runtime = RecordingRuntime::new(log());
+    let mut f = binding_fixture(
+        binding_row(&derived_row_name(), committed_decision(), 60_000),
+        manager.clone(),
+    );
+    let mut d = binding_driver(runtime).await;
+
+    d.validate(&mut f.ctx).await.expect("validate");
+
+    assert_eq!(
+        d.reconcile(&mut f.ctx).await.expect("reconcile"),
+        ReconcileOutcome::Satisfied,
+        "the pass converged its own work; the delivery itself is the named refusal below",
+    );
+    assert_eq!(
+        f.ctx.status::<CredentialBindingDriverStatus>(),
+        Some(&CredentialBindingDriverStatus::Undelivered {
+            reason: UndeliveredReason::MintPathUnroutable,
+        }),
+        "the mint path cannot be driven from a committed row, and the row says so by name",
+    );
+    // An undelivered relationship re-checks on the preserved cadence, because
+    // the generations the source's fence compares reach this actor as no watch
+    // delivery on the binding row.
+    assert_eq!(f.requeue.scheduled().len(), 1);
+    // Both dependency edges were registered: the Credential row and the
+    // consumer row (R12/R17).
+    let order = f.manager.call_order();
+    assert!(
+        order.iter().any(|entry| entry.contains("watch:Credential/api-key")),
+        "{order:?}"
+    );
+    assert!(order.iter().any(|entry| entry.contains("watch:Guest/work-vm")), "{order:?}");
+}
+
+/// A row whose name is not the one the source's own derivation mints was not
+/// admitted here, and is refused rather than served.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn a_row_name_the_source_did_not_derive_is_refused() {
+    let manager = serving_manager();
+    let mut f = binding_fixture(
+        binding_row("cred-binding-not-derived", committed_decision(), 60_000),
+        manager,
+    );
+    let mut d = binding_driver(RecordingRuntime::new(log())).await;
+
+    let failure = d
+        .validate(&mut f.ctx)
+        .await
+        .expect_err("a row the source did not derive is refused");
+    assert_eq!(failure.kind(), FailureKinds::BINDING_SPEC_INVALID);
+    assert_eq!(failure.class(), FailureClass::Terminal);
+}
+
+/// The committed `BindingSourceDecision` is enforced, not trusted: a row that
+/// drops the consuming right, drops the delivery facet, commits an arbitration
+/// this family never commits, or names a facet outside the family's declared
+/// support is refused terminally.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn a_committed_decision_that_does_not_admit_the_row_is_refused() {
+    let manager = serving_manager();
+    let name = derived_row_name();
+    let refused: Vec<(&str, serde_json::Value)> = vec![
+        (
+            "observe-only",
+            serde_json::json!({
+                "admittedRights": ["observe"],
+                "arbitration": "shared",
+                "realizedFacets": ["credential-delivery"],
+            }),
+        ),
+        (
+            "no-delivery-facet",
+            serde_json::json!({
+                "admittedRights": ["consume"],
+                "arbitration": "shared",
+                "realizedFacets": ["filesystem-presentation"],
+            }),
+        ),
+        (
+            "exclusive",
+            serde_json::json!({
+                "admittedRights": ["consume"],
+                "arbitration": "exclusive",
+                "realizedFacets": ["credential-delivery"],
+            }),
+        ),
+        (
+            "unsupported-facet",
+            serde_json::json!({
+                "admittedRights": ["consume"],
+                "arbitration": "shared",
+                "realizedFacets": ["credential-delivery", "namespace-interface"],
+            }),
+        ),
+    ];
+
+    for (label, decision) in refused {
+        let mut f = binding_fixture(binding_row(&name, decision, 60_000), manager.clone());
+        let mut d = binding_driver(RecordingRuntime::new(log())).await;
+        let failure = d
+            .validate(&mut f.ctx)
+            .await
+            .expect_err("a decision that does not admit the row is refused");
+        assert_eq!(
+            failure.kind(),
+            FailureKinds::BINDING_SPEC_INVALID,
+            "{label} must be refused terminally"
+        );
+        assert_eq!(failure.class(), FailureClass::Terminal, "{label} cannot converge by retrying");
+    }
+}
+
+/// A parent row whose owner uid differs from this binding's owner is refused
+/// terminally: the manager would silently re-parent.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn a_parent_whose_owner_differs_is_refused() {
+    // The parent row's uid is the Guest's, so it is not the row the manager
+    // reports as this binding's owner.
+    let manager = RecordingManagerEndpoint::new().with_row(StoredDesiredResource {
+        key: ResourceKey::new(ZONE, "Credential", "api-key"),
+        uid: row_uid("Guest", "work-vm"),
+        generation: 2,
+        owner_uid: None,
+        provenance: ResourceProvenance::Resource,
+        deleting: false,
+        spec: parent_credential_bytes(),
+        metadata: Vec::new(),
+        created_at: 0,
+    });
+    let mut f = binding_fixture(
+        binding_row(&derived_row_name(), committed_decision(), 60_000),
+        manager,
+    );
+    let mut d = binding_driver(RecordingRuntime::new(log())).await;
+
+    let failure = d
+        .validate(&mut f.ctx)
+        .await
+        .expect_err("a re-parenting row is refused");
+    assert_eq!(failure.kind(), FailureKinds::BINDING_OWNER_MISMATCH);
+    assert_eq!(failure.class(), FailureClass::Terminal);
+}
+
+/// A parent row that is not observable yet defers retryably rather than failing
+/// the binding terminal (issue #511): the row may simply not be committed.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn an_unobservable_parent_defers_retryably() {
+    let mut f = binding_fixture(
+        binding_row(&derived_row_name(), committed_decision(), 60_000),
+        RecordingManagerEndpoint::new(),
+    );
+    let mut d = binding_driver(RecordingRuntime::new(log())).await;
+
+    let failure = d
+        .validate(&mut f.ctx)
+        .await
+        .expect_err("an absent parent is not observable");
+    assert_eq!(failure.kind(), FailureKinds::BINDING_PARENT_UNAVAILABLE);
+    assert_eq!(
+        failure.class(),
+        FailureClass::Retryable,
+        "an absent parent may yet be committed",
+    );
+}
+
+/// A consumer row that is absent is the same deferral on the other fence: the
+/// consumer may not be committed yet.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn an_absent_consumer_defers_retryably() {
+    // The parent resolves; the consumer row does not exist yet.
+    let manager = RecordingManagerEndpoint::new().with_row(seeded_row(
+        ResourceKey::new(ZONE, "Credential", "api-key"),
+        parent_credential_bytes(),
+    ));
+    let mut f = binding_fixture(
+        binding_row(&derived_row_name(), committed_decision(), 60_000),
+        manager,
+    );
+    let mut d = binding_driver(RecordingRuntime::new(log())).await;
+
+    let failure = d
+        .validate(&mut f.ctx)
+        .await
+        .expect_err("an absent consumer is not observable");
+    assert_eq!(failure.kind(), FailureKinds::BINDING_PARENT_UNAVAILABLE);
+    assert_eq!(failure.class(), FailureClass::Retryable);
+}
+
+/// The parent's own source policy is the second, independent half of the
+/// admission: a row whose policy no longer grants `AcquireToken` is refused
+/// even though the binding's committed decision still claims it.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn a_parent_policy_that_withdrew_the_operation_is_refused() {
+    let mut f = binding_fixture(
+        binding_row(&derived_row_name(), committed_decision(), 60_000),
+        withdrawing_manager(),
+    );
+    let mut d = binding_driver(RecordingRuntime::new(log())).await;
+
+    let failure = d
+        .validate(&mut f.ctx)
+        .await
+        .expect_err("a withdrawn operation is refused");
+    assert_eq!(failure.kind(), FailureKinds::BINDING_PLAN_DERIVATION_INVALID);
+    assert_eq!(failure.class(), FailureClass::Terminal);
+}
+
+/// Teardown revokes through the preserved protocol call, binding the parent
+/// row's own uid and the live session generation rather than inventing either.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn teardown_revokes_with_the_real_parent_identity() {
+    let manager = serving_manager();
+    let runtime = RecordingRuntime::new(log());
+    let mut f = binding_fixture(
+        binding_row(&derived_row_name(), committed_decision(), 60_000),
+        manager,
+    );
+    // An `Active` lease is the only state that is revoked; `None` would skip.
+    runtime.set_lease(Some(CredentialLeaseFacts {
+        state: CredentialLeaseState::Active,
+        rotation_generation: 3,
+    }));
+    let mut d = binding_driver(runtime.clone()).await;
+
+    d.delete(&mut f.ctx).await.expect("delete");
+
+    // The revocation ran at all: the session was reached twice (once for the
+    // live generation, once for the call), and only an `Active` lease reaches
+    // either.
+    assert_eq!(
+        runtime
+            .call_order()
+            .iter()
+            .filter(|entry| entry.as_str() == "session")
+            .count(),
+        2,
+        "the session generation is read and then the revocation is issued through it: {:?}",
+        runtime.call_order()
+    );
+    assert!(
+        runtime.call_order().iter().any(|entry| entry.as_str() == "dependency-facts"),
+        "the revocation binds the Provider row's own generation: {:?}",
+        runtime.call_order()
+    );
+    // The revoke reached the session, which binds the generation exactly as the
+    // real `ComponentCredentialSession` does: a request carrying a different
+    // generation answers `Uncertain`, so a confirmed delete proves the driver
+    // read the live generation rather than defaulting one (R28).
+}
+
+/// An unconfirmed revoke withholds cleanup: the durable deleting mark stays and
+/// the pass retries rather than reporting a release it cannot prove (R36).
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn an_unconfirmed_revoke_withholds_cleanup() {
+    let manager = serving_manager();
+    let runtime = RecordingRuntime::new(log());
+    let mut f = binding_fixture(
+        binding_row(&derived_row_name(), committed_decision(), 60_000),
+        manager,
+    );
+    runtime.set_lease(Some(CredentialLeaseFacts {
+        state: CredentialLeaseState::Active,
+        rotation_generation: 3,
+    }));
+    // A Provider that cannot confirm answers `Uncertain` whatever generation
+    // the request carries, exactly as the real `ComponentCredentialSession`
+    // does when the route stops being live.
+    runtime.set_session(Some(Arc::new(RecordingSession::uncertain(Some(7)))));
+    let mut d = binding_driver(runtime).await;
+
+    let failure = d
+        .delete(&mut f.ctx)
+        .await
+        .expect_err("an unconfirmed revoke withholds cleanup");
+    assert_eq!(failure.kind(), FailureKinds::BINDING_SERVING_EFFECT_FAILED);
+    assert_eq!(failure.class(), FailureClass::Retryable, "a retry may confirm it");
+}
+
+/// No session surface at all fails the revocation closed rather than binding a
+/// zero generation (R28).
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn a_missing_session_surface_fails_the_revoke_closed() {
+    let manager = serving_manager();
+    let runtime = RecordingRuntime::new(log());
+    let mut f = binding_fixture(
+        binding_row(&derived_row_name(), committed_decision(), 60_000),
+        manager,
+    );
+    runtime.set_lease(Some(CredentialLeaseFacts {
+        state: CredentialLeaseState::Active,
+        rotation_generation: 3,
+    }));
+    runtime.set_session(None);
+    let mut d = binding_driver(runtime).await;
+
+    let failure = d
+        .delete(&mut f.ctx)
+        .await
+        .expect_err("no session surface means no authenticated revoker");
+    assert_eq!(
+        failure.class(),
+        FailureClass::Terminal,
+        "the identity could never be bound",
+    );
+}
+
+/// A relationship whose lease never stood has nothing to retire: the pass
+/// converges without a protocol call, exactly as the `Credential` row's own
+/// teardown does.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn a_relationship_with_no_lease_skips_the_revocation() {
+    let manager = serving_manager();
+    let runtime = RecordingRuntime::new(log());
+    let mut f = binding_fixture(
+        binding_row(&derived_row_name(), committed_decision(), 60_000),
+        manager,
+    );
+    runtime.set_lease(None);
+    let mut d = binding_driver(runtime.clone()).await;
+
+    d.delete(&mut f.ctx).await.expect("delete converges without effects");
+    assert!(
+        !runtime.call_order().iter().any(|entry| entry.starts_with("revoke:")),
+        "nothing to retire: {:?}",
+        runtime.call_order()
+    );
+}
+
+/// A pre-drain fences the relationship: the next reconcile pass reads the
+/// fence back out of the in-memory status instead of reporting it open again.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn pre_drain_fences_and_the_next_pass_reads_the_fence_back() {
+    let manager = serving_manager();
+    let mut f = binding_fixture(
+        binding_row(&derived_row_name(), committed_decision(), 60_000),
+        manager,
+    );
+    let mut d = binding_driver(RecordingRuntime::new(log())).await;
+
+    d.pre_drain(&mut f.ctx).await.expect("pre_drain");
+    assert!(
+        matches!(
+            f.ctx.status::<CredentialBindingDriverStatus>(),
+            Some(&CredentialBindingDriverStatus::Draining { .. })
+        ),
+        "pre-drain fences the relationship",
+    );
+
+    d.reconcile(&mut f.ctx).await.expect("reconcile after the fence");
+    assert!(
+        matches!(
+            f.ctx.status::<CredentialBindingDriverStatus>(),
+            Some(&CredentialBindingDriverStatus::Draining { .. })
+        ),
+        "the fence survives the next pass (R11: the status slot is the fence)",
+    );
+}
+
+/// A restart adopts nothing: the mint path never persisted a session this
+/// actor could find, so adopting a delivery it cannot prove is exactly the
+/// failure R41 exists to prevent.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn recover_adopts_nothing_it_cannot_prove() {
+    let manager = serving_manager();
+    let mut f = binding_fixture(
+        binding_row(&derived_row_name(), committed_decision(), 60_000),
+        manager,
+    );
+    let mut d = binding_driver(RecordingRuntime::new(log())).await;
+
+    assert_eq!(d.recover(&mut f.ctx).await.expect("recover"), RecoveryOutcome::Missing);
 }

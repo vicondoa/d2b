@@ -26,6 +26,17 @@ impl WellKnownType {
     pub const VOLUME_BINDING: Self = Self("VolumeBinding");
     /// A reachable transport endpoint.
     pub const ENDPOINT: Self = Self("Endpoint");
+    /// The binding that attaches one named device function to one consumer.
+    pub const DEVICE_BINDING: Self = Self("DeviceBinding");
+
+    /// The binding that joins one consumer to one shared fabric.
+    pub const NETWORK_BINDING: Self = Self("NetworkBinding");
+
+    /// The binding that delivers one credential to one consumer.
+    pub const CREDENTIAL_BINDING: Self = Self("CredentialBinding");
+
+    /// The binding that delivers one exact endpoint to one consumer.
+    pub const ENDPOINT_BINDING: Self = Self("EndpointBinding");
     /// The physical host target.
     pub const HOST: Self = Self("Host");
     /// A host user.

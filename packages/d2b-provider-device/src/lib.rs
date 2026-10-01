@@ -23,6 +23,13 @@ pub mod facets;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
+pub use binding::{
+    DEVICE_BINDING_TYPE_NAME, DeviceBindingDriver, DeviceBindingDriverArgs,
+    DeviceBindingDriverFactory,
+    DeviceBindingDriverStatus, DeviceBindingEffects, DeviceBindingEffectsService,
+    DeviceBindingRow, UnattachedReason, capability_backed, device_attachment_support,
+    device_binding_descriptor, device_binding_spec_decoder,
+};
 pub use driver::{
     DEVICE_REGISTRATIONS, DEVICE_RESYNC, DEVICE_TYPE_NAME, DeviceComponent, DeviceDriverArgs,
     DeviceDriverEffects, DeviceResourceState, GPU_CONTROLLER_REF, SECURITY_KEY_CONTROLLER_REF,

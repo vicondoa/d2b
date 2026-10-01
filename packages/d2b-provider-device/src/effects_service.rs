@@ -82,6 +82,16 @@ fn inspect_device_response() -> Result<EffectResponse, EffectServiceError> {
 /// driver observe the same runtime.
 pub struct DeviceEffects {
     runtime: Arc<dyn crate::facets::DeviceRuntime>,
+    /// The trusted host inventory the Device source admits its typed
+    /// `DeviceBinding` relationships against.
+    ///
+    /// This facet is carried, not dropped: it is the only place the trusted
+    /// physical inventory crosses into the family, and
+    /// [`crate::binding::decide_presence`] - the family's own answer to "is the
+    /// capability this relationship holds still backed" - cannot be evaluated
+    /// without it. Building the effects without it left the family's own
+    /// presence decision unreachable from the composition root.
+    inventory: Arc<dyn crate::facets::DeviceInventorySource>,
 }
 
 impl DeviceEffects {
@@ -90,7 +100,28 @@ impl DeviceEffects {
     pub fn new(facets: DeviceEffectFacets) -> Self {
         Self {
             runtime: facets.runtime,
+            inventory: facets.inventory,
         }
+    }
+
+    /// The trusted host inventory one committed `Device` row resolves to.
+    ///
+    /// The resolution reads the committed row's own declared selector and
+    /// answers the opaque physical authority each named capability resolves to
+    /// together with the presence observed for it. A row whose inventory
+    /// cannot be resolved admits nothing, which is the fail-closed answer
+    /// rather than a claim the source could not prove.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SharedProviderEffectError`] when the committed spec does not
+    /// decode, the declared selector names a bus class with no trusted
+    /// inventory, or the host device-node matrix cannot be read for it.
+    pub async fn device_inventory(
+        &self,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<crate::binding::DeviceInventory, SharedProviderEffectError> {
+        self.inventory.device_inventory(request).await
     }
 }
 
