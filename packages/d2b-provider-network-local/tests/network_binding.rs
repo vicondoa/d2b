@@ -18,6 +18,7 @@ use d2b_provider_network_local::{
     HostStateObservation, MembershipAdmission, NetworkBindingError, NetworkBindingRegistry,
     NetworkFabricTarget, NetworkMembershipCeiling, NmUnmanagedObservation, ParentInputOutcome,
     controller::{NetworkAdmissionIntent, NetworkAdmissionKey, render_membership_config},
+    membership_interface,
     nftables::{SharedNftTable, SharedTableEntry},
     observe::HostNetworkOccupancy,
 };
@@ -281,6 +282,34 @@ fn a_foreign_nftables_marker_refuses_the_membership() {
         table.entries()[0].bytes(),
         foreign.as_slice(),
         "the foreign chain is preserved byte for byte"
+    );
+}
+
+/// The interface a workload consumer reaches is derived once, in the binding
+/// family. A second derivation inside the production admission intent would
+/// let the tap an intent reserves drift away from the interface an admitted
+/// membership claims, so this pins that the production intent reserves
+/// exactly the membership family's derivation - and that two consumers on one
+/// Network still get distinct interfaces.
+#[test]
+fn the_production_intent_reserves_the_membership_interfaces() {
+    let intent = host_intent(3, 7);
+    let provenance = intent.key().provenance();
+    let claimed = membership_interface(&provenance, &uid(GUEST_UID)).expect("membership interface");
+    assert!(
+        intent
+            .interface_names()
+            .iter()
+            .any(|name| name == &claimed),
+        "the production admission intent reserves the interface an admitted membership claims"
+    );
+
+    // The same rule, keyed by consumer identity, is what keeps one consumer
+    // from reaching another's interface on the shared fabric.
+    let other = membership_interface(&provenance, &uid(SECOND_UID)).expect("second interface");
+    assert_ne!(
+        claimed, other,
+        "two consumers on one Network hold distinct interfaces on the shared fabric"
     );
 }
 

@@ -20,9 +20,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use d2b_provider_endpoint::binding::{
-    EndpointAccessObservation, EndpointSocketIdentity,
-};
+use d2b_provider_endpoint::{EndpointAccessObservation, EndpointSocketIdentity};
 
 use crate::driver::{EndpointBindingDelivery, EndpointDeliveryTarget};
 

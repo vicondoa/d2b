@@ -30,3 +30,11 @@ tracing = "0.1"
 
 [features]
 test-support = []
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[[test]]
+name = "registration"
+path = "tests/registration.rs"
+required-features = ["test-support"]

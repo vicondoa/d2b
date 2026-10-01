@@ -22,9 +22,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use d2b_provider_endpoint::binding::{
-    EndpointAccessObservation, EndpointSocketIdentity,
-};
+use d2b_provider_endpoint::{EndpointAccessObservation, EndpointSocketIdentity};
 use d2b_provider_toolkit::{
     EffectResponse, EffectService, EffectServiceError, EffectServiceFactory, ServiceInvocation,
 };
@@ -190,44 +188,56 @@ impl EffectServiceFactory for EndpointBindingEffectsServiceFactory {
 mod tests {
     use super::*;
 
+    use d2b_contracts_resource::v3::endpoint_binding::EndpointBindingSpec;
     use d2b_contracts_resource::v3::{
-        EndpointAttachmentKind, EndpointBindingRequest, ResourceGeneration, ResourceRef,
-        ResourceUid, ZoneId, execution_policy::BoundedToken,
+        BindingArbitration, BindingRealizationFacet, BindingSourceDecision, EndpointAttachmentKind,
+        RequestedRights, ResourceGeneration, ResourceRef, ResourceUid, ZoneId,
+        execution_policy::BoundedToken,
     };
-    use d2b_provider_endpoint::binding::EndpointAccessObservation;
 
     use crate::test_support::FakeEndpointEffects;
 
-    fn request() -> EndpointBindingRequest {
-        EndpointBindingRequest::new(
+    /// The endpoint row's own purpose, which is the purpose the delivery
+    /// carries: a binding row does not restate it.
+    fn purpose() -> BoundedToken {
+        BoundedToken::parse("display".to_owned()).expect("purpose")
+    }
+
+    fn row() -> EndpointBindingSpec {
+        EndpointBindingSpec::new(
             ResourceRef::parse("Endpoint/display").expect("endpoint reference"),
             ResourceRef::parse("Process/consumer").expect("consumer reference"),
-            d2b_contracts_resource::v3::BindingSlot::parse("primary").expect("slot"),
             EndpointAttachmentKind::Connect,
-            BoundedToken::parse("display".to_owned()).expect("purpose"),
+            BoundedToken::parse("primary".to_owned()).expect("slot"),
+            BindingSourceDecision::new(
+                vec![RequestedRights::Consume],
+                BindingArbitration::Shared,
+                vec![BindingRealizationFacet::EndpointDescriptor],
+            )
+            .expect("source decision"),
         )
-        .expect("binding request")
+        .expect("binding row")
     }
 
     fn target() -> EndpointDeliveryTarget {
-        let request = request();
-        EndpointDeliveryTarget::derive_for_test(
+        EndpointDeliveryTarget::derive(
             &ZoneId::parse("work").expect("zone"),
-            &request,
+            &row(),
             ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("uid"),
             ResourceGeneration::new(3).expect("generation"),
+            &purpose(),
         )
     }
 
-    /// The service's typed seam delegates onto the facets, and the hosted
-    /// report answers the family's committed serving contract.
+    /// The service's typed seam delegates onto the facets, one call per
+    /// effect, in the order the driver makes them.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn the_service_delegates_onto_the_facets() {
         let fake = FakeEndpointEffects::new();
         let service = EndpointBindingEffectsService::new(fake.facet_set());
         let target = target();
-        let delivery = EndpointBindingDelivery::for_request(&request());
+        let delivery = EndpointBindingDelivery::for_row(&row());
 
         let observation = service.verify(&target).await.expect("verify");
         assert!(
@@ -236,27 +246,27 @@ mod tests {
         );
         assert_eq!(fake.call_order(), ["verify"]);
 
-        let socket = service
-            .deliver(&target, &delivery)
-            .await
-            .expect("deliver");
+        let socket = service.deliver(&target, &delivery).await.expect("deliver");
         assert_eq!(
             socket,
             fake.pinned_socket(),
             "the delivery answers the identity the adapter pinned"
         );
         service.fence(&target).await.expect("fence");
-        service.consumer_attached(&target).await.expect("attached");
+        assert!(!service.consumer_attached(&target).await.expect("attached"));
         service.release(&target).await.expect("release");
         assert_eq!(
             fake.call_order(),
             ["verify", "deliver", "fence", "attached", "release"]
         );
+    }
 
-        let response = service
-            .handle(ServiceInvocation::for_test(&BINDING_EFFECTS_SERVICE.methods[0]))
-            .await
-            .expect("the declared method is served");
+    /// The hosted report is built from this family's own declaration, so it
+    /// names the exact endpoint the family reads, the facets it serves, and
+    /// the absence of any child creation it licenses.
+    #[test]
+    fn the_hosted_report_answers_this_familys_own_serving_contract() {
+        let response = inspect_binding_response().expect("the report is canonical");
         let payload = serde_json::to_value(&response.payload).expect("report json");
         assert_eq!(payload["family"], serde_json::json!("endpoint-binding"));
         assert_eq!(
@@ -278,23 +288,31 @@ mod tests {
             payload["facets"],
             serde_json::json!(["endpoint-descriptor", "endpoint-pathname"])
         );
+        assert_eq!(
+            payload["serving"],
+            serde_json::json!(["verify", "deliver", "fence", "attached", "release"])
+        );
     }
 
-    /// The hosted report is the family's own declaration, so a drift between
-    /// the served contract and the declared reads would be visible here.
+    /// The declared service carries this family's one zone-plane method and
+    /// no attach kinds, streams, or endpoint policy.
     #[test]
-    fn the_declared_service_answers_this_familys_own_surface() {
-        assert_eq!(BINDING_EFFECTS_SERVICE.id, "endpoint-binding.d2bus.org/effects");
+    fn the_declared_service_carries_only_its_own_method() {
+        assert_eq!(
+            BINDING_EFFECTS_SERVICE.id,
+            "endpoint-binding.d2bus.org/effects"
+        );
         assert_eq!(BINDING_EFFECTS_SERVICE.methods.len(), 1);
         assert_eq!(
             BINDING_EFFECTS_SERVICE.methods[0].name,
             "inspect-binding"
         );
         assert!(BINDING_EFFECTS_SERVICE.attach_kinds.is_empty());
+        assert!(BINDING_EFFECTS_SERVICE.streams.is_empty());
         assert!(BINDING_EFFECTS_SERVICE.endpoint_policy.is_none());
     }
 
-    /// A failed facet surfaces as an operational error on the typed seam, and
+    /// A failed facet surfaces as an operational error on the typed seam and
     /// never as a fabricated observation.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]

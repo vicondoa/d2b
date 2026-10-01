@@ -529,6 +529,7 @@ impl VolumeBindingStatusResource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::v3::binding::BindingArbitration;
 
     fn volume_ref() -> ResourceRef {
         ResourceRef::parse("Volume/work-state").expect("valid fixture ref")
@@ -538,6 +539,18 @@ mod tests {
         ResourceRef::parse("Guest/work-vm").expect("valid fixture ref")
     }
 
+    /// The source decision these fixtures commit: a read-only view a Guest may
+    /// observe. Every construction site below states the same decision, so the
+    /// tests differ only in what they are testing.
+    fn decision() -> BindingSourceDecision {
+        BindingSourceDecision::new(
+            vec![RequestedRights::Observe],
+            BindingArbitration::Shared,
+            vec![BindingRealizationFacet::FilesystemPresentation],
+        )
+        .expect("decision validates")
+    }
+
     fn spec() -> VolumeBindingSpec {
         VolumeBindingSpec::new(
             volume_ref(),
@@ -545,6 +558,7 @@ mod tests {
             "ro-store",
             AttachmentAccess::ReadOnly,
             "/nix/.ro-store",
+            decision(),
         )
         .expect("valid fixture spec")
     }
@@ -572,6 +586,11 @@ mod tests {
                 "view": "ro-store",
                 "access": "read-only",
                 "mountPath": "/nix/.ro-store",
+                "source": {
+                    "admittedRights": ["observe"],
+                    "arbitration": "shared",
+                    "realizedFacets": ["filesystem-presentation"],
+                },
             })
         );
         let parsed: VolumeBindingSpec =
@@ -591,6 +610,7 @@ mod tests {
             "ro-store",
             AttachmentAccess::ReadOnly,
             "/nix/.ro-store",
+            decision(),
         );
         assert_eq!(wrong_volume.unwrap_err(), PrimitiveSpecError::WrongResourceType);
 
@@ -600,6 +620,7 @@ mod tests {
             "ro-store",
             AttachmentAccess::ReadOnly,
             "relative/path",
+            decision(),
         );
         assert_eq!(invalid_path.unwrap_err(), PrimitiveSpecError::InvalidPath);
     }

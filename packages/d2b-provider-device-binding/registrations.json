@@ -1,0 +1,7 @@
+{
+  "crate": "d2b-provider-device-binding",
+  "provider": "device-binding",
+  "services": [
+    "device-binding.d2bus.org/effects"
+  ]
+}

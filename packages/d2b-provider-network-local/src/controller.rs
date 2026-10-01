@@ -368,22 +368,22 @@ impl NetworkAdmissionIntent {
         sorted_guest_uids.sort();
         sorted_guest_uids.dedup();
         for guest_uid in &sorted_guest_uids {
-            let ifname = derive_network_ifname(
-                key.zone_uid(),
-                key.network_uid(),
-                NetworkIfRole::WorkloadGuestTap,
-                Some(guest_uid),
-            )
-            .map_err(|error| {
-                debug!(
-                    provider = "network-local",
-                    network_uid = key.network_uid().as_str(),
-                    guest_uid = guest_uid.as_str(),
-                    error = %error,
-                    "guest tap name derivation failed"
-                );
-                NetworkEffectError::NetworkInterfaceCollision
-            })?;
+            // One derivation, not two: the interface a workload consumer
+            // reaches on the shared fabric is the family's own membership
+            // derivation, so the tap this intent reserves and the interface an
+            // admitted membership claims cannot drift apart.
+            let ifname = crate::binding::membership_interface(&provenance, guest_uid).map_err(
+                |error| {
+                    debug!(
+                        provider = "network-local",
+                        network_uid = key.network_uid().as_str(),
+                        guest_uid = guest_uid.as_str(),
+                        error = %error,
+                        "guest tap name derivation failed"
+                    );
+                    NetworkEffectError::NetworkInterfaceCollision
+                },
+            )?;
             interface_markers.insert(
                 ifname.clone(),
                 d2b_contracts_resource::v3::derive_network_ownership_marker(

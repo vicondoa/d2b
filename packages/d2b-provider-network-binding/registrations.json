@@ -1,7 +1,5 @@
 {
   "crate": "d2b-provider-network-binding",
   "provider": "network-binding",
-  "services": [
-    "network-binding.d2bus.org/effects"
-  ]
+  "services": []
 }
