@@ -254,9 +254,10 @@ and lockfiles remain rules_rs metadata authority rather than contributor
 workflow entry points.
 
 `make generate` is the sole aggregate entrypoint for committed schemas, docs,
-completions, protocol bindings, Nix resource outputs, and policy inputs. It
-invokes `//packages/xtask:generate` with `--config=local`; ordinary `make check`
-and `make test-*` aliases retain the repository-default remote profile.
+completions, protocol bindings, Nix resource outputs, new-graph projections,
+and policy inputs. It invokes `//packages/xtask:generate` with
+`--config=local`; ordinary `make check` and `make test-*` aliases retain the
+repository-default remote profile.
 
 The full invariants are in
 [`docs/contributing/critical-subsystems.md`](./docs/contributing/critical-subsystems.md).

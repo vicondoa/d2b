@@ -357,17 +357,15 @@ fn load_declarations(repo_root: &Path) -> Result<BTreeMap<String, RegistrationDe
 }
 /// Render the registration table from the declarations alone.
 ///
-/// The new-graph build closure (U33) stages its replacement projection
-/// through this entry point, so the staged bytes are the same render the
-/// `--fix` path installs. It reads no crate source, so the parity gate stays
-/// a separate cross-check the new-graph closure runs over the composition
-/// rather than a condition of rendering it.
-#[cfg(test)]
+/// `gen-new-graph` renders its committed new-graph projection through this
+/// entry point, so the staged bytes are the same render the `--fix` path
+/// installs. It reads no crate source, so the parity gate stays a separate
+/// cross-check the new-graph closure runs over the composition rather than a
+/// condition of rendering it.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn render_declarations_only(repo_root: &Path) -> Result<String, String> {
     render(repo_root)
 }
-
 
 /// Render the generated registration table from the declarations, in
 /// crate-name order.

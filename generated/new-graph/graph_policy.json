@@ -1,0 +1,1919 @@
+[
+  {
+    "providerRef": "Provider/activation-nixos",
+    "crate": "d2b-provider-activation-nixos",
+    "effectServices": [
+      "activation.d2bus.org/effects"
+    ],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "activation-nixos.d2bus.org.NixosGeneration",
+        "allowedSources": [
+          "builtin",
+          "startup"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host",
+          "guest"
+        ],
+        "exportable": false,
+        "reads": [
+          "activation-nixos.d2bus.org.NixosGeneration"
+        ]
+      }
+    ],
+    "provides": [
+      "Provider/system-minijail"
+    ],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/audio-binding",
+    "crate": "d2b-provider-audio-binding",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "audio.d2bus.org.AudioBinding",
+        "allowedSources": [
+          "builtin",
+          "startup",
+          "runtime"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host",
+          "guest"
+        ],
+        "exportable": false,
+        "reads": [
+          "audio.d2bus.org.AudioService",
+          "Guest"
+        ]
+      }
+    ],
+    "provides": [
+      "Provider/audio-pipewire"
+    ],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/audio-pipewire",
+    "crate": "d2b-provider-audio-pipewire",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/audio-service",
+    "crate": "d2b-provider-audio-service",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "audio.d2bus.org.AudioService",
+        "allowedSources": [
+          "builtin",
+          "startup",
+          "runtime"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host",
+          "guest"
+        ],
+        "exportable": false,
+        "reads": []
+      }
+    ],
+    "provides": [
+      "Provider/audio-pipewire"
+    ],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/clipboard-wayland",
+    "crate": "d2b-provider-clipboard-wayland",
+    "effectServices": [],
+    "servicePackages": [
+      "d2b.clipboard.bridge.v3",
+      "d2b.clipboard.picker-coord.v3",
+      "d2b.clipboard.v3"
+    ],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/config-nixos",
+    "crate": "d2b-provider-config-nixos",
+    "effectServices": [],
+    "servicePackages": [
+      "d2b.config-nixos.v3"
+    ],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/credential",
+    "crate": "d2b-provider-credential",
+    "effectServices": [
+      "credential.d2bus.org/effects"
+    ],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "Credential",
+        "allowedSources": [
+          "builtin",
+          "startup"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete",
+          "use-credential",
+          "admin-credential"
+        ],
+        "execution": [
+          "host",
+          "guest"
+        ],
+        "exportable": false,
+        "reads": [
+          "Process",
+          "Host",
+          "Guest",
+          "Provider"
+        ]
+      },
+      {
+        "resourceType": "CredentialBinding",
+        "allowedSources": [
+          "builtin",
+          "startup"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": [
+          "Credential"
+        ]
+      }
+    ],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/credential-entra",
+    "crate": "d2b-provider-credential-entra",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/credential-managed-identity",
+    "crate": "d2b-provider-credential-managed-identity",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/credential-secret-service",
+    "crate": "d2b-provider-credential-secret-service",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/device",
+    "crate": "d2b-provider-device",
+    "effectServices": [
+      "device.d2bus.org/effects"
+    ],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "Device",
+        "allowedSources": [
+          "builtin",
+          "startup",
+          "runtime"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": [
+          "Guest",
+          "Host",
+          "Volume",
+          "Process",
+          "Endpoint",
+          "usb.d2bus.org.UsbService",
+          "security-key.d2bus.org.SecurityKeyService"
+        ]
+      },
+      {
+        "resourceType": "DeviceBinding",
+        "allowedSources": [
+          "builtin",
+          "startup",
+          "runtime"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": [
+          "Device"
+        ]
+      }
+    ],
+    "provides": [
+      "Process/device-tpm-controller",
+      "Process/device-usbip-controller",
+      "Process/device-security-key-controller",
+      "Process/device-gpu-controller"
+    ],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/device-gpu",
+    "crate": "d2b-provider-device-gpu",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/device-security-key",
+    "crate": "d2b-provider-device-security-key",
+    "effectServices": [
+      "security-key.d2bus.org/effects"
+    ],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "security-key.d2bus.org.SecurityKeyService",
+        "allowedSources": [
+          "builtin",
+          "startup",
+          "runtime"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": true,
+        "reads": [
+          "Device"
+        ]
+      },
+      {
+        "resourceType": "security-key.d2bus.org.SecurityKeyBinding",
+        "allowedSources": [
+          "builtin",
+          "startup",
+          "runtime"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": [
+          "security-key.d2bus.org.SecurityKeyService",
+          "Guest"
+        ]
+      }
+    ],
+    "provides": [
+      "Provider/device-security-key",
+      "Process/device-security-key-service-controller",
+      "Process/device-security-key-binding-controller"
+    ],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/device-tpm",
+    "crate": "d2b-provider-device-tpm",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/device-usbip",
+    "crate": "d2b-provider-device-usbip",
+    "effectServices": [
+      "usbip.d2bus.org/effects"
+    ],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "usb.d2bus.org.UsbService",
+        "allowedSources": [
+          "builtin",
+          "startup",
+          "runtime"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": true,
+        "reads": [
+          "Device",
+          "Network"
+        ]
+      },
+      {
+        "resourceType": "usb.d2bus.org.UsbBinding",
+        "allowedSources": [
+          "builtin",
+          "startup",
+          "runtime"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": [
+          "usb.d2bus.org.UsbService",
+          "Guest"
+        ]
+      }
+    ],
+    "provides": [
+      "Provider/device-usbip",
+      "Process/device-usbip-service-controller",
+      "Process/device-usbip-binding-controller"
+    ],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/display-wayland",
+    "crate": "d2b-provider-display-wayland",
+    "effectServices": [],
+    "servicePackages": [
+      "d2b.display.v3"
+    ],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/emergency-policy",
+    "crate": "d2b-provider-emergency-policy",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "EmergencyPolicy",
+        "allowedSources": [
+          "builtin"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": []
+      }
+    ],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/endpoint",
+    "crate": "d2b-provider-endpoint",
+    "effectServices": [
+      "endpoint.d2bus.org/effects"
+    ],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "Endpoint",
+        "allowedSources": [
+          "builtin",
+          "startup"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": [
+          "Process",
+          "Guest",
+          "VolumeBinding"
+        ]
+      },
+      {
+        "resourceType": "EndpointBinding",
+        "allowedSources": [
+          "builtin",
+          "startup"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": [
+          "Endpoint",
+          "Zone"
+        ]
+      }
+    ],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/execution-policy",
+    "crate": "d2b-provider-execution-policy",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "ExecutionPolicy",
+        "allowedSources": [
+          "builtin"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": []
+      }
+    ],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/guest",
+    "crate": "d2b-provider-guest",
+    "effectServices": [
+      "guest.d2bus.org/effects"
+    ],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "Guest",
+        "allowedSources": [
+          "builtin",
+          "startup"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host",
+          "guest"
+        ],
+        "exportable": false,
+        "reads": [
+          "Provider",
+          "Guest",
+          "Host",
+          "Volume",
+          "VolumeBinding",
+          "Process",
+          "Endpoint",
+          "Device",
+          "Network"
+        ]
+      }
+    ],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/guest-azure-container-apps",
+    "crate": "d2b-provider-guest-azure-container-apps",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/guest-azure-virtual-machine",
+    "crate": "d2b-provider-guest-azure-virtual-machine",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/guest-cloud-hypervisor",
+    "crate": "d2b-provider-guest-cloud-hypervisor",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/guest-qemu-media",
+    "crate": "d2b-provider-guest-qemu-media",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/host",
+    "crate": "d2b-provider-host",
+    "effectServices": [
+      "host.d2bus.org/effects"
+    ],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "Host",
+        "allowedSources": [
+          "builtin",
+          "startup"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": []
+      }
+    ],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/network-local",
+    "crate": "d2b-provider-network-local",
+    "effectServices": [
+      "network.d2bus.org/effects"
+    ],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "Network",
+        "allowedSources": [
+          "builtin",
+          "startup"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": [
+          "Host",
+          "Guest",
+          "Volume",
+          "Process",
+          "User",
+          "Zone"
+        ]
+      },
+      {
+        "resourceType": "NetworkBinding",
+        "allowedSources": [
+          "builtin",
+          "startup"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": [
+          "Network",
+          "Host",
+          "Guest",
+          "Zone"
+        ]
+      }
+    ],
+    "provides": [
+      "Provider/network-local",
+      "Process/network-local-controller"
+    ],
+    "methods": [
+      {
+        "service": "d2b.network",
+        "method": "apply-nftables",
+        "operation": "ApplyNftables",
+        "profiles": [
+          "host"
+        ]
+      },
+      {
+        "service": "d2b.network",
+        "method": "apply-nftables-projection",
+        "operation": "ApplyNftablesProjection",
+        "profiles": [
+          "host"
+        ]
+      },
+      {
+        "service": "d2b.network",
+        "method": "apply-nm-unmanaged",
+        "operation": "ApplyNmUnmanaged",
+        "profiles": [
+          "host"
+        ]
+      },
+      {
+        "service": "d2b.network",
+        "method": "apply-route",
+        "operation": "ApplyRoute",
+        "profiles": [
+          "host"
+        ]
+      },
+      {
+        "service": "d2b.network",
+        "method": "apply-sysctl",
+        "operation": "ApplySysctl",
+        "profiles": [
+          "host"
+        ]
+      },
+      {
+        "service": "d2b.network",
+        "method": "create-bridge",
+        "operation": "CreateBridge",
+        "profiles": [
+          "host"
+        ]
+      },
+      {
+        "service": "d2b.network",
+        "method": "create-persistent-tap",
+        "operation": "CreatePersistentTap",
+        "profiles": [
+          "host"
+        ]
+      },
+      {
+        "service": "d2b.network",
+        "method": "create-tap-fd",
+        "operation": "CreateTapFd",
+        "profiles": [
+          "host"
+        ]
+      },
+      {
+        "service": "d2b.network",
+        "method": "delete-bridge",
+        "operation": "DeleteBridge",
+        "profiles": [
+          "host"
+        ]
+      },
+      {
+        "service": "d2b.network",
+        "method": "delete-persistent-tap",
+        "operation": "DeletePersistentTap",
+        "profiles": [
+          "host"
+        ]
+      },
+      {
+        "service": "d2b.network",
+        "method": "seed-dnsmasq-lease",
+        "operation": "SeedDnsmasqLease",
+        "profiles": [
+          "host"
+        ]
+      },
+      {
+        "service": "d2b.network",
+        "method": "set-bridge-port-flags",
+        "operation": "SetBridgePortFlags",
+        "profiles": [
+          "host"
+        ]
+      },
+      {
+        "service": "d2b.network",
+        "method": "update-hosts-file",
+        "operation": "UpdateHostsFile",
+        "profiles": [
+          "host"
+        ]
+      }
+    ]
+  },
+  {
+    "providerRef": "Provider/notification-desktop",
+    "crate": "d2b-provider-notification-desktop",
+    "effectServices": [],
+    "servicePackages": [
+      "d2b.notification.v3"
+    ],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/observability-otel",
+    "crate": "d2b-provider-observability-otel",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/operation",
+    "crate": "d2b-provider-operation",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "Operation",
+        "allowedSources": [
+          "builtin"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": []
+      }
+    ],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/process",
+    "crate": "d2b-provider-process",
+    "effectServices": [
+      "process.d2bus.org/effects"
+    ],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "Process",
+        "allowedSources": [
+          "builtin",
+          "startup"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host",
+          "guest"
+        ],
+        "exportable": false,
+        "reads": [
+          "VolumeBinding",
+          "Volume",
+          "Device",
+          "Guest",
+          "Provider"
+        ]
+      },
+      {
+        "resourceType": "EphemeralProcess",
+        "allowedSources": [
+          "builtin",
+          "startup"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host",
+          "guest"
+        ],
+        "exportable": false,
+        "reads": [
+          "VolumeBinding",
+          "Volume",
+          "Device",
+          "Guest",
+          "Provider"
+        ]
+      }
+    ],
+    "provides": [],
+    "methods": [
+      {
+        "service": "d2b.process",
+        "method": "cgroup-kill",
+        "operation": "CgroupKill",
+        "profiles": [
+          "host",
+          "guest"
+        ]
+      },
+      {
+        "service": "d2b.process",
+        "method": "deregister-runner-pidfd",
+        "operation": "DeregisterRunnerPidfd",
+        "profiles": [
+          "host",
+          "guest"
+        ]
+      },
+      {
+        "service": "d2b.process",
+        "method": "inspect-process-family",
+        "operation": "inspect-process-family",
+        "profiles": [
+          "host"
+        ]
+      },
+      {
+        "service": "d2b.process",
+        "method": "observe-runner",
+        "operation": "ObserveRunner",
+        "profiles": [
+          "host",
+          "guest"
+        ]
+      },
+      {
+        "service": "d2b.process",
+        "method": "open-peer-pidfd-from-accepted-socket",
+        "operation": "OpenPeerPidfdFromAcceptedSocket",
+        "profiles": [
+          "host",
+          "guest"
+        ]
+      },
+      {
+        "service": "d2b.process",
+        "method": "open-pidfd",
+        "operation": "OpenPidfd",
+        "profiles": [
+          "host",
+          "guest"
+        ]
+      },
+      {
+        "service": "d2b.process",
+        "method": "poll-child-reaped",
+        "operation": "PollChildReaped",
+        "profiles": [
+          "host",
+          "guest"
+        ]
+      },
+      {
+        "service": "d2b.process",
+        "method": "prepare-runtime-dir",
+        "operation": "PrepareRuntimeDir",
+        "profiles": [
+          "host",
+          "guest"
+        ]
+      },
+      {
+        "service": "d2b.process",
+        "method": "prepare-state-dir",
+        "operation": "PrepareStateDir",
+        "profiles": [
+          "host",
+          "guest"
+        ]
+      },
+      {
+        "service": "d2b.process",
+        "method": "signal-runner",
+        "operation": "SignalRunner",
+        "profiles": [
+          "host",
+          "guest"
+        ]
+      },
+      {
+        "service": "d2b.process",
+        "method": "spawn-runner",
+        "operation": "SpawnRunner",
+        "profiles": [
+          "host",
+          "guest"
+        ]
+      }
+    ]
+  },
+  {
+    "providerRef": "Provider/process-minijail",
+    "crate": "d2b-provider-process-minijail",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/process-systemd",
+    "crate": "d2b-provider-process-systemd",
+    "effectServices": [
+      "process-systemd.d2bus.org/effects"
+    ],
+    "servicePackages": [],
+    "types": [],
+    "provides": [],
+    "methods": [
+      {
+        "service": "d2b.process-systemd",
+        "method": "check-systemd-user-manager",
+        "operation": "CheckSystemdUserManager",
+        "profiles": [
+          "host",
+          "guest"
+        ]
+      },
+      {
+        "service": "d2b.process-systemd",
+        "method": "observe-systemd-unit",
+        "operation": "ObserveSystemdUnit",
+        "profiles": [
+          "host",
+          "guest"
+        ]
+      },
+      {
+        "service": "d2b.process-systemd",
+        "method": "open-systemd-unit-pidfd",
+        "operation": "OpenSystemdUnitPidfd",
+        "profiles": [
+          "host",
+          "guest"
+        ]
+      },
+      {
+        "service": "d2b.process-systemd",
+        "method": "start-systemd-unit",
+        "operation": "StartSystemdUnit",
+        "profiles": [
+          "host",
+          "guest"
+        ]
+      },
+      {
+        "service": "d2b.process-systemd",
+        "method": "stop-systemd-unit",
+        "operation": "StopSystemdUnit",
+        "profiles": [
+          "host",
+          "guest"
+        ]
+      }
+    ]
+  },
+  {
+    "providerRef": "Provider/provider",
+    "crate": "d2b-provider-provider",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "Provider",
+        "allowedSources": [
+          "builtin"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": [
+          "Host",
+          "Process",
+          "Volume",
+          "Zone"
+        ]
+      }
+    ],
+    "provides": [
+      "Provider/system-core",
+      "Provider/system-minijail",
+      "Host/host-system"
+    ],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/quota",
+    "crate": "d2b-provider-quota",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "Quota",
+        "allowedSources": [
+          "builtin"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": []
+      }
+    ],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/resource-export",
+    "crate": "d2b-provider-resource-export",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "ResourceExport",
+        "allowedSources": [
+          "builtin"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": []
+      }
+    ],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/resource-import",
+    "crate": "d2b-provider-resource-import",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "ResourceImport",
+        "allowedSources": [
+          "builtin"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": []
+      }
+    ],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/role",
+    "crate": "d2b-provider-role",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "Role",
+        "allowedSources": [
+          "builtin"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": []
+      }
+    ],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/role-binding",
+    "crate": "d2b-provider-role-binding",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "RoleBinding",
+        "allowedSources": [
+          "builtin"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": []
+      }
+    ],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/seccomp-profile",
+    "crate": "d2b-provider-seccomp-profile",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "SeccompProfile",
+        "allowedSources": [
+          "builtin"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": []
+      }
+    ],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/shell-pool",
+    "crate": "d2b-provider-shell-pool",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "shell-terminal.d2bus.org.ShellPool",
+        "allowedSources": [
+          "builtin",
+          "startup",
+          "runtime"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host",
+          "guest"
+        ],
+        "exportable": false,
+        "reads": [
+          "Host",
+          "Guest",
+          "User"
+        ]
+      }
+    ],
+    "provides": [
+      "Provider/shell-terminal"
+    ],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/shell-session",
+    "crate": "d2b-provider-shell-session",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "shell-terminal.d2bus.org.ShellSession",
+        "allowedSources": [
+          "builtin",
+          "startup",
+          "runtime"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host",
+          "guest"
+        ],
+        "exportable": false,
+        "reads": [
+          "shell-terminal.d2bus.org.ShellPool",
+          "Host",
+          "Guest",
+          "User"
+        ]
+      }
+    ],
+    "provides": [
+      "Provider/shell-terminal"
+    ],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/shell-terminal",
+    "crate": "d2b-provider-shell-terminal",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/supervisor",
+    "crate": "d2b-provider-supervisor",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/system-core",
+    "crate": "d2b-provider-system-core",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/telemetry-binding",
+    "crate": "d2b-provider-telemetry-binding",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "telemetry.d2bus.org.TelemetryBinding",
+        "allowedSources": [
+          "builtin",
+          "startup"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": [
+          "telemetry.d2bus.org.TelemetryService",
+          "Zone",
+          "Guest",
+          "Process",
+          "Endpoint"
+        ]
+      }
+    ],
+    "provides": [
+      "Provider/observability-otel"
+    ],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/telemetry-service",
+    "crate": "d2b-provider-telemetry-service",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "telemetry.d2bus.org.TelemetryService",
+        "allowedSources": [
+          "builtin",
+          "startup"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": true,
+        "reads": [
+          "Endpoint"
+        ]
+      }
+    ],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/test-controller",
+    "crate": "d2b-provider-test-controller",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/toolkit",
+    "crate": "d2b-provider-toolkit",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/transport-azure-relay",
+    "crate": "d2b-provider-transport-azure-relay",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/user",
+    "crate": "d2b-provider-user",
+    "effectServices": [
+      "user.d2bus.org/effects"
+    ],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "User",
+        "allowedSources": [
+          "builtin",
+          "startup"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": []
+      }
+    ],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/volume",
+    "crate": "d2b-provider-volume",
+    "effectServices": [
+      "volume.d2bus.org/effects"
+    ],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "Volume",
+        "allowedSources": [
+          "builtin",
+          "startup"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": []
+      }
+    ],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/volume-binding",
+    "crate": "d2b-provider-volume-binding",
+    "effectServices": [
+      "volume-binding.d2bus.org/effects"
+    ],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "VolumeBinding",
+        "allowedSources": [
+          "builtin",
+          "startup"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": [
+          "Volume"
+        ]
+      }
+    ],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/volume-local",
+    "crate": "d2b-provider-volume-local",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/volume-virtiofs",
+    "crate": "d2b-provider-volume-virtiofs",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/wayland-policy",
+    "crate": "d2b-provider-wayland-policy",
+    "effectServices": [
+      "interaction.d2bus.org/effects"
+    ],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "display-wayland.d2bus.org.WaylandPolicy",
+        "allowedSources": [
+          "builtin",
+          "startup",
+          "runtime"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host",
+          "guest"
+        ],
+        "exportable": false,
+        "reads": []
+      }
+    ],
+    "provides": [
+      "Provider/display-wayland"
+    ],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/wayland-session",
+    "crate": "d2b-provider-wayland-session",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "display-wayland.d2bus.org.WaylandSession",
+        "allowedSources": [
+          "builtin",
+          "startup",
+          "runtime"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host",
+          "guest"
+        ],
+        "exportable": false,
+        "reads": [
+          "Guest",
+          "Host",
+          "User",
+          "display-wayland.d2bus.org.WaylandPolicy"
+        ]
+      }
+    ],
+    "provides": [
+      "Provider/display-wayland"
+    ],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/zone",
+    "crate": "d2b-provider-zone",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "Zone",
+        "allowedSources": [
+          "builtin"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": []
+      }
+    ],
+    "provides": [],
+    "methods": []
+  },
+  {
+    "providerRef": "Provider/zone-link",
+    "crate": "d2b-provider-zone-link",
+    "effectServices": [],
+    "servicePackages": [],
+    "types": [
+      {
+        "resourceType": "ZoneLink",
+        "allowedSources": [
+          "builtin"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update-spec",
+          "update-status",
+          "update-metadata",
+          "update-finalizers",
+          "delete"
+        ],
+        "execution": [
+          "host"
+        ],
+        "exportable": false,
+        "reads": []
+      }
+    ],
+    "provides": [],
+    "methods": []
+  }
+]

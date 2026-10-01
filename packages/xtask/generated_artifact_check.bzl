@@ -17,6 +17,11 @@ GENERATED_ARTIFACT_COMMANDS = [
     "gen-resource-ttrpc",
     "gen-daemon-api",
     "gen-broker-operations",
+    # Renders the new-graph composition from the per-crate provider
+    # declarations alone and commits it beside the other generated
+    # artifacts. It reads no other generator's output, so it runs on the
+    # declarations it declares and needs no ordering against the rest.
+    "gen-new-graph",
     "gen-package-policy-inputs",
     # Regenerates the committed type-authority tables from the per-crate
     # `resource-types.json` declarations. Last, so it reads every schema the

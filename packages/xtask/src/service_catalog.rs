@@ -69,11 +69,10 @@ type CatalogRegistry = BTreeMap<String, DeclarationFile>;
 
 /// Render the service-to-provider catalog from the declarations alone.
 ///
-/// The new-graph build closure (U33) stages its replacement projection
-/// through this entry point. The declaration sanity gate runs first, so a
-/// staged catalog can never carry a service two crates claim or a provider
-/// ref its crate name does not imply, and nothing here reads a crate source.
-#[cfg(test)]
+/// `gen-new-graph` renders its committed new-graph projection through this
+/// entry point. The declaration sanity gate runs first, so a staged catalog
+/// can never carry a service two crates claim or a provider ref its crate
+/// name does not imply, and nothing here reads a crate source.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn render_declarations_only(repo_root: &Path) -> Result<String, String> {
     let registry = load(repo_root)?;

@@ -1,17 +1,19 @@
-//! The new-graph build and test composition, staged in isolation (U33).
+//! The new-graph build composition (U33/U9).
 //!
 //! Four independent declaration sources describe every provider: the
 //! resource types it owns, the operation rows it serves, the provider and
 //! service identities it registers, and the semantic services it publishes.
 //! Four committed generated artifacts are derived from them, one per source,
-//! and a fifth table - the closed Nix projection inventory - is maintained
-//! beside them rather than derived from anything.
+//! plus the canonical graph policy the configuration layer reads and the
+//! closure manifest that says what each staged byte replaces.
 //!
-//! This module renders the whole new-graph composition from those four
-//! declarations and nothing else. Its outputs are written into a directory
-//! the caller owns, never into a committed generated path, so staging the
-//! complete new production replacement cannot change what production
-//! generates today; U34's cutover installs these bytes.
+//! `gen-new-graph` is one step of the `make generate` aggregate, so these
+//! projections are production generation outputs: they are committed under
+//! [`OUTPUT_DIR`], they are byte-for-byte drift checked like every other
+//! committed artifact, and nothing renders them from a test-only path. What
+//! is still staged is the cutover, not the generation: no production
+//! composition reads these files yet, and the manifest travels with them so
+//! installing a byte is a copy rather than a re-derivation.
 //!
 //! # What this generator does not read
 //!
@@ -36,11 +38,10 @@
 //!
 //! # What the composition is not
 //!
-//! It is not a second generation command. Nothing here is reachable from
-//! `main.rs`, no artifact it renders has a repository-relative production
-//! path, and it introduces no inventory, ledger, or scheduler: the
-//! replacement mapping travels in one closure manifest so the cutover is a
-//! copy, not a re-derivation.
+//! It is not a second spelling of the production entry points: each staged
+//! artifact is the render the authority module already owns, reached through
+//! its declaration-only entry point. It introduces no inventory, ledger, or
+//! scheduler; the replacement mapping travels in one closure manifest.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -52,9 +53,11 @@ use d2b_contracts_provider::v3::projection::GRAPH_PROJECTION_CONTRACT_VERSION;
 use d2b_contracts_resource::v3::canonical_digest;
 use serde::Serialize;
 
-/// The directory the composition's artifacts live under inside the
-/// caller-owned output directory.
-pub(crate) const ISOLATED_PREFIX: &str = "new-graph";
+/// The committed directory the composition's artifacts are written under.
+pub(crate) const OUTPUT_DIR: &str = "generated";
+
+/// The one subdirectory every staged artifact shares inside [`OUTPUT_DIR`].
+const CLOSURE_DIR: &str = "new-graph";
 
 /// The domain tag the closure manifest's artifact digests are framed by.
 const CLOSURE_DIGEST_DOMAIN: &str = "d2b:v3:new-graph-build-closure";
@@ -96,12 +99,14 @@ pub(crate) fn contract_version() -> &'static str {
     GRAPH_PROJECTION_CONTRACT_VERSION
 }
 
-/// One staged replacement: the artifact this module renders, the committed
-/// production path U34 installs it at, and the declaration that produces it.
+/// One staged replacement: the artifact this module renders, the production
+/// path the cutover installs it at, and the declaration that produces it.
 ///
-/// The mapping travels with the bytes rather than in a separate ledger, so
-/// the cutover is a copy of files that already say what they replace and
-/// where they came from.
+/// `staged` is the artifact's file name inside the closure directory, so its
+/// committed path is [`staged`] and `replaces` is where that exact byte is
+/// copied. The mapping travels with the bytes rather than in a separate
+/// ledger, so the cutover is a copy of files that already say what they
+/// replace and where they came from.
 struct Replacement {
     staged: &'static str,
     replaces: &'static str,
@@ -229,70 +234,84 @@ const CONTRACT_CRATE_VERSION: &str = "0.0.0-bootstrap";
 
 /// Render the complete new-graph build composition from the declarations.
 ///
-/// Returns the artifacts in a fixed order, each paired with its path
-/// relative to the caller's output directory. The render is a pure function
-/// of the declaration set: no clock, no environment, no repository path
-/// leaks into any byte, so two runs over one tree produce identical output.
+/// Returns the artifacts in a fixed order, each paired with its
+/// repository-relative committed path. The render is a pure function of the
+/// declaration set: no clock, no environment, no repository path leaks into
+/// any byte, so two runs over one tree produce identical output.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn render_composition(repo_root: &Path) -> Result<Vec<(String, String)>, String> {
     let mut artifacts = vec![
         (
-            isolated("provider_registrations.rs"),
+            staged("provider_registrations.rs"),
             crate::provider_registration_authority::render_declarations_only(repo_root)?,
         ),
         (
-            isolated("service_provider_catalog.rs"),
+            staged("service_provider_catalog.rs"),
             crate::service_catalog::render_declarations_only(repo_root)?,
         ),
         (
-            isolated("v3_converted_resource_types.rs"),
+            staged("v3_converted_resource_types.rs"),
             crate::resource_type_authority::render_declarations_only(repo_root)?,
         ),
         (
-            isolated("operations.json"),
+            staged("operations.json"),
             crate::gen_broker_operations::render_declared_catalog(repo_root)
                 .map_err(|error| format!("new-graph operation catalog render failed: {error}"))?,
         ),
         (
-            isolated("graph_policy.json"),
+            staged("graph_policy.json"),
             render_graph_policy(repo_root)?,
         ),
     ];
     let manifest = render_manifest(&artifacts)?;
-    artifacts.push((isolated("build_closure.json"), manifest));
+    artifacts.push((staged("build_closure.json"), manifest));
     Ok(artifacts)
 }
 
-/// Write the composition into a caller-owned directory and return the paths
+/// Write the committed composition over the tree and return the paths
 /// written, in render order.
 ///
-/// The caller owns the directory precisely so this cannot become a second
-/// production write path: there is no repository-relative destination here
-/// to overwrite a committed generated artifact with.
+/// This is the one write path the composition has, and every path it writes
+/// is a committed generated artifact under [`OUTPUT_DIR`], so the same
+/// drift gate that compares the rest of `make generate`'s output compares
+/// these bytes too.
+///
+/// The compiled-vs-declared cross-check runs here, before anything is
+/// written: a method a crate compiles with no declaration behind it, a
+/// declared method nothing compiles, and an identity a declaration names
+/// that the crate never spells all fail generation rather than committing a
+/// graph that could not host what it states.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-pub(crate) fn write_isolated(
+pub(crate) fn gen_new_graph(
     repo_root: &Path,
-    output_dir: &Path,
-) -> Result<Vec<PathBuf>, String> {
-    let artifacts = render_composition(repo_root)?;
+) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let artifacts = render_composition(repo_root).map_err(|error| -> Box<dyn std::error::Error> {
+        error.into()
+    })?;
+    let undeclared = undeclared_compiled_handlers(repo_root, &artifacts).map_err(
+        |error| -> Box<dyn std::error::Error> { error.into() },
+    )?;
+    if !undeclared.is_empty() {
+        return Err(format!(
+            "new-graph declaration violations:\n- {}",
+            undeclared.join("\n- ")
+        )
+        .into());
+    }
     let mut written = Vec::with_capacity(artifacts.len());
     for (relative, contents) in artifacts {
-        let path = output_dir.join(&relative);
+        let path = repo_root.join(&relative);
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|error| {
-                format!("cannot create {}: {error}", parent.display())
-            })?;
+            fs::create_dir_all(parent)?;
         }
-        fs::write(&path, &contents)
-            .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+        fs::write(&path, &contents)?;
         written.push(path);
     }
     Ok(written)
 }
 
-/// Render the canonical graph policy: the one view the isolated Nix test
-/// artifacts and the isolated Rust composition both derive, so neither
-/// restates the other.
+/// Render the canonical graph policy: the one view the Nix policy projection
+/// and the Rust composition both derive, so neither restates the other.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn render_graph_policy(repo_root: &Path) -> Result<String, String> {
     let declarations = DeclaredProviders::load(repo_root)?;
@@ -310,13 +329,13 @@ fn render_graph_policy(repo_root: &Path) -> Result<String, String> {
 fn render_manifest(artifacts: &[(String, String)]) -> Result<String, String> {
     let mut rows = Vec::with_capacity(REPLACEMENTS.len());
     for replacement in REPLACEMENTS {
-        let staged = isolated(replacement.staged);
+        let path = staged(replacement.staged);
         let contents = artifacts
             .iter()
-            .find_map(|(path, contents)| (path == &staged).then_some(contents.as_str()))
-            .ok_or_else(|| format!("new-graph composition is missing its {staged} artifact"))?;
+            .find_map(|(candidate, contents)| (candidate == &path).then_some(contents.as_str()))
+            .ok_or_else(|| format!("new-graph composition is missing its {path} artifact"))?;
         rows.push(ClosureArtifact {
-            staged,
+            staged: path,
             replaces: replacement.replaces.to_owned(),
             declaration: replacement.declaration,
             digest: digest_of(contents.as_bytes()),
@@ -338,9 +357,9 @@ fn render_manifest(artifacts: &[(String, String)]) -> Result<String, String> {
     })
 }
 
-/// The isolated path of one artifact inside the caller's output directory.
-fn isolated(name: &str) -> String {
-    format!("{ISOLATED_PREFIX}/{name}")
+/// The repository-relative committed path of one staged artifact.
+fn staged(name: &str) -> String {
+    format!("{OUTPUT_DIR}/{CLOSURE_DIR}/{name}")
 }
 
 /// The domain-separated digest of one staged artifact's bytes.
@@ -754,10 +773,11 @@ fn compiled_surface(repo_root: &Path) -> Result<CompiledSurface, String> {
 /// rather than from the loader, so a renderer that dropped a row shows up
 /// here as an undeclared compiled handler.
 fn declared_surface(artifacts: &[(String, String)]) -> Result<DeclaredSurface, String> {
-    let operations: serde_json::Value = serde_json::from_str(artifact(artifacts, &isolated("operations.json"))?)
+    let operations: serde_json::Value =
+        serde_json::from_str(artifact(artifacts, &staged("operations.json"))?)
         .map_err(|error| format!("cannot parse the staged operation catalog: {error}"))?;
     let policy: serde_json::Value =
-        serde_json::from_str(artifact(artifacts, &isolated("graph_policy.json"))?)
+        serde_json::from_str(artifact(artifacts, &staged("graph_policy.json"))?)
             .map_err(|error| format!("cannot parse the staged graph policy: {error}"))?;
     let mut out = DeclaredSurface::default();
     for row in operations
@@ -1151,14 +1171,14 @@ mod tests {
             .expect("a declaration-only tree renders the whole composition");
         let paths: Vec<&str> = artifacts.iter().map(|(path, _)| path.as_str()).collect();
         for expected in [
-            "new-graph/provider_registrations.rs",
-            "new-graph/service_provider_catalog.rs",
-            "new-graph/v3_converted_resource_types.rs",
-            "new-graph/operations.json",
-            "new-graph/graph_policy.json",
-            "new-graph/build_closure.json",
+            staged("provider_registrations.rs"),
+            staged("service_provider_catalog.rs"),
+            staged("v3_converted_resource_types.rs"),
+            staged("operations.json"),
+            staged("graph_policy.json"),
+            staged("build_closure.json"),
         ] {
-            assert!(paths.contains(&expected), "the composition stages {expected}");
+            assert!(paths.contains(&expected.as_str()), "the composition stages {expected}");
         }
     }
 
@@ -1184,7 +1204,7 @@ mod tests {
     fn the_manifest_names_the_authorities_the_new_graph_does_not_read() {
         let artifacts = render_composition(&repo_root()).expect("the composition renders");
         let manifest: serde_json::Value =
-            serde_json::from_str(artifact(&artifacts, &isolated("build_closure.json")).expect("manifest"))
+            serde_json::from_str(artifact(&artifacts, &staged("build_closure.json")).expect("manifest"))
                 .expect("the manifest is JSON");
         let retired = manifest["retiredAuthoritySources"]
             .as_array()
@@ -1309,36 +1329,50 @@ mod tests {
         );
     }
 
-    /// The isolated write lands in the caller's directory and nowhere else:
-    /// the composition has no repository-relative output path, so staging the
-    /// replacement cannot overwrite a committed generated artifact.
+    /// The production generator writes exactly the committed closure and
+    /// nothing else: the files `make generate` installs, each holding the
+    /// bytes the same call rendered.
+    ///
+    /// It runs over a throwaway declaration-only tree so the assertion is
+    /// about the write path itself rather than about one snapshot of the
+    /// repository's declarations.
     #[test]
-    fn the_isolated_write_touches_no_committed_path() {
-        let root = repo_root();
-        let output = Fixture::new("isolated-write");
-        let written = write_isolated(&root, &output.root).expect("the composition stages");
+    fn the_generator_writes_only_the_committed_closure() {
+        let fixture = Fixture::new("committed-write");
+        fixture.write_bootstrap_provider();
+        fixture.write_crate("d2b-provider-fixture", "export", "fixture.d2bus.org/export");
+        let rendered = render_composition(&fixture.root).expect("the composition renders");
+        let written = gen_new_graph(&fixture.root).expect("the composition installs");
         assert_eq!(
             written
                 .iter()
                 .map(|path| {
-                    path.strip_prefix(&output.root)
-                        .expect("every staged file is under the caller's directory")
+                    path.strip_prefix(&fixture.root)
+                        .expect("every staged file is under the repository root")
                         .to_string_lossy()
                         .into_owned()
                 })
                 .collect::<Vec<_>>(),
-            vec![
-                isolated("provider_registrations.rs"),
-                isolated("service_provider_catalog.rs"),
-                isolated("v3_converted_resource_types.rs"),
-                isolated("operations.json"),
-                isolated("graph_policy.json"),
-                isolated("build_closure.json"),
-            ]
+            rendered
+                .iter()
+                .map(|(path, _)| path.clone())
+                .collect::<Vec<_>>()
         );
-        for path in &written {
-            assert!(path.is_file(), "{} was written", path.display());
+        for (path, contents) in &rendered {
+            assert_eq!(
+                fs::read_to_string(fixture.root.join(path)).expect("the committed file reads"),
+                *contents,
+                "{path} holds the rendered bytes"
+            );
         }
+        assert!(
+            fixture
+                .root
+                .join(OUTPUT_DIR)
+                .join(CLOSURE_DIR)
+                .is_dir(),
+            "the closure lands under the committed output directory"
+        );
     }
 
     /// The staged bytes for the three generated artifacts the declarations
@@ -1348,7 +1382,7 @@ mod tests {
     fn staged_replacements_match_the_committed_generated_artifacts() {
         let root = repo_root();
         let artifacts = render_composition(&root).expect("the composition renders");
-        for (staged, committed) in [
+        for (name, committed) in [
             (
                 "provider_registrations.rs",
                 "packages/d2bd/src/generated/provider_registrations.rs",
@@ -1362,7 +1396,7 @@ mod tests {
                 "packages/d2b-contracts/src/generated/v3_converted_resource_types.rs",
             ),
         ] {
-            let staged = artifact(&artifacts, &isolated(staged)).expect("staged artifact");
+            let staged = artifact(&artifacts, &staged(name)).expect("staged artifact");
             let committed_path = root.join(committed);
             assert!(
                 committed_path.is_file(),
@@ -1371,7 +1405,7 @@ mod tests {
             let committed = fs::read_to_string(&committed_path).expect("the committed artifact reads");
             assert_eq!(
                 staged, committed,
-                "the staged {staged} is the committed {committed} byte for byte"
+                "the staged {name} is the committed {committed} byte for byte"
             );
         }
     }
@@ -1385,7 +1419,7 @@ mod tests {
         let staged: serde_json::Value = serde_json::from_str(
             artifact(
                 &render_composition(&root).expect("the composition renders"),
-                &isolated("operations.json"),
+                &staged("operations.json"),
             )
             .expect("staged artifact"),
         )
@@ -1423,7 +1457,7 @@ mod tests {
         let policy: serde_json::Value = serde_json::from_str(
             artifact(
                 &render_composition(&repo_root()).expect("the composition renders"),
-                &isolated("graph_policy.json"),
+                &staged("graph_policy.json"),
             )
             .expect("staged artifact"),
         )

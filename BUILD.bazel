@@ -600,6 +600,33 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+# The committed new-graph closure `gen-new-graph` renders from the per-crate
+# provider declarations. No production composition reads these files yet; the
+# generation step and its drift gate own them until the cutover installs them
+# at the paths the closure manifest names.
+filegroup(
+    name = "generated_new_graph",
+    srcs = glob([
+        "generated/new-graph/*.json",
+        "generated/new-graph/*.rs",
+    ]),
+    visibility = ["//visibility:public"],
+)
+
+# The four per-crate declaration kinds the new-graph composition reads. The
+# globs are the ones the generator's own closed input list names, so the
+# drift target stages exactly the inputs the render reads.
+filegroup(
+    name = "provider_graph_declarations",
+    srcs = glob([
+        "packages/d2b-provider-*/operations.json",
+        "packages/d2b-provider-*/registrations.json",
+        "packages/d2b-provider-*/resource-types.json",
+        "packages/d2b-provider-*/service-catalog.json",
+    ]),
+    visibility = ["//visibility:public"],
+)
+
 # keep
 filegroup(
     name = "github_workspace_sources",

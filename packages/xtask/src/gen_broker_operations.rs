@@ -785,29 +785,6 @@ pub(crate) const RETIRED_MERGE_INPUTS: &[&str] = &[
     "packages/d2b-provider-*/resource-types.json",
 ];
 
-/// Write one rendered artifact into a caller-supplied isolated directory.
-///
-/// The declaration-driven generator has no repository-relative output path of
-/// its own: it renders into a directory the caller owns, so exercising it can
-/// never overwrite a committed generated artifact and never becomes a second
-/// supported production generation command.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-#[cfg(test)]
-pub(crate) fn write_isolated_artifact(
-    output_dir: &Path,
-    relative: &str,
-    contents: &str,
-) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let path = output_dir.join(relative);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| render_error(format!("create {}: {error}", parent.display())))?;
-    }
-    fs::write(&path, contents)
-        .map_err(|error| render_error(format!("write {relative}: {error}")))?;
-    Ok(path)
-}
-
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn write(
     repo_root: &Path,
@@ -1341,11 +1318,10 @@ pub(crate) fn render_artifacts(
 /// document with the declarations, so it can only ever emit a superset of
 /// what any crate declared. The new graph has no merged document: this is
 /// the whole catalog, built from the declarations with no committed input at
-/// all, which is what U34 installs in place of the merged document.
+/// all, which is what the cutover installs in place of the merged document.
 ///
 /// Rows are ordered by declaring crate and then by operation, so the catalog
 /// is a pure function of the declaration set.
-#[cfg(test)]
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn declared_catalog(
     repo_root: &Path,
@@ -1372,11 +1348,9 @@ fn declared_catalog(
 /// Render the declaration-only operation catalog as the committed rows
 /// document's byte shape.
 ///
-/// The new-graph build closure (U33) stages this as the replacement
-/// projection for the merged rows document. The rendering is the same
-/// function the production path uses, so U34 installs bytes the existing
-/// drift gate already knows how to compare.
-#[cfg(test)]
+/// `gen-new-graph` commits this as its new-graph operations projection. The
+/// rendering is the same function the production path uses, so installing
+/// those bytes is a copy rather than a re-derivation.
 pub(crate) fn render_declared_catalog(
     repo_root: &Path,
 ) -> Result<String, Box<dyn std::error::Error>> {
@@ -1411,30 +1385,6 @@ mod tests {
             );
         }
         assert_eq!(d2b_contracts_provider::v3::projection::GRAPH_PROJECTION_INPUTS, &["provider-declaration"]);
-    }
-
-    /// A rendered artifact lands in the caller's isolated directory, and the
-    /// committed generated files are untouched.
-    #[test]
-    fn an_isolated_write_never_touches_a_committed_generated_file() {
-        let plan = crate::resource_type_authority::declaration_fixture::plan(&["export", "close"]);
-        let root = std::env::temp_dir().join(format!(
-            "d2b-u4-isolated-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("clock")
-                .as_nanos()
-        ));
-        let path = write_isolated_artifact(
-            &root,
-            "nix/provider-graph-projection.nix",
-            &crate::nix_inventories::render_declaration_nix_projection(&plan),
-        )
-        .expect("isolated write");
-        assert!(path.starts_with(&root), "the write stays inside the caller's directory");
-        assert!(path.is_file());
-        std::fs::remove_dir_all(&root).expect("remove the isolated tree");
     }
 
     /// The committed catalog document, read once for the validation tests.

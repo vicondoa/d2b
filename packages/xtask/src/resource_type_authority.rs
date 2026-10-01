@@ -345,14 +345,13 @@ fn render_artifacts(
 /// Render the generated converted-resource-type authority from the
 /// declarations alone.
 ///
-/// The new-graph build closure (U33) stages its replacement projection
-/// through this entry point, so the staged bytes are the same render the
-/// `--fix` path installs. Only the Rust authority artifact is returned: the
-/// Nix views beside it are rendered from committed orderings and the
-/// principal allocation, which the new graph does not read. The
-/// declaration-internal gates run here; the source-parity gate stays a
-/// separate cross-check the new-graph closure runs over the composition.
-#[cfg(test)]
+/// `gen-new-graph` renders its committed new-graph projection through this
+/// entry point, so the staged bytes are the same render the `--fix` path
+/// installs. Only the Rust authority artifact is returned: the Nix views
+/// beside it are rendered from committed orderings and the principal
+/// allocation, which the new graph does not read. The declaration-internal
+/// gates run here; the source-parity gate stays a separate cross-check the
+/// new-graph closure runs over the composition.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn render_declarations_only(repo_root: &Path) -> Result<String, String> {
     let loaded = load_declarations(repo_root)?;
@@ -376,7 +375,6 @@ pub(crate) fn render_declarations_only(repo_root: &Path) -> Result<String, Strin
 /// two crates declare, and a malformed owning `Provider/<name>` reference.
 /// These are properties of the declarations alone, so a declaration-only
 /// render refuses them without consulting a crate's compiled sources.
-#[cfg(test)]
 fn declaration_internal_errors(registry: &AuthorityRegistry) -> Vec<String> {
     let mut errors = Vec::new();
     let mut declared_by: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
@@ -598,7 +596,7 @@ fn render_process_roles(registry: &AuthorityRegistry) -> Result<String, String> 
 /// registered descriptors from the tree.
 fn load(repo_root: &Path) -> Result<AuthorityRegistry, String> {
     let loaded = load_declarations(repo_root)?;
-    let sources = loaded.sources;
+    let sources = load_sources(repo_root)?;
     let descriptors = load_descriptors(repo_root, &sources)?;
     Ok(AuthorityRegistry {
         declarations: loaded.types,
@@ -614,18 +612,19 @@ struct LoadedDeclarations {
     types: BTreeMap<String, BTreeSet<String>>,
     /// Crate name -> declared role rows, in declaration order.
     roles: BTreeMap<String, Vec<RoleDeclaration>>,
-    /// Crate name -> its concatenated source text.
-    sources: BTreeMap<String, String>,
 }
 
 /// Read every provider crate's declaration file, collecting the declared
-/// types, roles, and the crate's descriptor source text (U4).
+/// types and roles (U4).
+///
+/// A crate source is a separate input, read by [`load_sources`] for the
+/// descriptor parity gate alone, so the declaration-only render neither
+/// needs a `src` tree in its sandbox nor reads one it would discard.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn load_declarations(repo_root: &Path) -> Result<LoadedDeclarations, String> {
     let packages_dir = repo_root.join(PACKAGES_DIR);
     let mut types = BTreeMap::new();
     let mut roles = BTreeMap::new();
-    let mut sources = BTreeMap::new();
     let entries = fs::read_dir(&packages_dir).map_err(|error| {
         format!("cannot read {}: {error}", packages_dir.display())
     })?;
@@ -659,9 +658,31 @@ fn load_declarations(repo_root: &Path) -> Result<LoadedDeclarations, String> {
         let type_names = file.types.into_iter().map(|t| t.resource_type).collect();
         types.insert(crate_name.clone(), type_names);
         if !file.roles.is_empty() {
-            roles.insert(crate_name.clone(), file.roles);
+            roles.insert(crate_name, file.roles);
         }
-        let src_dir = repo_root.join(PACKAGES_DIR).join(&crate_name).join("src");
+    }
+    Ok(LoadedDeclarations { types, roles })
+}
+
+/// Read the declaring crates' Rust sources, the input the descriptor parity
+/// gate compares a declaration against.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn load_sources(repo_root: &Path) -> Result<BTreeMap<String, String>, String> {
+    let packages_dir = repo_root.join(PACKAGES_DIR);
+    let mut sources = BTreeMap::new();
+    let entries = fs::read_dir(&packages_dir).map_err(|error| {
+        format!("cannot read {}: {error}", packages_dir.display())
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("cannot read a packages entry: {error}"))?;
+        let crate_name = entry.file_name().to_string_lossy().into_owned();
+        if !crate_name.starts_with(PROVIDER_PREFIX) {
+            continue;
+        }
+        if !entry.path().join(DECLARATION_FILE).is_file() {
+            continue;
+        }
+        let src_dir = packages_dir.join(&crate_name).join("src");
         let mut source_text = String::new();
         for path in collect_rs_files(&src_dir)? {
             source_text.push_str(
@@ -673,11 +694,7 @@ fn load_declarations(repo_root: &Path) -> Result<LoadedDeclarations, String> {
         }
         sources.insert(crate_name, source_text);
     }
-    Ok(LoadedDeclarations {
-        types,
-        roles,
-        sources,
-    })
+    Ok(sources)
 }
 
 /// Extract the type names each declaring crate's descriptor registers from

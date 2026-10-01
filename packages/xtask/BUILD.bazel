@@ -210,6 +210,19 @@ generated_artifact_check(
     env_inherit = ["HOME", "CARGO_HOME", "RUSTUP_HOME", "PATH"],
 )
 
+# The new-graph composition renders the declarations and cross-checks them
+# against the provider crates' compiled sources, so its drift target declares
+# those declarations, those sources, and the committed closure it rewrites.
+generated_artifact_check(
+    name = "gen_new_graph_drift",
+    command = "gen-new-graph",
+    data = [
+        "//:generated_new_graph",
+        "//:packages_workspace_sources",
+        "//:provider_graph_declarations",
+    ],
+)
+
 generated_artifact_generator(
     name = "generate",
     data = [
@@ -229,6 +242,7 @@ test_suite(
         ":gen_daemon_api_drift",
         ":gen_error_codes_drift",
         ":gen_layer_catalogs_drift",
+        ":gen_new_graph_drift",
         ":gen_nix_inventories_drift",
         ":gen_package_policy_inputs_drift",
         ":gen_provider_packaging_drift",
@@ -316,8 +330,6 @@ d2b_rust_test(
         "//packages/d2b-provider-process-systemd:BUILD.bazel",
         "//packages/d2b-provider-toolkit:BUILD.bazel",
         "//packages/d2b-provider-transport-azure-relay:BUILD.bazel",
-        "//packages/d2b-provider-transport-unix:BUILD.bazel",
-        "//packages/d2b-provider-transport-vsock:BUILD.bazel",
         "//packages/d2b-provider-volume-local:BUILD.bazel",
         "//packages/d2b-provider-volume-virtiofs:BUILD.bazel",
         "//packages/d2b-resource-api:BUILD.bazel",
