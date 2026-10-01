@@ -13,18 +13,23 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
 use nix::sys::stat::{SFlag, fstat, major, minor};
+#[cfg(test)]
 use serde::{Deserialize, Serialize};
 
 use d2b_core::bundle_resolver::BundleResolver;
+#[cfg(test)]
+use d2b_host::devices::DeviceNodeReadback;
 use d2b_host::devices::{
-    DeviceClass, DeviceNodeEntry, DeviceNodeKind, DeviceNodeReadback, DeviceValidation,
-    read_device_metadata, validate_entry,
+    DeviceClass, DeviceNodeEntry, DeviceNodeKind, DeviceValidation, read_device_metadata,
+    validate_entry,
 };
 
 use crate::ops::exec_reconcile::SystemLiveExec;
 
+// Pre-open decision, exercised only by this file's tests.
 /// Pre-open decision: whether the broker should attempt the open at
 /// all, and which audit disposition to record.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PreOpenDecision {
@@ -34,17 +39,10 @@ pub enum PreOpenDecision {
     DeniedValidation(DeviceValidation),
 }
 
-/// Audit fields for an `Open*` dispatch.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OpenAuditRecord {
-    pub device_class: DeviceClass,
-    pub role_id: String,
-    pub decision: PreOpenDecision,
-}
-
+// Per-role device class claim, exercised only by this file's tests.
 /// Per-role declared device classes. The dispatcher refuses any
 /// `Open*` request whose role does not declare the matching class.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoleDeviceClaim {
     pub role_id: String,
@@ -87,8 +85,10 @@ impl std::fmt::Display for DeviceOpenValidationError {
     }
 }
 
+// Pre-open decision helper, exercised only by this file's tests.
 /// Pre-open decision used by both the real-host path and the L1c fake
 /// canary. Pure: caller supplies the readback.
+#[cfg(test)]
 pub fn pre_open_decision(
     requested_class: DeviceClass,
     role: &RoleDeviceClaim,
@@ -110,25 +110,11 @@ pub fn pre_open_decision(
     }
 }
 
-/// Helper for `tests/device-node-matrix.sh`: an `Open*`-style record
-/// the L1c canary asserts against.
-pub fn audit_for(
-    requested_class: DeviceClass,
-    role: &RoleDeviceClaim,
-    decision: PreOpenDecision,
-) -> OpenAuditRecord {
-    OpenAuditRecord {
-        device_class: requested_class,
-        role_id: role.role_id.clone(),
-        decision,
-    }
-}
-
 /// Open the underlying device fd. Caller is responsible for the
-/// pre-open decision (see [`pre_open_decision`]). The returned
-/// `OwnedFd` is `O_CLOEXEC` (`std::fs::OpenOptions` sets that by
-/// default on Linux); the broker's `SCM_RIGHTS` send path clears
-/// CLOEXEC on the recipient side only.
+/// pre-open decision (see the `cfg(test)` `pre_open_decision` helper).
+/// The returned `OwnedFd` is `O_CLOEXEC` (`std::fs::OpenOptions` sets
+/// that by default on Linux); the broker's `SCM_RIGHTS` send path
+/// clears CLOEXEC on the recipient side only.
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn open_device_fd(path: &Path, read_write: bool) -> Result<OwnedFd, std::io::Error> {
     use std::fs::OpenOptions;
@@ -406,7 +392,7 @@ fn default_matrix_entry(class: DeviceClass) -> DeviceMatrixEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_host::devices::DeviceNodeKind;
+    use d2b_host::devices::{DeviceNodeKind, DeviceNodeReadback};
     use std::path::PathBuf;
 
     fn matrix_kvm() -> DeviceMatrixEntry {

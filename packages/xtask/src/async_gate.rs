@@ -53,6 +53,17 @@
 //! only the method-call shape - the qualified form (`std::sync::Mutex::lock`)
 //! and the `X::lock(...)` form have no hatch and always fail.
 //!
+//! Coverage is derived, not listed. The default scan set is every workspace
+//! crate the two control-plane binaries (`d2bd` and the composition crate
+//! that links the broker binary) reach through `[dependencies]`, plus every
+//! provider crate. A named root list loses coverage the moment it drifts:
+//! the broker-linking crate itself was missing from it, and a renamed root
+//! directory used to be skipped instead of reported, leaving a smaller scan
+//! set and a green gate. Resolution is fail-closed on both counts now - a
+//! missing entry point or an unreadable member manifest fails naming the
+//! crate - and the control-plane crates that are deliberately out of the set
+//! are listed with their reasons and printed on every run.
+//!
 //! Known limitations of the lexical form, all fail-closed or documented:
 //!
 //! * A call through an imported item (`use std::fs::read;` then `read(...)`)
@@ -77,13 +88,13 @@
 //! `--write-inventory` mode regenerates the inventory from the run's marker
 //! sites (over the default roots only) to repair exactly that drift.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::blocking_census::{parse_deny_list, DeniedApi};
+use crate::blocking_census::{package_name, parse_deny_list, workspace_member_paths, DeniedApi};
 
 /// The named violation class every finding renders under.
 pub const VIOLATION_NAME: &str = "blocking-call-in-async-context";
@@ -93,6 +104,7 @@ pub const VIOLATION_NAME: &str = "blocking-call-in-async-context";
 /// allowlist. The gate validates both directions - a marked site that is not
 /// recorded fails, and a recorded site without its marker fails (as does a
 /// recorded site whose file no longer exists in the tree).
+///
 pub const HATCH_INVENTORY_PATH: &str = "packages/xtask/data/async-gate-inventory.json";
 
 /// The hatch inventory file's shape: the marker format the scanner honors
@@ -117,20 +129,37 @@ pub struct HatchSite {
     pub reason: String,
 }
 
-/// The default scan roots: the covered control-plane crates (broker, daemon,
-/// daemon runtime, core, resource runtime) plus every provider crate (the
-/// handler crates linked into the broker binary - a non-yielding handler
-/// starves the whole envelope).
-///
-/// The resource-runtime/core/daemon-runtime roots are the shared substrate
-/// converted by U4/U5/U17; they are scanned from day one so the gate cannot
-/// regress while that conversion is in flight.
-const DEFAULT_CRATE_ROOTS: &[&str] = &[
-    "packages/d2b-broker",
+/// The control-plane entry points the gate covers: the daemon binary and the
+/// composition crate that links the broker binary. Every workspace crate
+/// their `[dependencies]` link graph reaches is a scan root, so the covered
+/// set follows the control plane's own manifests. A hand-kept root list is
+/// not enough: it silently lost the crate that links the broker binary
+/// entirely, and it loses any root whose directory is renamed, because a
+/// missing directory used to be skipped rather than reported.
+const CONTROL_PLANE_BINARIES: &[&str] = &[
     "packages/d2bd",
-    "packages/d2bd-runtime",
-    "packages/d2b-core",
-    "packages/d2b-resource-runtime",
+    "packages/d2b-broker-composition",
+];
+
+/// The provider-crate directory prefix. Every provider crate is a scan root
+/// whether or not a control-plane binary links it today: a non-yielding
+/// handler starves the whole envelope.
+const PROVIDER_CRATE_PREFIX: &str = "d2b-provider-";
+
+/// Control-plane crates deliberately left out of the scan set, each with the
+/// async-context blocking call sites that keep it out today. A crate belongs
+/// here only with its reason recorded in this table, and the gate prints the
+/// table on every default-roots run, so the gap is reported rather than
+/// silent.
+const UNCOVERED_CONTROL_PLANE_ROOTS: &[(&str, &str)] = &[
+    (
+        "packages/d2b-bus",
+        "40 async-context lock call sites (27 in src/router.rs, 12 in src/session_seam_tests.rs, 1 in src/session/zone_link.rs)",
+    ),
+    (
+        "packages/d2b-core-controller",
+        "1 async-context lock call site (src/authority.rs)",
+    ),
 ];
 
 /// One blocking call found on a runtime worker.
@@ -892,26 +921,163 @@ fn load_entries(repo_root: &Path) -> Result<Vec<DeniedApi>, String> {
     Ok(entries)
 }
 
-/// Resolve [`DEFAULT_CRATE_ROOTS`] plus every provider crate under `packages`.
+/// Every workspace member crate: the directory the root manifest lists and
+/// the package name that directory's own manifest declares.
+struct MemberCrate {
+    /// Crate directory relative to the repo root, e.g. `packages/d2bd`.
+    dir: String,
+    /// The package name the member's manifest declares.
+    name: String,
+}
+
+/// Every workspace member, with the package name its manifest declares.
+///
+/// A member whose directory or manifest the tree cannot produce is a hard
+/// error naming it. Skipping it instead would shrink the scan set quietly -
+/// the failure mode this whole resolution path exists to prevent.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn default_scan_paths(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut paths = Vec::new();
-    for root in DEFAULT_CRATE_ROOTS {
-        let path = repo_root.join(root);
-        if path.is_dir() {
-            paths.push(path);
+fn workspace_crates(repo_root: &Path) -> Result<Vec<MemberCrate>, String> {
+    let mut crates = Vec::new();
+    for dir in workspace_member_paths(repo_root)? {
+        let name = package_name(&repo_root.join(&dir)).map_err(|error| {
+            format!("async-gate: workspace member {dir} is not a readable crate: {error}")
+        })?;
+        crates.push(MemberCrate { dir, name });
+    }
+    Ok(crates)
+}
+
+/// The package names a manifest's `[dependencies]` table declares.
+///
+/// Dev- and build-dependencies are deliberately not followed: a test-only
+/// harness or a codegen helper is not linked into a control-plane binary, so
+/// its async code never runs on a runtime worker. A `foo.workspace = true`
+/// row names a registry dependency, never a workspace member, and its dotted
+/// key is skipped with it.
+fn manifest_dependencies(manifest: &str) -> BTreeSet<String> {
+    let mut dependencies = BTreeSet::new();
+    let mut in_dependencies = false;
+    for line in manifest.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_dependencies = trimmed == "[dependencies]";
+            continue;
+        }
+        if !in_dependencies {
+            continue;
+        }
+        let Some((key, _)) = trimmed.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        // A cargo package name is ASCII alphanumeric plus `-` and `_`; a
+        // dotted `foo.workspace = true` row names a registry dependency and
+        // is skipped with it.
+        if !key.is_empty()
+            && key
+                .bytes()
+                .all(|byte| is_ident_char(byte) || byte == b'-')
+        {
+            dependencies.insert(key.to_owned());
         }
     }
+    dependencies
+}
+
+/// The control-plane scan roots: every workspace crate the control-plane
+/// binaries link, transitively, minus the documented uncovered table.
+///
+/// Deriving the set is what makes it unlosable. Editing a constant cannot
+/// exclude a crate that a binary links, a renamed directory cannot drop one,
+/// and a substrate crate added to the control plane is covered the moment it
+/// is linked. Every root the set names is checked to exist before the scan
+/// starts, so a missing or unmatched root is a failure that names it.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn control_plane_roots(repo_root: &Path) -> Result<BTreeSet<String>, String> {
+    let crates = workspace_crates(repo_root)?;
+    let dir_by_name: BTreeMap<&str, &str> = crates
+        .iter()
+        .map(|member| (member.name.as_str(), member.dir.as_str()))
+        .collect();
+
+    let mut reachable: BTreeSet<String> = BTreeSet::new();
+    let mut pending: Vec<String> = Vec::new();
+    for binary in CONTROL_PLANE_BINARIES {
+        if !repo_root.join(binary).is_dir() {
+            return Err(format!(
+                "async-gate: control-plane entry point {binary} does not exist in the tree: \
+                 every crate linked through it would drop out of the scan set silently"
+            ));
+        }
+        reachable.insert((*binary).to_owned());
+        pending.extend(manifest_dependencies(&binary_manifest(repo_root, binary)?));
+    }
+    while let Some(name) = pending.pop() {
+        let Some(dir) = dir_by_name.get(name.as_str()).copied() else {
+            continue;
+        };
+        if !reachable.insert(dir.to_owned()) {
+            continue;
+        }
+        pending.extend(manifest_dependencies(&binary_manifest(repo_root, dir)?));
+    }
+
+    for (dir, reason) in UNCOVERED_CONTROL_PLANE_ROOTS {
+        if reason.trim().is_empty() {
+            return Err(format!(
+                "async-gate: uncovered control-plane root {dir} records no reason"
+            ));
+        }
+        if !crates.iter().any(|member| member.dir == *dir) {
+            continue;
+        }
+        if !reachable.remove(*dir) {
+            return Err(format!(
+                "async-gate: {dir} is listed as an uncovered control-plane root but a \
+                 control-plane binary links it: drop the stale entry so it is scanned"
+            ));
+        }
+    }
+    Ok(reachable)
+}
+
+/// Read one member crate's manifest, naming the crate when it is unreadable.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn binary_manifest(repo_root: &Path, dir: &str) -> Result<String, String> {
+    let path = repo_root.join(dir).join("Cargo.toml");
+    fs::read_to_string(&path).map_err(|error| {
+        format!(
+            "async-gate: control-plane crate {dir} has no readable manifest ({}): {error}",
+            path.display()
+        )
+    })
+}
+
+/// Resolve the default scan roots: every control-plane crate the binaries
+/// link, plus every provider crate under `packages`. A root that does not
+/// exist is a failure naming it, never a silently dropped scan target.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn default_scan_paths(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut roots = control_plane_roots(repo_root)?;
     let packages = repo_root.join("packages");
     let entries = fs::read_dir(&packages)
         .map_err(|error| format!("async-gate: read dir {}: {error}", packages.display()))?;
     for entry in entries {
         let entry = entry.map_err(|error| format!("async-gate: dir entry: {error}"))?;
-        if entry.path().is_dir()
-            && entry.file_name().to_string_lossy().starts_with("d2b-provider-")
-        {
-            paths.push(entry.path());
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if entry.path().is_dir() && name.starts_with(PROVIDER_CRATE_PREFIX) {
+            roots.insert(format!("packages/{name}"));
         }
+    }
+    let mut paths = Vec::with_capacity(roots.len());
+    for root in roots {
+        let path = repo_root.join(&root);
+        if !path.is_dir() {
+            return Err(format!(
+                "async-gate: expected scan root {root} does not exist in the tree"
+            ));
+        }
+        paths.push(path);
     }
     Ok(paths)
 }
@@ -1081,6 +1247,12 @@ fn write_inventory(
 /// `--write-inventory`, rewrite the inventory from the run's marker sites
 /// instead of validating it - the regeneration path for a line-shifting edit
 /// above a marked call.
+///
+/// Every path the run touches is resolved against `repo_root`, including a
+/// relative `<paths>` argument: a scan path names a place inside the
+/// repository the gate is about, not a place relative to the caller's
+/// working directory. A run must not report findings from whichever tree
+/// the process happened to be standing in.
 pub fn run(repo_root: &Path, args: &[String]) -> Result<(), String> {
     let write_mode = args.iter().any(|arg| arg == "--write-inventory");
     // Reject any flag-shaped argument that is not the documented
@@ -1106,9 +1278,33 @@ pub fn run(repo_root: &Path, args: &[String]) -> Result<(), String> {
     let entries = load_entries(repo_root)?;
     let inventory = load_inventory(repo_root)?;
     let paths = if paths_args.is_empty() {
-        default_scan_paths(repo_root)?
+        let paths = default_scan_paths(repo_root)?;
+        // The uncovered table is control-plane code the gate does not read.
+        // Printing it on every default-roots run keeps that gap reported
+        // rather than inferred from silence.
+        for (dir, reason) in UNCOVERED_CONTROL_PLANE_ROOTS {
+            println!("async gate: control-plane root NOT scanned: {dir} ({reason})");
+        }
+        paths
     } else {
-        paths_args.iter().map(PathBuf::from).collect()
+        // A relative path argument names a path inside the repository this
+        // run is about, so it resolves against `repo_root` like every other
+        // path here (the deny list, the ledger, the default roots).
+        // Resolving it against the process's working directory instead made
+        // the scanned tree a function of where the caller happened to be
+        // standing, which let a run against one repository report findings
+        // from another one.
+        paths_args
+            .iter()
+            .map(|arg| {
+                let path = PathBuf::from(arg);
+                if path.is_absolute() {
+                    path
+                } else {
+                    repo_root.join(path)
+                }
+            })
+            .collect()
     };
     // A resolved scan set that matches no `.rs` file (a mistyped or stale
     // path, an empty subtree) is a fatal scan error rather than a vacuous
@@ -1343,33 +1539,102 @@ mod tests {
         );
     }
 
-    #[test]
-    fn default_scan_paths_cover_the_extended_roots() {
-        let repo_root = {
-            let mut path = std::env::current_dir().expect("current dir");
-            loop {
-                if path.join("Cargo.toml").is_file()
-                    && path.join("BUILD.bazel").is_file()
-                    && path.join("flake.nix").is_file()
-                {
-                    break path;
-                }
-                if !path.pop() {
-                    panic!("cannot locate repo root");
-                }
+    /// The repository root, located by the markers every checkout has.
+    fn repo_root() -> PathBuf {
+        let mut path = std::env::current_dir().expect("current dir");
+        loop {
+            if path.join("Cargo.toml").is_file()
+                && path.join("BUILD.bazel").is_file()
+                && path.join("flake.nix").is_file()
+            {
+                return path;
             }
-        };
-        let paths = default_scan_paths(&repo_root).expect("default scan paths resolve");
-        for suffix in [
-            "packages/d2b-broker",
+            assert!(path.pop(), "cannot locate repo root");
+        }
+    }
+
+    /// The default scan roots, as repo-root-relative strings.
+    fn default_roots() -> BTreeSet<String> {
+        let root = repo_root();
+        default_scan_paths(&root)
+            .expect("default scan paths resolve")
+            .iter()
+            .map(|path| {
+                path.strip_prefix(&root)
+                    .expect("scan root under the repo root")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn default_scan_paths_cover_the_control_plane_entry_points() {
+        // The finding this pins: the crate that LINKS the broker binary was
+        // missing from the gate's roots, so every blocking call reached only
+        // through it was invisible. The two control-plane binaries and the
+        // substrate they link must all be scanned.
+        let roots = default_roots();
+        for expected in [
+            "packages/d2b-broker-composition",
             "packages/d2bd",
-            "packages/d2b-resource-runtime",
-            "packages/d2b-core",
+            "packages/d2b-broker",
             "packages/d2bd-runtime",
+            "packages/d2b-core",
+            "packages/d2b-resource-runtime",
+            "packages/d2b-host",
+            "packages/d2b-audit",
+            "packages/d2b-zone-routing",
         ] {
             assert!(
-                paths.iter().any(|path| path.ends_with(suffix)),
-                "default scan roots must include {suffix}: {paths:?}"
+                roots.contains(expected),
+                "default scan roots must include {expected}: {roots:?}"
+            );
+        }
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn default_scan_paths_cover_every_provider_crate() {
+        let roots = default_roots();
+        let root = repo_root();
+        let providers = fs::read_dir(root.join("packages"))
+            .expect("read packages/")
+            .map(|entry| entry.expect("dir entry").file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(PROVIDER_CRATE_PREFIX))
+            .collect::<Vec<_>>();
+        assert!(!providers.is_empty(), "the tree has provider crates");
+        for provider in providers {
+            let expected = format!("packages/{provider}");
+            assert!(
+                roots.contains(&expected),
+                "every provider crate is a scan root, missing {expected}: {roots:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn uncovered_control_plane_roots_are_listed_with_reasons_and_still_linked() {
+        // The uncovered table is a visible exception list, not a quiet
+        // gap: every entry names why it is out, and every entry is still a
+        // crate the control plane links - a stale entry fails resolution
+        // rather than outliving the crate it excused.
+        let root = repo_root();
+        let crates = workspace_crates(&root).expect("workspace members resolve");
+        let roots = control_plane_roots(&root).expect("control-plane roots resolve");
+        assert!(!UNCOVERED_CONTROL_PLANE_ROOTS.is_empty());
+        for (dir, reason) in UNCOVERED_CONTROL_PLANE_ROOTS {
+            assert!(
+                !reason.trim().is_empty(),
+                "{dir} must record why it is not scanned"
+            );
+            assert!(
+                crates.iter().any(|member| member.dir == *dir),
+                "{dir} is not a workspace member: drop the stale entry"
+            );
+            assert!(
+                !roots.contains(*dir),
+                "{dir} is recorded as uncovered but must be scanned"
             );
         }
     }
@@ -1843,10 +2108,26 @@ mod tests {
     /// `Mutex::lock` entry so the conservative method-call shape arms.
     const MINIMAL_CLIPPY_TOML: &str = "disallowed-methods = [\n    { path = \"std::sync::Mutex::lock\", reason = \"test deny list\", replacement = \"tokio::sync::Mutex::lock\" },\n]\n";
 
+    /// Write the root manifest and member manifests of a two-binary control
+    /// plane into a TempRepo: `run()` derives its scan roots from exactly
+    /// these files, so a test repo without them cannot resolve a scan set.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn write_control_plane_workspace(repo: &TempRepo) {
+        repo.write(
+            "Cargo.toml",
+            "[workspace]\nmembers = [\n  \"packages/d2bd\",\n  \"packages/d2b-broker-composition\",\n]\n",
+        );
+        repo.write("packages/d2bd/Cargo.toml", "[package]\nname = \"d2bd\"\n");
+        repo.write(
+            "packages/d2b-broker-composition/Cargo.toml",
+            "[package]\nname = \"d2b-broker-composition\"\n",
+        );
+    }
+
     /// A TempRepo laid out like the real repository for `run()`: the deny
-    /// list, the hatch ledger at its committed path, and one marked source
-    /// file under a default scan root. The committed ledger records the
-    /// marked call at `committed_line`.
+    /// list, the hatch ledger at its committed path, a resolvable control
+    /// plane, and one marked source file under a scan root. The committed
+    /// ledger records the marked call at `committed_line`.
     fn gate_repo(source: &str, committed_line: usize) -> TempRepo {
         let repo = TempRepo::new();
         repo.write("clippy.toml", MINIMAL_CLIPPY_TOML);
@@ -1862,6 +2143,7 @@ mod tests {
             })
             .expect("serialize committed inventory"),
         );
+        write_control_plane_workspace(&repo);
         repo.write("packages/d2bd/src/composition.rs", source);
         repo
     }
@@ -1990,22 +2272,152 @@ mod tests {
         assert!(error.contains("unknown flag"), "{error}");
     }
 
+    /// A TempRepo whose control plane links one substrate crate from the
+    /// daemon and one handler crate from the broker composition, plus a
+    /// member only a dev-dependency names.
+    fn linked_control_plane_repo() -> TempRepo {
+        let repo = TempRepo::new();
+        repo.write(
+            "Cargo.toml",
+            "[workspace]\nmembers = [\n  \"packages/d2bd\",\n  \"packages/d2b-broker-composition\",\n  \"packages/d2b-substrate\",\n  \"packages/d2b-broker-handlers\",\n  \"packages/d2b-test-only\",\n]\n",
+        );
+        repo.write(
+            "packages/d2bd/Cargo.toml",
+            "[package]\nname = \"d2bd\"\n\n[dependencies]\nd2b-substrate = { path = \"../d2b-substrate\" }\ntokio = { workspace = true }\n",
+        );
+        repo.write(
+            "packages/d2b-broker-composition/Cargo.toml",
+            "[package]\nname = \"d2b-broker-composition\"\n\n[dependencies]\nd2b-broker-handlers = { path = \"../d2b-broker-handlers\" }\n",
+        );
+        repo.write(
+            "packages/d2b-substrate/Cargo.toml",
+            "[package]\nname = \"d2b-substrate\"\n\n[dev-dependencies]\nd2b-test-only = { path = \"../d2b-test-only\" }\n",
+        );
+        repo.write(
+            "packages/d2b-broker-handlers/Cargo.toml",
+            "[package]\nname = \"d2b-broker-handlers\"\n",
+        );
+        repo.write(
+            "packages/d2b-test-only/Cargo.toml",
+            "[package]\nname = \"d2b-test-only\"\n",
+        );
+        repo
+    }
+
     #[test]
-    fn run_fails_closed_on_an_empty_resolved_scan_set() {
-        // A repo whose default roots resolve to nothing (only the ledger's
-        // `packages` tree exists) must fail rather than pass vacuously.
-        let repo = empty_gate_repo();
-        let error = run(&repo.root, &[]).expect_err("an empty scan set must fail");
-        assert!(error.contains("resolved scan set is empty"), "{error}");
+    fn control_plane_roots_follow_the_binaries_dependency_graph() {
+        // The coverage set is derived, not listed: a substrate crate nobody
+        // wrote down is scanned the moment a binary links it, and a crate
+        // only a dev-dependency names is not (it is not linked into the
+        // binary, so its async code never runs on a worker).
+        let repo = linked_control_plane_repo();
+        let roots = control_plane_roots(&repo.root).expect("roots resolve");
+        assert_eq!(
+            roots,
+            BTreeSet::from([
+                "packages/d2bd".to_owned(),
+                "packages/d2b-broker-composition".to_owned(),
+                "packages/d2b-substrate".to_owned(),
+                "packages/d2b-broker-handlers".to_owned(),
+            ]),
+            "roots: {roots:?}"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_renamed_control_plane_entry_point_fails_naming_it() {
+        // The old resolution skipped a root whose directory was not there, so
+        // a rename quietly shrank the scan set and the gate stayed green.
+        // The composition crate that links the broker binary renamed away
+        // must fail the gate and name itself, in both rename shapes.
+        let repo = linked_control_plane_repo();
+        fs::remove_dir_all(repo.root.join("packages/d2b-broker-composition"))
+            .expect("rename the composition crate away");
+        let error = default_scan_paths(&repo.root)
+            .expect_err("a missing control-plane entry point must fail");
+        assert!(
+            error.contains("packages/d2b-broker-composition"),
+            "the failure must name the root it could not find: {error}"
+        );
+
+        // The other shape: the crate also left the workspace member list, so
+        // nothing but the gate's own entry-point expectation knows it is
+        // gone.
+        repo.write(
+            "Cargo.toml",
+            "[workspace]\nmembers = [\n  \"packages/d2bd\",\n  \"packages/d2b-substrate\",\n  \"packages/d2b-broker-handlers\",\n  \"packages/d2b-test-only\",\n]\n",
+        );
+        let error = default_scan_paths(&repo.root)
+            .expect_err("an entry point that left the workspace must fail");
+        assert!(
+            error.contains("packages/d2b-broker-composition")
+                && error.contains("does not exist in the tree"),
+            "the failure must name the root it could not find: {error}"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_renamed_linked_crate_fails_naming_it() {
+        // A substrate crate the root manifest still lists, whose directory
+        // moved, must fail resolution naming the crate instead of dropping
+        // it from the scan set.
+        let repo = linked_control_plane_repo();
+        fs::remove_dir_all(repo.root.join("packages/d2b-substrate"))
+            .expect("rename the substrate crate away");
+        let error = default_scan_paths(&repo.root)
+            .expect_err("a missing linked crate must fail");
+        assert!(
+            error.contains("packages/d2b-substrate"),
+            "the failure must name the crate: {error}"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn run_fails_when_a_control_plane_root_is_renamed_away() {
+        // The gate itself, not just the resolver: a renamed root is a red
+        // gate that names the root, never a smaller scan set and a pass.
+        let repo = gate_repo(
+            "pub async fn touch(m: &std::sync::Mutex<u32>) {\n    let _guard = m.lock().unwrap(); // async-gate-allow: short critical section\n}\n",
+            2,
+        );
+        fs::remove_dir_all(repo.root.join("packages/d2b-broker-composition"))
+            .expect("rename the composition crate away");
+        let error = run(&repo.root, &[]).expect_err("a renamed root must fail the gate");
+        assert!(
+            error.contains("packages/d2b-broker-composition"),
+            "the gate must name the root it could not find: {error}"
+        );
     }
 
     #[test]
     fn run_fails_closed_on_a_zero_file_scan() {
-        // A scan set that resolves to directories but no `.rs` file must not
-        // report a vacuous success.
+        // A scan set that resolves to no `.rs` file must not report a
+        // vacuous success. The default scan set is derived from the
+        // control plane's own manifests, so it always resolves to real
+        // directories in a real tree - the empty condition has to be built
+        // on purpose: a workspace whose control plane resolves normally and
+        // whose crates hold no Rust at all.
         let repo = empty_gate_repo();
+        write_control_plane_workspace(&repo);
         repo.write("packages/d2bd/src/README.txt", "not rust\n");
         let error = run(&repo.root, &[]).expect_err("a zero-file scan must fail");
+        assert!(error.contains("zero-file scan"), "{error}");
+    }
+
+    #[test]
+    fn run_fails_closed_on_an_explicit_path_that_holds_no_rust_files() {
+        // The same fail-closed rule for a named path: a scan path that
+        // matches no `.rs` file is an error, not a quiet pass. The path is
+        // resolved inside the repository under test, so the run reads the
+        // temporary tree rather than whatever directory the process happens
+        // to be standing in.
+        let repo = empty_gate_repo();
+        repo.write("packages/d2bd/src/README.txt", "not rust\n");
+        let error = run(&repo.root, &["packages/d2bd".to_owned()])
+            .expect_err("a scan path holding no .rs file must fail");
         assert!(error.contains("zero-file scan"), "{error}");
     }
 

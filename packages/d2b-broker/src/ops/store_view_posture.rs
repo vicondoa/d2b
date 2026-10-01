@@ -484,14 +484,6 @@ pub(crate) async fn plant_live_marker_with_matrix_posture(
     posture_existing(&marker, &level, MissingLevel::Refuse).await
 }
 
-/// Posture the broker's host-only integrity record
-/// (`state/integrity-unknown.json`) from its declared contract row.
-pub(crate) async fn posture_host_only_file(path: &Path) -> Result<(), PostureError> {
-    let principals = resolve_principals()?;
-    let level = contract_store_view_level(&principals, "state/integrity-unknown.json", "")?;
-    posture_existing(path, &level, MissingLevel::Refuse).await
-}
-
 /// Stamp one declared level's posture on an existing path.
 ///
 /// Absence follows the declaration: a `required = false` row is

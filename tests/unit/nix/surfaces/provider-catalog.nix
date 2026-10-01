@@ -15,6 +15,7 @@ import ../helpers/surface.nix {
       "provider-catalog/signed-placement-and-runtime-contract-is-retained"
       "provider-catalog/signed-placement-contract-fails-closed-on-target-drift"
       "provider-catalog/null-catalog-has-no-signed-contract"
+      "provider-catalog/declaration-agreement-is-closed-in-both-directions"
     ];
   } {
     path = ../cases/provider-runtime-contracts.nix;

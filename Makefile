@@ -246,13 +246,18 @@ perf:
 check-async-gate:
 	$(D2B_BAZEL_TEST) //bazel/checks/policy:check-async-gate
 
-## check-census - blocking-API census gate (plan R15): runs the per-crate
-## census (lexical meter for free functions, clippy-derived counts for
-## instance-method classes) and fails when any covered crate's count for any
-## deny-entry class - including the no-new-spawn_blocking guard - exceeds its
-## committed baseline in packages/xtask/data/blocking-census-baseline.json.
+## check-census - blocking-API census gate: runs the per-crate census (lexical
+## meter for free functions, clippy-derived counts for instance-method
+## classes) and fails when any covered crate exceeds its committed baseline in
+## packages/xtask/data/blocking-census-baseline.json on EITHER axis: the
+## per-entry deny-list count (including the no-new-spawn_blocking guard) or
+## the crate's clippy::disallowed_methods allow/expect count. The second axis
+## is what stops a new allow attribute from lowering the count baseline
+## instead of removing a call.
 ## Re-baseline with `cargo xtask blocking-census --json <path>` after a
-## conversion lands; the baseline change ships in the same commit.
+## conversion lands; the check always runs before the write, so a
+## `--json <committed> --check <committed>` re-baseline is judged against the
+## committed bytes, and the baseline change ships in the same commit.
 check-census:
 	cd $(CURDIR) && cargo run -p xtask -- blocking-census --check packages/xtask/data/blocking-census-baseline.json
 

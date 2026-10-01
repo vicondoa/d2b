@@ -180,6 +180,9 @@ pub fn resource_backed_identity(
 ///
 /// `None` for a subject no trusted artifact names: the caller keeps failing
 /// closed rather than inventing a directory.
+// Exists for this module's tests and the cfg(test) `PrepareStateDir` op: no
+// live dispatch arm resolves this row by itself.
+#[cfg(test)]
 pub fn zone_native_swtpm_state_row<'a>(
     resolver: &'a BundleResolver,
     guest: &str,

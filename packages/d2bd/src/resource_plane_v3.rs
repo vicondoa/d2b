@@ -198,9 +198,10 @@ const PLANE_BACKOFF: Duration = d2b_resource_runtime::DEFAULT_REQUEUE_BACKOFF;
 /// that "each principal must be a real host account the state-layout effect
 /// resolves through NSS", and `host-users.nix` materializes exactly those
 /// accounts from `d2bLib.deviceTpmPrincipals`, with the uid the worker row
-/// actually runs as (`deviceWorkerPrincipalId`, the triple-derived id
-/// `mint_template_intent` mirrors). A name that does not resolve is a
-/// provisioning gap, not something to paper over.
+/// actually runs as - the id the host pinned on that account, which the
+/// runtime now reads back through the same NSS lookup rather than deriving a
+/// second time (`mint_template_intent`, `d2b-core`). A name that does not
+/// resolve is a provisioning gap, not something to paper over.
 ///
 /// An earlier revision fell back to a name-derived stable id here. That was
 /// wrong twice over: the accounts do exist, so the fallback never ran; and on

@@ -5,16 +5,20 @@
 //
 // - `deprecated`: cgroup vm_leaf_path migration is tracked but the deprecated
 //   path is still referenced in legacy code paths kept for v1.1.x compat.
-// - `clippy::dead_code`: helper functions (e.g. apply_mount_actions, apply)
-//   are public API of internal modules that downstream callers may use.
 // - `clippy::large_enum_variant`, `clippy::result_large_err`: TypedError
 //   variants intentionally carry rich context; boxing tracked separately.
 // - `clippy::too_many_arguments`: broker spawn pipeline has wide signatures
 //   for safety (forgetting an arg = sandbox bypass).
 // - `clippy::needless_borrows_for_generic_args`, `clippy::cmp_owned`,
 //   `clippy::io_other`, `clippy::needless_borrow`: stylistic.
+//
+// `dead_code` is NOT crate-wide. Every allow for it names the item it covers
+// and states why that item is still dead: either a resource-holding field
+// whose value must not be dropped, or a completed surface whose committed
+// catalog row puts the wire owner on a family crate, so this crate has no
+// caller for it yet. A `cfg_attr(feature = "layer1-bootstrap", ...)` allow
+// marks a surface the legacy bootstrap dispatcher never routes.
 #![allow(deprecated)]
-#![allow(dead_code)]
 #![allow(clippy::large_enum_variant)]
 #![allow(clippy::result_large_err)]
 #![allow(clippy::too_many_arguments)]
@@ -56,6 +60,7 @@ pub mod forwarding;
 // resolution + live execution.
 #[cfg(not(feature = "layer1-bootstrap"))]
 pub mod kernel_ops;
+#[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))] // unreachable under the legacy bootstrap dispatcher, see the ops note
 pub mod live_handlers;
 // Broker operation handlers. `ops::mod` declares 31 arms and only the
 // three the crate's own integration tests address by path stay `pub` -

@@ -3,12 +3,12 @@
   "sites": [
     {
       "file": "packages/d2b-broker/src/ops/host_generation_handoff.rs",
-      "line": 250,
+      "line": 273,
       "reason": "tokio OpenOptions builder flag, not a lock acquisition"
     },
     {
       "file": "packages/d2b-broker/src/ops/host_generation_handoff.rs",
-      "line": 495,
+      "line": 520,
       "reason": "tokio OpenOptions builder flag, not a lock acquisition"
     },
     {
@@ -43,22 +43,22 @@
     },
     {
       "file": "packages/d2b-broker/src/ops/nft.rs",
-      "line": 819,
+      "line": 802,
       "reason": "tokio OpenOptions builder flag, not a lock acquisition"
     },
     {
       "file": "packages/d2b-broker/src/ops/nft.rs",
-      "line": 820,
+      "line": 803,
       "reason": "tokio OpenOptions builder flag, not a lock acquisition"
     },
     {
       "file": "packages/d2b-broker/src/ops/nm.rs",
-      "line": 543,
+      "line": 557,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-broker/src/ops/nm.rs",
-      "line": 569,
+      "line": 583,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
@@ -103,42 +103,42 @@
     },
     {
       "file": "packages/d2b-broker/src/ops/tap.rs",
-      "line": 669,
+      "line": 686,
       "reason": "tokio OpenOptions builder flag, not a lock acquisition"
     },
     {
       "file": "packages/d2b-broker/src/ops/tap.rs",
-      "line": 670,
+      "line": 687,
       "reason": "tokio OpenOptions builder flag, not a lock acquisition"
     },
     {
       "file": "packages/d2b-broker/src/ops/tap.rs",
-      "line": 1681,
+      "line": 1715,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-broker/src/ops/tap.rs",
-      "line": 1702,
+      "line": 1736,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-broker/src/runtime.rs",
-      "line": 8881,
+      "line": 8933,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-broker/src/runtime.rs",
-      "line": 8948,
+      "line": 9000,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-broker/src/runtime.rs",
-      "line": 9165,
+      "line": 9217,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-broker/src/runtime.rs",
-      "line": 9242,
+      "line": 9294,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
@@ -888,7 +888,7 @@
     },
     {
       "file": "packages/d2bd/src/resource_plane_v3.rs",
-      "line": 7058,
+      "line": 7059,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {

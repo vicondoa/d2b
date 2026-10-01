@@ -13,12 +13,20 @@ use d2b_contracts_broker::broker_wire::ApplyHostGenerationHandoffResponse;
 use d2b_contracts_broker::host_generation::{
     ApplyHostGenerationHandoff, HandoffCoordinator, HandoffError, HandoffState, target_fingerprint,
 };
+// The artifact-validation path below exists for this module's tests, and it
+// is the only one that names an artifact id or speaks the helper's
+// validate-artifact protocol.
+#[cfg(test)]
 use d2b_contracts_resource::v3::ArtifactId;
 use d2b_host::host_generation::{
-    ActivationArtifactValidationRequest, ActivationArtifactValidationResponse,
     ActivationHelperOutcome, ActivationHelperRequest, ActivationHelperResponse,
 };
 use sha2::{Digest, Sha256};
+
+#[cfg(test)]
+use d2b_host::host_generation::{
+    ActivationArtifactValidationRequest, ActivationArtifactValidationResponse,
+};
 
 const JOURNAL_DIR: &str = "host-generation-handoffs";
 /// Per-state-dir flock file serializing handoff apply/replay across
@@ -39,11 +47,20 @@ struct JournalEntry {
 #[derive(Debug)]
 pub enum HandoffOperationError {
     Invalid(HandoffError),
-    Io(io::Error),
+    /// The underlying journal I/O fault. `Display` is the closed wire kind
+    /// and never renders it, so the payload is only read by the derived
+    /// `Debug`; it stays on the variant so the errno is still available.
+    Io(
+        #[allow(dead_code, reason = "closed-set Display never renders it; derived Debug keeps the errno")]
+        io::Error,
+    ),
     JournalMismatch,
     HelperUnavailable,
     HelperOutputInvalid,
+    // Both are raised only by the cfg(test) artifact-validation path below.
+    #[cfg(test)]
     ArtifactValidationUnavailable,
+    #[cfg(test)]
     ArtifactValidationOutputInvalid,
 }
 
@@ -55,9 +72,11 @@ impl core::fmt::Display for HandoffOperationError {
             Self::JournalMismatch => formatter.write_str("handoff-journal-mismatch"),
             Self::HelperUnavailable => formatter.write_str("handoff-helper-unavailable"),
             Self::HelperOutputInvalid => formatter.write_str("handoff-helper-output-invalid"),
+            #[cfg(test)]
             Self::ArtifactValidationUnavailable => {
                 formatter.write_str("handoff-artifact-validation-unavailable")
             }
+            #[cfg(test)]
             Self::ArtifactValidationOutputInvalid => {
                 formatter.write_str("handoff-artifact-validation-output-invalid")
             }
@@ -84,9 +103,11 @@ pub trait HandoffEffect {
 
 /// Deterministic effect for contract tests. Production dispatch uses
 /// [`ActivationHelperEffect`] instead.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SuccessfulHandoffEffect;
 
+#[cfg(test)]
 impl HandoffEffect for SuccessfulHandoffEffect {
     async fn execute(
         &self,
@@ -188,7 +209,9 @@ impl HandoffEffect for ActivationHelperEffect {
 ///
 /// This is used before a host-generation handoff is activated. The helper
 /// remains the sole authority for catalog, store-path, and package-digest
-/// validation.
+/// validation. It exists for this module's tests: no dispatch arm routes a
+/// handoff through it yet.
+#[cfg(test)]
 pub async fn validate_artifact_with_helper(
     helper_path: &Path,
     artifact_id: &ArtifactId,
@@ -336,7 +359,9 @@ pub async fn apply_with_helper(
     .await
 }
 
-/// Apply or replay one deterministic handoff for compatibility callers.
+/// Apply or replay one deterministic handoff. It exists for this module's
+/// replay-safety tests; production dispatch uses [`apply_with_helper`].
+#[cfg(test)]
 pub async fn apply(
     state_dir: &Path,
     request: &ApplyHostGenerationHandoff,

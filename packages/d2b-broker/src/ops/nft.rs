@@ -16,7 +16,7 @@ use crate::live_handlers::LiveHandlerError;
 use crate::ops::exec_reconcile::{ReconcileExecError, ReconcileExecutor};
 use d2b_core::host_w3::{CoexistencePolicy, FirewallCoexistencePolicy, FirewallManager};
 use d2b_host::nftables::{
-    self, DetectorProbe, NftBatch, NftError, ParseNftScriptError, Sha256, build_inet_d2b_chains,
+    self, NftBatch, NftError, ParseNftScriptError, Sha256, build_inet_d2b_chains,
     evaluate_coexistence_policy, hash_inet_d2b_table,
 };
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 /// Audit-event payload for `ApplyNftables`. Combined with the broker
 /// common header at write time. Sensitive identifiers go through the
 /// hash discipline upstream; this struct stores already-hashed values.
+#[allow(dead_code, reason = "legacy apply_nftables audit row; pinned by in-file tests only")]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApplyNftablesAudit {
@@ -84,6 +85,7 @@ fn live_table_has_foreign_entries(
 
 /// Decision returned by [`apply_nftables`] after the typed reconcile
 /// loop, before the broker hands off to `nft -f -`.
+#[allow(dead_code, reason = "legacy apply_nftables return value; pinned by in-file tests only")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApplyNftablesDecision {
     pub batch: NftBatch,
@@ -93,6 +95,7 @@ pub struct ApplyNftablesDecision {
 
 /// Bundle-derived inputs to the `ApplyNftables` op. Mirrors the typed
 /// `host.json` row the integrator-prep commit emits.
+#[allow(dead_code, reason = "legacy apply_nftables argument; pinned by in-file tests only")]
 #[derive(Debug, Clone)]
 pub struct ApplyNftablesInputs {
     pub detected: FirewallManager,
@@ -104,6 +107,7 @@ pub struct ApplyNftablesInputs {
 
 /// Re-derive the chain layout from the bundle and produce a decision
 /// the broker runtime feeds to `nft -f -`.
+#[allow(dead_code, reason = "legacy path superseded by apply_with_coexistence; in-file tests pin it")]
 pub fn apply_nftables(inputs: &ApplyNftablesInputs) -> Result<ApplyNftablesDecision, NftError> {
     evaluate_coexistence_policy(inputs.detected, inputs.declared_policy)?;
     let batch = build_inet_d2b_chains();
@@ -124,13 +128,6 @@ pub fn apply_nftables(inputs: &ApplyNftablesInputs) -> Result<ApplyNftablesDecis
         },
         nft_script,
     })
-}
-
-/// Re-hash the live `inet d2b` table for drift detection. Run
-/// periodically and immediately before every VM start; compare against
-/// the digest stored in `host.json`.
-pub fn rehash_for_drift(live_table_json: &[u8]) -> Sha256 {
-    hash_inet_d2b_table(live_table_json)
 }
 
 pub const DEFAULT_HOST_RUNTIME_PATH: &str = "/var/lib/d2b/runtime/host-runtime.json";
@@ -220,25 +217,6 @@ fn select_drift_expected_hash(
             }
         })
     })
-}
-
-/// Helper for the broker runtime: build a [`DetectorProbe`] from
-/// individual shell-out results. Kept here so the call site does not
-/// have to import `d2b-host` directly.
-pub fn detector_probe_from_results(
-    firewalld_active: bool,
-    ufw_active: bool,
-    docker_active: bool,
-    libvirt_active: bool,
-    iptables_reports_nf_tables: bool,
-) -> DetectorProbe {
-    DetectorProbe {
-        firewalld_active,
-        ufw_active,
-        docker_active,
-        libvirt_active,
-        iptables_reports_nf_tables,
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -792,7 +770,12 @@ fn projection_digest(bytes: &[u8]) -> String {
     digest
 }
 
-struct ProjectionLock(std::fs::File);
+/// Projection mutation guard: holding this value holds the OFD write lock.
+struct ProjectionLock(
+    /// RAII guard: holds the OFD write lock, released only on drop.
+    #[allow(dead_code, reason = "RAII guard: holds the OFD write lock, released only on drop")]
+    std::fs::File,
+);
 
 impl std::fmt::Debug for ProjectionLock {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

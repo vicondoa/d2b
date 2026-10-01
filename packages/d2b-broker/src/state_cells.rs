@@ -385,8 +385,12 @@ impl CellStore {
         Self::spawn_owner(Some(root.to_path_buf()), RetentionPolicy::default())
     }
 
+
     /// Test/embedding knob: the root plus an explicit retention policy.
     /// Failures propagate to the caller instead of panicking.
+    // Only the crate's retention-policy tests need this; production opens
+    // the store with `open`, which takes the default policy.
+    #[cfg(test)]
     pub(crate) fn with_retention(
         root: Option<PathBuf>,
         retention: RetentionPolicy,

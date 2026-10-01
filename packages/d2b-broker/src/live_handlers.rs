@@ -1182,6 +1182,10 @@ const QEMU_MEDIA_MEMLOCK_MIN_HEADROOM_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const QEMU_MEDIA_MEMLOCK_HEADROOM_RATIO_DIVISOR: u64 = 4;
 const QEMU_MEDIA_MEMLOCK_PREFLIGHT_OVERHEAD_BYTES: u64 = 1024 * 1024 * 1024;
 
+// Production applies the mem-lock limit through the two helpers below from
+// the spawn preflight; this combiner exists to pin the arithmetic the
+// in-crate memlock tests assert against, so it is compiled for tests only.
+#[cfg(test)]
 fn qemu_media_memlock_limit_bytes(plan: &SpawnRunnerPlan) -> Result<Option<u64>, LiveHandlerError> {
     Ok(qemu_media_memlock_guest_bytes(plan)?.map(|guest_bytes| {
         guest_bytes.saturating_add(qemu_media_memlock_headroom_bytes(guest_bytes))
@@ -1298,7 +1302,6 @@ fn parse_qemu_size_bytes(value: &str) -> Option<u64> {
 enum AclPathKind {
     Directory,
     Socket,
-    CharDevice,
 }
 
 fn setfacl_fd_safe(path: &Path, acl_spec: &str, kind: AclPathKind) -> Result<(), String> {
@@ -1433,7 +1436,6 @@ fn setfacl_fd_safe_op_classed(
     let matches_kind = match kind {
         AclPathKind::Directory => file_type.is_dir(),
         AclPathKind::Socket => file_type.is_socket(),
-        AclPathKind::CharDevice => file_type.is_char_device(),
     };
     if !matches_kind {
         return Err(SetfaclFailure {
@@ -2294,6 +2296,7 @@ async fn refresh_obs_vsock_acl(plan: &SpawnRunnerPlan) -> Result<(), LiveHandler
     }
 }
 
+#[allow(dead_code, reason = "verified-device ACL grant; only the unrouted runner-ACL helpers name it")]
 pub(crate) async fn live_grant_verified_device_acl(
     path: &Path,
     uid: u32,
@@ -2301,6 +2304,7 @@ pub(crate) async fn live_grant_verified_device_acl(
     live_set_verified_device_acl(path, uid, "-m", &format!("u:{uid}:rw"), "grant", false).await
 }
 
+#[allow(dead_code, reason = "verified-device ACL revoke; only the unrouted runner-ACL helpers name it")]
 pub(crate) async fn live_revoke_verified_device_acl(
     path: &Path,
     uid: u32,
@@ -2308,6 +2312,7 @@ pub(crate) async fn live_revoke_verified_device_acl(
     live_set_verified_device_acl(path, uid, "-x", &format!("u:{uid}"), "revoke", true).await
 }
 
+#[allow(dead_code, reason = "verified-device ACL setter; the grant/revoke helpers wrap it but no routed arm reaches those")]
 async fn live_set_verified_device_acl(
     path: &Path,
     uid: u32,

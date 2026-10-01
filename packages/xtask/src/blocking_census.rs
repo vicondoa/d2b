@@ -32,6 +32,22 @@
 //! against therefore stores the clippy-derived counts, and a new
 //! `spawn_blocking` call is caught no matter what comments say.
 //!
+//! The committed baseline therefore carries TWO ratchet axes per crate, and
+//! a change cannot lower either one to hide a call site:
+//!
+//! * the clippy-derived per-entry counts, which may not grow, and
+//! * the number of `#[allow(clippy::disallowed_methods)]` /
+//!   `#[expect(clippy::disallowed_methods)]` sites in the crate, which may
+//!   not grow either.
+//!
+//! The second axis is what makes the first one a ratchet instead of a
+//! suggestion. An `#[allow]` outside a provider crate silently deletes the
+//! diagnostic the count is derived from, so a count-only baseline can be
+//! walked down one site per attribute - to zero - while every gate stays
+//! green. With the suppression axis attached, lowering a count is only
+//! possible by removing the call: a count that drops while a new suppression
+//! appears is exactly the walk-down, and it fails.
+//!
 //! The census also inventories every `#[allow]`/`#[expect]` suppression of a
 //! banned-API lint per crate, splitting module-level blanket allows
 //! (`#![allow(...)]`) from per-site allows (`#[allow(...)]`); the crate
@@ -52,6 +68,12 @@ pub const BANNED_API_LINTS: &[&str] = &[
     "clippy::await_holding_lock",
     "clippy::await_holding_refcell_ref",
 ];
+
+/// The lint the census's authoritative counts are derived from. It is also
+/// the one suppression family the baseline ratchets separately: silencing it
+/// is the only way to move a count without moving a call site, so its
+/// `#[allow]`/`#[expect]` sites are a ratchet axis of their own.
+pub const COUNTING_LINT: &str = "clippy::disallowed_methods";
 
 /// How one deny-list entry is counted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -649,20 +671,37 @@ pub struct CrateCensus {
     pub blanket_suppressions: usize,
     /// Per-site suppressions of banned-API lints.
     pub per_site_suppressions: usize,
+    /// Suppressions of the counting lint itself
+    /// (`clippy::disallowed_methods`): the ratchet axis that keeps a count
+    /// baseline from being lowered by silencing the lint that produces it.
+    pub disallowed_method_suppressions: usize,
 }
 
-/// The committed per-crate baseline the CI cap compares against (plan R15).
+/// The committed per-crate baseline the CI cap compares against.
 ///
 /// The map is keyed by crate directory (`packages/d2b-broker`) then by
 /// deny-list entry path, so every deny-entry class - including
 /// `tokio::task::spawn_blocking` - carries its own per-crate cap: the
 /// no-new-spawn_blocking guard during the conversion window is the
 /// spawn_blocking row, which the gate refuses to see grow.
+///
+/// `suppressions` is the second axis: crate directory to the number of
+/// `#[allow(clippy::disallowed_methods)]` / `#[expect(...)]` sites the crate
+/// carries. Both maps are enforced, so the count baseline can only be walked
+/// down by deleting the call the count names, never by silencing the lint
+/// that counts it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CensusBaseline {
     /// Crate-directory to deny-entry counts, as serialized into the
     /// committed baseline file.
     pub crates: BTreeMap<String, BTreeMap<String, usize>>,
+    /// Crate-directory to `clippy::disallowed_methods` suppression sites. The
+    /// map defaults to empty so a baseline written before this axis existed
+    /// still parses, and then fails closed on the first crate that carries a
+    /// suppression rather than passing vacuously. A crate the map does not
+    /// mention is held to zero on both axes.
+    #[serde(default)]
+    pub suppressions: BTreeMap<String, usize>,
 }
 
 /// One source file under a census crate.
@@ -673,9 +712,10 @@ struct CensusFile {
 }
 
 /// The workspace member paths the root manifest declares, e.g.
-/// `packages/d2b-broker`.
+/// `packages/d2b-broker`. Shared with the async gate, which derives its
+/// control-plane scan roots from the same member list.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn workspace_member_paths(repo_root: &Path) -> Result<BTreeSet<String>, String> {
+pub(crate) fn workspace_member_paths(repo_root: &Path) -> Result<BTreeSet<String>, String> {
     let manifest = fs::read_to_string(repo_root.join("Cargo.toml"))
         .map_err(|error| format!("blocking-census: read root Cargo.toml: {error}"))?;
     let mut members = BTreeSet::new();
@@ -745,9 +785,11 @@ fn resolve_crate_dirs(repo_root: &Path, crate_args: &[String]) -> Result<Vec<Pat
     Ok(dirs)
 }
 
-/// The package name a crate directory's manifest declares.
+/// The package name a crate directory's manifest declares. Shared with the
+/// async gate, which resolves the same member crates' names to walk the
+/// control-plane link graph.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn package_name(crate_dir: &Path) -> Result<String, String> {
+pub(crate) fn package_name(crate_dir: &Path) -> Result<String, String> {
     let manifest = fs::read_to_string(crate_dir.join("Cargo.toml"))
         .map_err(|error| format!("blocking-census: read {}: {error}", crate_dir.display()))?;
     manifest
@@ -1081,7 +1123,9 @@ fn walk(dir: &Path, found: &mut Vec<PathBuf>) -> Result<(), String> {
 }
 
 /// Collect one crate's census inputs: every `.rs` file with its prod/test
-/// split and suppression inventory.
+/// split and suppression inventory. `disallowed_method` accumulates the
+/// suppression sites of the counting lint itself, the axis that keeps the
+/// count baseline from being lowered by silencing the lint.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn collect_crate_files(
     repo_root: &Path,
@@ -1089,6 +1133,7 @@ fn collect_crate_files(
     files: &mut Vec<CensusFile>,
     blanket: &mut usize,
     per_site: &mut usize,
+    disallowed_method: &mut usize,
 ) -> Result<(), String> {
     for path in walk_rs(crate_dir)? {
         let rel = path
@@ -1100,6 +1145,9 @@ fn collect_crate_files(
             .map_err(|error| format!("blocking-census: read {}: {error}", path.display()))?;
         let split = split_contexts(&raw, is_test_dir(&path));
         for site in scan_suppressions(&rel, &raw) {
+            if site.lint == COUNTING_LINT {
+                *disallowed_method += 1;
+            }
             if site.blanket {
                 *blanket += 1;
             } else {
@@ -1126,20 +1174,29 @@ fn hit_is_test(files: &[CensusFile], file: &str, line: usize) -> bool {
         })
 }
 
-/// Fails when any current per-crate count exceeds its committed baseline.
-fn check_against_baseline<'a>(
-    baseline_path: &Path,
-    crates: impl Iterator<Item = (&'a str, &'a BTreeMap<String, usize>)>,
-) -> Result<(), String> {
+/// Fail when the run moved past the committed baseline on either axis.
+///
+/// Axis one is the per-entry deny-list count: no crate may exceed its
+/// committed count for any entry class. Axis two is the per-crate count of
+/// `clippy::disallowed_methods` suppressions: no crate may carry more of
+/// them than the baseline records. Axis two is what stops the walk-down -
+/// without it, one `#[allow]` outside a provider crate deletes the
+/// diagnostic the count is derived from and lowers the committed baseline by
+/// one while every gate stays green, until the count reaches zero.
+///
+/// A crate the baseline does not mention is held to zero on both axes, so a
+/// new crate must ship a baseline entry the moment it carries a blocking call
+/// or a suppression.
+fn check_against_baseline(baseline_path: &Path, crates: &[CrateCensus]) -> Result<(), String> {
     let committed = fs::read_to_string(baseline_path)
         .map_err(|error| format!("blocking-census: read baseline {}: {error}", baseline_path.display()))?;
     let committed: CensusBaseline = serde_json::from_str(&committed)
         .map_err(|error| format!("blocking-census: parse baseline {}: {error}", baseline_path.display()))?;
     let mut violations = Vec::new();
-    for (crate_dir, counts) in crates {
-        let committed_counts = committed.crates.get(crate_dir);
+    for census in crates {
+        let committed_counts = committed.crates.get(&census.crate_dir);
         let mut crate_violations = Vec::new();
-        for (entry, count) in counts {
+        for (entry, count) in &census.counts {
             let committed_count = committed_counts
                 .and_then(|counts| counts.get(entry))
                 .copied()
@@ -1150,36 +1207,97 @@ fn check_against_baseline<'a>(
                 ));
             }
         }
+        let committed_suppressions = committed
+            .suppressions
+            .get(&census.crate_dir)
+            .copied()
+            .unwrap_or(0);
+        if census.disallowed_method_suppressions > committed_suppressions {
+            crate_violations.push(format!(
+                "{COUNTING_LINT} suppressions: {} > {committed_suppressions} (committed baseline): \
+                 a new allow/expect lowers the blocking-call baseline instead of removing a call",
+                census.disallowed_method_suppressions
+            ));
+        }
         if crate_violations.is_empty() {
             println!(
-                "  {}: {} entry class(es) at or below baseline",
-                crate_dir,
-                counts.len()
+                "  {}: {} entry class(es) at or below baseline, {} suppression(s) at or below baseline",
+                census.crate_dir,
+                census.counts.len(),
+                census.disallowed_method_suppressions
             );
         } else {
-            println!("  {}: ABOVE BASELINE", crate_dir);
+            println!("  {}: ABOVE BASELINE", census.crate_dir);
             for violation in &crate_violations {
                 println!("    {violation}");
             }
-            violations.extend(crate_violations);
+            violations.extend(crate_violations.iter().map(|violation| {
+                format!("{}: {violation}", census.crate_dir)
+            }));
         }
     }
     if violations.is_empty() {
-        println!("blocking-census check: PASS (no crate above its committed baseline)");
+        println!(
+            "blocking-census check: PASS (no crate above its committed counts or suppression baseline)"
+        );
     } else {
         return Err(format!(
-            "blocking-census check: FAILED - {} deny-entry class(es) above the committed baseline {}",
+            "blocking-census check: FAILED - {} baseline item(s) above the committed baseline {}:\n{}",
             violations.len(),
-            baseline_path.display()
+            baseline_path.display(),
+            violations.join("\n")
         ));
     }
     Ok(())
 }
 
+/// Judge the run against the committed baseline FIRST, then write the
+/// regenerated file.
+///
+/// The order is the contract, not a convenience: `--json <committed>
+/// --check <committed>` is the natural way to re-baseline in place, and
+/// writing first would let the run compare the tree against the baseline it
+/// just measured and pass unconditionally. Checking first also leaves the
+/// committed file untouched when the run is over it.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn check_then_write_baseline(
+    baseline: Option<&Path>,
+    json_out: Option<&Path>,
+    crates: &[CrateCensus],
+) -> Result<(), String> {
+    if let Some(baseline_path) = baseline {
+        check_against_baseline(baseline_path, crates)?;
+    }
+    let Some(path) = json_out else {
+        return Ok(());
+    };
+    let baseline_record = CensusBaseline {
+        crates: crates
+            .iter()
+            .map(|census| (census.crate_dir.clone(), census.counts.clone()))
+            .collect(),
+        suppressions: crates
+            .iter()
+            .map(|census| {
+                (
+                    census.crate_dir.clone(),
+                    census.disallowed_method_suppressions,
+                )
+            })
+            .collect(),
+    };
+    let rendered = serde_json::to_string_pretty(&baseline_record)
+        .map_err(|error| format!("blocking-census: serialize baseline: {error}"))?;
+    fs::write(path, rendered + "\n")
+        .map_err(|error| format!("blocking-census: write {}: {error}", path.display()))?;
+    println!("baseline written: {}", path.display());
+    Ok(())
+}
+
 /// Run the census over the repository or the given crate paths. Prints the
-/// per-crate tables and the totals; with `json_out` writes the authoritative
-/// per-crate counts (the baseline shape); with `baseline` fails when any
-/// covered crate's count exceeds its committed baseline (plan R15).
+/// per-crate tables and the totals; with `baseline` fails when any covered
+/// crate moved past its committed counts or its committed suppression count;
+/// with `json_out` writes the regenerated baseline, always AFTER the check.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn run(
     repo_root: &Path,
@@ -1226,7 +1344,15 @@ pub fn run(
         let mut files = Vec::new();
         let mut blanket = 0usize;
         let mut per_site = 0usize;
-        collect_crate_files(repo_root, crate_dir, &mut files, &mut blanket, &mut per_site)?;
+        let mut disallowed_method = 0usize;
+        collect_crate_files(
+            repo_root,
+            crate_dir,
+            &mut files,
+            &mut blanket,
+            &mut per_site,
+            &mut disallowed_method,
+        )?;
 
         let text_counts = count_occurrences(
             &files
@@ -1301,6 +1427,9 @@ pub fn run(
         println!(
             "suppressions: {blanket} blanket allow(s), {per_site} per-site allow(s)/expect(s) of banned-API lints"
         );
+        println!(
+            "  of which {disallowed_method} suppress {COUNTING_LINT}, the lint the counts come from"
+        );
 
         crates.push(CrateCensus {
             crate_dir: rel_dir,
@@ -1308,6 +1437,7 @@ pub fn run(
             counts,
             blanket_suppressions: blanket,
             per_site_suppressions: per_site,
+            disallowed_method_suppressions: disallowed_method,
         });
     }
 
@@ -1318,36 +1448,161 @@ pub fn run(
     println!("clippy-visible blocking-API call sites: {clippy_total}");
     println!("authoritative blocking-API call sites: {authoritative_total}");
     println!("deny-list entries: {}", entries.len());
-    if let Some(path) = json_out {
-        let baseline_record = CensusBaseline {
-            crates: std::mem::take(&mut crates)
-                .into_iter()
-                .map(|crate_census| (crate_census.crate_dir, crate_census.counts))
-                .collect(),
-        };
-        let rendered = serde_json::to_string_pretty(&baseline_record)
-            .map_err(|error| format!("blocking-census: serialize baseline: {error}"))?;
-        fs::write(path, rendered + "\n")
-            .map_err(|error| format!("blocking-census: write {}: {error}", path.display()))?;
-        println!("baseline written: {}", path.display());
-        if let Some(baseline_path) = baseline {
-            check_against_baseline(
-                baseline_path,
-                baseline_record.crates.iter().map(|(crate_dir, counts)| (crate_dir.as_str(), counts)),
-            )?;
-        }
-    } else if let Some(baseline_path) = baseline {
-        check_against_baseline(
-            baseline_path,
-            crates.iter().map(|crate_census| (crate_census.crate_dir.as_str(), &crate_census.counts)),
-        )?;
-    }
+    check_then_write_baseline(baseline, json_out, &crates)?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A throwaway directory, removed on drop, for the baseline files these
+    /// ratchet tests read and write.
+    struct TempBaseline {
+        dir: PathBuf,
+    }
+
+    static NEXT_TEMP_BASELINE: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    impl TempBaseline {
+        fn new() -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "blocking-census-baseline-test-{}-{}",
+                std::process::id(),
+                NEXT_TEMP_BASELINE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            ));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).expect("create temp dir");
+            Self { dir }
+        }
+
+        fn path(&self) -> PathBuf {
+            self.dir.join("baseline.json")
+        }
+
+        fn write_baseline(&self, baseline: &CensusBaseline) -> String {
+            let rendered = format!(
+                "{}\n",
+                serde_json::to_string_pretty(baseline).expect("serialize the fixture baseline")
+            );
+            fs::write(self.path(), &rendered).expect("write the fixture baseline");
+            rendered
+        }
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    impl Drop for TempBaseline {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    const FIXTURE_CRATE: &str = "packages/d2b-broker";
+    const FIXTURE_ENTRY: &str = "std::fs::read";
+
+    fn fixture_census(count: usize, suppressions: usize) -> CrateCensus {
+        CrateCensus {
+            crate_dir: FIXTURE_CRATE.to_owned(),
+            package_name: "d2b-broker".to_owned(),
+            counts: BTreeMap::from([(FIXTURE_ENTRY.to_owned(), count)]),
+            blanket_suppressions: suppressions,
+            per_site_suppressions: 0,
+            disallowed_method_suppressions: suppressions,
+        }
+    }
+
+    fn fixture_baseline(count: usize, suppressions: usize) -> CensusBaseline {
+        CensusBaseline {
+            crates: BTreeMap::from([(
+                FIXTURE_CRATE.to_owned(),
+                BTreeMap::from([(FIXTURE_ENTRY.to_owned(), count)]),
+            )]),
+            suppressions: BTreeMap::from([(FIXTURE_CRATE.to_owned(), suppressions)]),
+        }
+    }
+
+    #[test]
+    fn baseline_check_fails_when_a_count_grows_above_the_committed_baseline() {
+        // A committed baseline of zero is the common row: one new blocking
+        // call is one over the line.
+        let temp = TempBaseline::new();
+        temp.write_baseline(&fixture_baseline(0, 0));
+        let error = check_against_baseline(&temp.path(), &[fixture_census(1, 0)])
+            .expect_err("one new blocking call over a zero baseline must fail");
+        assert!(error.contains("std::fs::read: 1 > 0"), "{error}");
+        assert!(error.contains(FIXTURE_CRATE), "{error}");
+    }
+
+    #[test]
+    fn baseline_check_fails_when_a_new_suppression_lowers_a_count() {
+        // The walk-down: an `#[allow(clippy::disallowed_methods)]` outside a
+        // provider crate deletes the diagnostic the count comes from, so the
+        // count drops from 1 to 0 and the committed baseline would come down
+        // with it. With the suppression axis attached, the drop is the
+        // evidence of the trick, not the proof of progress.
+        let temp = TempBaseline::new();
+        temp.write_baseline(&fixture_baseline(1, 0));
+        let error = check_against_baseline(&temp.path(), &[fixture_census(0, 1)])
+            .expect_err("a lowered count backed by a new allow must fail");
+        assert!(
+            error.contains("suppressions: 1 > 0"),
+            "the failure must name the suppression that hid the call: {error}"
+        );
+        assert!(error.contains(COUNTING_LINT), "{error}");
+    }
+
+    #[test]
+    fn baseline_check_passes_when_the_call_is_actually_removed() {
+        // The legitimate walk-down stays legal: the same count drop with no
+        // new suppression is a conversion, which is the point of the
+        // ratchet.
+        let temp = TempBaseline::new();
+        temp.write_baseline(&fixture_baseline(1, 0));
+        check_against_baseline(&temp.path(), &[fixture_census(0, 0)])
+            .expect("a removed call must pass the ratchet");
+    }
+
+    #[test]
+    fn baseline_check_fails_closed_when_the_suppression_axis_is_missing() {
+        // A baseline written before the suppression axis existed must not
+        // pass vacuously: it parses as no suppressions anywhere, so the
+        // fixture's committed allow is over its line.
+        let temp = TempBaseline::new();
+        fs::write(
+            temp.path(),
+            "{\n  \"crates\": {\n    \"packages/d2b-broker\": {\n      \"std::fs::read\": 1\n    }\n  }\n}\n",
+        )
+        .expect("write the axis-less baseline");
+        let error = check_against_baseline(&temp.path(), &[fixture_census(1, 1)])
+            .expect_err("an axis-less baseline must not pass");
+        assert!(error.contains("suppressions: 1 > 0"), "{error}");
+    }
+
+    #[test]
+    fn regeneration_is_judged_against_the_committed_baseline_before_it_overwrites_it() {
+        // `--json <committed> --check <committed>` is the natural in-place
+        // re-baseline. Writing first would let the run compare the tree
+        // against the baseline it just measured, so an added allow would
+        // lower the committed file and pass unconditionally. The check runs
+        // first, and a failed check leaves the committed bytes alone.
+        let temp = TempBaseline::new();
+        let committed = temp.write_baseline(&fixture_baseline(1, 0));
+        let error = check_then_write_baseline(
+            Some(&temp.path()),
+            Some(&temp.path()),
+            &[fixture_census(0, 1)],
+        )
+        .expect_err("the in-place re-baseline must be judged against the committed bytes");
+        assert!(error.contains("suppressions: 1 > 0"), "{error}");
+        let after = fs::read_to_string(temp.path()).expect("read the baseline back");
+        assert_eq!(
+            after,
+            committed,
+            "a refused re-baseline must leave the committed file untouched"
+        );
+    }
 
     #[test]
     fn deny_list_parses_the_committed_list() {

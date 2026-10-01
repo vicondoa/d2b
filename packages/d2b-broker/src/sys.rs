@@ -496,7 +496,6 @@ pub mod path_safe {
 
     use std::ffi::CString;
     use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
-    use std::os::unix::ffi::OsStrExt;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     const RESOLVE_NO_XDEV: u64 = 0x01;
@@ -537,15 +536,6 @@ pub mod path_safe {
 
     fn io_from_rustix(err: rustix::io::Errno) -> io::Error {
         io::Error::from_raw_os_error(err.raw_os_error())
-    }
-
-    fn cstring_from_path(path: &Path) -> io::Result<CString> {
-        CString::new(path.as_os_str().as_bytes()).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("path contains interior NUL: {}", path.display()),
-            )
-        })
     }
 
     fn cstring_from_name(name: &str) -> io::Result<CString> {
@@ -2152,9 +2142,10 @@ pub mod pidfd_sys {
 
         /// Installs this BPF program in the calling process via
         /// `seccomp(SECCOMP_SET_MODE_FILTER)`.  Caller must have
-        /// already set `PR_SET_NO_NEW_PRIVS`.  Used by the broker
-        /// child closure and by the behavioral tests in
-        /// `seccomp_compile_tests`.
+        /// already set `PR_SET_NO_NEW_PRIVS`.  The production child
+        /// closure calls `apply_seccomp` directly; this wrapper exists for
+        /// the behavioral tests in `seccomp_compile_tests`.
+        #[cfg(test)]
         #[allow(unsafe_code)]
         pub(crate) fn apply(&self) -> io::Result<()> {
             apply_seccomp(self)
@@ -2861,43 +2852,6 @@ pub mod pidfd_sys {
             )
         })?;
         write_pid_to_cgroup(fd.as_raw_fd(), pid)
-    }
-
-    #[allow(unsafe_code)]
-    fn apply_mount_actions(actions: &[PreparedMountAction]) -> io::Result<()> {
-        for action in actions {
-            let path = action.path.as_ptr();
-            // SAFETY: `path` is a valid NUL-terminated path; the mount result is checked.
-            let bind_ret = unsafe {
-                libc::mount(
-                    path,
-                    path,
-                    std::ptr::null(),
-                    (libc::MS_BIND | libc::MS_REC) as libc::c_ulong,
-                    std::ptr::null(),
-                )
-            };
-            if bind_ret < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            if action.readonly {
-                // SAFETY: `path` is a valid NUL-terminated path; the mount result is checked.
-                let remount_ret = unsafe {
-                    libc::mount(
-                        std::ptr::null(),
-                        path,
-                        std::ptr::null(),
-                        (libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY | libc::MS_REC)
-                            as libc::c_ulong,
-                        std::ptr::null(),
-                    )
-                };
-                if remount_ret < 0 {
-                    return Err(io::Error::last_os_error());
-                }
-            }
-        }
-        Ok(())
     }
 
     /// Variant returning errno + the path that failed so the broker-child

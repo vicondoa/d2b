@@ -2,7 +2,7 @@
 # configuration surfaces read one projected row instead of restating a
 # provider's registration, its digests, or its relationships.
 #
-# Covers the Nix half of the KTD1/KTD2 boundary: a Provider package publishes
+# Covers the packaging boundary: a Provider package publishes
 # the projection its declaration produced, the offline catalog asserts
 # agreement with it, and a Process's authored binding request compiles into the
 # canonical consumer request the projection consumes.
@@ -222,7 +222,7 @@ let
     worker.spec;
 in
 {
-  # KTD2/KTD1: the authored shorthand compiles into the canonical consumer
+  # The authored shorthand compiles into the canonical consumer
   # request the projection consumes - the projection's own Nix view, in slot
   # order, byte-identical whichever order the declaration was written in.
   "declaration-projection/consumer-request-shorthand-is-canonical-and-byte-stable" =
@@ -497,15 +497,16 @@ in
   };
 
   # The offline catalog and the declaration projection must agree on exactly
-  # which Providers exist: a selected row the declaration does not produce and
-  # a produced declaration no row selects are both refused, while a
-  # configuration that publishes no projection is unchanged.
+  # which Providers exist, in both directions. The comparison is closed and
+  # always runs: a selected row the declaration does not produce and a
+  # produced declaration no row selects are both refused, while a
+  # configuration that selects nothing and produces nothing satisfies the
+  # same comparison truthfully because both closed sets are empty. An empty
+  # declaration set behind a selected row is therefore a named refusal, not
+  # a quiet pass.
   "declaration-projection/catalog-agreement-refuses-a-row-no-declaration-produces" = {
     expr = {
-      noProjectionIsQuiet =
-        disagreements {
-          d2b.providerCatalog.runtime.artifactId = "runtime-provider";
-        } == [ ];
+      nothingSelectedNothingDeclared = disagreements { } == [ ];
       agreed = disagreements ({
         d2b.artifacts.provider-declared.package =
           lib.mkForce (projectedPackage projectionRow);
@@ -520,12 +521,36 @@ in
         d2b.artifacts.provider-declared.package =
           lib.mkForce (projectedPackage projectionRow);
       });
+      # Each refusal states the expectation it failed: the rows the catalog
+      # selected and the rows the declarations produced. Joined rather than
+      # headed, so an absent refusal reads as a false expectation instead of
+      # an out-of-bounds crash.
+      selectedNamesBothSets =
+        let
+          stated = builtins.concatStringsSep " " (disagreements {
+            d2b.providerCatalog.runtime.artifactId = "runtime-provider";
+          });
+        in
+          lib.hasInfix "The catalog selects [ runtime-provider ];" stated
+          && lib.hasInfix "the declarations produce [ ]." stated;
+      declaredNamesBothSets =
+        let
+          stated = builtins.concatStringsSep " " (disagreements {
+            d2b.artifacts.provider-declared.package =
+              lib.mkForce (projectedPackage projectionRow);
+          });
+        in
+          lib.hasInfix "The catalog selects [ ];" stated
+          && lib.hasInfix
+            "the declarations produce [ provider-declared ]." stated;
     };
     expected = {
-      noProjectionIsQuiet = true;
+      nothingSelectedNothingDeclared = true;
       agreed = true;
       selectedWithoutDeclaration = 1;
       declaredWithoutSelection = 1;
+      selectedNamesBothSets = true;
+      declaredNamesBothSets = true;
     };
   };
 }

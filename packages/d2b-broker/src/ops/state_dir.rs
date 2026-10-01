@@ -5,13 +5,17 @@
 //! `created_paths_hash`, `mode`, `owner_uid`, `owner_gid`,
 //! `replace_or_create_result`.
 
+// The live `PrepareStateDir` op below exists for this module's tests only.
+#[cfg(test)]
 use crate::ops::exec_reconcile::SystemLiveExec;
 use crate::ops::hosts::stable_hash_str;
 use crate::sys::path_safe::{DirCreateResult, ensure_dir, ensure_dir_preserve_existing};
 use std::io;
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
 use d2b_contracts::types::PathClass;
+#[cfg(test)]
 use d2b_core::bundle_resolver::BundleResolver;
 
 
@@ -157,48 +161,6 @@ fn production_path(p: &Path) -> bool {
     p.starts_with("/var/lib/d2b") || p.starts_with("/run/d2b")
 }
 
-/// Prepare one VM's runtime root directory:requires the wire
-/// `pathClass=runtime`, resolves the bundle intent, and reuses the existing
-/// base dir without re-stamping its posture.
-///
-/// # Errors
-///
-/// Returns [`super::OpError::InvalidInput`] for a non-runtime path class,
-/// [`super::OpError::UnknownSubject`] for unmanaged VMs, and
-/// [`super::OpError::Io`] for the directory preparation failures.
-pub fn live_prepare_runtime_dir(
-    _exec: &SystemLiveExec,
-    resolver: &BundleResolver,
-    req:&d2b_contracts_broker::broker_wire::PrepareDirRequest,
-    _audit_log: &crate::audit::AuditLog,
-) -> Result<(), super::OpError> {
-    if req.path_class != PathClass::Runtime {
-        return Err(super::OpError::InvalidInput {
-            detail: format!(
-                "PrepareRuntimeDir requires pathClass=runtime, got {:?}",
-                req.path_class
-            ),
-        });
-    }
-    let intent = resolver
-        .resolve_prepare_dir_intent(req.vm_id.as_str(), true)
-        .ok_or_else(|| super::OpError::UnknownSubject {
-            operation: "PrepareRuntimeDir",
-            subject: req.vm_id.as_str().to_owned(),
-        })?;
-    ensure_dir_preserve_existing(
-        &intent.base_dir,
-        intent.mode,
-        Some(intent.owner_uid),
-        Some(intent.owner_gid),
-    )
-    .map_err(|e| super::OpError::Io {
-        path: intent.base_dir.clone(),
-        detail: e.to_string(),
-    })?;
-    Ok(())
-}
-
 /// The state directory one successful `PrepareStateDir` resolved, and the
 /// posture recorded for it.
 ///
@@ -208,6 +170,8 @@ pub fn live_prepare_runtime_dir(
 /// `path:swtpm-state:<guest>` storage row roots, so this op resolves that row
 /// and records the posture it declares - it creates nothing. Both postures
 /// come from a verified bundle artifact, never from the request.
+// Exists for this module's tests: no dispatch arm returns this record yet.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedStateDir {
     pub base_dir: PathBuf,
@@ -227,6 +191,8 @@ pub struct PreparedStateDir {
 /// Returns [`super::OpError::InvalidInput`] for a non-VM path class and
 /// [`super::OpError::UnknownSubject`] / [`super::OpError::Refused`] for
 /// unresolvable subjects.
+// Exists for this module's tests: no dispatch arm routes PrepareStateDir here.
+#[cfg(test)]
 pub fn live_prepare_state_dir(
     _exec:&SystemLiveExec,
     resolver:&BundleResolver,

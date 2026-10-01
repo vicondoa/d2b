@@ -1119,7 +1119,7 @@
     {
       "from": "d2b-core@0.0.0-bootstrap#path",
       "to": "nix@0.29.0#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "dev",
+      "kind": "normal",
       "target": null
     },
     {

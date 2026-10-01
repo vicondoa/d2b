@@ -34,10 +34,13 @@ tokio = { workspace = true, features = ["sync"] }
 # Bundle-load warnings (e.g. a pre-v2 bundle without bundleHash) are
 # emitted as structured records so the daemon's subscriber surfaces them.
 tracing = "0.1"
+# The host account database. A template-bound row's principal is resolved
+# through NSS rather than derived here, so the number a launch runs as and the
+# number a broker effect grants an ACL to are the ids a real account holds.
+nix = { version = "0.29", features = ["user", "fs"] }
 bolero = { version = "0.10", optional = true }
 
 [dev-dependencies]
-nix = { version = "0.29", features = ["user", "fs"] }
 serde_json.workspace = true
 tempfile = "3"
 

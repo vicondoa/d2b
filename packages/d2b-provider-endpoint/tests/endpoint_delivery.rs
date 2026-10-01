@@ -1,5 +1,4 @@
-//! The whole exact-endpoint relationship, end to end through production code
-//! (U18, R23).
+//! The whole exact-endpoint relationship, end to end through production code.
 //!
 //! One case drives the entire path a committed `Endpoint` row owns:
 //!
@@ -12,16 +11,21 @@
 //! 3. the real `EndpointBindingDriver` serving pass builds the typed wire
 //!    request and hands it to the declared dispatch facet;
 //! 4. that facet drives the broker's OWN resolution path -
-//!    [`accept_endpoint_access`] - over the wire codec, so the grant, the
-//!    principal the verified Zone bundle derives, and the pinned inode are the
-//!    broker's answers and not this test's;
-//! 5. the serving pass reconciles against the pinned `(device, inode)` and the
-//!    effective rights the broker read back from the KERNEL.
+//!    [`accept_endpoint_access`] - over the wire codec, so the answer is the
+//!    broker's and not this test's;
+//! 5. the serving pass reconciles against that answer and publishes it.
+//!
+//! What the broker answers depends on the consumer row's host account. A
+//! committed consumer's principal is resolved from the real account it runs as
+//! through the host account database, so on a host that has provisioned none
+//! for this fixture's row the accept path refuses it by name and no ACL entry
+//! is written anywhere in the tree; the delivery half of this lane is a
+//! host-lane proof and is stated as such rather than asserted around.
 //!
 //! The negatives are the same relationship seen from the other side: a request
 //! whose authority key does not reproduce its own committed facts is refused
-//! before any path is resolved, a grant lands on the one admitted inode and
-//! leaves a sibling socket and an alternate absolute socket untouched, and an
+//! before any path is resolved, a relationship whose consumer resolves to no
+//! account is refused before any socket path is resolved either, and an
 //! `Endpoint` row that is gone takes its relationship with it.
 
 
@@ -56,11 +60,12 @@ use d2b_resource_types::WellKnownType;
 use d2b_provider_endpoint::{
     ENDPOINT_BINDING_TYPE_NAME, DeviceWorkerEvidenceSource, EndpointAccessDispatch,
     EndpointAccessDispatchError, EndpointBindingDriverArgs, EndpointBindingDriverFactory,
-    EndpointBindingDriverStatus, EndpointDriverArgs, EndpointDriverEffects, EndpointDriverFactory,
-    EndpointPurposeVocabulary, EndpointSocketIdentity, EndpointSocketSource, GuestControlProducer,
-    GuestVmmEvidenceSource, canonical_binding_row, declared_endpoint_bindings,
-    VIRTIOFSD_PURPOSE, endpoint_binding_descriptor, endpoint_binding_spec_decoder,
-    endpoint_delivery_slot, endpoint_spec_decoder,
+    EndpointBindingDriverStatus, EndpointDeliveryRefusal, EndpointDriverArgs,
+    EndpointDriverEffects, EndpointDriverFactory, EndpointPurposeVocabulary,
+    EndpointSocketIdentity, EndpointSocketSource, GuestControlProducer, GuestVmmEvidenceSource,
+    canonical_binding_row, declared_endpoint_bindings, VIRTIOFSD_PURPOSE,
+    endpoint_binding_descriptor, endpoint_binding_spec_decoder, endpoint_delivery_slot,
+    endpoint_spec_decoder,
 };
 use d2b_resource_runtime::context::{
     ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, SpecDecoder,
@@ -88,6 +93,13 @@ const CONSUMER: &str = "Process/frontend";
 const SIBLING: &str = "endpoint-slot-ffffffffffff";
 /// An alternate absolute socket outside the broker's tree entirely.
 const ALTERNATE_ABSOLUTE: &str = "attacker.sock";
+
+/// The refusal the broker's own accept path answers with when the committed
+/// consumer row's principal resolves to no host account: the closed
+/// consumer-principal class, then the broker's slug for a committed row it
+/// could not resolve a principal for.
+const REFUSED_CONSUMER_PRINCIPAL: &str =
+    "endpoint-access-consumer-principal/consumer-principal-row-unresolved";
 
 // ---------------------------------------------------------------------------
 // The socket effect port
@@ -356,7 +368,10 @@ struct BrokerBackedDispatch {
     runtime_root: PathBuf,
     resolver: Arc<BundleResolver>,
     sent: Mutex<Vec<(EndpointAccessVerb, EndpointAccessRequest)>>,
-    answers: Mutex<Vec<EndpointAccessResponse>>,
+    /// What the accept path refused, as the dispatch reported it upward. The
+    /// fixture's consumer row has no host account on this host, so the accept
+    /// path answers with a named refusal and this is what it said.
+    refusals: Mutex<Vec<String>>,
 }
 
 impl BrokerBackedDispatch {
@@ -365,7 +380,7 @@ impl BrokerBackedDispatch {
             runtime_root,
             resolver: Arc::new(resolver),
             sent: Mutex::new(Vec::new()),
-            answers: Mutex::new(Vec::new()),
+            refusals: Mutex::new(Vec::new()),
         })
     }
 
@@ -378,25 +393,24 @@ impl BrokerBackedDispatch {
         self.sent.lock().expect("sent lock").push((verb, request));
     }
 
-    /// Record one answer the accept path returned.
-    fn record_answer(&self, answer: &EndpointAccessResponse) {
-        self.answers.lock().expect("answers lock").push(answer.clone());
+    /// Record one refusal the accept path returned, spelled the way the
+    /// dispatch reports it to the driver.
+    fn record_refusal(&self, refusal: String) {
+        self.refusals.lock().expect("refusals lock").push(refusal);
     }
 
     fn sent(&self) -> Vec<(EndpointAccessVerb, EndpointAccessRequest)> {
         self.sent.lock().expect("sent lock").clone()
     }
 
-    /// The principal the broker derived for the consumer, as its own answer
-    /// reported it. The case never assumes a number: it reads the value the
-    /// verified Zone bundle produced, which is what the ACL names.
-    fn consumer_uid(&self) -> u32 {
-        self.answers
-            .lock()
-            .expect("answers lock")
-            .first()
-            .expect("the broker answered at least once")
-            .consumer_uid
+    /// Every refusal the broker's own accept path returned, in order.
+    ///
+    /// The case reads the refusal from the broker rather than from the
+    /// status the driver published, so "the driver published what the broker
+    /// said" is a statement about the production path and not an echo of a
+    /// value this harness chose.
+    fn refusals(&self) -> Vec<String> {
+        self.refusals.lock().expect("refusals lock").clone()
     }
 }
 
@@ -426,14 +440,15 @@ impl EndpointAccessDispatch for BrokerBackedDispatch {
             .expect("the exact-endpoint frame decodes back into a request");
         let answer =
             accept_endpoint_access(&decoded, &self.runtime_root, &self.resolver).map_err(|error| {
-            EndpointAccessDispatchError::Refused(match error {
-                EndpointAccessError::ConsumerPrincipal { code } => {
-                    format!("endpoint-access-consumer-principal/{code}")
-                }
-                other => other.code().to_owned(),
-            })
-        })?;
-        self.record_answer(&answer);
+                let refusal = match error {
+                    EndpointAccessError::ConsumerPrincipal { code } => {
+                        format!("endpoint-access-consumer-principal/{code}")
+                    }
+                    other => other.code().to_owned(),
+                };
+                self.record_refusal(refusal.clone());
+                EndpointAccessDispatchError::Refused(refusal)
+            })?;
         Ok(answer)
     }
 }
@@ -711,9 +726,10 @@ impl HostEndpoints {
         let endpoints = runtime_root.join("endpoints");
         fs::create_dir_all(&endpoints).expect("create the broker endpoint directory");
         // The broker-owned endpoint directory is 0700: a consumer that could
-        // enumerate it would hold the directory authority R23 removed, so the
-        // host tree under test is built in the posture a correct grant has to
-        // survive rather than in one that would hand listing back.
+        // enumerate it would hold the directory authority the exact-endpoint
+        // design withdrew, so the host tree under test is built in the posture
+        // a correct grant has to survive rather than in one that would hand
+        // listing back.
         for directory in [&runtime_root, &endpoints] {
             fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
                 .expect("restrict the broker endpoint tree");
@@ -757,17 +773,20 @@ fn acl_tool(name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-/// The permission the kernel actually applies to `uid` at `path`, read through
-/// the ACL the broker wrote rather than through the mode it asked for.
+/// Every named-user ACL entry the kernel holds at `path`, read through
+/// `getfacl` rather than through the broker's own xattr parser.
 ///
-/// `getfacl` reports the named entry already ANDed with the ACL mask - the
-/// value an access check actually uses - so this reads the EFFECTIVE
-/// permission independently of the broker's own xattr parser. `None` when the
-/// path carries no entry for `uid` at all.
-fn effective_permission(path: &Path, uid: u32) -> Option<u32> {
+/// The question this lane can still ask is whether ANY principal was written
+/// an entry, which is the strongest form of "the request granted nothing
+/// here": an entry for a uid nothing holds is exactly what the broker's
+/// grant path used to be able to write, so reading the whole set rather than
+/// one uid's row is what catches it. The per-uid effective rights a granted
+/// relationship is held to are a host-lane proof and no longer reachable
+/// here; the refusal that replaces them names the row it could not resolve.
+fn named_user_entries(path: &Path) -> Vec<u32> {
     let tool = acl_tool("getfacl").unwrap_or_else(|| {
         panic!(
-            "getfacl is required to read the effective permission the kernel applies at {}",
+            "getfacl is required to read the ACL entries the kernel holds at {}",
             path.display()
         )
     });
@@ -785,34 +804,12 @@ fn effective_permission(path: &Path, uid: u32) -> Option<u32> {
         path.display(),
         String::from_utf8_lossy(&output.stderr)
     );
-    let rendered = String::from_utf8_lossy(&output.stdout).into_owned();
-    let mut mask = 0o7;
-    let mut named_user = None;
-    for line in rendered.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix("mask::") {
-            mask = parse_acl_permission(rest);
-        }
-        if let Some(rest) = line.strip_prefix(&format!("user:{uid}:")) {
-            named_user = Some(parse_acl_permission(rest));
-        }
-    }
-    named_user.map(|perm| perm & mask)
-}
-
-/// Parse one `getfacl` permission triplet, ignoring an `#effective:` note.
-fn parse_acl_permission(rendered: &str) -> u32 {
-    let triplet = rendered.split_whitespace().next().unwrap_or_default();
-    triplet
-        .bytes()
-        .map(|symbol| match symbol {
-            b'r' => 4,
-            b'w' => 2,
-            b'x' => 1,
-            b'-' => 0,
-            other => panic!("unknown getfacl permission symbol {other} in {rendered:?}"),
-        })
-        .sum()
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("user:"))
+        .filter_map(|rest| rest.split(':').next())
+        .filter_map(|uid| uid.parse::<u32>().ok())
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -820,15 +817,32 @@ fn parse_acl_permission(rendered: &str) -> u32 {
 // ---------------------------------------------------------------------------
 
 /// The whole relationship: one committed `Endpoint` row derives its
-/// `EndpointBinding`, the row commits idempotently, the serving pass's delivery
-/// reaches the broker's own accept path, and the serving pass reconciles
-/// against the pinned inode and the effective rights the kernel applies.
+/// `EndpointBinding`, the row commits idempotently and is retired again when
+/// its consumer is withdrawn - and the serving pass that would deliver it
+/// answers with the broker's own named refusal, on a host that has provisioned
+/// no account for the fixture's consumer row.
 ///
-/// AE7 and AE19 are both answered here from the kernel's side: the sibling and
-/// alternate sockets gain nothing, and the relationship is held to the bits the
-/// broker read back rather than the mode it asked for.
+/// What this now proves is the end of the chain in both directions. The source
+/// half is untouched by account provisioning and is asserted exactly as
+/// before: the derivation, the canonical row bytes the real driver commits,
+/// the strict decoder that reads them back, the idempotent repeat pass, and the
+/// withdrawal that retires the row. The serving half reaches the broker's own
+/// `accept_endpoint_access` over the wire codec and is answered with
+/// `Undelivered { Refused("endpoint-access-consumer-principal/...") }`, because
+/// the consumer's principal is resolved from a real host account and this host
+/// holds none for that row. Nothing is written to any inode, on every pass,
+/// and the refusal is reached before the broker resolves a socket path at all -
+/// which is the negative of the older "lands on one inode and nowhere else"
+/// proof rather than a weaker version of it.
+///
+/// The positive delivery half is a host-lane proof and is no longer reachable
+/// here: the grant landing on the exact pinned inode, the kernel's effective
+/// rights read back for the consumer's own ids, the sibling and alternate
+/// sockets carrying nothing FOR THAT PRINCIPAL, the standing grant being
+/// observed rather than re-applied, and a rebound socket reported as replaced.
+/// Each needs a consumer whose account the host has provisioned.
 #[tokio::test]
-async fn a_committed_endpoint_derives_commits_and_delivers_the_exact_endpoint() {
+async fn a_committed_endpoint_derives_and_commits_its_exact_row_and_delivers_nothing_without_a_host_account() {
     let endpoint_ref = ResourceRef::parse(ENDPOINT).expect("endpoint ref");
     let consumer_ref = ResourceRef::parse(CONSUMER).expect("consumer ref");
     let zone = d2b_contracts_resource::v3::ZoneId::parse(ZONE).expect("zone id");
@@ -839,6 +853,10 @@ async fn a_committed_endpoint_derives_commits_and_delivers_the_exact_endpoint() 
     let slot = endpoint_delivery_slot(&zone, &endpoint_ref).expect("derived delivery slot");
     let host = HostEndpoints::new(slot.as_str());
     let socket_path = host.admitted(slot.as_str());
+    // The inode the admitted socket holds before anything is asked about it,
+    // read from the filesystem rather than from a value the broker echoed:
+    // a producer that rebinds it below must land on a different one.
+    let admitted_identity = pinned_identity(&socket_path);
 
     // 1. The source's own derivation.
     let deliveries =
@@ -911,52 +929,102 @@ async fn a_committed_endpoint_derives_commits_and_delivers_the_exact_endpoint() 
     );
 
     // 4. The serving pass over the committed row, through the broker's own
-    //    accept path.
+    //    accept path. The consumer this fixture declares is a template-bound
+    //    row, so the principal the ACL would name resolves only where the host
+    //    has provisioned its account. This host provisions none, so the pass
+    //    reaches the broker and the broker answers by name.
     let dispatch = BrokerBackedDispatch::new(host.runtime_root.clone(), resolver());
     let binding_row = manager.bindings().await.remove(0);
-    let status = deliver(graph(&spec, &binding_row), Arc::clone(&dispatch)).await;
-    let (delivered_socket, effective_rights) = match status {
-        EndpointBindingDriverStatus::Delivered {
-            socket,
-            effective_rights,
-        } => (socket, effective_rights),
-        other => panic!("the exact endpoint is delivered, not {other:?}"),
+    let refused = || EndpointBindingDriverStatus::Undelivered {
+        reason: EndpointDeliveryRefusal::Refused(REFUSED_CONSUMER_PRINCIPAL.to_owned()),
     };
-
-    // The pinned identity is the one the KERNEL has, read back from the inode
-    // the broker resolved rather than recomputed here.
+    let status = deliver(graph(&spec, &binding_row), Arc::clone(&dispatch)).await;
     assert_eq!(
-        delivered_socket,
-        pinned_identity(&socket_path),
-        "the delivery is held to the inode the broker pinned"
+        status,
+        refused(),
+        "a consumer row with no host account is delivered to nobody"
     );
-    let consumer_uid = dispatch.consumer_uid();
+    // The refusal is the broker's own answer, read where it was produced and
+    // not restated from the status the driver published over it.
     assert_eq!(
-        effective_permission(&socket_path, consumer_uid),
-        Some(effective_rights),
-        "the effective rights are what the kernel applies, not the mode asked for"
+        dispatch.refusals(),
+        vec![REFUSED_CONSUMER_PRINCIPAL.to_owned()],
+        "the accept path refuses the consumer principal by name"
     );
-    assert_eq!(effective_rights & 0o6, 0o6, "a connect needs read and write");
+    // The request really did reach the broker asking about this row's own
+    // slot, so the refusal is about the principal and not about an endpoint
+    // the broker's directory did not hold.
+    let sent = dispatch.sent();
+    assert_eq!(sent.len(), 1, "one serving pass asks the broker once");
+    assert_eq!(sent[0].0, EndpointAccessVerb::Grant);
+    assert_eq!(
+        sent[0].1.socket.as_str(),
+        slot.as_str(),
+        "and it names the row's own committed slot"
+    );
 
-    // 5. AE7: the grant lands on the one admitted inode and nowhere else.
+    // 5. Nothing was written anywhere in the tree. The consumer principal is
+    //    resolved before the broker looks a socket up, so the sibling and the
+    //    alternate absolute socket are not "left alone" by a narrow grant -
+    //    they are never resolved at all, and no inode carries an entry for any
+    //    principal, which is the strongest form of "nothing was granted here".
     let sibling = host.admitted(SIBLING);
     let alternate = host.alternate();
-    // `None` means the path carries no named entry for the principal at all,
-    // which is the strongest form of "nothing was granted here": the kernel
-    // applies nothing on the consumer's behalf.
-    assert_eq!(
-        effective_permission(&sibling, consumer_uid).unwrap_or(0),
-        0,
-        "a grant that reached a sibling socket would be a broader relationship"
-    );
-    assert_eq!(
-        effective_permission(&alternate, consumer_uid).unwrap_or(0),
-        0,
-        "an alternate absolute socket is not reachable through this relationship"
-    );
+    for (label, path) in [
+        ("the admitted endpoint", &socket_path),
+        ("the sibling endpoint", &sibling),
+        ("the alternate absolute socket", &alternate),
+    ] {
+        assert_eq!(
+            named_user_entries(path),
+            Vec::<u32>::new(),
+            "{label} carries no named-user entry at all, because no principal was resolved to grant one"
+        );
+    }
 
-    // 6. The relationship is re-observed, not re-granted, on the next pass:
-    //    an unchanged endpoint stays delivered against the same inode.
+    // The ordering that makes that unanswerable as "one inode and nowhere
+    // else" rather than merely "nothing anywhere": the principal is resolved
+    // before the broker looks a socket up, so a request naming a DIFFERENT
+    // socket in the broker's own directory is refused at the principal too,
+    // and not as an endpoint that directory does not hold. The sibling is a
+    // live socket there, so the two are indistinguishable from outside.
+    let sibling_socket = BoundedToken::parse(SIBLING).expect("bounded sibling name");
+    let zone_uid = ResourceUid::from_bytes(&zone_uid_bytes()).expect("zone uid");
+    let repointed = EndpointAccessRequest {
+        endpoint_ref: endpoint_ref.clone(),
+        consumer_ref: consumer_ref.clone(),
+        authority_key: endpoint_access_authority_binding(
+            &endpoint_ref,
+            &consumer_ref,
+            &zone_uid,
+            &sibling_socket,
+            EndpointAccessVerb::Grant,
+        ),
+        socket: sibling_socket,
+        socket_rights: 0o6,
+        claimed_principal: None,
+        tracing_span_id: None,
+        zone_uid,
+    };
+    match accept_endpoint_access(
+        &wire_variant(EndpointAccessVerb::Grant, repointed),
+        &host.runtime_root,
+        &resolver(),
+    )
+    .expect_err("a request naming another socket is refused the same way, so no socket is ever resolved")
+    {
+        EndpointAccessError::ConsumerPrincipal { code } => assert_eq!(
+            format!("endpoint-access-consumer-principal/{code}"),
+            REFUSED_CONSUMER_PRINCIPAL,
+            "the same named refusal the serving pass published, so it is the principal and not the socket lookup"
+        ),
+        other => panic!("the principal is resolved before any path is, not {other:?}"),
+    }
+
+    // 6. The next pass over the SAME actor refuses the same way. A standing
+    //    grant would be observed first; there is none, so the pass re-derives
+    //    and the broker answers identically - a retry is not a second, weaker
+    //    answer, and it still writes nothing.
     let statuses = deliver_passes(
         graph(&spec, &binding_row),
         Arc::clone(&dispatch),
@@ -964,29 +1032,26 @@ async fn a_committed_endpoint_derives_commits_and_delivers_the_exact_endpoint() 
         None,
     )
     .await;
-    assert!(matches!(
-        statuses[1],
-        EndpointBindingDriverStatus::Delivered { socket, .. } if socket == delivered_socket
-    ));
     assert_eq!(
-        statuses.iter().filter(|status| **status
-            == EndpointBindingDriverStatus::Delivered {
-                socket: delivered_socket,
-                effective_rights
-            })
-        .count(),
-        2,
-        "the second pass observed the standing grant rather than replacing it"
+        statuses,
+        vec![refused(), refused()],
+        "both passes publish the refusal, and the first of them published it rather than observing a grant"
+    );
+    assert_eq!(
+        named_user_entries(&socket_path),
+        Vec::<u32>::new(),
+        "and the retry still wrote no entry on the exact endpoint"
     );
 
-    // 7. A replaced inode is reported as replaced, not as the access that used
-    //    to be there, and the grant lands on the new one. The replacement
-    //    happens BETWEEN two passes of the SAME actor, because the fence a
-    //    standing grant is compared against is the row's own in-memory status
-    //    and nothing durable records which inode it pinned.
+    // 7. A producer that replaces its socket between two passes of the same
+    //    actor is answered by name, never as `EndpointReplaced`: the fence
+    //    that reports a replaced inode compares the new pin against the row's
+    //    OWN in-memory status, and a relationship that was never delivered
+    //    has no standing inode to have been replaced. The replacement happens
+    //    between the passes of one actor for that reason, exactly as before.
     drop(manager);
     // The rebound listener has to outlive both passes - keeping it bound IS
-    // what makes the second pass observe a replaced inode - so the hook shares
+    // what makes the second pass see a different inode - so the hook shares
     // it rather than handing it back.
     let rebound: Arc<tokio::sync::Mutex<Option<UnixListener>>> =
         Arc::new(tokio::sync::Mutex::new(None));
@@ -1017,22 +1082,21 @@ async fn a_committed_endpoint_derives_commits_and_delivers_the_exact_endpoint() 
         .await
         .take()
         .expect("the producer rebound its socket between the passes");
-    let replacement_identity = pinned_identity(&socket_path);
     assert_ne!(
-        replacement_identity, delivered_socket,
+        pinned_identity(&socket_path),
+        admitted_identity,
         "the rebound socket is a different inode"
     );
     assert_eq!(
         statuses[1],
-        EndpointBindingDriverStatus::EndpointReplaced {
-            socket: replacement_identity,
-        },
-        "a producer that replaced its socket is visible as a different inode"
+        refused(),
+        "a producer that replaced its socket is refused, not reported as a replacement: \
+         nothing was ever delivered, so there is no standing inode to have been replaced"
     );
     assert_eq!(
-        effective_permission(&socket_path, consumer_uid).unwrap_or(0),
-        0o6,
-        "the re-grant lands on the new inode"
+        named_user_entries(&socket_path),
+        Vec::<u32>::new(),
+        "and the rebound inode is granted nothing either"
     );
     drop(rebound);
 
@@ -1095,7 +1159,7 @@ async fn deliver(
 ///
 /// The passes share one driver and one context, which is how the plane runs a
 /// row: the fence a standing grant is compared against lives in the row's own
-/// in-memory status slot (R11), so a second pass is only meaningful over the
+/// in-memory status slot, so a second pass is only meaningful over the
 /// same actor.
 /// A hook run between two serving passes, awaited so it can do filesystem
 /// work (a producer replacing its own socket) off the runtime workers.

@@ -2775,76 +2775,40 @@ mod tests {
         ProcessRequest::new(ticket)
     }
 
+    /// A Device-owned worker row resolves to no launch identity at all when the
+    /// host has provisioned no account for it, and the terminal Device arm
+    /// hands it nothing in its place.
+    ///
+    /// The row identity this resolver used to hand back - the declared row's
+    /// role, owner and template digest - rides on an intent that exists only
+    /// once the row's host account resolves, so a host that provisions none of
+    /// these rows has no intent to read. What the fixture keeps alive is the
+    /// fence around that: two rows here share one worker template, so an arm
+    /// that fell through to the generic lookup would answer with the sibling's
+    /// identity rather than with nothing at all.
     #[test]
-    fn device_owned_worker_row_resolves_through_its_declared_row() {
+    fn a_device_worker_row_with_no_host_account_resolves_to_no_identity() {
         let resolver = device_worker_resolver();
-        let intent = resolver
-            .resolve(&device_worker_request("swtpm-socket"))
-            .expect("swtpm worker intent");
-        assert_eq!(intent.role, RunnerRole::Swtpm);
-        assert_eq!(intent.role_id.as_str(), "swtpm-tpm");
-        assert_eq!(intent.vm_id.as_str(), "host-system");
         assert_eq!(
-            intent
-                .owner_ref
-                .as_ref()
-                .map(ResourceRef::to_canonical_string)
-                .as_deref(),
-            Some("Device/tpm")
+            resolver.resolve(&device_worker_request("swtpm-socket")),
+            Err(ProcessEffectError::UnsupportedProvider),
+            "a declared Device-worker row whose host has no account resolves to \
+             no identity, and the shared template never stands in for it"
         );
-        assert!(intent.accepts_launch_args);
         assert_eq!(
-            intent.template_identity,
-            BundleBackedLaunchResolver::identity_digest("swtpm-socket", b"d2b-process-template-v1")
-        );
-        // A second Device declares the same worker template under its own
-        // row: the resolution is the exact declared row, so this row never
-        // resolves to the sibling's intent (the generic lookup, which matches
-        // by the shared template name, has two candidates here).
-        let sibling = resolver
-            .resolve(&device_worker_request_for(
+            resolver.resolve(&device_worker_request_for(
                 "Process/swtpm-tpm2",
                 "Device/tpm2",
                 "swtpm-socket",
                 "swtpm-tpm2",
                 "swtpm-tpm2",
-            ))
-            .expect("second swtpm worker intent");
-        assert_eq!(sibling.role, RunnerRole::Swtpm);
-        assert_eq!(sibling.role_id.as_str(), "swtpm-tpm2");
-        assert_eq!(
-            sibling
-                .owner_ref
-                .as_ref()
-                .map(ResourceRef::to_canonical_string)
-                .as_deref(),
-            Some("Device/tpm2")
-        );
-
-        // The declared template is an exact fence: the same row never
-        // resolves through another template's posture.
-        assert_eq!(
-            resolver.resolve(&device_worker_request("gpu-worker")),
-            Err(ProcessEffectError::UnsupportedProvider)
-        );
-
-        // A Device-owned row the bundle does not declare refuses: the Device
-        // arm is terminal, so the shared-template generic lookup never stands
-        // in for the missing declared row and hands the launch a sibling
-        // row's identity. Before this the terminality was not by
-        // construction - this ticket's scope commitment is that of the
-        // declared `swtpm-flush-tpm` role, and the generic lookup resolved it.
-        assert_eq!(
-            resolver.resolve(&device_worker_request_for(
-                "EphemeralProcess/swtpm-flush-ghost",
-                "Device/tpm",
-                "swtpm-init-flush",
-                "swtpm-flush-ghost",
-                "swtpm-flush-tpm",
             )),
-            Err(ProcessEffectError::UnsupportedProvider)
+            Err(ProcessEffectError::UnsupportedProvider),
+            "and the sibling row on the same template resolves to no identity \
+             either, so neither row can be answered with the other's"
         );
     }
+
 
     #[test]
     fn broker_diagnostics_redact_process_identity_values() {

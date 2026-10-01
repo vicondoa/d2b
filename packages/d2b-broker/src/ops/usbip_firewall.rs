@@ -7,9 +7,9 @@
 //! [`d2b_host::nftables::NftBatch::assert_carveout_ordering`].
 //!
 //! The full `UsbipBind`/`UsbipUnbind`/`UsbipProxyReconcile` UX (live
-//! device routing) is handled separately; [`refuse_w6_operation`] is the
-//! explicit fail-closed handler used by the broker dispatch table when
-//! one of those live-routing variants is invoked before support.
+//! device routing) has no broker dispatch arm; `refuse_w6_operation`
+//! is the fail-closed handler those live-routing variants would use,
+//! exercised only by the tests that pin its `unknown-operation` audit.
 
 use d2b_host::media::BusId;
 use d2b_host::nftables::{ChainHook, NftBatch, NftError, Sha256};
@@ -52,9 +52,11 @@ pub fn bind_firewall_rule(
     })
 }
 
+// USBIP live-routing operation label, exercised only by this file's tests.
 /// USBIP operations explicitly outside this firewall-rule skeleton.
 /// These are refused with the `unknown-operation` kebab-case
 /// discriminant + audit (`defaultForUnknown: deny`).
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum W6UsbipOperation {
@@ -66,18 +68,10 @@ pub enum W6UsbipOperation {
     ProxyReconcile,
 }
 
-impl W6UsbipOperation {
-    pub const fn as_kebab_case(&self) -> &'static str {
-        match self {
-            Self::Bind => "usbip-bind",
-            Self::Unbind => "usbip-unbind",
-            Self::ProxyReconcile => "usbip-proxy-reconcile",
-        }
-    }
-}
-
+// Refusal-audit payload, exercised only by this file's tests.
 /// Refusal-audit payload emitted when a USBIP UX operation is
 /// dispatched before support.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RefusedW6Audit {
@@ -85,10 +79,12 @@ pub struct RefusedW6Audit {
     pub reason: &'static str,
 }
 
+// Fail-closed refusal handler, exercised only by this file's tests.
 /// Fail-closed handler for USBIP live-routing variants. Returns the
 /// audit payload the broker runtime writes; the wire-level response is
 /// `broker-unimplemented` per the legacy broker enum disposition
 /// contract.
+#[cfg(test)]
 pub fn refuse_w6_operation(op: W6UsbipOperation) -> RefusedW6Audit {
     RefusedW6Audit {
         operation: op,

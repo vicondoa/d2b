@@ -968,6 +968,12 @@
     },
     {
       "from": "d2b-core@0.0.0-bootstrap#path",
+      "to": "nix@0.29.0#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-core@0.0.0-bootstrap#path",
       "to": "rustix@0.38.44#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null

@@ -5,17 +5,19 @@
 //! to it, opening a host path under its identity - needs a number, not a name.
 //! The number is not on the wire and not on the row: a `Process` spec commits
 //! its `executionRef`, its domain, its `userRef`, and its template, and the
-//! numeric uid those resolve to is minted by the bundle from the row's own
-//! `<ownerRef>:<rowRef>:<executionRef>` triple. This module is where the broker
-//! performs that resolution, and nothing here reads a number a caller supplied.
+//! numeric uid those resolve to is the id the row's host account holds - the
+//! account the host layer provisions per Zone, read back through the account
+//! database rather than derived a second time. A row whose host has no such
+//! account resolves to no principal at all, so this module is where that
+//! refusal is performed, and nothing here reads a number a caller supplied.
 //!
 //! The broker reaches this the same way it reaches every other fact: the
 //! verified Zone resource bundle reloaded from `ServerConfig.bundle_path` on the
 //! request being served. That bundle's per-Zone template bindings are the
 //! committed executable bindings for the Zone's rows, they are hash-pinned
 //! alongside the rows themselves, and `d2bd` ingests those same bytes into the
-//! Zone's desired store - so the triple this derives from is the same triple
-//! the store commits, not a second identity that could drift from it.
+//! Zone's desired store - so the row this resolves from is the same row the
+//! store commits, not a second identity that could drift from it.
 //!
 //! A caller that also carries a claim gets it checked, never trusted:
 //! [`repin_consumer_principal`] resolves the principal independently and
@@ -58,36 +60,6 @@ impl std::fmt::Display for ConsumerPrincipalError {
             Self::RowUnresolved { .. } => "consumer-principal-row-unresolved",
             Self::ClaimMismatch { .. } => "consumer-principal-claim-mismatch",
         })
-    }
-}
-
-impl ConsumerPrincipalError {
-    /// The request field the refusal is filed under.
-    pub(crate) fn field(&self) -> &'static str {
-        match self {
-            Self::ZoneUnresolved => "zone_uid",
-            Self::NotAConsumer { .. } | Self::RowUnresolved { .. } => "execution_ref",
-            Self::ClaimMismatch { .. } => "execution_ref",
-        }
-    }
-
-    /// What the request named, or `missing`, for the refusal record.
-    pub(crate) fn requested(&self) -> String {
-        match self {
-            Self::ZoneUnresolved => "missing".to_owned(),
-            Self::NotAConsumer { consumer } | Self::RowUnresolved { consumer } => consumer.clone(),
-            Self::ClaimMismatch { claimed, .. } => claimed.clone(),
-        }
-    }
-
-    /// What the verified bundle resolved instead.
-    pub(crate) fn resolved(&self) -> &'static str {
-        match self {
-            Self::ZoneUnresolved => "verified-bundle-zone",
-            Self::NotAConsumer { .. } => "committed-consumer-row",
-            Self::RowUnresolved { .. } => "verified-bundle-consumer-row",
-            Self::ClaimMismatch { .. } => "verified-bundle-consumer-principal",
-        }
     }
 }
 
@@ -170,7 +142,7 @@ mod tests {
     use d2b_core::bundle::{Bundle, BundleGeneration};
     use d2b_core::bundle_resolver::DEVICE_TPM_PROVIDER_REF;
     use d2b_core::manifest_v04::ManifestV04;
-    use d2b_core::processes::{ProcessExecutionDomain, ProcessesJson};
+    use d2b_core::processes::ProcessesJson;
     use std::collections::BTreeMap;
 
     /// The Zone self-resource uid the `work` fixture bundle is bound to.
@@ -319,69 +291,65 @@ mod tests {
         ResourceRef::parse(&format!("Process/{name}")).expect("fixture row ref")
     }
 
-    /// A committed consumer reference resolves to the principal its row runs
-    /// as: the same uid/gid the launch path applies, read from the same
-    /// derivation, so an effect can name the consumer's uid without anything on
-    /// the wire carrying one.
+    /// A committed consumer reference resolves to the principal its row's host
+    /// account holds, and to nothing at all where the host has provisioned no
+    /// account for that row.
+    ///
+    /// The equality this used to assert - the resolved principal against the
+    /// uid/gid the launch path applies - needs a row that runs as a real
+    /// account, and this fixture host provisions none, so what is left is the
+    /// half the contract turns on: a committed row with no host account
+    /// produces no principal, so no effect can name its uid and no ACL entry
+    /// is ever written for it. The broker answers its own closed refusal
+    /// rather than inventing the number.
     #[test]
-    fn a_committed_consumer_reference_resolves_the_principal_its_row_runs_as() {
+    fn a_committed_consumer_row_with_no_host_account_resolves_to_nothing() {
         let resolver = work_resolver();
         let row = process("shell");
 
-        let principal =
-            resolve_consumer_principal(&resolver, &uid(WORK_ZONE_UID), &row).expect("resolves");
-        let launched = resolver
-            .find_provider_controller_intent(
-                &row,
-                "Host/work-host",
-                ProcessExecutionDomain::System,
-                None,
-                "consumer-worker",
-                Some(DEVICE_TPM_PROVIDER_REF),
-            )
-            .expect("the same committed row resolves as the intent its launch applies");
         assert_eq!(
-            principal,
-            ConsumerPrincipal {
-                uid: launched.uid,
-                gid: launched.gid,
-            },
-            "the principal a broker effect resolves equals the uid/gid the launch applies"
+            resolve_consumer_principal(&resolver, &uid(WORK_ZONE_UID), &row),
+            Err(ConsumerPrincipalError::RowUnresolved {
+                consumer: "Process/shell".to_owned(),
+            }),
+            "a committed row whose host has provisioned no account resolves to \
+             no principal, so the grant path writes no ACL entry for it"
         );
-        assert!(
-            (50_000..=16_777_215).contains(&principal.uid),
-            "the derived principal sits in the provisioned band: {}",
-            principal.uid
+        assert_eq!(
+            resolver.consumer_principal("work", &row),
+            None,
+            "and the resolver holds no entry for that row to be read from"
         );
     }
 
-    /// The broker derives the principal itself and refuses a claim that names
-    /// another one, so a caller cannot select a uid by asserting it. A claim
-    /// that does reproduce the derivation is accepted, and what comes back is
-    /// still the derived principal.
+    /// The broker resolves the principal itself, so a caller that carries a
+    /// claim cannot select a uid by asserting one: what comes back is the
+    /// row's own resolution or its refusal, never the claim's copy.
     #[test]
-    fn a_claim_that_disagrees_with_the_derivation_is_refused() {
+    fn a_caller_supplied_claim_is_never_answered_with_its_own_numbers() {
         let resolver = work_resolver();
         let zone_uid = uid(WORK_ZONE_UID);
         let row = process("shell");
-        let derived = resolve_consumer_principal(&resolver, &zone_uid, &row).expect("resolves");
-
-        let forged = ConsumerPrincipal {
-            uid: derived.uid + 1,
-            gid: derived.gid + 1,
+        let claimed = ConsumerPrincipal {
+            uid: 50_001,
+            gid: 50_001,
         };
+
         assert_eq!(
-            repin_consumer_principal(&resolver, &zone_uid, &row, &forged),
-            Err(ConsumerPrincipalError::ClaimMismatch {
-                claimed: principal_label(&forged),
-                derived: principal_label(&derived),
+            repin_consumer_principal(&resolver, &zone_uid, &row, &claimed),
+            Err(ConsumerPrincipalError::RowUnresolved {
+                consumer: "Process/shell".to_owned(),
             }),
-            "a claim that does not reproduce the derivation is refused, not obeyed"
+            "a claim over a row with no host account is answered with the row's \
+             own refusal, never with the uid the caller asserted"
         );
         assert_eq!(
-            repin_consumer_principal(&resolver, &zone_uid, &row, &derived).expect("accepted"),
-            derived,
-            "the returned principal is the derived one, never the claim's copy"
+            claimed,
+            ConsumerPrincipal {
+                uid: 50_001,
+                gid: 50_001
+            },
+            "and the claim never becomes the effect's principal"
         );
     }
 
@@ -422,36 +390,37 @@ mod tests {
         );
     }
 
-    /// One row reference declared in two Zones names two consumers. Both
-    /// resolve, to different principals, because the derivation reads the
-    /// Zone-local owner the row committed - so a Zone-scoped effect can never be
-    /// handed another Zone's principal, and neither Zone answers for the row
-    /// name the other declares.
+    /// One row reference declared in two Zones is resolved per Zone, and where
+    /// the host has provisioned no account for either, neither Zone answers for
+    /// the row name the other declares. Each Zone refuses on its own committed
+    /// facts rather than borrowing the sibling's.
     #[test]
-    fn one_row_reference_in_two_zones_names_two_principals() {
+    fn one_row_reference_in_two_zones_is_resolved_per_zone() {
         let resolver = resolver(&[("work", WORK_ZONE_UID), ("personal", PERSONAL_ZONE_UID)]);
         let row = process("shell");
 
-        let work = resolve_consumer_principal(&resolver, &uid(WORK_ZONE_UID), &row)
-            .expect("the work Zone declares the row");
-        let personal = resolve_consumer_principal(&resolver, &uid(PERSONAL_ZONE_UID), &row)
-            .expect("the personal Zone declares the row");
-        assert_ne!(
-            work, personal,
-            "the same row reference in two Zones is two consumers, not one"
-        );
+        for (zone, zone_uid) in [("work", WORK_ZONE_UID), ("personal", PERSONAL_ZONE_UID)] {
+            assert_eq!(
+                resolve_consumer_principal(&resolver, &uid(zone_uid), &row),
+                Err(ConsumerPrincipalError::RowUnresolved {
+                    consumer: "Process/shell".to_owned(),
+                }),
+                "{zone}: the row this Zone declares resolves on this Zone's own \
+                 account lookup, and never on the sibling Zone's"
+            );
+        }
     }
+
     /// The broker's own per-request bundle load: the artifacts written to a
     /// scratch directory, read back through the no-follow / ownership /
     /// artifact-hash checks, and the Zone-keyed tables re-derived from the
     /// verified bytes. This is the same
     /// [`BundleResolver::load_with_policy`] `load_kernel_resolver` runs before
-    /// every bundle-dependent effect, so the principal below is resolved over
-    /// the committed bytes rather than over an in-memory assembly - and the
-    /// equality check against the intent the launch applies pins the two
-    /// derivations to one.
+    /// every bundle-dependent effect, so the refusal below is the one the
+    /// broker's own verified bytes produce, not one an in-memory assembly
+    /// invented.
     #[test]
-    fn the_brokers_own_bundle_load_resolves_the_same_principal() {
+    fn the_brokers_own_bundle_load_resolves_no_principal_without_a_host_account() {
         use std::fs;
         use std::os::unix::fs::PermissionsExt as _;
 
@@ -562,19 +531,18 @@ mod tests {
             Some("work"),
             "the verified bundle binds the Zone uid the effect carries"
         );
-        let principal = resolve_consumer_principal(&resolver, &uid(WORK_ZONE_UID), &process("shell"))
-            .expect("the loaded bundle resolves the committed consumer's principal");
         assert_eq!(
-            principal,
-            work_resolver()
-                .consumer_principal("work", &process("shell"))
-                .expect("the in-memory assembly resolves the same consumer"),
-            "the principal does not depend on which construction path the broker used"
+            resolve_consumer_principal(&resolver, &uid(WORK_ZONE_UID), &process("shell")),
+            Err(ConsumerPrincipalError::RowUnresolved {
+                consumer: "Process/shell".to_owned(),
+            }),
+            "the broker's own load resolves no principal for a row whose host \
+             has provisioned no account, so no ACL entry is written from it"
         );
-        assert!(
-            (50_000..=16_777_215).contains(&principal.uid),
-            "the derived principal sits in the provisioned band: {}",
-            principal.uid
+        assert_eq!(
+            work_resolver().consumer_principal("work", &process("shell")),
+            None,
+            "and the in-memory assembly resolves the same consumer to nothing"
         );
     }
 

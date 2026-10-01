@@ -95,6 +95,7 @@ const DEFAULT_SOCKET_PATH: &str = "/run/d2b/priv.sock";
 /// (`socket_runtime_dir`), so this is the fallback fence for
 /// [`crate::live_handlers::grant_serving_worker_launch_acls`] when the
 /// configured path has no parent.
+#[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
 const DEFAULT_BROKER_RUNTIME_DIR: &str = "/run/d2b";
 const DEFAULT_GUEST_SOCKET_PATH: &str = "/run/d2b/guest-broker.sock";
 /// Audit records land under
@@ -123,8 +124,10 @@ const IPC_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
 /// family's method-timeout precedent (5s). A probe that exceeds the bound
 /// is treated exactly like a failed probe (host not ready / effect not
 /// applied), never a stall of the dispatch worker.
+#[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
 const PW_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_IPC_RATE_LIMIT_MAX_BUCKETS: usize = 4096;
+#[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
 const MAX_MODULE_NAME_LEN: usize = 64;
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -358,6 +361,7 @@ pub struct EffectFrameRefusal {
 }
 
 impl EffectFrameRefusal {
+    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     fn new(code: &'static str, variant: Option<&str>) -> Self {
         Self {
             code,
@@ -786,11 +790,15 @@ impl From<io::Error> for RunError {
 }
 
 pub(crate) enum BrokerError {
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    // Constructed only by a legacy dispatch arm: the bootstrap dispatcher
+    // builds them, the real-wire dispatch answers the reserved stub.
+    #[allow(dead_code, reason = "built only by a dispatch arm that no longer constructs it")]
     MinijailValidation {
         reason: String,
     },
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    // Constructed only by a legacy dispatch arm: the bootstrap dispatcher
+    // builds them, the real-wire dispatch answers the reserved stub.
+    #[allow(dead_code, reason = "built only by a dispatch arm that no longer constructs it")]
     NoPidfd {
         runner_id: String,
     },
@@ -811,6 +819,7 @@ pub(crate) enum BrokerError {
         operation: &'static str,
     },
     AuditRequiresAdmin,
+    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     HostShutdownRestricted,
     /// Broker started without a loadable bundle at
     /// `ServerConfig.bundle_path`; bundle-dependent real-wire ops cannot
@@ -884,12 +893,16 @@ pub(crate) enum BrokerError {
     /// only into the obs VM declared in the trusted bundle; any other
     /// target is a closed-set violation and the broker refuses
     /// fail-closed.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    // Constructed only by a legacy dispatch arm: the bootstrap dispatcher
+    // builds them, the real-wire dispatch answers the reserved stub.
+    #[allow(dead_code, reason = "built only by a dispatch arm that no longer constructs it")]
     OtelHostBridgeIntentInvalid {
         intent_vm: String,
         expected_obs_vm: String,
     },
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    // Constructed only by a legacy dispatch arm: the bootstrap dispatcher
+    // builds them, the real-wire dispatch answers the reserved stub.
+    #[allow(dead_code, reason = "built only by a dispatch arm that no longer constructs it")]
     SpawnRunnerIntentMismatch {
         field: &'static str,
         requested: String,
@@ -911,10 +924,12 @@ pub(crate) enum BrokerError {
     PeerCredentialRefused {
         operation: &'static str,
     },
+    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     ProfileOperationRefused {
         profile: BrokerProfile,
         operation: &'static str,
     },
+    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     RequestValidation {
         operation: &'static str,
         reason: &'static str,
@@ -2647,6 +2662,7 @@ fn validate_broker_request(_request: &BrokerRequest) -> Result<(), BrokerError> 
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "network provenance core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn validate_network_authority(scope_id: &str, intent_id: &str) -> Result<(), &'static str> {
     if scope_id.starts_with("env:")
         || intent_id.contains(":env:")
@@ -2666,6 +2682,7 @@ fn validate_network_authority(scope_id: &str, intent_id: &str) -> Result<(), &'s
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "network provenance core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn validate_uid_network_authority(
     scope_id: &str,
     intent_id: &str,
@@ -2714,6 +2731,7 @@ fn validate_uid_network_authority(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "network provenance core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn validate_network_scope_provenance(
     scope_id: &str,
     zone_uid: &d2b_contracts_resource::v3::ResourceUid,
@@ -2734,6 +2752,7 @@ fn validate_network_scope_provenance(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "network provenance core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn validate_tap_create_provenance(
     bundle_tap_intent_ref: &d2b_contracts::types::BundleOpId,
     vm_id: &d2b_contracts::types::VmId,
@@ -2833,6 +2852,7 @@ fn validate_tap_create_provenance(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "network provenance core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn network_provenance(
     zone_uid: d2b_contracts_resource::v3::ResourceUid,
     network_uid: d2b_contracts_resource::v3::ResourceUid,
@@ -2850,6 +2870,7 @@ fn network_provenance(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "network provenance core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn require_installed_network_generation(
     resolver: &BundleResolver,
     provenance: &d2b_contracts_resource::v3::NetworkProvenance,
@@ -3027,10 +3048,17 @@ struct DispatchAuditContext {
     verb: String,
     request_fields: Value,
     started_at: Instant,
+    /// Populated from the request's authoritative audit join; no reader
+    /// consumes it yet because nothing builds this context from a request.
+    #[allow(dead_code, reason = "written from the audit join, not yet read by the record writer")]
     audit_join: Option<AuditJoinContext>,
 }
 
 impl DispatchAuditContext {
+    // No caller: nothing builds the dispatch audit context from a wire
+    // request, so the authoritative audit-join digests it parses are never
+    // reached and the context it would fill is never built.
+    #[allow(dead_code, reason = "no arm builds the dispatch audit context from a request")]
     fn from_request(
         request: &BrokerRequest,
         peer_pid: i32,
@@ -3397,6 +3425,7 @@ fn request_accepts_fd(request: &BrokerRequest) -> bool {
 /// cross-crate decisions the broker only *reads*, and the broker must never
 /// re-derive them from request fields.
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn intent_is_serving_worker_template(
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
 ) -> bool {
@@ -3433,6 +3462,7 @@ fn intent_is_serving_worker_template(
 /// intent.
 #[cfg(not(feature = "layer1-bootstrap"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 enum LaunchPosture {
     /// Ordinary runner launch: no controller escrow descriptor.
     Standard,
@@ -3456,6 +3486,7 @@ enum LaunchPosture {
 impl LaunchPosture {
     /// Resolve the posture ONCE, from the trusted intent, at the point the
     /// dispatch arm resolves that intent.
+    #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
     fn resolve(role: RunnerRole, intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent) -> Self {
         match (role, intent_is_serving_worker_template(intent)) {
             (RunnerRole::ProviderController, true) => Self::ServingWorker,
@@ -3476,6 +3507,7 @@ impl LaunchPosture {
     /// the backend retains the attached descriptor in the
     /// `controller_bootstrap_registry` custody and returns no duplicate on
     /// the response.
+    #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
     fn carries_controller_escrow(self) -> bool {
         matches!(self, Self::ControllerEscrow)
     }
@@ -3494,6 +3526,7 @@ impl LaunchPosture {
     /// the well-known Provider bootstrap fd slot (10) inside the worker with
     /// no custody and no copy. The ServingWorker arm therefore admits only
     /// `(0, 0)`, enforcing the contract the enum documents.
+    #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
     fn validate_request_fds(
         self,
         inherited_fd_count: u16,
@@ -3538,12 +3571,14 @@ impl LaunchPosture {
     /// fence with the fd-leg code). The daemon keeps its own copy of the
     /// daemon end to wait on, so the response fd vector holds the pidfd
     /// alone for every launch.
+    #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
     fn bootstrap_response_index(self) -> Option<u32> {
         None
     }
 
     /// Index of the console-socket descriptor on a `SpawnRunner` response.
     /// Controller launches carry no console descriptor.
+    #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
     fn console_response_index(self, extra_response_fds: usize) -> Option<u32> {
         if extra_response_fds == 0 || self.is_provider_controller() {
             None
@@ -3574,6 +3609,7 @@ impl LaunchPosture {
 /// ([`crate::live_handlers::grant_serving_worker_launch_acls`]) instead of
 /// borrowing the daemon's credentials.
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn prepare_runner_launch_identity(
     posture: LaunchPosture,
     config: &ServerConfig,
@@ -3641,40 +3677,6 @@ fn broker_runtime_root(config: &ServerConfig) -> &Path {
 }
 
 
-/// Real-wire dispatch. Matches the opaque-ID
-/// `d2b_contracts_broker::broker_wire::BrokerRequest` tuple-newtype shape and
-/// wires the live executors into the dispatch arms that have a ready
-/// implementation today.
-///
-/// This signature takes an `Option<&Arc<BundleResolver>>` and returns
-/// `DispatchResult` (response + optional fds) so the bundle-dependent
-/// arms can route through `BundleResolver::find_*_intent` and
-/// `live_handlers::*`, transporting fds via SCM_RIGHTS on the response
-/// frame.
-#[cfg(not(feature = "layer1-bootstrap"))]
-async fn dispatch_request(
-    request: BrokerRequest,
-    caller_uid: u32,
-    caller_gid: u32,
-    caller_role: CallerRole,
-    audit_context: &DispatchAuditContext,
-    config: &ServerConfig,
-    audit_log: &AuditLog,
-    resolver: Option<&Arc<BundleResolver>>,
-) -> Result<DispatchResult, BrokerError> {
-    dispatch_request_with_request_fds(
-        request,
-        caller_uid,
-        caller_gid,
-        caller_role,
-        audit_context,
-        config,
-        audit_log,
-        resolver,
-        Vec::new(),
-    )
-    .await
-}
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(clippy::too_many_arguments)]
@@ -3711,6 +3713,9 @@ async fn dispatch_request_with_request_fds(
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(clippy::too_many_arguments)]
+// Production dispatch enters at `dispatch_request_with_request_fds`; only
+// this crate's unit tests need to substitute a backend.
+#[cfg(test)]
 async fn dispatch_request_with_backend<B: DispatchBackend>(
     request: BrokerRequest,
     caller_uid: u32,
@@ -5797,6 +5802,7 @@ fn write_success_op_record_impl(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn runner_signal_name(signal: d2b_contracts_broker::broker_wire::RunnerSignal) -> &'static str {
     match signal {
         d2b_contracts_broker::broker_wire::RunnerSignal::Term => "term",
@@ -5806,6 +5812,7 @@ fn runner_signal_name(signal: d2b_contracts_broker::broker_wire::RunnerSignal) -
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn runner_signal_number(signal: d2b_contracts_broker::broker_wire::RunnerSignal) -> i32 {
     match signal {
         d2b_contracts_broker::broker_wire::RunnerSignal::Term => libc::SIGTERM,
@@ -5815,6 +5822,7 @@ fn runner_signal_number(signal: d2b_contracts_broker::broker_wire::RunnerSignal)
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 const RUNNER_PIDFD_REGISTRY_CELL: &str = "runner-pidfd-registry";
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -5900,6 +5908,7 @@ impl RunnerPidfdCell {
         crate::state_cells::broker_store().keys(cell)
     }
 
+    #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
     pub(crate) fn clear(self) -> usize {
         let (cell, _) = Self::cell();
         crate::state_cells::broker_store().clear(cell)
@@ -5929,6 +5938,7 @@ pub(crate) fn controller_bootstrap_registry() -> &'static tokio::sync::Mutex<Has
 #[cfg(not(feature = "layer1-bootstrap"))]
 #[derive(Clone)]
 pub(crate) struct RunnerRegistration {
+    #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
     pub(crate) vm_id: String,
     pub(crate) role_id: String,
     pub(crate) resource_ref: Option<d2b_contracts_resource::v3::ResourceRef>,
@@ -5969,6 +5979,7 @@ pub(crate) fn runner_metadata_registry(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn register_runner_metadata(
     runner_id: &str,
     request: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
@@ -6012,6 +6023,7 @@ fn register_runner_metadata(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn register_runner_metadata_from_open(
     runner_id: &str,
     request: &d2b_contracts_broker::broker_wire::OpenPidfdRequest,
@@ -6081,6 +6093,7 @@ pub(crate) fn runner_registry_key(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn runner_intent_id_for_open_pidfd(vm_id: &str, role_id: &str) -> String {
     let process_role_id = match role_id {
         "ch-runner" => "cloud-hypervisor",
@@ -6091,6 +6104,7 @@ fn runner_intent_id_for_open_pidfd(vm_id: &str, role_id: &str) -> String {
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn registration_matches(
     registration: &RunnerRegistration,
     resource_ref: Option<&d2b_contracts_resource::v3::ResourceRef>,
@@ -6142,6 +6156,7 @@ fn registration_matches(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn rebind_guest_execution_registration(
     registration: &mut RunnerRegistration,
     requested: Option<&d2b_contracts_broker::broker_wire::GuestExecutionBinding>,
@@ -6191,6 +6206,7 @@ fn remove_runner_metadata(runner_id: &str) {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 async fn observe_registered_runner(
     request: &d2b_contracts_broker::broker_wire::ObserveRunnerRequest,
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
@@ -6366,6 +6382,7 @@ let mut metadata_registry = runner_metadata_registry().try_lock().map_err(|_| {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 async fn discover_runner_candidate(
     request: &d2b_contracts_broker::broker_wire::ObserveRunnerRequest,
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
@@ -6445,6 +6462,7 @@ async fn discover_runner_candidate(
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 enum RunnerExecutableObservation {
     Matching,
     Mismatch,
@@ -6454,6 +6472,7 @@ enum RunnerExecutableObservation {
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 impl RunnerExecutableObservation {
+    #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
     fn is_verified(self, broker_owned_provenance: bool) -> bool {
         match self {
             Self::Matching => true,
@@ -6472,6 +6491,7 @@ impl RunnerExecutableObservation {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 async fn observe_runner_executable(
     executable: io::Result<PathBuf>,
     expected: &Path,
@@ -6489,6 +6509,7 @@ async fn observe_runner_executable(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 async fn classify_executable_path(actual: &Path, expected: &Path) -> RunnerExecutableObservation {
     let actual = match tokio::fs::canonicalize(actual).await {
         Ok(actual) => actual,
@@ -6549,11 +6570,13 @@ async fn classify_executable_path(actual: &Path, expected: &Path) -> RunnerExecu
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 async fn executable_paths_match(actual: &Path, expected: &Path) -> bool {
     classify_executable_path(actual, expected).await == RunnerExecutableObservation::Matching
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn present_unverified_runner_response(
     request: &d2b_contracts_broker::broker_wire::ObserveRunnerRequest,
     registration: &RunnerRegistration,
@@ -6570,6 +6593,7 @@ fn present_unverified_runner_response(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn reap_registered_runner_after_observation(
     request: &d2b_contracts_broker::broker_wire::ObserveRunnerRequest,
     runner_id: &str,
@@ -6590,6 +6614,7 @@ fn reap_registered_runner_after_observation(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn absent_runner_response(
     request: &d2b_contracts_broker::broker_wire::ObserveRunnerRequest,
 ) -> d2b_contracts_broker::broker_wire::ObserveRunnerResponse {
@@ -6605,6 +6630,7 @@ fn absent_runner_response(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn select_runner_candidate(
     candidates: impl IntoIterator<Item = (i32, u64, bool)>,
 ) -> Result<Option<(i32, u64, bool)>, BrokerError> {
@@ -6620,6 +6646,7 @@ fn select_runner_candidate(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 async fn read_runner_executable(pid: i32) -> io::Result<PathBuf> {
     tokio::fs::read_link(format!("/proc/{pid}/exe")).await
 }
@@ -6632,6 +6659,7 @@ async fn read_runner_executable(pid: i32) -> io::Result<PathBuf> {
 // the async discovery chain calls it as a bounded single-file read. The
 // allow is the sanctioned synchronous-path class, not a blanket.
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn read_proc_start_time_ticks(pid: i32) -> Result<Option<u64>, BrokerError> {
     let content = match fs::read_to_string(format!("/proc/{pid}/stat")) {
         Ok(content) => content,
@@ -6658,6 +6686,7 @@ fn read_proc_start_time_ticks(pid: i32) -> Result<Option<u64>, BrokerError> {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 async fn proc_cgroup_matches(pid: i32, expected_subtree: &str) -> bool {
     if expected_subtree.is_empty() {
         return false;
@@ -6758,6 +6787,7 @@ pub(crate) fn push_child_reap_notification(
 
 /// Drain the ring buffer (used by PollChildReaped handler).
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 pub(crate) fn drain_child_reap_buffer()
 -> Vec<d2b_contracts_broker::broker_wire::ChildReapedNotification> {
     match child_reap_buffer().try_lock() {
@@ -6770,6 +6800,7 @@ pub(crate) fn drain_child_reap_buffer()
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn register_runner_pidfd(runner_id: &str, pidfd: &OwnedFd) -> Result<(), BrokerError> {
     let duplicated = dup(pidfd.as_raw_fd())
         .map(owned_fd_from_raw)
@@ -6868,6 +6899,7 @@ pub(crate) fn reserve_runner_id_for_spawn(runner_id: &str) -> Result<(), BrokerE
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn signal_registered_runner(
     runner_id: &str,
     signal: d2b_contracts_broker::broker_wire::RunnerSignal,
@@ -6920,6 +6952,7 @@ trait DispatchBackend {
     /// authority and an unwired operation stays unreachable.
     fn operation_envelope(&self) -> &crate::envelope::BrokerEnvelope;
 
+    #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
     fn apply_nftables<'a>(
         &'a self,
         resolver: &'a BundleResolver,
@@ -6928,6 +6961,7 @@ trait DispatchBackend {
         destroy: bool,
     ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>>;
 
+    #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
     fn apply_route<'a>(
         &'a self,
         state_dir: &'a Path,
@@ -6936,24 +6970,28 @@ trait DispatchBackend {
         destroy: bool,
     ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>>;
 
+    #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
     fn apply_sysctl<'a>(
         &'a self,
         intent: &'a d2b_core::bundle_resolver::ResolvedSysctlIntent,
         destroy: bool,
     ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>>;
 
+    #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
     fn update_hosts_file<'a>(
         &'a self,
         intent: &'a d2b_core::bundle_resolver::ResolvedHostsIntent,
         destroy: bool,
     ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>>;
 
+    #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
     fn apply_nm_unmanaged<'a>(
         &'a self,
         intent: &'a d2b_core::bundle_resolver::ResolvedNmUnmanagedIntent,
         destroy: bool,
     ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>>;
 
+    #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
     fn set_bridge_port_flags<'a>(
         &'a self,
         req: &'a d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest,
@@ -6966,6 +7004,7 @@ trait DispatchBackend {
         >,
     >;
 
+    #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
     fn open_pidfd<'a>(
         &'a self,
         runner_id: &'a str,
@@ -6973,6 +7012,7 @@ trait DispatchBackend {
         expected_start_time_ticks: u64,
     ) -> Pin<Box<dyn Future<Output = Result<crate::live_handlers::OpenPidfdResult, BrokerError>> + Send + 'a>>;
 
+    #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
     fn signal_runner<'a>(
         &'a self,
         runner_id: &'a str,
@@ -7066,19 +7106,23 @@ trait DispatchBackend {
 #[cfg(not(feature = "layer1-bootstrap"))]
 struct LiveDispatchBackend {
     daemon_gid: u32,
+    #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
     profile: BrokerProfile,
     /// The declaring process that serves family-owned operation handlers, as
     /// the server resolved it from its configuration.
+    #[allow(dead_code, reason = "declared for the family-owned forward socket; no routed arm reads it")]
     forward_socket_path: Option<PathBuf>,
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 struct RunnerPreopenedFds {
     child_fds: Vec<std::os::fd::OwnedFd>,
     response_fds: Vec<std::os::fd::OwnedFd>,
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 async fn prepare_runner_preopened_fds(
     _plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
     resolver: &BundleResolver,
@@ -7836,6 +7880,7 @@ fn live_operation_envelope() -> &'static crate::envelope::BrokerEnvelope {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "vm start prerequisite core: no routed dispatch arm runs the vm start action list")]
 fn require_resolver_ref(resolver: Option<&BundleResolver>) -> Result<&BundleResolver, BrokerError> {
     resolver.ok_or(BrokerError::BundleResolverUnavailable)
 }
@@ -7939,6 +7984,7 @@ fn lookup_vm_name(_resolver: &Arc<BundleResolver>, vm_id: &d2b_contracts::types:
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "vm start prerequisite core: no routed dispatch arm runs the vm start action list")]
 fn apply_vm_start_prerequisites(
     resolver: &BundleResolver,
     vm_name: &str,
@@ -7953,6 +7999,7 @@ fn apply_vm_start_prerequisites(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "vm start prerequisite core: no routed dispatch arm runs the vm start action list")]
 fn execute_vm_start_action(
     intent: &d2b_core::bundle_resolver::ResolvedVmStartIntent,
     action: &d2b_core::bundle_resolver::ResolvedVmStartAction,
@@ -8020,6 +8067,7 @@ fn usbip_lock_path_for_intent(
 }
 
 #[cfg(not(test))]
+#[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
 fn usbip_lock_path_for_intent(
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
 ) -> PathBuf {
@@ -8082,6 +8130,7 @@ impl Drop for TestKernelBundleResolver {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "usb identity probe: no routed dispatch arm reads usb device identity from sysfs")]
 async fn read_usb_device_identity(sysfs_root: &Path, bus_id: &str) -> Result<(u16, u16), BrokerError> {
     if d2b_contracts::usbip::validate_bus_id(bus_id).is_err() {
         return Err(BrokerError::Protocol(format!(
@@ -8607,6 +8656,7 @@ async fn read_usb_serial_for_audit(sysfs_root: &Path, bus_id: &str) -> Option<St
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "usb identity probe: no routed dispatch arm reads usb device identity from sysfs")]
 async fn usb_device_node_for_busid(sysfs_root: &Path, bus_id: &str) -> Result<PathBuf, BrokerError> {
     d2b_contracts::usbip::validate_bus_id(bus_id)
         .map_err(|err| BrokerError::LiveHandler(format!("invalid usbip bus_id: {err:?}")))?;
@@ -8619,6 +8669,7 @@ async fn usb_device_node_for_busid(sysfs_root: &Path, bus_id: &str) -> Result<Pa
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "usb identity probe: no routed dispatch arm reads usb device identity from sysfs")]
 async fn read_usb_decimal_attr(device_dir: &Path, attr: &str, bus_id: &str) -> Result<u16, BrokerError> {
     let path = device_dir.join(attr);
     let raw = tokio::fs::read_to_string(&path).await.map_err(|err| {
@@ -8801,6 +8852,7 @@ async fn handle_usbip_acl_revoke_failure_after_unbind(
 const USBIP_BACKEND_ACL_GRANT_ATTEMPTS: usize = 20;
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "USBIP backend ACL retry pacing; only the unrouted USBIP backend bind helpers sleep on it")]
 const USBIP_BACKEND_ACL_GRANT_RETRY_SLEEP: std::time::Duration =
     std::time::Duration::from_millis(100);
 
@@ -9434,6 +9486,7 @@ async fn build_usbip_explicit_firewall_decision(
         .map_err(|err| BrokerError::LiveHandler(err.to_string()))
 }
 
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn runner_role_for_process_role(
     role: &d2b_core::processes::ProcessRole,
 ) -> Option<d2b_contracts_broker::broker_wire::RunnerRole> {
@@ -9469,6 +9522,7 @@ fn runner_role_for_process_role(
 /// SINGLE EVALUATION POINT for the alias: spawn validation and observation
 /// both read it instead of re-listing the match.
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn wire_role_id_for_intent(intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent) -> &str {
     match intent.role {
         d2b_core::processes::ProcessRole::CloudHypervisorRunner => "ch-runner",
@@ -9477,6 +9531,7 @@ fn wire_role_id_for_intent(intent: &d2b_core::bundle_resolver::ResolvedRunnerInt
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn validate_sandbox_launch_plan(
     req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
@@ -9717,6 +9772,7 @@ fn validate_sandbox_launch_plan(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn capability_matches(
     class: d2b_contracts_resource::v3::process::CapabilityClass,
     capability: &str,
@@ -9740,6 +9796,7 @@ fn capability_matches(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn typed_process_identity(
     resource_ref: Option<&d2b_contracts_resource::v3::ResourceRef>,
     resource_uid: Option<&d2b_contracts_resource::v3::ResourceUid>,
@@ -9805,6 +9862,7 @@ fn typed_process_identity(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn typed_control_identity_complete(
     resource_ref: Option<&d2b_contracts_resource::v3::ResourceRef>,
     resource_uid: Option<&d2b_contracts_resource::v3::ResourceUid>,
@@ -9837,6 +9895,7 @@ fn typed_control_identity_complete(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn private_runtime_scope(
     zone_uid: &d2b_contracts_resource::v3::ResourceUid,
     guest_uid: Option<&d2b_contracts_resource::v3::ResourceUid>,
@@ -9863,6 +9922,7 @@ fn private_runtime_scope(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn validate_typed_process_metadata(
     typed: bool,
     owner_ref: Option<&d2b_contracts_resource::v3::ResourceRef>,
@@ -10043,6 +10103,7 @@ fn validate_typed_process_metadata(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn runtime_scope_segment(scope: [u8; 32]) -> String {
     let mut rendered = String::with_capacity(64);
     for byte in scope {
@@ -10052,6 +10113,7 @@ fn runtime_scope_segment(scope: [u8; 32]) -> String {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn private_cgroup_placement(
     placement: &d2b_core::sandbox_profile::CgroupPlacement,
     vm_name: &str,
@@ -10132,6 +10194,7 @@ fn private_cgroup_placement(
 /// [`DeviceWorkerLaunch::default`]: it has no Device-derived runtime path and
 /// no per-Guest socket directory to open.
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn resolve_device_worker_launch(
     resolver: &BundleResolver,
     req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
@@ -10179,6 +10242,7 @@ fn resolve_device_worker_launch(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn validate_spawn_runner_request_matches_intent(
     req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
@@ -10328,6 +10392,7 @@ fn validate_spawn_runner_request_matches_intent(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "usb identity probe: no routed dispatch arm reads usb device identity from sysfs")]
 async fn read_hex_u16(path: PathBuf, bus_id: &str) -> Result<u16, BrokerError> {
     let raw = tokio::fs::read_to_string(&path).await.map_err(|err| {
         BrokerError::LiveHandler(format!(
@@ -10344,6 +10409,7 @@ async fn read_hex_u16(path: PathBuf, bus_id: &str) -> Result<u16, BrokerError> {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "usbip binding core: no routed dispatch arm enforces the allowlist or looks the bind intent up")]
 async fn enforce_usbip_allowlist(
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
     sysfs_root: &Path,
@@ -10462,6 +10528,7 @@ pub(crate) async fn extend_usbip_backend_device_binds(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "audio runner property core: no routed dispatch arm extends the pipewire environment")]
 async fn extend_audio_runner_pipewire_props(
     vm_id: &str,
     role_id: &str,
@@ -10503,6 +10570,7 @@ async fn extend_audio_runner_pipewire_props(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "audio runner property core: no routed dispatch arm extends the pipewire environment")]
 fn audio_input_target_node(
     env: &[String],
     vm_id: &str,
@@ -10523,6 +10591,7 @@ fn audio_input_target_node(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "audio runner property core: no routed dispatch arm extends the pipewire environment")]
 fn audio_state_value<'a>(
     value: &'a Value,
     key: &str,
@@ -10912,6 +10981,7 @@ fn parse_usbip_bind_intent_id(intent_id: &str) -> Option<(String, String, String
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "usbip binding core: no routed dispatch arm enforces the allowlist or looks the bind intent up")]
 fn find_usbip_bind_intent_for(
     resolver: &BundleResolver,
     vm_name: &str,
@@ -10935,6 +11005,7 @@ fn find_usbip_bind_intent_for(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(dead_code, reason = "usbip binding core: no routed dispatch arm enforces the allowlist or looks the bind intent up")]
 fn find_usbip_bind_intent_by_busid(
     resolver: &BundleResolver,
     bus_id: &str,
@@ -12664,6 +12735,10 @@ pub(crate) async fn cleanup_spawned_runner_after_failure(
 /// catalog; until then the unchanged production entry point does not call it,
 /// and the projection store is absent, so the envelope admits exactly as it
 /// did before this unit.
+// Not yet called: the accept-loop arm that carries the publication message
+// family is a separate, still-open step. Until it lands the projection
+// store is never opened, so this entry point has no production caller.
+#[allow(dead_code, reason = "accept-loop wiring is a separate open step")]
 pub(crate) async fn serve_authority_publication(
     state_dir: &std::path::Path,
     envelope: &d2b_contracts_broker::broker_wire::AuthorityPublicationEnvelope,
@@ -12695,6 +12770,10 @@ pub(crate) async fn serve_authority_publication(
 /// Zone, the store generation the broker holds, the epoch it is minting under,
 /// the authenticated initiating subject the trusted daemon admission
 /// coordinator vouched for, and the accepted cursor this broker held.
+// Not yet called: the accept-loop arm that carries the publication message
+// family is a separate, still-open step. Until it lands the projection
+// store is never opened, so this entry point has no production caller.
+#[allow(dead_code, reason = "accept-loop wiring is a separate open step")]
 pub(crate) async fn serve_authority_publication_open(
     state_dir: &std::path::Path,
     open: &d2b_contracts_broker::broker_wire::AuthorityPublicationOpen,
@@ -13493,7 +13572,9 @@ mod tests {
     struct TestBundle {
         bundle_path: PathBuf,
         manifest_path: PathBuf,
+        #[allow(dead_code, reason = "test bundle fixture paths; no test reads them")]
         host_path: PathBuf,
+        #[allow(dead_code, reason = "test bundle fixture path; no test reads it")]
         processes_path: PathBuf,
         /// The shared-storage root this bundle's storage contract
         /// declares: `<root>/store`. The serving-worker ACL grant proves
@@ -18902,6 +18983,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    #[allow(dead_code, reason = "otel host-bridge socket-path helper; no caller")]
     fn otel_host_bridge_socket_path_extracts_unix_listen_target() {
         let argv = vec![
             "/run/current-system/sw/bin/socat".to_owned(),

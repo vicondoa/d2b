@@ -1,11 +1,11 @@
-# The isolated new-graph Nix test surface (U33).
+# The isolated new-graph Nix test surface.
 #
-# Canonical graph policy, or a refusal. Every case evaluates the
+# Canonical graph policy, or a named refusal. Every case evaluates the
 # test-owned projection in `tests/unit/nix/graph-policy.nix` over a
 # declaration projection document and asserts what comes out: the exact
-# canonical policy for a well-formed projection, and a refusal naming the
-# retired knob or the undeclared row for a projection that still speaks the
-# old vocabulary.
+# canonical policy for a well-formed projection, and the exact refusal naming
+# the retired knob or the undeclared row for a projection that still speaks
+# the old vocabulary.
 #
 # The surface imports no production option module and declares no NixOS
 # option, so nothing here can change what `nixosModules.default` evaluates
@@ -15,7 +15,19 @@
 
 let
   inherit (pkgs) lib;
-  policy = import (flakeRoot + "/tests/unit/nix/graph-policy.nix") { inherit lib; };
+  compile = import (flakeRoot + "/tests/unit/nix/graph-policy.nix") { inherit lib; };
+
+  # The canonical policy a projection earns when it earns no refusal.
+  policy = args: (compile args).policy;
+  # The refusal a projection earns, named rather than merely observed as a
+  # throw: `refused` proves the policy really is refused, and `refusals` is the
+  # reason it is refused. Asserting only the throw lets a case pass for an
+  # unrelated defect, which is how a case named for a retired knob survives
+  # the knob it names being gone.
+  refusal = args: {
+    refused = builtins.tryEval (policy args);
+    refusals = (compile args).refusals;
+  };
 
   digest = seed: "sha256:${builtins.hashString "sha256" seed}";
 
@@ -108,58 +120,86 @@ in
     };
 
     "graph-policy/a-retired-privilege-knob-is-refused" = {
-      expr = policy {
+      expr = refusal {
         projection = canonical;
         legacy.privileges = { read = [ "global" ]; };
       };
-      expectedError = { };
+      expected = {
+        refused = { success = false; value = false; };
+        refusals = [
+          "refused retired knob(s) privileges; the canonical graph policy is derived from the provider declaration and admits no second source"
+        ];
+      };
     };
 
     "graph-policy/a-retired-role-scope-table-is-refused" = {
-      expr = policy {
+      expr = refusal {
         projection = canonical;
         legacy.roleScopes."HostReconcile" = {
           principals = [ "d2bd" ];
         };
       };
-      expectedError = { };
+      expected = {
+        refused = { success = false; value = false; };
+        refusals = [
+          "refused retired knob(s) roleScopes; the canonical graph policy is derived from the provider declaration and admits no second source"
+        ];
+      };
     };
 
     "graph-policy/a-retired-family-scope-table-is-refused" = {
-      expr = policy {
+      expr = refusal {
         projection = canonical;
         legacy.familyScopes.volume = {
           storageRoots = [ "/var/lib/d2b" ];
         };
       };
-      expectedError = { };
+      expected = {
+        refused = { success = false; value = false; };
+        refusals = [
+          "refused retired knob(s) familyScopes; the canonical graph policy is derived from the provider declaration and admits no second source"
+        ];
+      };
     };
 
     "graph-policy/a-retired-broker-wire-variant-list-is-refused" = {
-      expr = policy {
+      expr = refusal {
         projection = canonical;
         legacy.brokerOperations = [ "ExportVolume" ];
       };
-      expectedError = { };
+      expected = {
+        refused = { success = false; value = false; };
+        refusals = [
+          "refused retired knob(s) brokerOperations; the canonical graph policy is derived from the provider declaration and admits no second source"
+        ];
+      };
     };
 
     "graph-policy/a-retired-principal-allocation-is-refused" = {
-      expr = policy {
+      expr = refusal {
         projection = canonical;
         legacy.principalAllocation = {
           d2bd = "d2bd.d2bus.org";
         };
       };
-      expectedError = { };
+      expected = {
+        refused = { success = false; value = false; };
+        refusals = [
+          "refused retired knob(s) principalAllocation; the canonical graph policy is derived from the provider declaration and admits no second source"
+        ];
+      };
     };
 
     "graph-policy/a-projection-row-carrying-a-retired-table-is-refused" = {
-      expr = policy { projection = withRetiredKey; };
-      expectedError = { };
+      expr = refusal { projection = withRetiredKey; };
+      expected = {
+        refused = { success = false; value = false; };
+        refusals = [ "provider provider-declared carries privileges" ];
+      };
     };
 
     "graph-policy/a-method-no-declared-component-answers-is-refused" = {
-      expr = policy {
+      expr = refusal {
         projection = canonical // {
           operations = [
             {
@@ -171,11 +211,16 @@ in
           ];
         };
       };
-      expectedError = { };
+      expected = {
+        refused = { success = false; value = false; };
+        refusals = [
+          "method import is answered by undeclared-worker with presentation none, which Provider/provider-declared does not declare"
+        ];
+      };
     };
 
     "graph-policy/a-method-restating-another-presentation-is-refused" = {
-      expr = policy {
+      expr = refusal {
         projection = canonical // {
           operations = [
             {
@@ -187,11 +232,16 @@ in
           ];
         };
       };
-      expectedError = { };
+      expected = {
+        refused = { success = false; value = false; };
+        refusals = [
+          "method export is answered by declared-service with presentation filesystem-presentation, which Provider/provider-declared does not declare"
+        ];
+      };
     };
 
     "graph-policy/a-registration-naming-an-undeclared-provider-is-refused" = {
-      expr = policy {
+      expr = refusal {
         projection = canonical // {
           registrations = [
             {
@@ -202,21 +252,38 @@ in
           ];
         };
       };
-      expectedError = { };
+      expected = {
+        refused = { success = false; value = false; };
+        refusals = [
+          "registration provider-retired names Provider/provider-retired, which no projection row declares"
+        ];
+      };
     };
 
     "graph-policy/a-service-resolving-to-an-undeclared-provider-is-refused" = {
-      expr = policy {
+      expr = refusal {
         projection = canonical // {
           serviceCatalog."orphan.d2bus.org/export" = "Provider/provider-orphan";
         };
       };
-      expectedError = { };
+      expected = {
+        refused = { success = false; value = false; };
+        refusals = [
+          "service orphan.d2bus.org/export resolves to Provider/provider-orphan, which no projection row declares"
+        ];
+      };
     };
 
     "graph-policy/a-projection-under-the-old-contract-version-is-refused" = {
-      expr = policy { projection = canonical // { contractVersion = "d2b.zone.v2"; }; };
-      expectedError = { };
+      expr = refusal {
+        projection = canonical // { contractVersion = "d2b.zone.v2"; };
+      };
+      expected = {
+        refused = { success = false; value = false; };
+        refusals = [
+          "projection declares contract version d2b.zone.v2; the canonical graph policy compiles only d2b.zone.v3"
+        ];
+      };
     };
 
     # The projection is a pure function of its input, so the same

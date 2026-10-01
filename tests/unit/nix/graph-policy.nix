@@ -1,4 +1,4 @@
-# The isolated new-graph policy projection (U33).
+# The isolated new-graph policy projection.
 #
 # This module is the Nix half of the new graph's build/test closure. It
 # turns one declaration projection - the document the Rust projection emits
@@ -179,15 +179,19 @@ let
   failures = lib.concatLists [
     (if refusedKnobs != [ ] then
       [
-        "refused retired knob(s) ${builtins.concatStringsSep ", "
-          refusedKnobs}; the canonical graph policy is derived from the provider
-          declaration and admits no second source"
+        (builtins.concatStringsSep " " [
+          "refused retired knob(s) ${builtins.concatStringsSep ", " refusedKnobs};"
+          "the canonical graph policy is derived from the provider declaration"
+          "and admits no second source"
+        ])
       ]
     else [ ])
     (if contractVersion_ != contractVersion then
       [
-        "projection declares contract version ${toString contractVersion_}; the
-          canonical graph policy compiles only ${contractVersion}"
+        (builtins.concatStringsSep " " [
+          "projection declares contract version ${toString contractVersion_};"
+          "the canonical graph policy compiles only ${contractVersion}"
+        ])
       ]
     else [ ])
     (if wideRows != [ ] then wideRows else [ ])
@@ -196,24 +200,32 @@ let
     (if orphanServices != [ ] then orphanServices else [ ])
   ];
 in
-if failures != [ ] then
-  throw ''
-    graph-policy: the projection is not a canonical new-graph policy:
-    ${builtins.concatStringsSep "\n    - " failures}
-  ''
-else
-  {
-    inherit contractVersion;
-    providerRefs = builtins.sort lib.lessThan knownProviderRefs;
-    components = lib.concatLists (map
-      (name: map
-        (component: {
-          inherit (component) componentId presentation setupRestrictions;
-          providerRef = providers.${name}.providerRef;
-          declarationDigest = providers.${name}.declarationDigest;
-        })
-        providers.${name}.components)
-      providerNames);
-    methods = operations;
-    consumerRequests = consumerRequests;
-  }
+{
+  # The refusals are a value, not only a thrown message. A caller that can
+  # read them asserts WHICH refusal a projection earned; a throw alone only
+  # says that something refused, which every unrelated defect also satisfies.
+  refusals = failures;
+
+  policy =
+    if failures != [ ] then
+      throw ''
+        graph-policy: the projection is not a canonical new-graph policy:
+        ${builtins.concatStringsSep "\n    - " failures}
+      ''
+    else
+      {
+        inherit contractVersion;
+        providerRefs = builtins.sort lib.lessThan knownProviderRefs;
+        components = lib.concatLists (map
+          (name: map
+            (component: {
+              inherit (component) componentId presentation setupRestrictions;
+              providerRef = providers.${name}.providerRef;
+              declarationDigest = providers.${name}.declarationDigest;
+            })
+            providers.${name}.components)
+          providerNames);
+        methods = operations;
+        consumerRequests = consumerRequests;
+      };
+}

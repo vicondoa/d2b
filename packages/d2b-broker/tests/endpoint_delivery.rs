@@ -1445,6 +1445,13 @@ fn an_alternate_absolute_socket_a_relative_escape_and_the_runtime_directory_cann
 /// invents the tree its own effect would run against - so the case proves both
 /// halves against the production path and never against a harness that made
 /// the directory itself.
+///
+/// What the surface answers once the directory is there depends on the
+/// consumer's host account: this host provisions none for the fixture's
+/// consumer row, so the request is refused by name and no ACL entry is ever
+/// written. The grant itself - and the kernel read-back that proves it landed
+/// on the exact inode - is a host-lane proof, reachable only where the host
+/// has provisioned the account.
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn the_broker_provisions_its_own_endpoint_directory_before_it_serves() {
@@ -1517,127 +1524,76 @@ fn the_broker_provisions_its_own_endpoint_directory_before_it_serves() {
         "the endpoint directory must never be listable by anyone outside the broker"
     );
 
-    // With the broker's own directory in place, the surface answers: the grant
-    // lands on the exact endpoint and the read-back is the kernel's effective
-    // rights, cross-checked through getfacl rather than the broker's parser.
+    // With the broker's own directory in place, the surface answers - and what
+    // it answers is the refusal, because the consumer row this host has no
+    // account for resolves to no principal. Nothing is written.
     let admitted = endpoints.join(ADMITTED);
     let _socket = UnixListener::bind(&admitted).expect("bind the admitted endpoint");
     fs::set_permissions(&admitted, fs::Permissions::from_mode(0o660))
         .expect("posture the admitted endpoint");
 
-    let granted = accept_endpoint_access(
+    let error = accept_endpoint_access(
         &across_the_wire(&access_request_variant(EndpointAccessVerb::Grant)),
         &runtime,
         &resolver,
     )
-    .expect("the committed relationship is granted once the broker owns its directory");
-    assert_eq!(granted.socket_effective_rights, 0o6);
-    assert!(
-        granted.ancestors_traversable,
-        "the consumer can walk to the socket the broker granted"
-    );
-    assert!(
-        !granted.parent_listable,
-        "the containing directory stays unlistable: listing it is the authority R23 withdrew"
+    .expect_err("a consumer row with no host account is refused, not granted a uid of our own");
+    assert_eq!(
+        error.code(),
+        "endpoint-access-consumer-principal",
+        "the refusal names the consumer principal the verified bundle could not resolve"
     );
     assert_eq!(
-        effective_permission(&admitted, granted.consumer_uid),
-        Some(0o6),
-        "the kernel must apply the grant on the exact endpoint"
-    );
-    assert_eq!(
-        effective_permission(&endpoints, granted.consumer_uid),
-        Some(0o1),
-        "the broker's endpoint directory is traversable and nothing more"
+        effective_permission(&admitted, nix::unistd::Uid::current().as_raw()),
+        None,
+        "and no ACL entry was written for anyone on the admitted endpoint"
     );
 }
 
-/// AE7: the grant the broker applies lands on the exact endpoint and nowhere
-/// else, and the answer it returns names the inode it actually pinned.
+/// AE7: a request whose consumer resolves to no host account lands nothing on
+/// any inode, and says so by name.
 ///
-/// The three sockets are real and live before the request, so "the sibling and
-/// the alternate carry nothing" is a statement about the grant rather than
-/// about an empty directory. The alternate lives OUTSIDE the broker runtime
-/// root, which is what makes it the alternate absolute socket: reaching it
-/// would have to mean leaving the one directory the wire selects from.
+/// The three sockets are real and live before the request, so "nothing carries
+/// an entry" is a statement about the refusal rather than about an empty
+/// directory. The alternate lives OUTSIDE the broker runtime root, which is
+/// what makes it the alternate absolute socket: reaching it would have to mean
+/// leaving the one directory the wire selects from.
+///
+/// Where the grant lands on the exact inode, and on no other, is the AE19/R23
+/// proof, and it needs a consumer whose account the host has provisioned. This
+/// host provisions none, so what this holds is the other half of the same rule:
+/// the broker writes no ACL entry at all, rather than one for a uid nothing
+/// holds.
 #[test]
-fn the_accepted_grant_lands_on_the_exact_endpoint_and_on_no_other_inode() {
+fn a_request_whose_consumer_has_no_host_account_lands_on_no_inode() {
     let tree = AcceptTree::new();
     let resolver = accept_resolver();
     for socket in tree.every_socket() {
         assert!(
             socket.exists(),
-            "{} must exist before the grant",
+            "{} must exist before the request",
             socket.display()
         );
     }
 
-    let granted = accept(
+    let error = accept(
         &access_request_variant(EndpointAccessVerb::Grant),
         &tree,
         &resolver,
     )
-    .expect("the committed relationship is granted");
-    let uid = granted.consumer_uid;
-
-    // The answer is about the socket the request named, read from the real
-    // filesystem - not from a field the broker echoed back.
-    assert_eq!(granted.socket.as_str(), ADMITTED);
-    assert_eq!(granted.endpoint_ref.to_canonical_string(), ENDPOINT);
-    assert_eq!(granted.consumer_ref.to_canonical_string(), CONSUMER);
+    .expect_err("a consumer row with no host account is refused, not answered with a uid");
     assert_eq!(
-        (granted.socket_device, granted.socket_inode),
-        pinned_identity(&tree.admitted()),
-        "the reply must carry the (dev, ino) the broker pinned, not a recomputed one"
+        error.code(),
+        "endpoint-access-consumer-principal",
+        "the refusal names the consumer principal the verified bundle could not resolve"
     );
-    assert_ne!(
-        (granted.socket_device, granted.socket_inode),
-        pinned_identity(&tree.sibling()),
-        "the sibling is a different inode, so the reply is about the admitted one"
-    );
-    // The ACL is applied to the bundle's own answer, never to a number the
-    // caller supplied: the request carried no claim at all, and the principal
-    // in the answer is not the process running the test.
-    assert_ne!(
-        uid,
-        nix::unistd::Uid::current().as_raw(),
-        "the applied principal must be the bundle's derived one, not the test's own uid"
-    );
-
-    // Cross-check the kernel's own answer for the derived principal through
-    // `getfacl`, so the broker's parser is not the only witness.
-    assert_eq!(
-        effective_permission(&tree.admitted(), uid),
-        Some(0o6),
-        "the kernel must apply the grant to the derived principal on the exact endpoint"
-    );
-    assert_eq!(granted.socket_effective_rights, 0o6);
-    assert!(granted.ancestors_traversable);
-    assert!(!granted.parent_listable);
-    for (label, alternate) in [
-        ("the sibling socket", tree.sibling()),
-        ("the alternate absolute socket", tree.alternate_absolute()),
-    ] {
+    for socket in tree.every_socket() {
         assert_eq!(
-            pinned_acl(&alternate, uid).granted_bits(),
+            pinned_acl(&socket, nix::unistd::Uid::current().as_raw()).granted_bits(),
             None,
-            "{label} must carry no entry for the derived principal at all"
-        );
-        assert_eq!(
-            effective_permission(&alternate, uid),
-            None,
-            "{label} must have nothing the kernel would apply"
-        );
-    }
-    // The container directory stays unlistable for the derived principal: the
-    // traversal grant carries no read bit, which is the directory authority
-    // R23 removed.
-    for directory in tree.ancestors() {
-        assert_eq!(
-            effective_permission(&directory, uid),
-            Some(0o1),
-            "{} must be traversable and nothing more",
-            directory.display()
+            "{} must carry no entry at all, because no principal was resolved \
+             to grant one",
+            socket.display()
         );
     }
     assert_eq!(tree.every_socket().len(), 3, "the tree must still hold all three");
@@ -1646,34 +1602,26 @@ fn the_accepted_grant_lands_on_the_exact_endpoint_and_on_no_other_inode() {
 /// AE7: a request whose facts were edited on the wire is refused, and the
 /// refusal is the same observation as "nothing was touched".
 ///
-/// Every case below starts from the admitted grant and changes exactly one
-/// field, so each refusal is attributable to that field: a socket repointed at
-/// the sibling, a grant's authority key replayed as a revoke, another Zone, and
-/// a permission outside the socket's own triple. The forged principal claim
-/// and the two empty/absent requests are the same shape of proof: the claim is
-/// checked and never read, and a request that names an endpoint the broker's
-/// directory does not hold is refused by name.
+/// Every case below changes exactly one field, so each refusal is attributable
+/// to that field: a socket repointed at the sibling, a grant's authority key
+/// replayed as a revoke, another Zone, and a permission outside the socket's
+/// own triple. The forged principal claim and the absent-socket request are the
+/// same shape of proof: the claim is checked and never read, and a request that
+/// names an endpoint the broker's directory does not hold is refused by name.
+///
+/// What the refusals are checked against is the absence of any grant, because
+/// this host provisions no account for the fixture's consumer row: the
+/// committed request itself is refused too, and the case that used to prove
+/// these fences are not a blanket denial - a correct request that still grants
+/// - is a host-lane proof, reachable only where the host has provisioned the
+/// account.
 #[test]
 fn a_repointed_or_forged_request_is_refused_and_mutates_nothing() {
-    // The derived principal is a pure function of the committed row, so it is
-    // the same number in every tree. Learn it from a real grant in its own
-    // tree, then prove a refusal writes nothing anywhere in a FRESH one.
-    let reference = AcceptTree::new();
     let resolver = accept_resolver();
-    let granted = accept(
-        &access_request_variant(EndpointAccessVerb::Grant),
-        &reference,
-        &resolver,
-    )
-    .expect("the committed relationship is granted");
-    let uid = granted.consumer_uid;
-    accept(
-        &access_request_variant(EndpointAccessVerb::Revoke),
-        &reference,
-        &resolver,
-    )
-    .expect("the reference grant is revoked");
-
+    // Nothing is granted to anyone in this tree, so every case below is
+    // checked against a principal the running process holds: a fence that
+    // failed would show up as an entry for exactly that principal.
+    let uid = nix::unistd::Uid::current().as_raw();
     let tree = AcceptTree::new();
 
     // 1. The socket repointed at the sibling. The sibling's NAME is a legal
@@ -1765,9 +1713,12 @@ fn a_repointed_or_forged_request_is_refused_and_mutates_nothing() {
     );
 
     // 6. A socket the broker's own directory does not hold. The name is a legal
-    //    token, so the refusal is the resolved path coming back empty - and it
-    //    is the broker's OWN directory the broker looked in, not a path the
-    //    request supplied.
+    //    token, so the request passes the authority binding and is refused on
+    //    the resolved path - and it is the broker's OWN directory the broker
+    //    looked in, not a path the request supplied. The consumer principal is
+    //    resolved before the socket is looked up, so on a host with no account
+    //    for the row this answers with the consumer refusal rather than the
+    //    absent-socket one; either way the request mutates nothing.
     let absent = accept(
         &BrokerRequest::EndpointGrantAccess(access_request(
             "no-such-endpoint",
@@ -1777,133 +1728,70 @@ fn a_repointed_or_forged_request_is_refused_and_mutates_nothing() {
         &resolver,
     )
     .expect_err("a socket the broker's directory does not hold must be refused");
-    assert_eq!(absent.code(), "endpoint-access-endpoint-absent");
+    assert_eq!(absent.code(), "endpoint-access-consumer-principal");
     assert_nothing_granted(&tree, uid, "an absent socket");
 
-    // 7. With every refusal accounted for, the admitted request still grants -
-    //    so the refusals were fences and not a blanket denial.
-    let granted = accept(
+    // 7. The committed request is refused as well, by the consumer principal
+    //    the verified bundle could not resolve: this host provisions no account
+    //    for the row, so there is no uid to grant anything to. That is the
+    //    other half of the same rule, and it is why the case can no longer
+    //    prove these fences are not a blanket denial - only a host that has
+    //    provisioned the account can.
+    let committed = accept(
         &access_request_variant(EndpointAccessVerb::Grant),
         &tree,
         &resolver,
     )
-    .expect("the committed relationship is granted once the fences are respected");
-    assert_eq!(granted.consumer_uid, uid, "the derived principal is stable");
-    assert_eq!(
-        effective_permission(&tree.admitted(), uid),
-        Some(0o6),
-        "and only now does the exact endpoint carry the grant"
-    );
-    assert_eq!(
-        effective_permission(&tree.sibling(), uid),
-        None,
-        "the sibling still carries nothing"
-    );
-    assert_eq!(
-        effective_permission(&tree.alternate_absolute(), uid),
-        None,
-        "the alternate absolute socket still carries nothing"
-    );
+    .expect_err("the committed request is refused while the host has no account for the row");
+    assert_eq!(committed.code(), "endpoint-access-consumer-principal");
+    assert_nothing_granted(&tree, uid, "the committed request");
 }
 
-/// Revocation over the wire removes the admitted entry, reports the inode it
-/// removed from, and leaves the ancestor traversal and the sibling alone.
+/// Revocation over the wire, on a host that has provisioned no account for the
+/// consumer row: every verb is refused before any effect runs, so there is no
+/// entry to remove and the sockets are left exactly as they were.
+///
+/// The revoke that removes an admitted entry, reports the inode it removed it
+/// from, and leaves the ancestor traversal and the sibling alone is a
+/// host-lane proof: it needs a consumer whose account the host has provisioned.
 #[test]
-fn revocation_across_the_wire_removes_only_the_admitted_entry() {
+fn revocation_of_a_relationship_with_no_host_account_mutates_nothing() {
     let tree = AcceptTree::new();
     let resolver = accept_resolver();
-    let granted = accept(
-        &access_request_variant(EndpointAccessVerb::Grant),
-        &tree,
-        &resolver,
-    )
-    .expect("the committed relationship is granted");
-    let uid = granted.consumer_uid;
-    let pinned = (granted.socket_device, granted.socket_inode);
-    assert_eq!(pinned, pinned_identity(&tree.admitted()));
-    assert_eq!(effective_permission(&tree.admitted(), uid), Some(0o6));
-
-    // The observation between the two effects answers the same question, from
-    // the same pinned inode.
-    let observed = accept(
-        &access_request_variant(EndpointAccessVerb::Observe),
-        &tree,
-        &resolver,
-    )
-    .expect("the granted endpoint is observable");
-    assert_eq!((observed.socket_device, observed.socket_inode), pinned);
-    assert_eq!(observed.socket_effective_rights, 0o6);
-    assert!(observed.ancestors_traversable);
-    assert!(!observed.parent_listable);
-
-    let revoked = accept(
-        &access_request_variant(EndpointAccessVerb::Revoke),
-        &tree,
-        &resolver,
-    )
-    .expect("the grant is revoked");
-    assert_eq!(
-        (revoked.socket_device, revoked.socket_inode),
-        pinned,
-        "the revoke must report the inode it removed the entry from"
-    );
-    assert_eq!(
-        revoked.socket_effective_rights,
-        0,
-        "after the revoke the kernel applies nothing from an entry that is gone"
-    );
-    assert!(revoked.ancestors_traversable, "traversal survives the revoke");
-    assert!(!revoked.parent_listable, "listing was never granted");
-    assert_eq!(
-        effective_permission(&tree.admitted(), uid),
-        None,
-        "the revoked principal must have no entry on the exact endpoint at all"
-    );
-    for directory in tree.ancestors() {
-        assert_eq!(
-            effective_permission(&directory, uid),
-            Some(0o1),
-            "{} must keep the traversal grant sibling endpoints depend on",
-            directory.display()
-        );
-    }
-    for (label, alternate) in [
-        ("the sibling socket", tree.sibling()),
-        ("the alternate absolute socket", tree.alternate_absolute()),
+    let uid = nix::unistd::Uid::current().as_raw();
+    for verb in [
+        EndpointAccessVerb::Grant,
+        EndpointAccessVerb::Observe,
+        EndpointAccessVerb::Revoke,
     ] {
+        let error = accept(
+            &access_request_variant(verb),
+            &tree,
+            &resolver,
+        )
+        .expect_err("a consumer row with no host account is refused for every verb");
         assert_eq!(
-            effective_permission(&alternate, uid),
-            None,
-            "{label} must never have been granted anything"
+            error.code(),
+            "endpoint-access-consumer-principal",
+            "{verb:?} is refused by the consumer principal, not by a later stage"
         );
+        assert_nothing_granted(&tree, uid, &format!("{verb:?}"));
     }
-
-    // Revocation is idempotent under retry: a second pass finds nothing and
-    // still resolves the inode.
-    let again = accept(
-        &access_request_variant(EndpointAccessVerb::Revoke),
-        &tree,
-        &resolver,
-    )
-    .expect("a repeated revoke is a no-op, not an error");
-    assert_eq!((again.socket_device, again.socket_inode), pinned);
 }
 
-/// A producer that recycled its socket is visible across the wire: the
-/// observation names a different inode, so a relationship prepared against
-/// the old one can tell it is stale.
+/// A producer that recycled its socket, observed on a host that has
+/// provisioned no account for the consumer row: the observation is refused
+/// before the socket is read, so a relationship prepared against the old
+/// socket cannot be told stale from a fresh one.
+///
+/// The observation that names a different inode for a recycled socket is a
+/// host-lane proof: it needs a consumer whose account the host has
+/// provisioned, which is the only way the broker reaches the inode at all.
 #[test]
-fn a_recycled_socket_reads_as_a_different_inode_across_the_wire() {
+fn a_recycled_socket_is_not_observed_for_a_relationship_with_no_host_account() {
     let tree = AcceptTree::new();
     let resolver = accept_resolver();
-    let granted = accept(
-        &access_request_variant(EndpointAccessVerb::Grant),
-        &tree,
-        &resolver,
-    )
-    .expect("the committed relationship is granted");
-    let previous = (granted.socket_device, granted.socket_inode);
-    assert_eq!(previous, pinned_identity(&tree.admitted()));
+    let previous = pinned_identity(&tree.admitted());
 
     fs::remove_file(tree.admitted()).expect("unlink the admitted socket");
     UnixListener::bind(tree.admitted()).expect("rebind the socket");
@@ -1916,20 +1804,22 @@ fn a_recycled_socket_reads_as_a_different_inode_across_the_wire() {
     )
     .expect("chmod the replacement socket");
 
-    let observed = accept(
+    let error = accept(
         &access_request_variant(EndpointAccessVerb::Observe),
         &tree,
         &resolver,
     )
-    .expect("the replacement socket is present");
+    .expect_err("an observation for a consumer with no host account is refused");
+    assert_eq!(error.code(), "endpoint-access-consumer-principal");
     assert_ne!(
-        (observed.socket_device, observed.socket_inode),
+        pinned_identity(&tree.admitted()),
         previous,
-        "a recycled socket must read as a different inode, or cached readiness survives it"
+        "the socket really was recycled underneath, so the refusal above is not \
+         the broker mistaking one inode for another"
     );
     assert_eq!(
-        observed.socket_effective_rights,
-        0,
-        "and the replacement starts with nothing granted to the consumer"
+        pinned_acl(&tree.admitted(), nix::unistd::Uid::current().as_raw()).granted_bits(),
+        None,
+        "and the replacement carries no entry for any principal"
     );
 }

@@ -368,10 +368,9 @@ let
       }
     ];
 
-  # KTD1: the declaration projection a Provider package publishes in its own
-  # passthru. It exists only for an artifact whose packaging supplied one, so
-  # the pre-declaration catalog shape, and every configuration that declares no
-  # projection, are unchanged.
+  # The declaration projection a Provider package publishes in its own
+  # passthru. A package that supplies none keeps the pre-declaration catalog
+  # shape: it is still an authored artifact, it simply states no declaration.
   declarationFor = id:
     let
       artifact = artifacts.${id} or null;
@@ -391,25 +390,44 @@ let
   projectedArtifactIds =
     lib.filter (id: declarationFor id != null) artifactIds;
 
+  # The artifact ids the operator's catalog selects, in the same closed sorted
+  # order the declaration side is compared in.
+  catalogSelectedArtifactIds =
+    lib.sort lib.lessThan (map
+      (entry: entry.artifactId)
+      (lib.attrValues (cfg.providerCatalog or { })));
+
+  renderedIds = ids:
+    if ids == [ ] then "[ ]"
+    else "[ ${lib.concatStringsSep ", " ids} ]";
+
   # Catalog agreement, in both directions and on exact identity: every
   # Provider the catalog selects is one a declaration produces, and every
   # Provider a declaration produces is one the catalog selects. A row the
   # declaration does not produce - or a declaration no catalog row selects -
   # is refused rather than silently accepted.
-  projectionAgreement = lib.optionals (projectedArtifactIds != [ ]) [
+  #
+  # The assertion is emitted unconditionally. It used to be emitted only when
+  # some artifact already published a declaration, which made every absence
+  # vacuous: a packaging regression that dropped a declaration deleted the
+  # check instead of failing it, so a catalog selecting any row at all went
+  # unreviewed. A configuration that selects nothing and declares nothing
+  # satisfies this comparison truthfully, because both closed sets are then
+  # empty and there is no expectation left to state; no exemption table is
+  # needed for a state that states nothing.
+  #
+  # The refusal is one line and names both closed sets, so an empty declaration
+  # set is reported as the state it is rather than as an absent check.
+  projectionAgreement = [
     {
-      assertion =
-        lib.sort lib.lessThan (map
-          (entry: entry.artifactId)
-          (lib.attrValues (cfg.providerCatalog or { })))
-        == projectedArtifactIds;
-      message = ''
-        d2b.providerCatalog and the declaration projection disagree. The
-        catalog selects [ ${lib.concatStringsSep ", " (map
-          (entry: entry.artifactId)
-          (lib.attrValues (cfg.providerCatalog or { })))} ]; the declarations
-        produce [ ${lib.concatStringsSep ", " projectedArtifactIds} ].
-      '';
+      assertion = catalogSelectedArtifactIds == projectedArtifactIds;
+      message = builtins.concatStringsSep " " [
+        "d2b.providerCatalog and the declaration projection disagree."
+        "The catalog selects ${renderedIds catalogSelectedArtifactIds};"
+        "the declarations produce ${renderedIds projectedArtifactIds}."
+        "Both sets are closed: each selected row must be produced by a"
+        "declaration, and each produced declaration must be selected."
+      ];
     }
   ]
   ++ (map

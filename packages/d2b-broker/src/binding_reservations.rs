@@ -47,11 +47,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(test)]
+use d2b_contracts_resource::v3::ZoneId;
 use d2b_contracts_resource::v3::{
     AdmissionStage, BindingAdmission, BindingArbitration, BindingKey, BindingLifecycleState,
     BindingObservation, BindingSlotIndex, BindingSpecFingerprint, BoundedToken,
     CallableOperation, CompletionCondition, DesiredRevision, OperationImplementation,
-    RefusalReason, ReleaseOutcome, RequestedRights, ResourceUid, SourceReservation, ZoneId,
+    RefusalReason, ReleaseOutcome, RequestedRights, ResourceUid, SourceReservation,
 };
 
 use crate::catalog::CellDurability;
@@ -650,7 +652,6 @@ impl Holder {
 /// so a leg is found through its parent holder rather than through the claim.
 #[derive(Debug, Clone)]
 struct SourceClaim {
-    zone: ZoneId,
     source_uid: ResourceUid,
     reservation: SourceReservation,
     arbitration: BindingArbitration,
@@ -817,7 +818,6 @@ impl BindingReservationService {
         let rights = admission.rights();
         let source_uid = key.source_uid().clone();
         let claim = self.claims.entry(source_uid.clone()).or_insert_with(|| SourceClaim {
-            zone: key.zone().clone(),
             source_uid: source_uid.clone(),
             reservation: reservation.clone(),
             arbitration: admission.arbitration(),

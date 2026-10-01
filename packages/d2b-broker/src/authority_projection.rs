@@ -2595,6 +2595,7 @@ static AUTHORITY_PROJECTION: std::sync::OnceLock<AuthorityProjection> =
 /// A projection that fails to open fails the broker closed rather than serving
 /// admission out of a half-open state.
 #[cfg(test)]
+#[allow(dead_code, reason = "test-only opener; no test installs it, the async twin is the one the publication entry uses")]
 pub(crate) fn init_authority_projection(state_dir: &Path) -> Reply<()> {
     let projection = AuthorityProjection::open(state_dir.to_path_buf())?;
     let _ = AUTHORITY_PROJECTION.set(projection);
@@ -2603,6 +2604,9 @@ pub(crate) fn init_authority_projection(state_dir: &Path) -> Reply<()> {
 
 /// The async twin of [`init_authority_projection`], for the dispatch path that
 /// opens the projection lazily on the first publication arrival.
+// Only caller is the authority-publication accept-loop entry point, which
+// itself has no production caller until that arm is wired.
+#[allow(dead_code, reason = "only reachable from the not-yet-wired publication entry point")]
 pub(crate) async fn init_authority_projection_async(state_dir: &Path) -> Reply<()> {
     let projection = AuthorityProjection::open_async(state_dir.to_path_buf()).await?;
     let _ = AUTHORITY_PROJECTION.set(projection);
