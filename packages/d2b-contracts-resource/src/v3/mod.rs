@@ -39,6 +39,7 @@ pub use authority::{
     ZoneDesiredSequence, DESIRED_ROW_DIGEST_DOMAIN_TAG, MAX_STORE_INCARNATION_BYTES,
 };
 pub use binding::{
+    admit_binding_row_refs, BindingRowError,
     admit_binding_request, BindingAdmission, BindingArbitration, BindingAuthorization,
     BindingConsumerKind, BindingContractError, BindingEvidence, BindingKey, BindingKind,
     BindingLifecycleState, BindingObservation, BindingRealizationFacet, BindingRealizationSupport,

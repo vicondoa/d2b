@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use super::{
     ResourceRef,
     binding::{
-        BindingConsumerKind, BindingContractError, BindingKey, BindingKind, BindingRealizationFacet,
+        BindingConsumerKind, BindingRowError, BindingContractError, BindingKey, BindingKind, BindingRealizationFacet,
         BindingSlot, BindingSpecFingerprint, ExecutionParentInput, RequestedRights,
     },
     execution_policy::{BoundedToken, PrimitiveSpecError, redacted_debug, require_resource_type},
@@ -230,3 +230,98 @@ wire_deserialize!(
 
 /// A Host or Guest device attachment input, classified.
 pub type DeviceExecutionParentInput = ExecutionParentInput<DeviceBindingRequest>;
+
+/// Strict base DeviceBinding specification.
+///
+/// A DeviceBinding row is the committed attachment of one named device
+/// function to one consumer. The `function` is part of the row rather than
+/// implied by the device: [`DeviceInventory::entry`] is keyed by the function
+/// alone, so a row that did not name one would be a claim on "some function
+/// of this device" - precisely the template-shaped grant this contract
+/// removes. The consumer is whatever the kind admits, not a fixed `Guest`.
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceBindingSpec {
+    device_ref: ResourceRef,
+    execution_ref: ResourceRef,
+    function: DeviceFunction,
+    claim: DeviceClaimRequest,
+    slot: BoundedToken,
+}
+
+impl DeviceBindingSpec {
+    /// Construct a strict device binding specification from typed references.
+    pub fn new(
+        device_ref: ResourceRef,
+        execution_ref: ResourceRef,
+        function: DeviceFunction,
+        claim: DeviceClaimRequest,
+        slot: BoundedToken,
+    ) -> Result<Self, BindingRowError> {
+        super::binding::admit_binding_row_refs(
+            super::binding::BindingKind::Device,
+            &device_ref,
+            &execution_ref,
+        )?;
+        Ok(Self {
+            device_ref,
+            execution_ref,
+            function,
+            claim,
+            slot,
+        })
+    }
+
+    /// Return the standard ResourceType name.
+    pub const fn resource_type() -> &'static str {
+        DEVICE_BINDING_RESOURCE_TYPE
+    }
+
+    /// Borrow the bound Device.
+    pub const fn device_ref(&self) -> &ResourceRef {
+        &self.device_ref
+    }
+
+    /// Borrow the consumer that receives the attachment.
+    pub const fn execution_ref(&self) -> &ResourceRef {
+        &self.execution_ref
+    }
+
+    /// Borrow the device function this claim covers.
+    pub const fn function(&self) -> &DeviceFunction {
+        &self.function
+    }
+
+    /// Borrow the requested claim.
+    pub const fn claim(&self) -> &DeviceClaimRequest {
+        &self.claim
+    }
+
+    /// Borrow the consumer slot the attachment occupies.
+    pub const fn slot(&self) -> &BoundedToken {
+        &self.slot
+    }
+}
+
+redacted_debug!(DeviceBindingSpec);
+
+wire_deserialize!(
+    DeviceBindingSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        device_ref: ResourceRef,
+        execution_ref: ResourceRef,
+        function: DeviceFunction,
+        claim: DeviceClaimRequest,
+        slot: String,
+    },
+    wire,
+    Self::new(
+        wire.device_ref,
+        wire.execution_ref,
+        wire.function,
+        wire.claim,
+        BoundedToken::parse(wire.slot).map_err(serde::de::Error::custom)?,
+    )
+    .map_err(serde::de::Error::custom)
+);

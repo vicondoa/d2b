@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use super::{
     ResourceRef,
     binding::{
-        BindingConsumerKind, BindingContractError, BindingKey, BindingKind, BindingRealizationFacet,
+        BindingRowError, BindingConsumerKind, BindingContractError, BindingKey, BindingKind, BindingRealizationFacet,
         BindingSlot, BindingSpecFingerprint, ExecutionParentInput, RequestedRights,
     },
     execution_policy::{BoundedToken, redacted_debug, require_resource_type},
@@ -195,3 +195,91 @@ wire_deserialize!(
 
 /// A Host or Guest endpoint attachment input, classified.
 pub type EndpointExecutionParentInput = ExecutionParentInput<EndpointBindingRequest>;
+
+/// Strict base EndpointBinding specification.
+///
+/// An EndpointBinding row delivers exactly one named endpoint to one
+/// consumer. The consumer is whatever the kind admits - `Guest`, `Process`,
+/// or `EphemeralProcess`, never `Host`, because a provider's host-side
+/// delivery is an admitted realization leg of the binding whose consumer is
+/// that helper, not a binding whose consumer is the Host.
+///
+/// The row carries no purpose: the endpoint's own spec carries it and the
+/// admission path never reads it off the request, so a row that restated it
+/// would let the two drift.
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EndpointBindingSpec {
+    endpoint_ref: ResourceRef,
+    execution_ref: ResourceRef,
+    attachment: EndpointAttachmentKind,
+    slot: BoundedToken,
+}
+
+impl EndpointBindingSpec {
+    /// Construct a strict endpoint binding specification from typed references.
+    pub fn new(
+        endpoint_ref: ResourceRef,
+        execution_ref: ResourceRef,
+        attachment: EndpointAttachmentKind,
+        slot: BoundedToken,
+    ) -> Result<Self, BindingRowError> {
+        super::binding::admit_binding_row_refs(
+            super::binding::BindingKind::Endpoint,
+            &endpoint_ref,
+            &execution_ref,
+        )?;
+        Ok(Self {
+            endpoint_ref,
+            execution_ref,
+            attachment,
+            slot,
+        })
+    }
+
+    /// Return the standard ResourceType name.
+    pub const fn resource_type() -> &'static str {
+        ENDPOINT_BINDING_RESOURCE_TYPE
+    }
+
+    /// Borrow the bound Endpoint.
+    pub const fn endpoint_ref(&self) -> &ResourceRef {
+        &self.endpoint_ref
+    }
+
+    /// Borrow the consumer that receives the exact endpoint.
+    pub const fn execution_ref(&self) -> &ResourceRef {
+        &self.execution_ref
+    }
+
+    /// Borrow the requested attachment kind.
+    pub const fn attachment(&self) -> &EndpointAttachmentKind {
+        &self.attachment
+    }
+
+    /// Borrow the consumer slot the delivery occupies.
+    pub const fn slot(&self) -> &BoundedToken {
+        &self.slot
+    }
+}
+
+redacted_debug!(EndpointBindingSpec);
+
+wire_deserialize!(
+    EndpointBindingSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        endpoint_ref: ResourceRef,
+        execution_ref: ResourceRef,
+        attachment: EndpointAttachmentKind,
+        slot: String,
+    },
+    wire,
+    Self::new(
+        wire.endpoint_ref,
+        wire.execution_ref,
+        wire.attachment,
+        BoundedToken::parse(wire.slot).map_err(serde::de::Error::custom)?,
+    )
+    .map_err(serde::de::Error::custom)
+);

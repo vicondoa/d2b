@@ -17,7 +17,7 @@ use serde::Serialize;
 use super::{
     ResourceRef,
     binding::{
-        BindingConsumerKind, BindingContractError, BindingKey, BindingKind, BindingRealizationFacet,
+        BindingRowError, BindingConsumerKind, BindingContractError, BindingKey, BindingKind, BindingRealizationFacet,
         BindingSlot, BindingSpecFingerprint, ExecutionParentInput, RequestedRights,
     },
     execution_policy::{BoundedToken, redacted_debug, require_resource_type},
@@ -264,3 +264,77 @@ wire_deserialize!(
 
 /// A Host or Guest network attachment input, classified.
 pub type NetworkExecutionParentInput = ExecutionParentInput<NetworkBindingRequest>;
+
+/// Strict base NetworkBinding specification.
+///
+/// A NetworkBinding row is one consumer's membership in a shared fabric. It
+/// carries no ports, egress rules, or other per-consumer traffic policy: the
+/// firewall is the Network's single ownership slot, so a second per-consumer
+/// ruleset here would fork that authority. The membership policy is the
+/// source provider's admitted state and is resolved against the row, never
+/// restated by it.
+///
+/// The consumer is whatever the kind admits, which includes `Host`: a host
+/// consuming a fabric as its own parent is a distinct, live case.
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkBindingSpec {
+    network_ref: ResourceRef,
+    execution_ref: ResourceRef,
+    presentation: NetworkPresentation,
+}
+
+impl NetworkBindingSpec {
+    /// Construct a strict network binding specification from typed references.
+    pub fn new(
+        network_ref: ResourceRef,
+        execution_ref: ResourceRef,
+        presentation: NetworkPresentation,
+    ) -> Result<Self, BindingRowError> {
+        super::binding::admit_binding_row_refs(
+            super::binding::BindingKind::Network,
+            &network_ref,
+            &execution_ref,
+        )?;
+        Ok(Self {
+            network_ref,
+            execution_ref,
+            presentation,
+        })
+    }
+
+    /// Return the standard ResourceType name.
+    pub const fn resource_type() -> &'static str {
+        NETWORK_BINDING_RESOURCE_TYPE
+    }
+
+    /// Borrow the bound Network.
+    pub const fn network_ref(&self) -> &ResourceRef {
+        &self.network_ref
+    }
+
+    /// Borrow the consumer that joins the fabric.
+    pub const fn execution_ref(&self) -> &ResourceRef {
+        &self.execution_ref
+    }
+
+    /// Borrow the requested presentation.
+    pub const fn presentation(&self) -> &NetworkPresentation {
+        &self.presentation
+    }
+}
+
+redacted_debug!(NetworkBindingSpec);
+
+wire_deserialize!(
+    NetworkBindingSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        network_ref: ResourceRef,
+        execution_ref: ResourceRef,
+        presentation: NetworkPresentation,
+    },
+    wire,
+    Self::new(wire.network_ref, wire.execution_ref, wire.presentation)
+        .map_err(serde::de::Error::custom)
+);

@@ -1668,3 +1668,70 @@ impl<R> ExecutionParentInput<R> {
         }
     }
 }
+// ---------------------------------------------------------------------------
+// Row admission predicate
+// ---------------------------------------------------------------------------
+
+/// Why a binding row's own references were refused.
+///
+/// A row names the capability it binds and the consumer that receives it.
+/// Both are checked against the binding kind rather than against a string
+/// match at the call site, so a kind's admitted consumer set and a row's
+/// consumer cannot drift apart.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum BindingRowError {
+    /// The bound capability reference does not name the kind's source type.
+    WrongSourceType,
+    /// The consumer reference names a ResourceType that is not a binding
+    /// consumer at all.
+    WrongConsumerType,
+    /// The consumer reference names a binding consumer this kind does not
+    /// admit: a `Host` is never the consumer of an Endpoint or a Credential.
+    ConsumerNotAdmitted,
+    /// The requested operation set is empty or over the family bound.
+    InvalidOperations,
+    /// The requested operation set names the same operation twice.
+    DuplicateOperation,
+    /// The requested delivery lifetime is outside the family's bounds.
+    LifetimeOutOfBounds,
+}
+
+/// Check one binding row's source and consumer references against `kind`.
+///
+/// This is the single rule every typed binding row shares. It is derived from
+/// [`BindingKind::admits_consumer`] instead of restating a per-family list,
+/// which is why a row whose kind admits a `Host` consumer carries one and a
+/// row whose kind does not refuses one.
+pub fn admit_binding_row_refs(
+    kind: BindingKind,
+    source_ref: &ResourceRef,
+    execution_ref: &ResourceRef,
+) -> Result<(), BindingRowError> {
+    if source_ref.resource_type().as_str() != kind.source_resource_type() {
+        return Err(BindingRowError::WrongSourceType);
+    }
+    let consumer = BindingConsumerKind::from_resource_type(execution_ref.resource_type().as_str())
+        .ok_or(BindingRowError::WrongConsumerType)?;
+    if kind.admits_consumer(consumer) {
+        Ok(())
+    } else {
+        Err(BindingRowError::ConsumerNotAdmitted)
+    }
+}
+
+redacted_debug!(BindingRowError);
+
+impl core::fmt::Display for BindingRowError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::WrongSourceType => "binding-row-wrong-source-type",
+            Self::WrongConsumerType => "binding-row-wrong-consumer-type",
+            Self::ConsumerNotAdmitted => "binding-row-consumer-not-admitted",
+            Self::InvalidOperations => "binding-row-operations-invalid",
+            Self::DuplicateOperation => "binding-row-duplicate-operation",
+            Self::LifetimeOutOfBounds => "binding-row-lifetime-out-of-bounds",
+        })
+    }
+}
+
+impl std::error::Error for BindingRowError {}

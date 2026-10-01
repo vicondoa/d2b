@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use super::{
     ResourceRef,
     binding::{
-        BindingConsumerKind, BindingContractError, BindingKey, BindingKind, BindingRealizationFacet,
+        BindingRowError, BindingConsumerKind, BindingContractError, BindingKey, BindingKind, BindingRealizationFacet,
         BindingSlot, BindingSpecFingerprint, ExecutionParentInput, RequestedRights,
     },
     execution_policy::{
@@ -263,3 +263,113 @@ wire_deserialize!(
 
 /// A Host or Guest credential attachment input, classified.
 pub type CredentialExecutionParentInput = ExecutionParentInput<CredentialBindingRequest>;
+
+/// Strict base CredentialBinding specification.
+///
+/// A CredentialBinding row delivers one named credential to one consumer for
+/// a bounded lifetime and an explicit operation set. The row never carries
+/// secret material: it names what is delivered and for how long, and the
+/// realization crosses the provider boundary through the family's declared
+/// effect port.
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialBindingSpec {
+    credential_ref: ResourceRef,
+    execution_ref: ResourceRef,
+    operations: Vec<CredentialOperation>,
+    lifetime_ms: u64,
+    slot: BoundedToken,
+}
+
+impl CredentialBindingSpec {
+    /// Construct a strict credential binding specification.
+    ///
+    /// The operation set must be non-empty, bounded by
+    /// [`MAX_CREDENTIAL_OPERATIONS`], and duplicate-free: a delivery that
+    /// grants more than it names, or the same right twice, is refused.
+    pub fn new(
+        credential_ref: ResourceRef,
+        execution_ref: ResourceRef,
+        operations: Vec<CredentialOperation>,
+        lifetime_ms: u64,
+        slot: BoundedToken,
+    ) -> Result<Self, BindingRowError> {
+        super::binding::admit_binding_row_refs(
+            super::binding::BindingKind::Credential,
+            &credential_ref,
+            &execution_ref,
+        )?;
+        if operations.is_empty() || operations.len() > MAX_CREDENTIAL_OPERATIONS {
+            return Err(BindingRowError::InvalidOperations);
+        }
+        let mut sorted = operations.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        if sorted.len() != operations.len() {
+            return Err(BindingRowError::DuplicateOperation);
+        }
+        if !(MIN_CREDENTIAL_LIFETIME_MS..=MAX_CREDENTIAL_LIFETIME_MS).contains(&lifetime_ms) {
+            return Err(BindingRowError::LifetimeOutOfBounds);
+        }
+        Ok(Self {
+            credential_ref,
+            execution_ref,
+            operations,
+            lifetime_ms,
+            slot,
+        })
+    }
+
+    /// Return the standard ResourceType name.
+    pub const fn resource_type() -> &'static str {
+        CREDENTIAL_BINDING_RESOURCE_TYPE
+    }
+
+    /// Borrow the bound Credential.
+    pub const fn credential_ref(&self) -> &ResourceRef {
+        &self.credential_ref
+    }
+
+    /// Borrow the consumer the credential is delivered to.
+    pub const fn execution_ref(&self) -> &ResourceRef {
+        &self.execution_ref
+    }
+
+    /// Borrow the operations the consumer may perform.
+    pub fn operations(&self) -> &[CredentialOperation] {
+        &self.operations
+    }
+
+    /// Borrow the bounded delivery lifetime in milliseconds.
+    pub const fn lifetime_ms(&self) -> u64 {
+        self.lifetime_ms
+    }
+
+    /// Borrow the consumer slot the delivery occupies.
+    pub const fn slot(&self) -> &BoundedToken {
+        &self.slot
+    }
+}
+
+redacted_debug!(CredentialBindingSpec);
+
+wire_deserialize!(
+    CredentialBindingSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        credential_ref: ResourceRef,
+        execution_ref: ResourceRef,
+        operations: Vec<CredentialOperation>,
+        lifetime_ms: u64,
+        slot: String,
+    },
+    wire,
+    Self::new(
+        wire.credential_ref,
+        wire.execution_ref,
+        wire.operations,
+        wire.lifetime_ms,
+        BoundedToken::parse(wire.slot).map_err(serde::de::Error::custom)?,
+    )
+    .map_err(serde::de::Error::custom)
+);
