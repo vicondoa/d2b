@@ -53,10 +53,16 @@
 //! already uses. A broker restart strictly increments the epoch and moves every
 //! known Zone to [`ZoneAuthorityState::Reconciling`], so no new effect is
 //! admitted until the manager resynchronizes the accepted state and the
-//! outstanding transactions. The transient half - the in-flight snapshot
-//! reassembly buffer - is deliberately not durable: a restart mid-transfer
-//! leaves the Zone fenced and requires a full resynchronization, which is the
-//! plan's rule rather than a recoverable partial state.
+//! outstanding transactions. The one posture that survives is a prepared
+//! candidate naming a commit this broker never installed, and only while it
+//! still names the accepted cursor as its predecessor: overwriting it would
+//! leave a transaction the store already committed durably with no way to
+//! publish it, since [`AuthorityPublicationRequest::CommitChange`] is admitted
+//! only against a live fence. Such a Zone was already admitting nothing, so
+//! nothing is served by the restart. The transient half - the in-flight
+//! snapshot reassembly buffer - is deliberately not durable: a restart
+//! mid-transfer leaves the Zone fenced and requires a full resynchronization,
+//! which is the plan's rule rather than a recoverable partial state.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -313,6 +319,13 @@ enum PersistedPosture {
     /// Ordinary admission is open under the accepted cursor.
     Unfenced,
     /// A prepared candidate holds the Zone's new-effect admission.
+    ///
+    /// A record that names a forward commit over the accepted cursor survives a
+    /// restart, because [`commit_change_locked`] admits no replay without one
+    /// and a store that committed the candidate durably has nothing else to
+    /// publish it by. A record whose `expected` and `committed` are the same
+    /// cursor - the marker a resynchronization carries for a transaction it
+    /// still owes - names no commit to replay and does not survive.
     Fenced {
         prepared: Box<PreparedRecord>,
     },
@@ -796,7 +809,9 @@ fn is_control_action(request: &AuthorityPublicationRequest) -> bool {
 /// One serialized command the authority worker executes in channel order.
 enum ProjectionCommand {
     /// Load the durable state, bump the epoch, move every known Zone to
-    /// reconciling, and persist - the open barrier, before anything is served.
+    /// reconciling but for a prepared candidate that still names a forward
+    /// commit over the accepted cursor, and persist - the open barrier, before
+    /// anything is served.
     Bootstrap {
         root: PathBuf,
         reply: oneshot::Sender<Reply<()>>,
@@ -1188,8 +1203,37 @@ fn projection_bootstrap(root: &Path) -> Reply<ProjectionWorkerState> {
     // resynchronizes the accepted state and the outstanding transactions. The
     // prepared identity stays in the Zone's transaction set, so an exact replay
     // or cancel is still answerable while the Zone waits for its snapshot.
+    //
+    // One posture is NOT overwritten. A prepared candidate naming a commit this
+    // broker never installed is the manager's evidence that a transaction is
+    // still outstanding, and it is the only record `commit_change_locked` can
+    // admit against: erasing it makes a transaction the store already committed
+    // durably unpublishable forever, because every later replay of it needs a
+    // live fence and a broker that has forgotten the fence has none. A Zone
+    // that is already fenced also gains nothing by being called reconciling -
+    // no new effect is admitted under either name, and the transaction set the
+    // control lane binds to is untouched - so keeping its own record is the
+    // strictly more conservative of the two.
+    //
+    // The condition is what makes a preserved record replayable rather than
+    // merely kept. `prepared.expected` must still be the accepted cursor,
+    // because that is the predecessor `commit_change_locked` installs over and
+    // any movement of the accepted cursor invalidates it; and
+    // `prepared.committed` must be strictly ahead of the accepted cursor,
+    // because a record naming no forward commit has no commit to replay - that
+    // is the marker a resynchronization carries for a transaction it still
+    // owes, it can never be discharged, and it stays reconciling as before.
     for zone in durable.zones.values_mut() {
-        zone.posture = PersistedPosture::Reconciling;
+        let replayable = match &zone.posture {
+            PersistedPosture::Fenced { prepared } => {
+                prepared.expected == zone.accepted
+                    && prepared.committed.sequence > zone.accepted.sequence
+            }
+            _ => false,
+        };
+        if !replayable {
+            zone.posture = PersistedPosture::Reconciling;
+        }
     }
     durable.epoch = durable.epoch.saturating_add(1);
     persist(&path, &durable)?;

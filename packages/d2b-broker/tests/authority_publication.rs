@@ -2679,6 +2679,279 @@ async fn a_replayed_commit_after_the_acknowledgment_is_refused_not_reapplied() {
 }
 
 // ---------------------------------------------------------------------------
+// A restart keeps the fence a store still owes a publication for
+// ---------------------------------------------------------------------------
+
+/// Reach a Zone that is unfenced at `cursor(2)` holding a prepared candidate
+/// for `TX_TWO` at `cursor(3)`, and return the exact commit that discharges it.
+/// This is the durable state a daemon that died between the broker's prepare
+/// and its commit leaves behind: the fence is written, the projection has not
+/// moved, and the store is holding a transaction.
+async fn fenced_before_restart() -> (Harness, CommitChangeRequest) {
+    let mut harness = unfenced_with_one_effect().await;
+    harness
+        .prepare(harness.prepare_request(
+            TX_TWO,
+            cursor(2),
+            cursor(3),
+            PublicationMutationKind::UpdateSpec,
+            vec![process_row("worker")],
+            Vec::new(),
+            shell(),
+        ))
+        .await;
+    assert_eq!(posture(&harness.status().await), "fenced");
+    let commit = harness.commit_request(
+        TX_TWO,
+        cursor(2),
+        cursor(3),
+        vec![process_row("worker")],
+        Vec::new(),
+    );
+    (harness, commit)
+}
+
+/// The negative: a preserved fence is the record of one validated candidate,
+/// not a licence to install anything else.
+///
+/// Every way a commit can differ from what the fence was written for is
+/// refused here, and refused by the same code the live fence gave before the
+/// restart. The bytes the fence names are pinned by a digest the broker
+/// re-derives from the presented rows, the revision it installs is pinned by
+/// the two cursors, and the predecessor it installs over is pinned by the
+/// accepted cursor - so a commit that carries anything else is not a weaker
+/// version of the accepted one, it is a different declaration.
+#[tokio::test]
+async fn a_preserved_fence_admits_only_the_candidate_it_validated() {
+    let (mut harness, commit) = fenced_before_restart().await;
+    harness.restart().await;
+    let state = harness.status().await;
+    assert_eq!(
+        posture(&state),
+        "fenced",
+        "the prepared identity survived the restart"
+    );
+    assert_eq!(
+        accepted_sequence(&state),
+        Some(2),
+        "and the projection still has not moved"
+    );
+
+    // A commit for another transaction is not this fence's commit, however
+    // exact its bytes are.
+    let error = harness
+        .serve(AuthorityPublicationRequest::CommitChange(harness.commit_request(
+            TX_THREE,
+            cursor(2),
+            cursor(3),
+            vec![process_row("worker")],
+            Vec::new(),
+        )))
+        .await
+        .expect_err("a commit naming another transaction is refused");
+    assert_refused(
+        &refusal(error),
+        PUBLICATION_UNKNOWN_TRANSACTION,
+        AdmissionStage::Authorize,
+        RefusalReason::UnprovenEffect,
+        true,
+    );
+
+    // The same identity carrying different bytes is a conflicting declaration
+    // under one fence, which is what it is before a restart too.
+    let error = harness
+        .serve(AuthorityPublicationRequest::CommitChange(harness.commit_request(
+            TX_TWO,
+            cursor(2),
+            cursor(3),
+            vec![process_row("other")],
+            Vec::new(),
+        )))
+        .await
+        .expect_err("a commit carrying bytes the fence never named is refused");
+    assert_refused(
+        &refusal(error),
+        PUBLICATION_DUPLICATE_TRANSACTION,
+        AdmissionStage::Authorize,
+        RefusalReason::ConflictingDeclaration,
+        true,
+    );
+
+    // A revision that is not the one the fence reserved is stale, and a
+    // predecessor the broker does not hold is stale by name.
+    for (expected, committed, what) in [
+        (cursor(2), cursor(4), "a revision the fence never reserved"),
+        (cursor(1), cursor(3), "a predecessor the broker does not hold"),
+    ] {
+        let Err(error) = harness
+            .serve(AuthorityPublicationRequest::CommitChange(harness.commit_request(
+                TX_TWO,
+                expected,
+                committed,
+                vec![process_row("worker")],
+                Vec::new(),
+            )))
+            .await
+        else {
+            panic!("{what} is refused: the commit was accepted");
+        };
+        assert_refused(
+            &refusal(error),
+            PUBLICATION_STALE_PREDECESSOR,
+            AdmissionStage::Authorize,
+            RefusalReason::StaleAuthority,
+            true,
+        );
+    }
+
+    // And a payload that does not hash to the digest it declares is refused
+    // before the fence is even read.
+    let mut mislabelled = commit.clone();
+    mislabelled.digest = publication_candidate_digest(&[process_row("other")], &[]);
+    let error = harness
+        .serve(AuthorityPublicationRequest::CommitChange(mislabelled))
+        .await
+        .expect_err("a payload that does not hash to its declared digest is refused");
+    assert_refused(
+        &refusal(error),
+        PUBLICATION_DIGEST_MISMATCH,
+        AdmissionStage::Authorize,
+        RefusalReason::ConflictingDeclaration,
+        true,
+    );
+
+    // None of those refusals consumed the fence, which is the point: the one
+    // candidate it names is still dischargeable, and only that one is.
+    let accepted = harness.commit(commit).await;
+    assert_eq!(accepted.sequence, sequence(3));
+}
+
+/// A preserved fence does not outlive the transaction it names.
+///
+/// Three separate claims, because there are three separate ways a fence could
+/// leak. The record is GONE from durable state, which the next commit answers
+/// directly: `commit_change_locked` reaches `publication-fence-held` only
+/// through the arm that runs when the Zone holds no fence at all, so that
+/// refusal is a reading of the durable posture rather than an inference from
+/// a cursor that moved. The replay does not apply a second time. And the
+/// accepted predecessor it was bound to cannot carry a second transaction
+/// under the identity it used.
+#[tokio::test]
+async fn a_preserved_fence_does_not_outlive_the_commit_it_names() {
+    let (mut harness, commit) = fenced_before_restart().await;
+    harness.restart().await;
+    let accepted = harness.commit(commit.clone()).await;
+    assert_eq!(accepted.sequence, sequence(3));
+    assert_eq!(posture(&harness.status().await), "unfenced");
+
+    // This refusal is the reading of the durable record: a held fence would
+    // have been matched first and compared field by field, and a *surviving*
+    // one whose predecessor no longer matches would have answered
+    // `publication-stale-predecessor` instead. Fence-held means there is no
+    // fence left to compare against, and it is also why the replay did not
+    // apply a second time.
+    let error = harness
+        .serve(AuthorityPublicationRequest::CommitChange(commit))
+        .await
+        .expect_err("the same commit does not install a second time");
+    assert_refused(
+        &refusal(error),
+        PUBLICATION_FENCE_HELD,
+        AdmissionStage::Authorize,
+        RefusalReason::UnprovenEffect,
+        true,
+    );
+    assert_eq!(
+        accepted_sequence(&harness.status().await),
+        Some(3),
+        "and the accepted revision is still the one the replay installed"
+    );
+
+    // And the Zone is back to the open barrier's own posture: the restart
+    // writes reconciling over everything it did not preserve, so a Zone that
+    // reaches reconciling here is a Zone that held no fence to preserve.
+    harness.restart().await;
+    assert_eq!(
+        posture(&harness.status().await),
+        "reconciling",
+        "the discharged fence did not survive the next restart"
+    );
+    assert_eq!(accepted_sequence(&harness.status().await), Some(3));
+
+    // And the identity it used cannot be reused for a different transaction:
+    // the only candidate the accepted predecessor can carry is one this broker
+    // validates now, against a graph it still holds.
+    let error = harness
+        .prepare_refused(harness.prepare_request(
+            TX_TWO,
+            cursor(3),
+            cursor(4),
+            PublicationMutationKind::UpdateSpec,
+            vec![process_row("other")],
+            Vec::new(),
+            shell(),
+        ))
+        .await;
+    assert_refused(
+        &error,
+        PUBLICATION_RECONCILIATION_REQUIRED,
+        AdmissionStage::Recover,
+        RefusalReason::UnprovenEffect,
+        true,
+    );
+}
+
+/// The narrowing, stated as its own case: a fence that names no forward commit
+/// is not made replayable.
+///
+/// That is the record a resynchronization carries for a transaction the
+/// manager still owes - its `expected` and `committed` are the same cursor,
+/// because the broker installed a document rather than a commit - and it is the
+/// one "prepared but nothing was committed under it" shape the broker can
+/// recognise on its own. The restart still refuses a commit under it.
+#[tokio::test]
+async fn a_carried_forward_outstanding_marker_does_not_become_replayable() {
+    let mut harness = unfenced_with_one_effect().await;
+    harness
+        .publish_snapshot(
+            TX_TWO,
+            cursor(2),
+            vec![reader_role(), shell_binding(), process_row("worker")],
+            Some(TX_THREE),
+        )
+        .await
+        .expect("the reconciliation carries the outstanding identity forward");
+    let state = harness.status().await;
+    assert_eq!(posture(&state), "fenced", "the marker fences the Zone");
+    assert_eq!(accepted_sequence(&state), Some(2));
+
+    harness.restart().await;
+    assert_eq!(
+        posture(&harness.status().await),
+        "reconciling",
+        "a fence that names no forward commit is not made replayable"
+    );
+
+    let error = harness
+        .serve(AuthorityPublicationRequest::CommitChange(harness.commit_request(
+            TX_THREE,
+            cursor(2),
+            cursor(3),
+            vec![process_row("other")],
+            Vec::new(),
+        )))
+        .await
+        .expect_err("the carried-forward marker admits no commit");
+    assert_refused(
+        &refusal(error),
+        PUBLICATION_FENCE_HELD,
+        AdmissionStage::Authorize,
+        RefusalReason::UnprovenEffect,
+        true,
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The projection holds a graph, not a second copy of the manager's rows
 // ---------------------------------------------------------------------------
 

@@ -143,5 +143,13 @@ d2b-provider-user = { path = "../d2b-provider-user", version = "0.0.0-bootstrap"
 d2b-provider-provider = { path = "../d2b-provider-provider", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-notification-desktop = { path = "../d2b-provider-notification-desktop", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-wayland-policy = { path = "../d2b-provider-wayland-policy", version = "0.0.0-bootstrap", features = ["test-support"] }
+# The declaration compiler, so the cross-layer acceptance test starts at the
+# real artifact compile and the real controller projection rather than at a
+# hand-written bundle row.
+d2b-resource-compiler = { path = "../d2b-resource-compiler", version = "0.0.0-bootstrap" }
+# The manifest signer the cross-layer acceptance test's in-memory Provider
+# artifact is signed with, and the PEM encoding its publisher key travels in.
+base64 = { workspace = true }
+ring = { workspace = true }
 tempfile = "3"
 tokio = { workspace = true, features = ["test-util"] }

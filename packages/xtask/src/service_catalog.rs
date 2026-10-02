@@ -13,7 +13,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::authority_common::{declaration_paths, Declaration};
+use crate::authority_common::{admits_provider_identity, declaration_paths, Declaration};
 
 #[cfg(test)]
 use d2b_contracts_provider::v3::projection::PrivatePlanProjection;
@@ -24,9 +24,6 @@ use serde::Deserialize;
 /// compiled production bytes are the same file rather than two.
 pub(crate) const GENERATED_ARTIFACT: &str =
     "generated/new-graph/service_provider_catalog.rs";
-
-/// The directory-name prefix that marks a package as a provider crate.
-const PROVIDER_PREFIX: &str = "d2b-provider-";
 
 /// One provider crate's service-catalog declaration.
 
@@ -186,25 +183,27 @@ fn load(repo_root: &Path) -> Result<CatalogRegistry, String> {
 
 /// The declaration sanity violations:
 ///
-/// - a provider identity that does not match its owning crate's name (the
-///   suffix after `d2b-provider-` must be the declared provider identity);
+/// - a provider identity the contracts' resource-name grammar refuses;
 /// - a provider ref that does not name the declared provider identity;
 /// - a service package declared by two crates;
 /// - a non-bootstrap provider declaring a fixed UID (the only fixed UID
 ///   belongs to system-core).
+///
+/// The identity is not compared against the crate's directory name. A
+/// crate is named for the family it realizes and the identity it registers
+/// is a separate fact - `d2b-provider-guest-qemu-media` publishes
+/// `runtime-qemu-media` - so a directory-name comparison published
+/// references the product does not have and made the ones it does
+/// inexpressible. The ref check below is the one that still ties the
+/// declaration together: the identity and the reference it publishes must
+/// name each other.
 fn declaration_errors(registry: &CatalogRegistry) -> Vec<String> {
     let mut errors = Vec::new();
     let mut services: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for (crate_name, file) in registry {
-        let expected_provider = crate_name
-            .strip_prefix(PROVIDER_PREFIX)
-            .unwrap_or(crate_name.as_str());
-        if file.provider != expected_provider {
-
-
-
+        if !admits_provider_identity(&file.provider) {
             errors.push(format!(
-                "provider-mismatch: {} declares provider \"{}\" but its crate name implies \"{expected_provider}\"",
+                "malformed-provider-identity: {} declares provider \"{}\"; a Provider identity is a resource name the contracts admit",
                 crate_name, file.provider
             ));
         }

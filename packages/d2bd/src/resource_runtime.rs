@@ -595,6 +595,46 @@ impl CommittedInteractionIdentity {
         }
     }
 
+    /// One identity-bound composition whose committed WaylandSession UID is
+    /// supplied rather than fixed, so a test can drive the production
+    /// display driver against a session row the Zone's resource plane
+    /// actually holds.
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn for_test_with_session_uid(
+        zone: ZoneId,
+        wayland_session_uid: ResourceUid,
+        subject_ref: ResourceRef,
+        subject_uid: ResourceUid,
+        host_execution_ref: ResourceRef,
+        user_ref: ResourceRef,
+        allowed_guest_sources: BTreeMap<ResourceRef, ResourceUid>,
+        display_provider_generation: ResourceGeneration,
+        clipboard_provider_generation: Option<ResourceGeneration>,
+        clipboard_provider_uid: Option<ResourceUid>,
+        notification_provider_generation: Option<ResourceGeneration>,
+        notification_provider_uid: Option<ResourceUid>,
+    ) -> Self {
+        Self {
+            zone,
+            wayland_session_ref: ResourceRef::parse(
+                "display-wayland.d2bus.org.WaylandSession/display-wayland",
+            )
+            .expect("fixed test WaylandSession reference"),
+            wayland_session_uid,
+            subject_ref,
+            subject_uid,
+            host_execution_ref,
+            user_ref,
+            allowed_guest_sources,
+            display_provider_generation,
+            clipboard_provider_generation,
+            clipboard_provider_uid,
+            notification_provider_generation,
+            notification_provider_uid,
+        }
+    }
+
     pub(crate) fn seal_interaction_subject_install(
         &self,
         issuer: CommittedInteractionSubjectIssuer,

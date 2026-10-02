@@ -81,6 +81,9 @@ pub(crate) mod security_key;
 // Public arm: `tests/volume_presentation.rs` imports it from outside the
 // crate, for the same reason the arms above are public.
 pub mod spawn_runner;
+// The broker's own authority for the private execution values an admitted
+// effect resolves to, read from the verified private bundle.
+pub(crate) mod private_execution;
 // Broker reconcile executors (nft / sysctl / hosts / ip route) with
 // FakeReconcileExecutor for unit tests + the SystemReconcileExecutor
 // for production shellouts.

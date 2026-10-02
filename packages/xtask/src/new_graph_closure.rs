@@ -1,22 +1,37 @@
-//! The new-graph build composition (U33/U9).
+//! The new-graph build composition.
 //!
 //! Four independent declaration sources describe every provider: the
 //! resource types it owns, the operation rows it serves, the provider and
 //! service identities it registers, and the semantic services it publishes.
-//! Four committed generated artifacts are derived from them, one per source,
-//! plus the canonical graph policy the configuration layer reads and the
-//! closure manifest that says which production file compiles each byte.
+//! Three committed generated artifacts are derived from them, and the closure
+//! manifest beside them names the production file that compiles each byte.
 //!
 //! `gen-new-graph` is one step of the `make generate` aggregate, so these
 //! projections are production generation outputs: they are committed under
 //! [`OUTPUT_DIR`], they are byte-for-byte drift checked like every other
-//! committed artifact, and nothing renders them from a test-only path. Three
-//! of the four are compiled by the production entry points themselves - the
+//! committed artifact, and nothing renders them from a test-only path.
+//!
+//! # What production compiles
+//!
+//! Each staged artifact is compiled by a production entry point itself. The
 //! daemon's composition root, the zone-session contract and the resource
 //! contracts `include!` the staged file directly, so there is no second copy
-//! to fall out of step. The fourth, the operation catalog, is the merge input
-//! the retired broker-operations generator still writes; it stays staged
-//! until that merge is deleted.
+//! to fall out of step, and the manifest names the file that compiles each
+//! byte.
+//!
+//! Nothing is staged that no production file compiles. A projection with no
+//! consumer is a second copy of a declaration with nothing reading it, so the
+//! generator stages the tables the daemon links and stops there.
+//!
+//! # The declared-versus-compiled cross-check
+//!
+//! Before it writes anything, the composition cross-checks the declarations
+//! against the provider crates' own compiled sources: a handler a crate
+//! compiles with no declaration behind it, a declared method nothing
+//! compiles, a Provider identity two crates declare, and a service package a
+//! crate declares but never spells all fail `make generate`. That check reads
+//! [`DeclaredProviders`] rather than this module's rendered bytes, so its two
+//! sides are independent sources.
 //!
 //! # What this generator does not read
 //!
@@ -103,53 +118,61 @@ pub(crate) fn contract_version() -> &'static str {
 }
 
 /// One staged artifact: the file this module renders, the production file
-/// it is installed into, and the declaration that produces it.
+/// that compiles it, and the declaration that produces it.
 ///
 /// `staged` is the artifact's file name inside the closure directory, so its
-/// committed path is [`staged`]. `installed_into` is the production source
-/// file that compiles the byte: the crate source that `include!`s it. The
-/// mapping travels with the bytes rather than in a separate ledger, so a
-/// consumer is a fact the manifest states and a gate resolves rather than a
-/// convention.
+/// committed path is [`staged`]. `compiled_into` is the production source
+/// file that `include!`s the byte. The mapping travels with the bytes rather
+/// than in a separate ledger, so a consumer is a fact the manifest states and
+/// a gate resolves rather than a convention. The field cannot be absent: an
+/// artifact no production file compiles is staged bytes with no reader.
 struct Replacement {
     staged: &'static str,
-    installed_into: &'static str,
+    compiled_into: &'static str,
     declaration: &'static str,
 }
 
-/// The four independent declaration sources and the production artifact each
-/// one projects into today.
+/// The committed artifacts the declarations project into, and the production
+/// file each one is compiled by.
+///
+/// Every entry names a production consumer. An artifact nothing compiles would
+/// be a staged copy of a declaration with nothing reading it, so the closure
+/// holds the tables the product links and no projection besides them.
 const REPLACEMENTS: &[Replacement] = &[
     Replacement {
         staged: "provider_registrations.rs",
-        installed_into: "packages/d2bd/src/resource_plane_v3.rs",
+        compiled_into: "packages/d2bd/src/resource_plane_v3.rs",
         declaration: "packages/d2b-provider-*/registrations.json",
     },
     Replacement {
         staged: "service_provider_catalog.rs",
-        installed_into: "packages/d2b-contracts-zone-session/src/v3/mod.rs",
+        compiled_into: "packages/d2b-contracts-zone-session/src/v3/mod.rs",
         declaration: "packages/d2b-provider-*/service-catalog.json",
     },
     Replacement {
         staged: "v3_converted_resource_types.rs",
-        installed_into: "packages/d2b-contracts/src/identity.rs",
+        compiled_into: "packages/d2b-contracts/src/identity.rs",
         declaration: "packages/d2b-provider-*/resource-types.json",
-    },
-    Replacement {
-        staged: "operations.json",
-        installed_into: "docs/reference/policy/broker-operations.json",
-        declaration: "packages/d2b-provider-*/operations.json",
     },
 ];
 
-/// The canonical graph policy one declared provider publishes: the identity
-/// it registers, the services it serves, the types it owns with their verbs
-/// and execution domains, and the declared method behind each operation row.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GraphPolicyProvider {
-    provider_ref: String,
-    #[serde(rename = "crate")]
+/// The declared surface one provider crate contributes: the Provider
+/// identity it registers, the services it serves, and the declared method
+/// behind each operation row.
+///
+/// This is the cross-check's declared side, not a rendered artifact: nothing
+/// serializes it, and the closure manifest carries no copy of it.
+struct DeclaredProvider {
+    /// The Provider identity a registration or service catalog declared, or
+    /// `None` for a crate that declares none.
+    ///
+    /// A crate that owns no plane-facing surface is a provider *crate* but
+    /// not a declared Provider, so composing a reference from its directory
+    /// name would put an identity in the graph no declaration made. That
+    /// absence is stated rather than filled, because the cross-check has to
+    /// be able to tell a declared Provider from a crate that only implements
+    /// one.
+    provider_ref: Option<String>,
     crate_name: String,
     /// The effect-service ids the provider registers. A `ServiceDecl` in the
     /// crate's own sources names each one, so this is the vocabulary the
@@ -159,33 +182,8 @@ struct GraphPolicyProvider {
     /// constant in the crate's own sources names each one, so this is the
     /// vocabulary the session layer addresses.
     service_packages: Vec<String>,
-    types: Vec<GraphPolicyType>,
-    provides: Vec<String>,
-    methods: Vec<GraphPolicyMethod>,
-}
-
-/// One declared ResourceType and the closed verb and execution vocabularies
-/// the declaration states for it.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GraphPolicyType {
-    resource_type: String,
-    allowed_sources: Vec<String>,
-    verbs: Vec<String>,
-    execution: Vec<String>,
-    exportable: bool,
-    reads: Vec<String>,
-}
-
-/// One declared method: the session-layer address a call takes, and the
-/// operation row the declaring crate serves it with.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GraphPolicyMethod {
-    service: String,
-    method: String,
-    operation: String,
-    profiles: Vec<String>,
+    /// The addressable methods the crate's operation rows declare.
+    methods: Vec<String>,
 }
 
 /// The closure manifest: what the composition is, what it read, which
@@ -220,7 +218,7 @@ struct ContractCrate {
 #[serde(rename_all = "camelCase")]
 struct ClosureArtifact {
     staged: String,
-    installed_into: String,
+    compiled_into: String,
     declaration: &'static str,
     digest: String,
 }
@@ -258,15 +256,6 @@ pub(crate) fn render_composition(repo_root: &Path) -> Result<Vec<(String, String
             staged("v3_converted_resource_types.rs"),
             crate::resource_type_authority::render_declarations_only(repo_root)?,
         ),
-        (
-            staged("operations.json"),
-            crate::gen_broker_operations::render_declared_catalog(repo_root)
-                .map_err(|error| format!("new-graph operation catalog render failed: {error}"))?,
-        ),
-        (
-            staged("graph_policy.json"),
-            render_graph_policy(repo_root)?,
-        ),
     ];
     let manifest = render_manifest(&artifacts)?;
     artifacts.push((staged("build_closure.json"), manifest));
@@ -290,12 +279,8 @@ pub(crate) fn render_composition(repo_root: &Path) -> Result<Vec<(String, String
 pub(crate) fn gen_new_graph(
     repo_root: &Path,
 ) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
-    let artifacts = render_composition(repo_root).map_err(|error| -> Box<dyn std::error::Error> {
-        error.into()
-    })?;
-    let undeclared = undeclared_compiled_handlers(repo_root, &artifacts).map_err(
-        |error| -> Box<dyn std::error::Error> { error.into() },
-    )?;
+    let undeclared = undeclared_compiled_handlers(repo_root)
+        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
     if !undeclared.is_empty() {
         return Err(format!(
             "new-graph declaration violations:\n- {}",
@@ -303,6 +288,9 @@ pub(crate) fn gen_new_graph(
         )
         .into());
     }
+    let artifacts = render_composition(repo_root).map_err(|error| -> Box<dyn std::error::Error> {
+        error.into()
+    })?;
     let mut written = Vec::with_capacity(artifacts.len());
     for (relative, contents) in artifacts {
         let path = repo_root.join(&relative);
@@ -313,20 +301,6 @@ pub(crate) fn gen_new_graph(
         written.push(path);
     }
     Ok(written)
-}
-
-/// Render the canonical graph policy: the one view the Nix policy projection
-/// and the Rust composition both derive, so neither restates the other.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn render_graph_policy(repo_root: &Path) -> Result<String, String> {
-    let declarations = DeclaredProviders::load(repo_root)?;
-    let mut providers: Vec<GraphPolicyProvider> = declarations
-        .crate_names()
-        .into_iter()
-        .map(|crate_name| declarations.provider(crate_name))
-        .collect::<Result<_, _>>()?;
-    providers.sort_by(|left, right| left.provider_ref.cmp(&right.provider_ref));
-    render_json(&providers)
 }
 
 /// The closure manifest, rendered over the artifacts beside it so its
@@ -341,7 +315,7 @@ fn render_manifest(artifacts: &[(String, String)]) -> Result<String, String> {
             .ok_or_else(|| format!("new-graph composition is missing its {path} artifact"))?;
         rows.push(ClosureArtifact {
             staged: path,
-            installed_into: replacement.installed_into.to_owned(),
+            compiled_into: replacement.compiled_into.to_owned(),
             declaration: replacement.declaration,
             digest: digest_of(contents.as_bytes()),
         });
@@ -377,49 +351,50 @@ fn render_json<T: Serialize>(value: &T) -> Result<String, String> {
     serde_json::to_string_pretty(value).map_err(|error| format!("cannot render JSON: {error}"))
 }
 
-/// Every provider crate's four declarations, keyed by crate name.
+/// Every provider crate's operation, registration and catalog declarations,
+/// keyed by crate name.
 ///
 /// This is the composition's own reader. It does not reuse the merge-capable
 /// authority loaders, so the declaration-only claim is a property of this
 /// struct rather than a property of a call graph.
 struct DeclaredProviders {
     /// Every provider crate in the tree, in name order: a crate that declares
-    /// nothing of its own still gets a graph-policy row, stated with the empty
+    /// nothing of its own still gets a declared surface, stated with the empty
     /// vocabularies its recorded absences imply.
     declaring: Vec<String>,
-    types: BTreeMap<String, TypeDeclarationFile>,
     operations: BTreeMap<String, OperationDeclarationFile>,
     registrations: BTreeMap<String, RegistrationDeclarationFile>,
     catalogs: BTreeMap<String, ServiceCatalogFile>,
 }
 
 /// One `resource-types.json`.
+///
+/// The composition projects no ResourceType row of its own: the
+/// resource-type authority's artifact is the compiled table, and this reader
+/// exists to hold the declaration format closed on the cross-check's own
+/// pass, so a `resource-types.json` whose rows or top-level keys do not match
+/// the format is refused here rather than skipped.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[allow(dead_code, reason = "the rows are validated here and projected through the type authority")]
 struct TypeDeclarationFile {
     #[serde(rename = "crate")]
-    #[allow(dead_code, reason = "the file self-binds to its directory name")]
     crate_name: String,
     types: Vec<TypeRow>,
     #[serde(default)]
     provides: Vec<String>,
-    /// The role vocabulary the crate declares. Read and dropped: the role
-    /// projections are the resource-type authority's artifact, and the graph
-    /// policy states the provider and method identities, not the role names
-    /// an older authority keyed its scopes by.
     #[serde(default)]
-    #[allow(dead_code, reason = "the role vocabulary projects through the type authority")]
     roles: Vec<serde_json::Value>,
-    /// The principal vocabulary the crate declares, dropped for the same
-    /// reason as the roles.
     #[serde(default)]
-    #[allow(dead_code, reason = "the principal vocabulary is the privilege plane's input")]
     principals: Vec<serde_json::Value>,
 }
 
-/// One declared ResourceType row.
+/// One declared ResourceType row, held closed against the declaration
+/// format and projected through the resource-type authority rather than by
+/// this crate.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[allow(dead_code, reason = "the row shape is gated; the compiled table is the type authority's")]
 struct TypeRow {
     resource_type: String,
     #[serde(default)]
@@ -448,31 +423,34 @@ struct OperationDeclarationFile {
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct OperationRow {
+    #[allow(dead_code, reason = "the cross-check gates the addressable method, not the operation name")]
     operation: String,
+    #[allow(dead_code, reason = "the cross-check gates the addressable method, not the service")]
     service: String,
     method: String,
+    #[allow(dead_code, reason = "the declared profiles are the operation-row authority's input")]
     profiles: Vec<String>,
-    /// The broker-only facets a row may carry. The new graph's canonical
-    /// policy states the addressable method, not the broker's own audit and
-    /// payload vocabulary, so these are read and dropped: a row a declaration
-    /// states is a row the graph can route, whatever the old wire frame said.
+    /// The broker-only facets a row may carry. The new graph routes on the
+    /// addressable method, not the broker's own audit and payload
+    /// vocabulary, so these are read and dropped: a row a declaration states
+    /// is a row the graph can route, whatever the old wire frame said.
     #[serde(default)]
-    #[allow(dead_code, reason = "the graph policy states the addressable method")]
+    #[allow(dead_code, reason = "the new graph routes on the addressable method")]
     family: String,
     #[serde(default)]
     #[allow(dead_code, reason = "the declaring crate is the file's own directory")]
     declaring_provider: String,
     #[serde(default)]
-    #[allow(dead_code, reason = "the graph policy states the addressable method")]
+    #[allow(dead_code, reason = "the new graph routes on the addressable method")]
     w3: bool,
     #[serde(default)]
-    #[allow(dead_code, reason = "the graph policy states the addressable method")]
+    #[allow(dead_code, reason = "the new graph routes on the addressable method")]
     capabilities: bool,
     #[serde(default)]
-    #[allow(dead_code, reason = "the graph policy states the addressable method")]
+    #[allow(dead_code, reason = "the new graph routes on the addressable method")]
     disposition: String,
     #[serde(default)]
-    #[allow(dead_code, reason = "the graph policy states the addressable method")]
+    #[allow(dead_code, reason = "the new graph routes on the addressable method")]
     disposition_target: String,
     #[serde(default)]
     #[allow(dead_code, reason = "the privilege plane is not a new-graph input")]
@@ -484,13 +462,13 @@ struct OperationRow {
     #[allow(dead_code, reason = "the privilege plane is not a new-graph input")]
     payload: serde_json::Value,
     #[serde(default)]
-    #[allow(dead_code, reason = "the graph policy states the addressable method")]
+    #[allow(dead_code, reason = "the new graph routes on the addressable method")]
     deadline: serde_json::Value,
     #[serde(default)]
-    #[allow(dead_code, reason = "the graph policy states the addressable method")]
+    #[allow(dead_code, reason = "the new graph routes on the addressable method")]
     state_cell: serde_json::Value,
     #[serde(default)]
-    #[allow(dead_code, reason = "the graph policy states the addressable method")]
+    #[allow(dead_code, reason = "the new graph routes on the addressable method")]
     fds: serde_json::Value,
 }
 
@@ -524,6 +502,11 @@ impl DeclaredProviders {
     /// a crate other than the directory it lives in and a crate that carries
     /// no declaration of a kind it is not recorded as owning none of.
     ///
+    /// The `resource-types.json` set is read and dropped: the compiled
+    /// resource-type table is the type authority's artifact, and this reader
+    /// exists only so the cross-check's own pass refuses a declaration
+    /// outside the format rather than skipping it.
+    ///
     /// The crate set is [`declaration_paths`]' rather than a per-kind
     /// optional read: an absent file and a renamed one look the same on disk,
     /// and a loader that skips what it cannot find would render a partial
@@ -531,9 +514,11 @@ impl DeclaredProviders {
     #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
     fn load(repo_root: &Path) -> Result<Self, String> {
         let crates = provider_crates(repo_root)?;
+        for (crate_name, path) in declaration_paths(repo_root, Declaration::ResourceTypes)? {
+            read_parsed::<TypeDeclarationFile>(&path, &crate_name)?;
+        }
         Ok(Self {
             declaring: crates.iter().map(|(name, _)| name.clone()).collect(),
-            types: load_kind(repo_root, Declaration::ResourceTypes)?,
             operations: load_kind(repo_root, Declaration::Operations)?,
             registrations: load_kind(repo_root, Declaration::Registrations)?,
             catalogs: load_kind(repo_root, Declaration::ServiceCatalog)?,
@@ -544,97 +529,63 @@ impl DeclaredProviders {
     ///
     /// A crate declares only the kinds it owns: a provider that serves no
     /// operation row and owns no ResourceType has no `operations.json` and no
-    /// `resource-types.json`, and the graph policy states it with empty
-    /// vocabularies rather than a second invented file. Every such absence is
-    /// recorded in the shared absence table the loader gates on.
+    /// `resource-types.json`, and the declared surface states it with empty
+    /// vocabularies and no Provider identity rather than a second invented
+    /// file. Every such absence is recorded in the shared absence table the
+    /// loader gates on.
     fn crate_names(&self) -> Vec<&str> {
         self.declaring.iter().map(String::as_str).collect()
     }
 
-    /// The canonical graph policy row for one declaring crate.
+    /// The declared surface one declaring crate contributes.
     ///
     /// A provider registers its own identity, serves the union of the
     /// services its registration and catalog declare (a service package two
-    /// declarations name is a service the provider publishes once), owns the
-    /// types it declared, and serves one declared method per operation row.
+    /// declarations name is a service the provider publishes once), and serves
+    /// one declared method per operation row.
     ///
-    /// The provider reference is the one the service catalog declared, not a
-    /// string composed here: a crate whose catalog and registration disagree
-    /// about which Provider it is would otherwise produce two identities for
-    /// one provider, so that disagreement is refused naming both.
-    fn provider(&self, crate_name: &str) -> Result<GraphPolicyProvider, String> {
+    /// The provider reference is the one a declaration named, never a string
+    /// composed here. Nothing infers an identity from the crate's directory
+    /// name, because that name is not the identity: the committed Provider
+    /// matrix gives `d2b-provider-guest-qemu-media` the identity
+    /// `runtime-qemu-media` and `d2b-provider-process-minijail` the identity
+    /// `system-minijail`, so a directory-name convention both published
+    /// references the product does not have and rejected the ones it does.
+    /// A crate whose registration and catalog disagree about which Provider
+    /// it is is refused naming both, and a crate that declares neither states
+    /// no reference at all.
+    fn provider(&self, crate_name: &str) -> Result<DeclaredProvider, String> {
         let registration = self.registrations.get(crate_name);
         let catalog = self.catalogs.get(crate_name);
-        let identity = crate_name
-            .strip_prefix("d2b-provider-")
-            .unwrap_or(crate_name)
-            .to_owned();
-        for (source, declared) in [
-            ("registrations.json", registration.map(|file| file.provider.as_str())),
-            ("service-catalog.json", catalog.map(|file| file.provider.as_str())),
-        ] {
-            if let Some(declared) = declared
-                && declared != identity
-            {
-                return Err(format!(
-                    "provider-identity-mismatch: crate {crate_name} is the {identity} provider but its {source} declares provider {declared}"
-                ));
-            }
+        if let (Some(registration), Some(catalog)) = (registration, catalog)
+            && registration.provider != catalog.provider
+        {
+            return Err(format!(
+                "provider-identity-mismatch: crate {crate_name} declares provider {} in registrations.json and provider {} in service-catalog.json",
+                registration.provider, catalog.provider
+            ));
         }
-        let provider = registration
-            .map(|file| file.provider.clone())
-            .or_else(|| catalog.map(|file| file.provider.clone()))
-            .unwrap_or(identity);
-        let provider_ref = match catalog {
-            Some(file) => file.provider_ref.clone(),
-            None => format!("Provider/{provider}"),
+        let provider_ref = match (registration, catalog) {
+            (Some(_), Some(file)) => Some(file.provider_ref.clone()),
+            (Some(file), None) => Some(format!("Provider/{}", file.provider)),
+            (None, Some(file)) => Some(file.provider_ref.clone()),
+            (None, None) => None,
         };
         let effect_services: BTreeSet<String> = registration.map_or_else(BTreeSet::new, |file| {
             file.services.iter().cloned().collect()
         });
         let service_packages: BTreeSet<String> =
             catalog.map_or_else(BTreeSet::new, |file| file.services.iter().cloned().collect());
-        let types = self.types.get(crate_name).map_or_else(Vec::new, |file| {
-            file.types
-                .iter()
-                .map(|row| GraphPolicyType {
-                    resource_type: row.resource_type.clone(),
-                    allowed_sources: row.allowed_sources.clone(),
-                    verbs: row.verbs.clone(),
-                    execution: row.execution.clone(),
-                    exportable: row.exportable,
-                    reads: row.reads.clone(),
-                })
-                .collect()
-        });
-        let provides = self
-            .types
-            .get(crate_name)
-            .map(|file| file.provides.clone())
-            .unwrap_or_default();
-        let mut methods: Vec<GraphPolicyMethod> = self
+        let methods = self
             .operations
             .get(crate_name)
-            .map(|file| {
-                file.operations
-                    .iter()
-                    .map(|row| GraphPolicyMethod {
-                        service: row.service.clone(),
-                        method: row.method.clone(),
-                        operation: row.operation.clone(),
-                        profiles: row.profiles.clone(),
-                    })
-                    .collect()
-            })
+            .map(|file| file.operations.iter().map(|row| row.method.clone()).collect())
             .unwrap_or_default();
-        methods.sort_by(|left, right| left.method.cmp(&right.method));
-        Ok(GraphPolicyProvider {
+        Ok(DeclaredProvider {
             provider_ref,
             crate_name: crate_name.to_owned(),
             effect_services: effect_services.into_iter().collect(),
             service_packages: service_packages.into_iter().collect(),
-            types,
-            provides,
             methods,
         })
     }
@@ -714,9 +665,9 @@ struct DeclaredSurface {
 /// files is the point: a check whose two sides are the same input is a
 /// restatement.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn compiled_surface(repo_root: &Path) -> Result<CompiledSurface, String> {
+fn compiled_surface(repo_root: &Path, declaring: &[&str]) -> Result<CompiledSurface, String> {
     let mut out = CompiledSurface::default();
-    for crate_name in DeclaredProviders::load(repo_root)?.crate_names() {
+    for &crate_name in declaring {
         let src = repo_root.join("packages").join(crate_name).join("src");
         let mut text = String::new();
         for path in crate::authority_common::collect_rs_files(&src)? {
@@ -743,115 +694,65 @@ fn compiled_surface(repo_root: &Path) -> Result<CompiledSurface, String> {
     Ok(out)
 }
 
-/// Read what the staged composition declares, from the rendered bytes
-/// rather than from the loader, so a renderer that dropped a row shows up
-/// here as an undeclared compiled handler.
-fn declared_surface(artifacts: &[(String, String)]) -> Result<DeclaredSurface, String> {
-    let operations: serde_json::Value =
-        serde_json::from_str(artifact(artifacts, &staged("operations.json"))?)
-        .map_err(|error| format!("cannot parse the staged operation catalog: {error}"))?;
-    let policy: serde_json::Value =
-        serde_json::from_str(artifact(artifacts, &staged("graph_policy.json"))?)
-            .map_err(|error| format!("cannot parse the staged graph policy: {error}"))?;
+/// Read what every provider crate's declarations state.
+///
+/// The declared side is the loader's own output rather than this module's
+/// rendered bytes, so the cross-check compares the declarations against the
+/// crate sources and not one rendering against another.
+fn declared_surface(providers: &DeclaredProviders) -> Result<DeclaredSurface, String> {
     let mut out = DeclaredSurface::default();
-    for row in operations
-        .get("rows")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let declaring = declaring_crate(row)?;
-        let method = row
-            .get("method")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| "the staged operation catalog has a row with no method".to_owned())?;
+    for crate_name in providers.crate_names() {
+        let provider = providers.provider(crate_name)?;
         out.handlers
-            .entry(declaring)
-            .or_default()
-            .insert(format!("Operation/{method}"));
-    }
-    for provider in policy.as_array().into_iter().flatten() {
-        let crate_name = provider
-            .get("crate")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| "the staged graph policy has a provider with no crate".to_owned())?;
-        out.handlers
-            .entry(crate_name.to_owned())
+            .entry(provider.crate_name.clone())
             .or_default()
             .extend(
                 provider
-                    .get("methods")
-                    .and_then(serde_json::Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|method| method.get("method").and_then(serde_json::Value::as_str))
+                    .methods
+                    .iter()
                     .map(|method| format!("Operation/{method}")),
             );
         out.effect_services.insert(
-            crate_name.to_owned(),
-            provider
-                .get("effectServices")
-                .and_then(serde_json::Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(serde_json::Value::as_str)
-                .map(str::to_owned)
-                .collect(),
+            provider.crate_name.clone(),
+            provider.effect_services.into_iter().collect(),
         );
         out.service_packages.insert(
-            crate_name.to_owned(),
-            provider
-                .get("servicePackages")
-                .and_then(serde_json::Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(serde_json::Value::as_str)
-                .map(str::to_owned)
-                .collect(),
+            provider.crate_name.clone(),
+            provider.service_packages.into_iter().collect(),
         );
-        let provider_ref = provider
-            .get("providerRef")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| "the staged graph policy has a provider with no reference".to_owned())?;
+        // A crate whose reference is `None` declares no Provider identity, so
+        // it registers no provider and cannot collide with a sibling that does.
+        let Some(provider_ref) = provider.provider_ref else {
+            continue;
+        };
         let identity = provider_ref
             .strip_prefix("Provider/")
-            .ok_or_else(|| format!("the staged graph policy names {provider_ref} as a Provider"))?
+            .ok_or_else(|| format!("crate {crate_name} names {provider_ref} as a Provider"))?
             .to_owned();
-        if let Some(first) = out.providers.insert(identity.clone(), crate_name.to_owned()) {
+        if let Some(first) = out.providers.insert(identity.clone(), provider.crate_name.clone()) {
             return Err(format!(
-                "provider-declared-twice: the staged composition registers {identity} as both {first} and {crate_name}"
+                "provider-declared-twice: crate {crate_name} and crate {first} both register {identity}"
             ));
         }
     }
     Ok(out)
 }
 
-/// The declaring crate one staged operation row names.
-fn declaring_crate(row: &serde_json::Value) -> Result<String, String> {
-    row.get("declaringProvider")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            "the staged operation catalog has a row with no declaring provider".to_owned()
-        })
-}
-
-/// The cross-check violations between the compiled surface and the staged
-/// composition, each naming the undeclared side.
+/// The cross-check violations between the compiled surface and the
+/// declarations, each naming the undeclared side.
 ///
 /// A compiled handler no declaration carries is a handler the new graph
 /// would not host; a declared method the crate never registers is a method
-/// the composition would route to nothing; a provider the composition
-/// registers with no crate behind it has no implementation to compile; and a
+/// the composition would route to nothing; a provider the declarations
+/// register with no crate behind it has no implementation to compile; and a
 /// service package a crate declares but never spells is a service it cannot
 /// address.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn undeclared_compiled_handlers(
-    repo_root: &Path,
-    artifacts: &[(String, String)],
-) -> Result<Vec<String>, String> {
-    let compiled = compiled_surface(repo_root)?;
-    let declared = declared_surface(artifacts)?;
+fn undeclared_compiled_handlers(repo_root: &Path) -> Result<Vec<String>, String> {
+    let providers = DeclaredProviders::load(repo_root)?;
+    let declaring = providers.crate_names();
+    let compiled = compiled_surface(repo_root, &declaring)?;
+    let declared = declared_surface(&providers)?;
     let mut errors = Vec::new();
     for (crate_name, handlers) in &compiled.handlers {
         let declared_handlers = declared.handlers.get(crate_name);
@@ -877,7 +778,7 @@ fn undeclared_compiled_handlers(
         let crate_dir = repo_root.join("packages").join(crate_name);
         if !crate_dir.is_dir() {
             errors.push(format!(
-                "registered-provider-without-crate: the staged composition registers provider {identity} as {crate_name}, which is not a crate in this tree"
+                "registered-provider-without-crate: crate {crate_name} registers provider {identity}, which is not a crate in this tree"
             ));
         }
     }
@@ -985,6 +886,7 @@ fn string_constants(text: &str) -> BTreeMap<String, String> {
 }
 
 /// One rendered artifact's bytes by its isolated path.
+#[cfg(test)]
 fn artifact<'a>(artifacts: &'a [(String, String)], path: &str) -> Result<&'a str, String> {
     artifacts
         .iter()
@@ -1180,9 +1082,10 @@ mod tests {
             "the composition renders the same artifact set in the same order"
         );
         assert_eq!(first, second, "the composition is byte-stable");
-        assert!(
-            first.len() >= 6,
-            "the composition stages every replacement plus the policy and the manifest"
+        assert_eq!(
+            first.len(),
+            REPLACEMENTS.len() + 1,
+            "the composition stages every replacement plus the manifest"
         );
     }
 
@@ -1205,11 +1108,15 @@ mod tests {
             staged("provider_registrations.rs"),
             staged("service_provider_catalog.rs"),
             staged("v3_converted_resource_types.rs"),
-            staged("operations.json"),
-            staged("graph_policy.json"),
             staged("build_closure.json"),
         ] {
             assert!(paths.contains(&expected.as_str()), "the composition stages {expected}");
+        }
+        for deleted in ["operations.json", "graph_policy.json"] {
+            assert!(
+                !paths.contains(&staged(deleted).as_str()),
+                "the composition stages nothing no production file compiles: {deleted}"
+            );
         }
     }
 
@@ -1302,8 +1209,7 @@ mod tests {
     #[test]
     fn every_compiled_handler_and_provider_is_declared() {
         let root = repo_root();
-        let artifacts = render_composition(&root).expect("the composition renders");
-        let undeclared = undeclared_compiled_handlers(&root, &artifacts).expect("the cross-check runs");
+        let undeclared = undeclared_compiled_handlers(&root).expect("the cross-check runs");
         assert!(
             undeclared.is_empty(),
             "every compiled handler and provider is declared:\n- {}",
@@ -1322,11 +1228,8 @@ mod tests {
             "packages/d2b-provider-fixture/src/extra.rs",
             "pub fn extra() {\n    let _ = ResourceRef::parse(\"Operation/import\");\n}\n",
         );
-        let undeclared = undeclared_compiled_handlers(
-            &fixture.root,
-            &render_composition(&fixture.root).expect("renders"),
-        )
-        .expect("the cross-check runs");
+        let undeclared =
+            undeclared_compiled_handlers(&fixture.root).expect("the cross-check runs");
         assert_eq!(
             undeclared,
             vec![
@@ -1348,11 +1251,8 @@ mod tests {
         // handler and publishes no service, so the declared method and the
         // declared effect service both have nothing behind them.
         fixture.write("packages/d2b-provider-fixture/src/driver.rs", "pub fn nothing() {}\n");
-        let undeclared = undeclared_compiled_handlers(
-            &fixture.root,
-            &render_composition(&fixture.root).expect("renders"),
-        )
-        .expect("the cross-check runs");
+        let undeclared =
+            undeclared_compiled_handlers(&fixture.root).expect("the cross-check runs");
         assert!(
             undeclared.iter().any(|error| {
                 error.contains("declared-but-not-compiled")
@@ -1373,17 +1273,38 @@ mod tests {
             "packages/d2b-provider-fixture/service-catalog.json",
             "{\n  \"provider\": \"fixture\",\n  \"providerRef\": \"Provider/fixture\",\n  \"services\": [\"d2b.fixture.absent.v3\"]\n}\n",
         );
-        let undeclared = undeclared_compiled_handlers(
-            &fixture.root,
-            &render_composition(&fixture.root).expect("renders"),
-        )
-        .expect("the cross-check runs");
+        let undeclared =
+            undeclared_compiled_handlers(&fixture.root).expect("the cross-check runs");
         assert!(
             undeclared.iter().any(|error| {
                 error.contains("declared-but-not-spelled")
                     && error.contains("service package d2b.fixture.absent.v3")
             }),
             "the cross-check names the service package nothing spells: {undeclared:?}"
+        );
+    }
+
+    /// A crate whose registration and service catalog name different
+    /// Providers is refused rather than resolved to one of them.
+    ///
+    /// The identity a crate states has to be the one its own declaration
+    /// named, and a crate naming two of them names none a caller could route
+    /// to. Picking either would publish an identity no declaration made.
+    #[test]
+    fn a_crate_naming_two_provider_identities_is_refused() {
+        let fixture = Fixture::new("identity-mismatch");
+        fixture.write_bootstrap_provider();
+        fixture.write_crate("d2b-provider-fixture", "export", "fixture.d2bus.org/export");
+        fixture.write(
+            "packages/d2b-provider-fixture/service-catalog.json",
+            "{\n  \"provider\": \"other\",\n  \"providerRef\": \"Provider/other\",\n  \"services\": []\n}\n",
+        );
+        let error = undeclared_compiled_handlers(&fixture.root)
+            .expect_err("a crate naming two Provider identities is refused");
+        assert!(
+            error.starts_with("provider-identity-mismatch")
+                && error.contains("d2b-provider-fixture"),
+            "the refusal names the crate and both identities: {error}"
         );
     }
 
@@ -1433,31 +1354,27 @@ mod tests {
         );
     }
 
-    /// Every staged Rust artifact is compiled by the production file the
-    /// manifest names: the consumer `include!`s the staged path itself, so
-    /// the byte the generator renders is the byte the daemon links. The test
-    /// fails the moment consumption moves off the closure - a restored
-    /// per-crate copy, a repointed `include!`, or a dropped manifest row.
+    /// Every staged artifact is compiled by the production file the manifest
+    /// names: the consumer `include!`s the staged path itself, so the byte
+    /// the generator renders is the byte the daemon links. The test fails the
+    /// moment consumption moves off the closure - a restored per-crate copy,
+    /// a repointed `include!`, or a dropped manifest row.
     #[test]
-    fn every_staged_rust_artifact_is_included_by_its_production_consumer() {
+    fn every_staged_artifact_is_included_by_its_production_consumer() {
         let root = repo_root();
         for replacement in REPLACEMENTS {
-            if !replacement.staged.ends_with(".rs") {
-                continue;
-            }
-            let consumer_path = root.join(replacement.installed_into);
-            let consumer = fs::read_to_string(&consumer_path).unwrap_or_else(|error| {
-                panic!("{} must exist: {error}", replacement.installed_into)
-            });
+            let compiled_into = replacement.compiled_into;
+            let consumer_path = root.join(compiled_into);
+            let consumer = fs::read_to_string(&consumer_path)
+                .unwrap_or_else(|error| panic!("{compiled_into} must exist: {error}"));
             let included: Vec<String> = include_targets(&consumer)
                 .into_iter()
-                .map(|target| resolved_include(replacement.installed_into, target))
+                .map(|target| resolved_include(compiled_into, target))
                 .collect();
             let expected = staged(replacement.staged);
             assert!(
                 included.contains(&expected),
-                "{} must include {expected}, but it includes {included:?}",
-                replacement.installed_into,
+                "{compiled_into} must include {expected}, but it includes {included:?}",
             );
         }
     }
@@ -1480,98 +1397,4 @@ mod tests {
         }
     }
 
-    /// The declaration-only operation catalog is a strict subset of the
-    /// merged one: it carries every row a crate declared and no broker-generic
-    /// row, which is the merge input U34 deletes.
-    #[test]
-    fn the_staged_operation_catalog_drops_the_merged_rows() {
-        let root = repo_root();
-        let staged: serde_json::Value = serde_json::from_str(
-            artifact(
-                &render_composition(&root).expect("the composition renders"),
-                &staged("operations.json"),
-            )
-            .expect("staged artifact"),
-        )
-        .expect("the staged catalog is JSON");
-        let committed: serde_json::Value = serde_json::from_str(
-            &fs::read_to_string(root.join("docs/reference/policy/broker-operations.json"))
-                .expect("the merged rows document reads"),
-        )
-        .expect("the merged rows document is JSON");
-        let staged_rows = staged["rows"].as_array().expect("staged rows");
-        let committed_rows = committed["rows"].as_array().expect("committed rows");
-        assert!(
-            staged_rows.len() < committed_rows.len(),
-            "the staged catalog drops the rows no crate declared: {} staged, {} merged",
-            staged_rows.len(),
-            committed_rows.len()
-        );
-        for row in staged_rows {
-            assert_eq!(
-                row["owner"], "family",
-                "every staged row is a declared family row, never a merged broker row"
-            );
-            assert!(
-                !row.get("wireVariant").is_some_and(|value| !value.is_null()),
-                "a declared row carries no wire variant"
-            );
-        }
-    }
-
-    /// The canonical graph policy is what the isolated Nix artifacts read, so
-    /// it states the declared provider, its services, its types and its
-    /// methods - and nothing a declaration does not state.
-    #[test]
-    fn the_graph_policy_states_only_declared_facets() {
-        let policy: serde_json::Value = serde_json::from_str(
-            artifact(
-                &render_composition(&repo_root()).expect("the composition renders"),
-                &staged("graph_policy.json"),
-            )
-            .expect("staged artifact"),
-        )
-        .expect("the graph policy is JSON");
-        let providers = policy.as_array().expect("the policy is a provider list");
-        assert!(!providers.is_empty(), "the policy covers the declared providers");
-        for provider in providers {
-            let keys: Vec<&str> = provider
-                .as_object()
-                .expect("a provider row")
-                .keys()
-                .map(String::as_str)
-                .collect();
-            assert_eq!(
-                keys,
-                vec![
-                    "crate",
-                    "effectServices",
-                    "methods",
-                    "providerRef",
-                    "provides",
-                    "servicePackages",
-                    "types"
-                ],
-                "a provider row states exactly the declared facets"
-            );
-            let provider_ref = provider["providerRef"].as_str().expect("a provider ref");
-            assert!(
-                provider_ref.starts_with("Provider/"),
-                "{provider_ref} is a Provider reference"
-            );
-            for method in provider["methods"].as_array().expect("methods") {
-                let keys: Vec<&str> = method
-                    .as_object()
-                    .expect("a method row")
-                    .keys()
-                    .map(String::as_str)
-                    .collect();
-                assert_eq!(
-                    keys,
-                    vec!["method", "operation", "profiles", "service"],
-                    "a method row states exactly the declared facets"
-                );
-            }
-        }
-    }
 }

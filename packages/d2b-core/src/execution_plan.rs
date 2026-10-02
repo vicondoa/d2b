@@ -895,6 +895,262 @@ impl PrivateExecutionTable {
 }
 
 // ---------------------------------------------------------------------------
+// The authority behind the private execution values
+// ---------------------------------------------------------------------------
+
+/// One resolved source's private host values.
+///
+/// The three fields are what the broker resolved *for* one accepted
+/// relationship: the class of host object the source became, the private
+/// path of that object, and the named views of it. Nothing here is derived
+/// from the invocation, and there is no constructor a caller can reach: the
+/// only way to obtain one is [`PrivateExecutionValues::source`], which the
+/// broker answers from a verified artifact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrivateSourceValues {
+    backing: PrivateBacking,
+    path: PrivatePath,
+    views: Vec<PlannedView>,
+}
+
+impl PrivateSourceValues {
+    /// Record one resolved source's private values.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlanValueError::OverBound`] when the named-view list exceeds
+    /// [`MAX_PLAN_VIEWS`].
+    pub fn new(
+        backing: PrivateBacking,
+        path: PrivatePath,
+        views: Vec<PlannedView>,
+    ) -> Result<Self, PlanValueError> {
+        if views.len() > MAX_PLAN_VIEWS {
+            return Err(PlanValueError::OverBound);
+        }
+        Ok(Self {
+            backing,
+            path,
+            views,
+        })
+    }
+
+    /// The host object class the source resolves to.
+    pub const fn backing(&self) -> PrivateBacking {
+        self.backing
+    }
+
+    /// The private path of the host object.
+    pub const fn path(&self) -> &PrivatePath {
+        &self.path
+    }
+
+    /// The named views of the source.
+    pub fn views(&self) -> &[PlannedView] {
+        &self.views
+    }
+}
+
+/// The broker's own authority for the private host values an admitted effect
+/// resolves to.
+///
+/// Every method is a *lookup*, keyed by an identity the broker already holds:
+/// an accepted relationship key, an accepted subject, an accepted `Operation`.
+/// There is deliberately no method whose argument is a program, an argument
+/// vector, an environment entry, a uid, a gid, or a mount policy, so an
+/// implementation physically cannot forward one back to the plan. That is the
+/// difference between this trait and a passthrough: the caller of
+/// [`PrivateExecutionTable::from_authority`] names *what* an effect depends on
+/// and the implementation answers *what it runs against*, or it answers
+/// nothing.
+///
+/// Every method returns `None` for an identity the broker holds no verified
+/// value for. `None` is the refusal: the entry is simply absent from the
+/// table, and [`resolve_execution_plan`] refuses the effect by name rather
+/// than substituting a default path, uid, or program.
+pub trait PrivateExecutionValues {
+    /// The committed state of every row the broker currently observes.
+    ///
+    /// This is the AE16 fence's own input (R35): a row the broker cannot
+    /// observe at a committed revision and digest is a row whose authority it
+    /// cannot prove, so an empty set refuses every effect rather than
+    /// admitting one against an unfenced dependency.
+    fn observed(&self) -> &[FreshnessTuple];
+
+    /// The private host values one accepted relationship resolves to.
+    fn source(&self, key: &BindingKey) -> Option<PrivateSourceValues>;
+
+    /// The private mount point one accepted consumer slot resolves to.
+    fn destination(&self, key: &BindingKey) -> Option<PlannedDestination>;
+
+    /// The identity one admitted subject resolves to.
+    fn identity(&self, subject: &ResourceRef) -> Option<PlannedIdentity>;
+
+    /// The trusted executable one declared `Operation` resolves to.
+    ///
+    /// `declared` is the committed contract, and the answer must realize
+    /// exactly it: the caller of this method is not asked what to run, it is
+    /// asked what the contract it already committed names.
+    fn executable(
+        &self,
+        operation: &ResourceRef,
+        declared: &CallableOperation,
+    ) -> Option<PlannedExecutable>;
+}
+
+impl PrivateExecutionTable {
+    /// Resolve the private execution values for one Zone from the broker's
+    /// own authority.
+    ///
+    /// This is the production construction. It joins three authorities and
+    /// nothing else:
+    ///
+    /// - `accepted` says *which relationships are committed*: the exact
+    ///   [`BindingKey`]s, the rights each source admitted, and the
+    ///   presentation facets each realization declared it realizes.
+    /// - `declared` says *which operations exist*: the committed
+    ///   [`CallableOperation`]s the broker serves, each naming its own
+    ///   implementation.
+    /// - `values` says *what each of those runs against*: the verified
+    ///   private host values behind every one of them.
+    ///
+    /// The join is fail-closed at every step, and each refusal is an absence
+    /// rather than a narrower substitute:
+    ///
+    /// - A row the broker cannot observe at a committed revision and digest
+    ///   is not recorded, so the plan resolver refuses it as
+    ///   [`PlanRefusalKind::SourceUnproven`].
+    /// - A relationship the graph accepted but `values` resolves no host
+    ///   values for is not recorded, with the same refusal.
+    /// - A resolved backing whose presentation facet the source's own row
+    ///   does not realize is refused, because presenting it would be a
+    ///   capability the source never declared.
+    /// - A resolved view whose right the source did not admit is refused,
+    ///   because a view is a narrower claim than its own right.
+    /// - An executable whose implementation is not the one `declared` names
+    ///   is refused, because that is the one thing a table must never route
+    ///   around.
+    ///
+    /// The result is therefore a table whose every entry is traceable to a
+    /// named declaration, and whose missing entries are exactly the effects
+    /// the broker refuses.
+    pub fn from_authority(
+        accepted: &AcceptedGraph,
+        declared: impl IntoIterator<Item = (ResourceRef, CallableOperation)>,
+        values: &dyn PrivateExecutionValues,
+    ) -> Self {
+        let zone = accepted.zone();
+        let store = accepted.store();
+        let mut table = Self::empty();
+
+        // The fence's own rows: only the ones describing *this* store
+        // generation of *this* Zone are observations, and a tuple from
+        // another one is a different store rather than an older but current
+        // row.
+        for row in values.observed() {
+            if row.zone() == zone && row.store_incarnation() == store {
+                table = table.with_observed(row.clone());
+            }
+        }
+
+        for (key, source) in accepted.sources() {
+            let Some(resolved) = values.source(key) else {
+                continue;
+            };
+            // The source's own row decides the class of host object it
+            // becomes. A backing whose facet the declared realization does
+            // not realize is a capability the source never declared.
+            if !source.support().realizes(resolved.backing().facet()) {
+                continue;
+            }
+            // A view is a narrower claim than the relationship it rides, so
+            // its right has to be one the source admitted.
+            let views: Vec<PlannedView> = resolved
+                .views()
+                .iter()
+                .filter(|view| source.admission().admits(view.rights()))
+                .cloned()
+                .collect();
+            // The committed state is the fence's own input: a source the
+            // broker cannot observe at a committed revision and digest is a
+            // relationship whose authority it cannot prove, so it is not
+            // recorded at all.
+            let Some(freshness) = values
+                .observed()
+                .iter()
+                .find(|row| {
+                    row.zone() == zone
+                        && row.store_incarnation() == store
+                        && row.resource_uid() == key.source_uid()
+                })
+                .cloned()
+            else {
+                continue;
+            };
+            let Ok(planned) = PlannedSource::new(
+                key.source_ref().clone(),
+                key.source_uid().clone(),
+                key.kind(),
+                freshness,
+                resolved.backing(),
+                resolved.path().clone(),
+                views,
+            ) else {
+                continue;
+            };
+            table = table.with_source(planned);
+        }
+
+        for (key, _source) in accepted.sources() {
+            if let Some(destination) = values.destination(key) {
+                table = table.with_destination(destination);
+            }
+        }
+
+        // The subjects the graph admits are exactly the consumers of its
+        // committed relationships and the subjects its accepted role bindings
+        // name, so the resolver never has to be told which subject an
+        // invocation will claim.
+        for subject in admitted_subjects(accepted) {
+            if let Some(identity) = values.identity(&subject) {
+                table = table.with_identity(identity);
+            }
+        }
+
+        for (operation, callable) in declared {
+            let Some(executable) = values.executable(&operation, &callable) else {
+                continue;
+            };
+            // The one thing a table must never route around: an executable
+            // that is not the implementation the committed contract names.
+            if executable.implementation() != callable.implementation() {
+                continue;
+            }
+            table = table.with_executable(operation, executable);
+        }
+
+        table
+    }
+}
+
+/// Every subject the accepted graph admits, in canonical order.
+///
+/// A subject is admitted by being the consumer of a committed relationship or
+/// by being named in an accepted `RoleBinding`, and those two sets are the
+/// whole of it: a reference no accepted row names is not a subject this graph
+/// grants anything to.
+fn admitted_subjects(accepted: &AcceptedGraph) -> BTreeSet<ResourceRef> {
+    let mut subjects: BTreeSet<ResourceRef> = accepted
+        .sources()
+        .map(|(key, _source)| key.consumer_ref().clone())
+        .collect();
+    for (_, binding) in accepted.role_bindings() {
+        subjects.extend(binding.subjects().iter().cloned());
+    }
+    subjects
+}
+
+// ---------------------------------------------------------------------------
 // The resolved plan
 // ---------------------------------------------------------------------------
 

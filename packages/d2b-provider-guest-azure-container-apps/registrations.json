@@ -1,0 +1,5 @@
+{
+  "crate": "d2b-provider-guest-azure-container-apps",
+  "provider": "runtime-azure-container-apps",
+  "services": []
+}

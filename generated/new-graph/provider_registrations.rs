@@ -30,8 +30,24 @@ pub(crate) const PROVIDER_REGISTRATIONS: &[ProviderRegistration] = &[
         services: &["credential.d2bus.org/effects"],
     },
     ProviderRegistration {
+        provider_ref: "credential-entra",
+        services: &[],
+    },
+    ProviderRegistration {
+        provider_ref: "credential-managed-identity",
+        services: &[],
+    },
+    ProviderRegistration {
+        provider_ref: "credential-secret-service",
+        services: &[],
+    },
+    ProviderRegistration {
         provider_ref: "device",
         services: &["device.d2bus.org/effects"],
+    },
+    ProviderRegistration {
+        provider_ref: "device-gpu",
+        services: &[],
     },
     ProviderRegistration {
         provider_ref: "device-security-key",
@@ -48,6 +64,22 @@ pub(crate) const PROVIDER_REGISTRATIONS: &[ProviderRegistration] = &[
     ProviderRegistration {
         provider_ref: "guest",
         services: &["guest.d2bus.org/effects"],
+    },
+    ProviderRegistration {
+        provider_ref: "runtime-azure-container-apps",
+        services: &[],
+    },
+    ProviderRegistration {
+        provider_ref: "runtime-azure-virtual-machine",
+        services: &[],
+    },
+    ProviderRegistration {
+        provider_ref: "runtime-cloud-hypervisor",
+        services: &[],
+    },
+    ProviderRegistration {
+        provider_ref: "runtime-qemu-media",
+        services: &[],
     },
     ProviderRegistration {
         provider_ref: "host",
@@ -74,6 +106,14 @@ pub(crate) const PROVIDER_REGISTRATIONS: &[ProviderRegistration] = &[
         services: &[],
     },
     ProviderRegistration {
+        provider_ref: "transport-azure-relay",
+        services: &[],
+    },
+    ProviderRegistration {
+        provider_ref: "transport-vsock",
+        services: &[],
+    },
+    ProviderRegistration {
         provider_ref: "user",
         services: &["user.d2bus.org/effects"],
     },
@@ -84,6 +124,14 @@ pub(crate) const PROVIDER_REGISTRATIONS: &[ProviderRegistration] = &[
     ProviderRegistration {
         provider_ref: "volume-binding",
         services: &["volume-binding.d2bus.org/effects"],
+    },
+    ProviderRegistration {
+        provider_ref: "volume-local",
+        services: &[],
+    },
+    ProviderRegistration {
+        provider_ref: "volume-virtiofs",
+        services: &[],
     },
     ProviderRegistration {
         provider_ref: "wayland-policy",

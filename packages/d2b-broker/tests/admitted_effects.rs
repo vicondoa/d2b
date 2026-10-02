@@ -9,14 +9,18 @@
 //!
 //! The table and the private values are test-owned fixtures, not the wiring
 //! production installs: `install_live_admitted_effects` in
-//! `packages/d2b-broker/src/runtime.rs` installs an empty table and the
-//! empty private table, deliberately, because no declared `Operation`
-//! contract exists for an admitted invocation to be admitted against. So
-//! the cases below prove the boundary's rules over a table that serves an
-//! `Operation`; they do not claim to observe what production serves. The
-//! production install's own observable behaviour - that its empty live
-//! table refuses a well-formed carrier by name - is owned by a case in
-//! that module's `cfg(test)`, beside the construction it pins.
+//! `packages/d2b-broker/src/runtime.rs` installs an empty implementation table
+//! and resolves the private values per admission from the verified private
+//! bundle, over the live accepted graph, in
+//! `packages/d2b-broker/src/ops/private_execution.rs`. No declared
+//! `Operation` implementation is installed, so production still refuses by
+//! name. So the cases below prove the boundary's rules over a table that
+//! serves an `Operation`; they do not claim to observe what production
+//! serves. The production install's own observable behaviour - that its empty
+//! live table refuses a well-formed carrier by name - is owned by a case in
+//! that module's `cfg(test)`, beside the construction it pins, and the
+//! resolver's own rules over a real verified bundle are owned by the cases in
+//! `ops::private_execution`.
 //!
 //! The plan's four scenarios are covered here:
 //!

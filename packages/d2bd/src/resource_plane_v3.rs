@@ -48,6 +48,7 @@ use d2b_contracts_resource::v3::{
 };
 use d2b_contracts_zone_session::v3::resource_bundle::{BundleResource, ResourceBundle};
 use d2b_core::bundle_resolver::{BundleResolver, ResolvedStoreViewIntent, intent_id_store_view};
+use d2b_core::resource_authority::AuthorityRowKind;
 use d2b_provider_activation_nixos::{
     ACTIVATION_EFFECTS_SERVICE, ActivationDriverArgs, ActivationEffectFacets,
     ActivationEffectsServiceFactory, activation_descriptor,
@@ -2007,6 +2008,26 @@ pub user_facets: UserEffectFacets,
     /// authority's home - and leaves it clear for every zone-local plane, so
     /// a system-homed row can never be written outside the seed.
     pub foundation: Option<FoundationInputs>,
+    /// The Zone's verified Nix bundle, applied before the manager spawns.
+    ///
+    /// The plane commits the rows this graph reads as authority - the
+    /// `Role` and `RoleBinding` rows an accepted graph is built from -
+    /// through the same fenced store path the foundation seed uses, so they
+    /// are durable, published, and acknowledged before the manager exists
+    /// (F1). The manager's own `pre_start` then loads them, so a Zone never
+    /// reaches a reader - the broker's per-Zone projection included - as an
+    /// empty Zone while its own declared authority is still in flight.
+    ///
+    /// Every other bundle row keeps arriving through
+    /// [`ResourcePlaneV3::ingest_nix_bundle`] after the plane opens: only the
+    /// authority rows are read by anything that exists before the manager
+    /// spawns, and staging the rest here would move every resource actor's
+    /// first reconcile without any boundary being ready to decide it.
+    ///
+    /// `None` is a plane that was given no bundle to apply, which is the
+    /// test shape: a plane with no declared authority commits no authority
+    /// row of its own.
+    pub bundle: Option<ResourceBundle>,
 }
 
 /// The declarations one foundation plane seeds before its manager spawns.
@@ -2354,6 +2375,7 @@ Arc::new(DaemonAudioMediatorSource {
                 &volume_facets,
             ),
             foundation: None,
+            bundle: None,
         })
     }
 }
@@ -2939,6 +2961,14 @@ pub enum PlaneError {
     Target(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("bundle invalid: {0}")]
     Bundle(#[from] d2b_contracts_zone_session::v3::resource_bundle::ResourceBundleError),
+    /// The authority refused a row the plane applies before its manager
+    /// spawns. The plane does not open without it: a Zone whose declared
+    /// authority was not accepted is a Zone every authority reader would see
+    /// as unestablished.
+    #[error("declared authority row refused: {0}")]
+    AuthorityPublication(
+        #[source] d2b_resource_runtime::authority_publish::PublishError,
+    ),
 }
 
 /// The canonical core Host target every non-guest resource realizes on
@@ -3329,10 +3359,16 @@ impl ResourcePlaneV3 {
         set.start().await.map_err(PlaneError::ProviderStartup)
     }
 
-    /// Open the store, register the converted-type factories, and
-    /// spawn the manager. Initial-load completion is a separate step so the
-    /// readiness checklist is observable stage by stage; [`Self::open`]
-    /// composes both.
+    /// Open the store, register the converted-type factories, apply the
+    /// Zone's declared authority rows, and spawn the manager.
+    /// Initial-load completion is a separate step so the readiness checklist
+    /// is observable stage by stage; [`Self::open`] composes both.
+    ///
+    /// The declared authority rows are applied HERE, before the spawn, and
+    /// not after it: a `Role` or `RoleBinding` row is an input an accepted
+    /// graph is built from, so a manager that spawned first and ingested
+    /// afterwards left every authority reader that runs before the ingest
+    /// looking at an empty Zone.
     ///
     /// Every stage here is async work the constructor awaits; the only
     /// synchronous work left is the store's own half (a directory create and
@@ -3510,6 +3546,31 @@ impl ResourcePlaneV3 {
                 "foundation seed committed the policy rows"
             );
         }
+        // The Zone's own declared authority is applied before the manager
+        // spawns, in the same place and through the same fenced store path
+        // the foundation seed just used. Ordering is the whole point: a
+        // `Role` or `RoleBinding` row is the input an accepted graph is
+        // built from, so a plane that spawned its manager first and ingested
+        // afterwards published the Zone while every authority reader that
+        // runs before the ingest - the broker's per-Zone projection, the
+        // session layer, the manager-boundary admission - still saw an empty
+        // Zone. The rows are durable and acknowledged here, and the manager's
+        // own `pre_start` loads them, so its actors start from a committed row
+        // (F1) exactly as the seeded rows do.
+        let committed_authority = Self::commit_declared_authority_rows(
+            &store,
+            inputs.bundle.as_ref(),
+            &inputs.zone,
+            authority.as_ref(),
+        )
+        .await?;
+        if !committed_authority.is_empty() {
+            tracing::info!(
+                zone = %inputs.zone.as_str(),
+                committed = committed_authority.len(),
+                "the zone's declared authority rows committed before the manager spawn"
+            );
+        }
         providers.mark_plane_open();
         check_registry_catalog(
             providers.registered_types(),
@@ -3534,13 +3595,13 @@ impl ResourcePlaneV3 {
         // so the registry is the authority: the plane wires no decoder table
         // of its own.
         let decoders = providers.decoders();
-        // U40: the manager-boundary admission. It is composed once, here, and
-        // reads two published facts rather than capturing them: the prior
-        // accepted graph the deployment published, and the Zone's accepted
+        // U40: the manager-boundary admission, and the two facts it would
+        // read: the Zone's own prior accepted graph, and the Zone's accepted
         // ceilings and reduction, which the two family drivers republish as
-        // their rows commit. A snapshot taken here would hold only the
-        // foundation seed rows and would never enforce a ceiling an operator
-        // commits after the manager spawned.
+        // their rows commit. A limits snapshot taken here would hold only
+        // what existed at the spawn and would never enforce a ceiling an
+        // operator commits afterwards, which is why the holder below is the
+        // live one.
         //
         // The two per-Zone runtimes are installed BEFORE the manager spawns,
         // so a family's driver finds its runtime on its first reconcile. The
@@ -3560,14 +3621,26 @@ impl ResourcePlaneV3 {
                 }),
             ),
         ));
-        // U40: the manager-boundary admission is NOT installed. The verified
-        // deployment graph is per-DEPLOYMENT and rooted at the system Zone,
-        // while this admission is per-ZONE: `GraphAuthority::admit_mutation`
-        // refuses a mutation whose Zone the accepted graph does not describe,
-        // so installing it here refuses every mutation in every Zone-local
-        // plane. A Zone's own Role and RoleBinding rows arrive with its
-        // bundle, which is ingested after this manager spawns, so no per-Zone
-        // accepted graph exists at this point to install.
+        // U40: the manager-boundary admission is still NOT installed, and the
+        // reason is no longer the graph.
+        //
+        // The per-Zone accepted graph this admission needs now EXISTS at this
+        // point: `commit_declared_authority_rows` committed the Zone's own
+        // `Role` and `RoleBinding` rows above, through the store's fenced
+        // path, before this manager spawns, so the graph built from them is
+        // rooted at THIS Zone and is not the deployment's system-Zone graph.
+        //
+        // What still blocks the install is the subject every other mutating
+        // entry point presents. `GraphMutationAdmission` decides a mutation
+        // from the initiating subject alone, and it refuses a principal that
+        // is neither an exact `Type/name` reference nor one of the
+        // bootstrap-class tokens. The owned-cascade boundaries render their
+        // subject as `ResourceKey`'s display form - `zone/Type/name` - which
+        // is not an exact reference (both the child bridge and the manager's
+        // own cascade do this), and no Zone bundle declares the RoleBindings
+        // that would grant a cascade subject even once it parsed. Installing
+        // the identity arm today therefore refuses every owned-child commit in
+        // every Zone, which is strictly worse than the gap it closes.
         //
         // What IS installed is only the fence below. The per-Zone runtimes
         // and the drain finalizer the families drive are real and wired, but
@@ -3661,6 +3734,100 @@ impl ResourcePlaneV3 {
         let plane = Self::prepare(inputs).await?;
         plane.complete_initial_load().await?;
         Ok(plane)
+    }
+
+    /// Commit the Zone bundle's declared authority rows, before the manager
+    /// exists.
+    ///
+    /// These are the rows an accepted graph is built from: a `Role` states
+    /// the rules one grant draws on and a `RoleBinding` states which subject
+    /// holds them, so anything that decides a mutation reads them. The class
+    /// comes from [`AuthorityRowKind::of_reference`] rather than from a local
+    /// table of type names, so the plane and the evaluator cannot disagree
+    /// about what counts as authority.
+    ///
+    /// The write is the store's only fenced path - staged, frozen, committed,
+    /// published, acknowledged - and it is the same call the foundation seed
+    /// makes for the rows it homes in the system Zone, so a seeded row and a
+    /// Zone-declared row are committed by one authority rather than two.
+    ///
+    /// Nothing is overwritten. A row this store already holds is left exactly
+    /// as it stands, whatever its provenance: an API-created row keeps the
+    /// provenance it was created under (R26), a row already retiring keeps
+    /// that mark, and [`ResourcePlaneV3::ingest_nix_bundle`] partitions both
+    /// the same way once the plane is open. An authority row that declares an
+    /// owner is left to that ingest too, because linking an owned child is
+    /// the manager's own deferral sweep and this step does not second-guess
+    /// it.
+    async fn commit_declared_authority_rows(
+        store: &SpecStore,
+        bundle: Option<&ResourceBundle>,
+        zone: &ZoneId,
+        authority: &dyn AuthorityPublisher,
+    ) -> Result<Vec<ResourceKey>, PlaneError> {
+        let Some(bundle) = bundle else {
+            return Ok(Vec::new());
+        };
+        bundle.verify()?;
+        let mut committed = Vec::new();
+        for row in &bundle.resources {
+            let key = bundle_row_key(zone, row);
+            let Ok(reference) = ResourceRef::parse(&format!(
+                "{}/{}",
+                key.type_name, key.name
+            )) else {
+                continue;
+            };
+            if !AuthorityRowKind::of_reference(&reference).is_authority()
+                || row.metadata().owner_ref().is_some()
+            {
+                continue;
+            }
+            // Any row this store already holds is left exactly as it stands,
+            // including one already retiring: an ensure against a deleting
+            // row is refused by the store, and the ingest partitions a
+            // retiring row as a skip anyway.
+            if store
+                .list(SpecSelector {
+                    zone: Some(zone.as_str().to_owned()),
+                    type_name: Some(key.type_name.clone()),
+                    owner_uid: None,
+                })
+                .await?
+                .iter()
+                .any(|held| held.key.name == key.name)
+            {
+                continue;
+            }
+            let desired = bundle_desired(zone, row);
+            store
+                .publish(
+                    d2b_resource_runtime::DesiredMutation::Ensure(StoredDesiredResource {
+                        uid: d2b_resource_runtime::manager::deterministic_uid(&key),
+                        key: key.clone(),
+                        generation: 1,
+                        owner_uid: None,
+                        provenance: d2b_resource_runtime::identity::ResourceProvenance::Nix,
+                        deleting: false,
+                        spec: desired.spec,
+                        metadata: desired.metadata,
+                        created_at: 0,
+                    }),
+                    authority,
+                )
+                .await
+                .map_err(|error| {
+                    tracing::error!(
+                        zone = %zone.as_str(),
+                        reference = %key,
+                        error = ?error,
+                        "the zone's declared authority row was refused"
+                    );
+                    PlaneError::AuthorityPublication(error)
+                })?;
+            committed.push(key);
+        }
+        Ok(committed)
     }
 
     /// The providers this zone started, in the order they started.
@@ -4009,6 +4176,8 @@ use d2b_provider_system_core::MinijailPlatformGate;
     use d2b_resource_runtime::revision::ManualClock;
     use d2b_resource_runtime::watch::{ChangeKind, ChangeNotice, WatchHubConfig};
 
+    use d2b_core::resource_authority::{AcceptedGraph, ProjectionRow, TransportIdentity};
+
     /// A principal that is not a real host account must be refused, not
     /// resolved to a guessed id. The closed contract requires these
     /// principals to be real accounts, and `host-users.nix` materializes the
@@ -4265,11 +4434,40 @@ use d2b_provider_system_core::MinijailPlatformGate;
         )
     }
 
+    /// The plane inputs over a caller-chosen Guest facet set, so a test can
+    /// observe the Cloud Hypervisor controller-session calls the composed
+    /// Guest driver's effects make through the same facets the plane builds
+    /// the family's effects service from.
+    fn test_inputs_with_guest_facets(
+        guest_facets: d2b_provider_guest::facets::GuestEffectFacets,
+    ) -> (tempfile::TempDir, ConstructionInputs, Arc<NewPlaneReadinessState>) {
+        test_inputs_over(
+            d2b_provider_wayland_policy::test_support::scripted_facets(
+                ZoneId::parse("test").unwrap(),
+            ),
+            guest_facets,
+        )
+    }
+
+
     /// The plane inputs over a caller-chosen interaction facet set, so a
     /// test can seed the family's audio registry through the same facets the
     /// plane hosts the declared service from.
     fn test_inputs_with_interaction_facets(
         interaction_facets: d2b_provider_wayland_policy::InteractionEffectFacets,
+    ) -> (tempfile::TempDir, ConstructionInputs, Arc<NewPlaneReadinessState>) {
+        test_inputs_over(
+            interaction_facets,
+            d2b_provider_guest::test_support::ScriptedFacets::new().facet_set(),
+        )
+    }
+
+    /// The plane inputs over both caller-chosen facet sets: the interaction
+    /// family's and the Guest family's, each the value the production
+    /// composition root builds its family's effects service from.
+    fn test_inputs_over(
+        interaction_facets: d2b_provider_wayland_policy::InteractionEffectFacets,
+        guest_facets: d2b_provider_guest::facets::GuestEffectFacets,
     ) -> (tempfile::TempDir, ConstructionInputs, Arc<NewPlaneReadinessState>) {
         let dir = tempfile::tempdir().expect("tempdir");
         let spec_store_dir = dir.path().join("daemon-state/zones/test");
@@ -4309,9 +4507,8 @@ use d2b_provider_system_core::MinijailPlatformGate;
             d2b_provider_user::test_support::ScriptedProbe::new(),
         );
         // U10: the plane tests build the Guest family's facet set from the
-        // scripted facets double, exactly as the production composition
-        // root builds it from the daemon's runtime.
-        let guest_facets = d2b_provider_guest::test_support::ScriptedFacets::new().facet_set();
+        // caller's scripted facets double, exactly as the production
+        // composition root builds it from the daemon's runtime.
         // U1/U5/U10/U14: the plane hosts the Process, Network, Host,
         // Activation, and Guest families' declared effects services from the
         // same facet sets their driver factories are built from, exactly as
@@ -4519,6 +4716,7 @@ HOST_EFFECTS_SERVICE.id,
                     ),
                 ]),
                 foundation: None,
+                bundle: None,
             },
             readiness,
         )
@@ -6583,6 +6781,213 @@ HOST_EFFECTS_SERVICE.id,
            .expect("the foundation plane admits the write");
     }
 
+    /// The authority rows a Zone bundle declares, in the Zone's own words: one
+    /// `Role` over the types that Zone's operator may write, and one
+    /// `RoleBinding` naming that operator. This is the exact pair an accepted
+    /// graph is built from, and the pair the manager boundary's identity arm
+    /// decides against.
+    fn declared_authority_rows(role_name: &str, subject: &str) -> Vec<BundleResource> {
+        let zone = ZoneId::parse("test").expect("the fixture zone");
+        let role = d2b_contracts_zone_session::v3::role::AuthorizedRole::new(
+            vec![d2b_contracts_zone_session::v3::RoleRule::new(
+                vec![d2b_contracts_resource::v3::ResourceTypeName::parse("Volume")
+                    .expect("a standard type")],
+                vec![
+                    d2b_contracts_zone_session::v3::RoleResourceVerb::Create,
+                    d2b_contracts_zone_session::v3::RoleResourceVerb::Delete,
+                ],
+                Vec::new(),
+                Vec::new(),
+                vec![zone],
+                Vec::new(),
+                Vec::new(),
+            )
+            .expect("the role rule validates")],
+            Vec::new(),
+        )
+        .expect("the role validates");
+        let binding = d2b_contracts_zone_session::v3::RoleBindingSpec::new(
+            ResourceRef::parse(&format!("Role/{role_name}")).expect("a canonical role"),
+            vec![ResourceRef::parse(subject).expect("a canonical subject")],
+            None,
+            None,
+        )
+        .expect("the role binding validates");
+        vec![
+            bundle_row(
+                "Role",
+                role_name,
+                serde_json::to_value(&role).expect("role row bytes"),
+            ),
+            bundle_row(
+                "RoleBinding",
+                &format!("{role_name}-holders"),
+                serde_json::to_value(&binding).expect("binding row bytes"),
+            ),
+        ]
+    }
+
+    /// The prior accepted graph one Zone's admission reads, rebuilt from the
+    /// rows this plane's own store committed - through the same
+    /// [`AcceptedGraph::from_canonical_rows`] call, over the same stored
+    /// bytes, that the broker's `prior_graph` makes.
+    async fn plane_accepted_graph(plane: &ResourcePlaneV3) -> AcceptedGraph {
+        let zone = ZoneId::parse("test").expect("the fixture zone");
+        let rows = plane
+           .store()
+           .list(SpecSelector {
+                zone: Some(zone.as_str().to_owned()),
+                type_name: None,
+                owner_uid: None,
+            })
+           .await
+           .expect("store rows");
+        let mut decoded: Vec<(ResourceRef, CanonicalJsonObject)> = Vec::new();
+        for row in rows {
+            let Ok(reference) =
+                ResourceRef::parse(&format!("{}/{}", row.key.type_name, row.key.name))
+            else {
+                continue;
+            };
+            if !AuthorityRowKind::of_reference(&reference).is_authority() {
+                continue;
+            }
+            let Ok(admitted) = serde_json::from_slice::<CanonicalJsonObject>(&row.spec) else {
+                continue;
+            };
+            decoded.push((reference, admitted));
+        }
+        let projection = decoded
+           .iter()
+           .map(|(reference, admitted)| ProjectionRow::new(reference, admitted));
+        AcceptedGraph::from_canonical_rows(
+            zone,
+            plane
+               .store()
+               .store_incarnation()
+               .await
+               .expect("store incarnation"),
+            AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap),
+            projection,
+        )
+        .expect("the committed authority rows decode")
+    }
+
+    /// One API mutation of `Type/name` in the fixture Zone, as the manager
+    /// boundary presents it.
+    fn api_mutation(type_name: &str, name: &str) -> MutationRequest {
+        MutationRequest {
+            key: ResourceKey::new("test", type_name, name),
+            op: AdmissionOp::Ensure,
+            spec: Vec::new(),
+            metadata: br#"{"annotations":{},"labels":{},"ownerRef":null}"#.to_vec(),
+        }
+    }
+
+    /// A cold start in a Zone-local plane applies that Zone's declared
+    /// authority BEFORE the manager spawns, so the per-Zone accepted graph
+    /// the manager boundary reads already carries the Zone's own grants the
+    /// first time it reads it - and a mutation the Zone granted is admitted
+    /// rather than refused for want of a graph.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_zone_local_cold_start_applies_its_declared_authority_before_the_manager_spawns() {
+        let (_dir, mut inputs, _readiness) = test_inputs();
+        inputs.bundle = Some(test_bundle(declared_authority_rows("volume-writer", "User/alice")));
+        // No ingest call: everything asserted below was committed by the
+        // plane's own open, before its manager existed.
+        let plane = ResourcePlaneV3::prepare(inputs).await.expect("plane");
+        plane.complete_initial_load().await.expect("initial load");
+
+        for (type_name, name) in
+            [("Role", "volume-writer"), ("RoleBinding", "volume-writer-holders")]
+        {
+            let committed = plane
+               .store()
+               .list(SpecSelector {
+                    zone: Some("test".to_owned()),
+                    type_name: Some(type_name.to_owned()),
+                    owner_uid: None,
+                })
+               .await
+               .expect("store rows")
+               .into_iter()
+               .any(|row| row.key.name == name);
+            assert!(committed, "{type_name}/{name} was not committed before the manager spawned");
+            // The manager's own pre_start loaded it, so the row is served
+            // from the manager and not only from the store.
+            assert!(
+                plane
+                   .client()
+                   .get_row(ResourceKey::new("test", type_name, name))
+                   .await
+                   .expect("manager row")
+                   .is_some(),
+                "{type_name}/{name} is durable but the manager never loaded it"
+            );
+        }
+
+        let graph = plane_accepted_graph(&plane).await;
+        assert_eq!(
+            graph.zone().as_str(),
+            "test",
+            "the graph is rooted at the Zone whose rows it holds, not the deployment's"
+        );
+        let admission = GraphMutationAdmission::new(
+            Arc::new(graph),
+            ZoneId::parse("test").expect("the fixture zone"),
+            TransportIdentity::ComponentSession,
+        );
+        assert!(
+            matches!(
+                admission.admit(&api_subject("User/alice"), &api_mutation("Volume", "state")),
+                AdmissionDecision::Allow
+            ),
+            "a Zone-local cold start refused a mutation its own declared RoleBinding grants"
+        );
+        plane.shutdown().await;
+    }
+
+    /// The same admission is not a rubber stamp: a mutation naming a row the
+    /// accepted graph does not cover is refused, on the target axis and on
+    /// the subject axis, while the granted one still passes beside them.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_zone_local_admission_refuses_a_row_its_graph_does_not_cover() {
+        let (_dir, mut inputs, _readiness) = test_inputs();
+        inputs.bundle = Some(test_bundle(declared_authority_rows("volume-writer", "User/alice")));
+        let plane = ResourcePlaneV3::open(inputs).await.expect("plane");
+        let admission = GraphMutationAdmission::new(
+            Arc::new(plane_accepted_graph(&plane).await),
+            ZoneId::parse("test").expect("the fixture zone"),
+            TransportIdentity::ComponentSession,
+        );
+
+        // The granted mutation, so neither refusal below can be an admission
+        // that denies everything.
+        assert!(matches!(
+            admission.admit(&api_subject("User/alice"), &api_mutation("Volume", "state")),
+            AdmissionDecision::Allow
+        ));
+        // The target the Zone's Role does not name.
+        let refused_type = admission.admit(
+            &api_subject("User/alice"),
+            &api_mutation("Guest", "work"),
+        );
+        assert!(
+            matches!(&refused_type, AdmissionDecision::Deny(refusal) if refusal.contains("identity-not-authorized")),
+            "a type the graph grants nothing was admitted: {refused_type:?}"
+        );
+        // The subject no RoleBinding in this Zone names.
+        let refused_subject =
+            admission.admit(&api_subject("User/mallory"), &api_mutation("Volume", "state"));
+        assert!(
+            matches!(&refused_subject, AdmissionDecision::Deny(refusal) if refusal.contains("identity-not-authorized")),
+            "a subject the graph never names was admitted: {refused_subject:?}"
+        );
+        plane.shutdown().await;
+    }
+
     /// A publication transaction the system Zone still owes an outcome for is
     /// resolved before the foundation seed publishes.
     ///
@@ -7553,4 +7958,750 @@ HOST_EFFECTS_SERVICE.id,
         );
     }
 
+    // -----------------------------------------------------------------------
+    // Production-path coverage for the Guest runtime Providers.
+    //
+    // The plane registers one `Guest` driver for four runtime Providers, and
+    // which Provider serves a row is decided from that row's own
+    // `spec.providerRef`. Nothing outside that split names it, so a Provider
+    // whose branch stopped being taken would leave the row converging as some
+    // other Provider - or not at all - with no failure anywhere. Each test
+    // below starts the plane's own provider set (the `provider_set`
+    // composition the daemon runs), takes the `Guest` driver and the `Guest`
+    // decoder that set registered, and drives stored rows through them, so the
+    // assertions are the composed driver's own behavior.
+    // -----------------------------------------------------------------------
+
+    use d2b_provider_guest::driver::{GUEST_REGISTRATIONS, GuestKind};
+    use d2b_provider_toolkit::testing::fakes::{RecordingManagerEndpoint, RecordingRequeue};
+    use d2b_resource_runtime::ResourceStatus;
+    use d2b_resource_runtime::context::{ResourceContext, SpecDecoder};
+    use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
+
+    /// The Provider reference one runtime-Provider row of the Guest family's
+    /// own table names.
+    fn runtime_provider_ref(kind: GuestKind) -> &'static str {
+        GUEST_REGISTRATIONS[kind.index()].provider_ref
+    }
+
+    /// The uid the Guest rows these passes drive, and the uid the composed
+    /// driver commits their children under.
+    const GUEST_ROW_UID: [u8; 16] = [
+        0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x41, 0x11, 0x81, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
+        0x11,
+    ];
+    /// The `Guest` row name the runtime-Provider passes below drive.
+    const GUEST_ROW_NAME: &str = "worker";
+
+    /// The `Guest` driver factory and spec decoder, as the plane's production
+    /// composition registered them.
+    async fn production_guest_driver(
+        inputs: &ConstructionInputs,
+    ) -> (Arc<dyn ResourceDriverFactory>, Arc<dyn SpecDecoder>) {
+        let mut runtime = ResourcePlaneV3::start_providers(inputs)
+            .await
+            .expect("the production composition starts its providers");
+        let directory = runtime.take_directory();
+        let type_name = d2b_resource_types::WellKnownType::GUEST.to_resource_type_name();
+        let factory = directory
+            .lookup(&type_name)
+            .expect("the production composition registers the Guest type");
+        let decoder = directory
+            .decoders()
+            .get(&type_name)
+            .cloned()
+            .expect("the production composition registers the Guest decoder");
+        runtime.drain().await.expect("the providers drain");
+        (factory, decoder)
+    }
+
+    fn stored_row(type_name: &str, name: &str, spec: serde_json::Value) -> StoredDesiredResource {
+        StoredDesiredResource {
+            key: ResourceKey::new("test", type_name, name),
+            uid: GUEST_ROW_UID,
+            generation: 1,
+            owner_uid: None,
+            provenance: ResourceProvenance::Nix,
+            deleting: false,
+            spec: serde_json::to_vec(&spec).expect("canonical spec bytes"),
+            metadata: br#"{"ownerRef":null,"labels":{},"annotations":{}}"#.to_vec(),
+            created_at: 0,
+        }
+    }
+
+    /// The child surface the composed driver commits through: the manager
+    /// double, keyed into the plane's own zone, with the row's uid as the
+    /// owner its committed children carry.
+    fn guest_manager() -> Arc<RecordingManagerEndpoint> {
+        Arc::new(
+            RecordingManagerEndpoint::new()
+                .with_zone("test")
+                .with_owner_uid(GUEST_ROW_UID),
+        )
+    }
+
+    fn guest_context(
+        row: StoredDesiredResource,
+        decoder: Arc<dyn SpecDecoder>,
+        manager: Arc<RecordingManagerEndpoint>,
+    ) -> ResourceContext {
+        let (effects_tx, _effects_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
+        ResourceContext::new(
+            row,
+            decoder,
+            manager,
+            Arc::new(RecordingRequeue::default()),
+            effects_tx,
+            notify_tx,
+        )
+    }
+
+    /// The committed children of the driven row, read back through the
+    /// family's own child surface.
+    async fn committed_children(
+        ctx: &mut ResourceContext,
+    ) -> Vec<(String, serde_json::Value)> {
+        ctx.children()
+            .await
+            .expect("the manager answers the owned set")
+            .into_iter()
+            .map(|row| {
+                (
+                    format!("{}/{}", row.key.type_name, row.key.name),
+                    serde_json::from_slice(&row.spec).expect("committed child spec decodes"),
+                )
+            })
+            .collect()
+    }
+
+    /// The Plane inputs whose Guest effects service is built over a scripted
+    /// facet set seeded for the runtime Providers the test drives: the plane's
+    /// own controller generation, a committed identity per driven Provider row,
+    /// and one enrolled controller-session generation.
+    ///
+    /// The three are the runtime fence the family's effects validate before
+    /// any Provider work runs, so without them the effects refuse the row
+    /// before the runtime branch is ever taken.
+    async fn production_guest_inputs(
+        provider_refs: &[&str],
+    ) -> (
+        tempfile::TempDir,
+        ConstructionInputs,
+        Arc<NewPlaneReadinessState>,
+        Arc<d2b_provider_guest::test_support::ScriptedFacets>,
+    ) {
+        let scripted = d2b_provider_guest::test_support::ScriptedFacets::new();
+        for (index, provider_ref) in provider_refs.iter().enumerate() {
+            scripted.add_committed_provider(
+                d2b_contracts_resource::v3::ResourceRef::parse(provider_ref)
+                    .expect("typed provider reference"),
+                d2b_contracts_resource::v3::ResourceUid::parse(format!(
+                    "00000000-0000-4000-8000-0000000000{index:02x}"
+                ))
+                .expect("bounded resource uid"),
+                d2b_contracts_resource::v3::ResourceGeneration::new(1)
+                    .expect("bounded generation"),
+            );
+        }
+        scripted.set_session_generation(Some(
+            d2b_contracts_resource::v3::identity::ReconnectGeneration::new(1)
+                .expect("bounded reconnect generation"),
+        ));
+        for provider_ref in provider_refs {
+            let name = provider_ref
+                .strip_prefix("Provider/")
+                .expect("a runtime Provider reference");
+            scripted
+                .add_row(d2b_provider_guest::test_support::row_fixture(
+                    "test",
+                    "Provider",
+                    name,
+                    serde_json::json!({}),
+                    ResourceStatus::Ready,
+                ))
+                .await;
+        }
+        let inputs = test_inputs_with_guest_facets(d2b_provider_guest::facets::GuestEffectFacets {
+            zone: ZoneId::parse("test").expect("bounded zone"),
+            controller_generation: ControllerGeneration::new(1)
+                .expect("bounded controller generation"),
+            manager: Arc::clone(&scripted)
+                as Arc<dyn d2b_provider_guest::facets::GuestManagerView>,
+            cloud_hypervisor: Arc::clone(&scripted)
+                as Arc<dyn d2b_provider_guest::facets::CloudHypervisorGuestRuntime>,
+        });
+        (inputs.0, inputs.1, inputs.2, scripted)
+    }
+
+    /// The Cloud Hypervisor runtime Provider: the composed driver's effects
+    /// reach this Zone's Cloud Hypervisor controller session for the row, and
+    /// the kind commits no manager children (its fixed child roles belong to
+    /// the controller session).
+    ///
+    /// The facet set is the value the composition root builds the family's
+    /// effects service from, so the recorded calls are the composed driver's
+    /// own: the target session it establishes and the controller reconcile it
+    /// drives.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_production_guest_driver_drives_the_cloud_hypervisor_controller_session() {
+        let (_dir, inputs, _readiness, scripted) = production_guest_inputs(&[
+            runtime_provider_ref(GuestKind::CloudHypervisor),
+        ])
+        .await;
+        let (factory, decoder) = production_guest_driver(&inputs).await;
+
+        let manager = guest_manager();
+        manager.add(
+            stored_row("Provider", "runtime-cloud-hypervisor", serde_json::json!({})),
+            ResourceStatus::Ready,
+        );
+        let mut ctx = guest_context(
+            stored_row(
+                "Guest",
+                GUEST_ROW_NAME,
+                serde_json::json!({
+                    "providerRef": runtime_provider_ref(GuestKind::CloudHypervisor),
+                }),
+            ),
+            decoder,
+            Arc::clone(&manager),
+        );
+        let mut driver = factory.create(ctx.key()).await;
+        driver
+            .reconcile(&mut ctx)
+            .await
+            .expect("the composed driver reconciles the Cloud Hypervisor row");
+
+        let calls = scripted.call_order();
+        assert!(
+            calls.contains(&"ensure-session:Guest/worker".to_owned()),
+            "the composed driver established no Cloud Hypervisor target session: {calls:?}"
+        );
+        assert!(
+            calls.contains(&"reconcile-ch:Guest/worker".to_owned()),
+            "the composed driver never reached the Cloud Hypervisor controller: {calls:?}"
+        );
+        assert_eq!(
+            committed_children(&mut ctx).await,
+            Vec::new(),
+            "the Cloud Hypervisor kind commits no manager children: its fixed child roles \
+             belong to the controller session"
+        );
+    }
+
+    /// The qemu-media runtime Provider: the composed driver materializes the
+    /// runtime Volume and the qemu worker Process the qemu-media Provider
+    /// derives, and the Process spec is that Provider's own worker template
+    /// over the committed execution reference and runtime mount.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_production_guest_driver_commits_the_qemu_media_runtime_children() {
+        let (_dir, inputs, _readiness, _scripted) =
+            production_guest_inputs(&[runtime_provider_ref(GuestKind::QemuMedia)]).await;
+        let (factory, decoder) = production_guest_driver(&inputs).await;
+        let manager = guest_manager();
+        manager.add(
+            stored_row(
+                "Provider",
+                "runtime-qemu-media",
+                serde_json::json!({
+                    "config": serde_json::to_value(
+                        d2b_provider_guest_qemu_media::ProviderConfig::new(
+                            "Host/host-system",
+                            "qemu-system-x86-64",
+                            "Provider/network-local",
+                            "Provider/volume-local",
+                            None,
+                        )
+                        .expect("qemu provider config"),
+                    )
+                    .expect("provider config document"),
+                }),
+            ),
+            ResourceStatus::Ready,
+        );
+        let mut ctx = guest_context(
+            stored_row(
+                "Guest",
+                GUEST_ROW_NAME,
+                serde_json::json!({
+                    "providerRef": runtime_provider_ref(GuestKind::QemuMedia),
+                }),
+            ),
+            decoder,
+            Arc::clone(&manager),
+        );
+        let mut driver = factory.create(ctx.key()).await;
+        driver
+            .reconcile(&mut ctx)
+            .await
+            .expect("the composed driver reconciles the qemu-media row");
+
+        assert_eq!(
+            manager.ensure_order(),
+            vec![
+                "ensure:Volume/worker-runtime".to_owned(),
+                "ensure:Process/worker-qemu".to_owned(),
+            ],
+            "the qemu-media kind commits the runtime Volume before the Process that consumes it"
+        );
+        let children = committed_children(&mut ctx).await;
+        let volume = &children
+            .iter()
+            .find(|(key, _)| key == "Volume/worker-runtime")
+            .expect("the runtime Volume child")
+            .1;
+        assert_eq!(volume["providerRef"], "Provider/volume-local");
+        assert_eq!(volume["kind"], "ephemeral");
+        let process = &children
+            .iter()
+            .find(|(key, _)| key == "Process/worker-qemu")
+            .expect("the qemu worker Process child")
+            .1;
+        assert_eq!(
+            process["sandbox"]["seccompClass"], "qemu-media-runner",
+            "the worker Process is the qemu-media Provider's own seccomp template"
+        );
+        assert_eq!(process["processClass"], "worker");
+        assert_eq!(process["providerRef"], "Provider/system-minijail");
+        assert_eq!(process["executionRef"], "Host/host-system");
+        assert_eq!(
+            process["mounts"][0]["volumeRef"], "Volume/worker-runtime",
+            "the worker mounts the runtime Volume the pass committed first"
+        );
+        assert_eq!(process["mounts"][0]["mountPath"], "/run/qemu");
+        assert_eq!(process["mounts"][0]["access"], "read-write");
+    }
+
+    /// The two Azure runtime Providers take different branches of the same
+    /// composed driver: azure-container-apps owns the sandbox-agent control
+    /// Endpoint its provider identity serves, and azure-virtual-machine
+    /// realizes itself through no manager child at all. A row dispatched to
+    /// the wrong branch would swap those two outcomes.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_production_guest_driver_separates_the_two_azure_runtime_providers() {
+        let (_dir, inputs, _readiness, _scripted) = production_guest_inputs(&[
+            runtime_provider_ref(GuestKind::AzureContainerApps),
+            runtime_provider_ref(GuestKind::AzureVirtualMachine),
+        ])
+        .await;
+        let (factory, decoder) = production_guest_driver(&inputs).await;
+
+        let container_apps = guest_manager();
+        container_apps.add(
+            stored_row(
+                "Provider",
+                "runtime-azure-container-apps",
+                serde_json::json!({
+                    "config": runtime_provider_ref(GuestKind::AzureContainerApps),
+                }),
+            ),
+            ResourceStatus::Ready,
+        );
+        let mut ctx = guest_context(
+            stored_row(
+                "Guest",
+                GUEST_ROW_NAME,
+                serde_json::json!({
+                    "providerRef": runtime_provider_ref(GuestKind::AzureContainerApps),
+                }),
+            ),
+            Arc::clone(&decoder),
+            Arc::clone(&container_apps),
+        );
+        let mut driver = factory.create(ctx.key()).await;
+        let _ = driver.reconcile(&mut ctx).await;
+        let children = committed_children(&mut ctx).await;
+        let control = children
+            .iter()
+            .find(|(key, _)| key == "Endpoint/worker-sandbox-agent")
+            .map(|(_, spec)| spec.clone())
+            .expect("the azure-container-apps kind commits its sandbox-agent control Endpoint");
+        assert_eq!(
+            control["providerRef"],
+            runtime_provider_ref(GuestKind::AzureContainerApps)
+        );
+        assert_eq!(control["endpointClass"], "control");
+        assert_eq!(control["purpose"], "aca-sandbox-agent");
+        assert_eq!(
+            control["consumerPolicy"]["allowedSubjects"],
+            serde_json::json!([runtime_provider_ref(GuestKind::AzureContainerApps)]),
+            "the control Endpoint admits exactly its own Provider identity"
+        );
+
+        let virtual_machine = guest_manager();
+        virtual_machine.add(
+            stored_row(
+                "Provider",
+                "runtime-azure-virtual-machine",
+                serde_json::json!({}),
+            ),
+            ResourceStatus::Ready,
+        );
+        let mut ctx = guest_context(
+            stored_row(
+                "Guest",
+                GUEST_ROW_NAME,
+                serde_json::json!({
+                    "providerRef": runtime_provider_ref(GuestKind::AzureVirtualMachine),
+                }),
+            ),
+            Arc::clone(&decoder),
+            Arc::clone(&virtual_machine),
+        );
+        let mut driver = factory.create(ctx.key()).await;
+        let _ = driver.reconcile(&mut ctx).await;
+        assert_eq!(
+            virtual_machine.ensure_order(),
+            Vec::<String>::new(),
+            "the azure-virtual-machine kind realizes itself through no manager child"
+        );
+        assert_eq!(
+            committed_children(&mut ctx).await,
+            Vec::new(),
+            "the azure-virtual-machine kind committed the container-apps control Endpoint"
+        );
+    }
+
+    /// A Guest row whose `providerRef` names a Provider this family does not
+    /// own is refused by the composed driver, not guessed onto one of the four
+    /// runtime branches.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_production_guest_driver_refuses_a_provider_the_family_does_not_own() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let (factory, decoder) = production_guest_driver(&inputs).await;
+        let manager = guest_manager();
+        let mut ctx = guest_context(
+            stored_row(
+                "Guest",
+                GUEST_ROW_NAME,
+                serde_json::json!({ "providerRef": "Provider/volume-local" }),
+            ),
+            decoder,
+            Arc::clone(&manager),
+        );
+        let mut driver = factory.create(ctx.key()).await;
+        let failure = driver
+            .reconcile(&mut ctx)
+            .await
+            .expect_err("a Provider the Guest family does not own is refused");
+        assert!(failure.to_string().contains("providerRef"), "{failure}");
+        assert_eq!(
+            manager.ensure_order(),
+            Vec::<String>::new(),
+            "a refused row commits nothing"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Production-path coverage for the telemetry rows.
+    //
+    // The plane wires the two telemetry types through the per-type
+    // declarations below the generated registration table rather than through
+    // it, so nothing in the generated closure names them and a family that
+    // stopped being wired would leave both rows unserved with no failure
+    // anywhere. These tests take the drivers that wiring registered and drive
+    // stored rows through them.
+    // -----------------------------------------------------------------------
+
+    /// The driver factory and spec decoder one resource type's production
+    /// registration served.
+    async fn production_driver_for(
+        inputs: &ConstructionInputs,
+        type_name: &str,
+    ) -> (Arc<dyn ResourceDriverFactory>, Arc<dyn SpecDecoder>) {
+        let mut runtime = ResourcePlaneV3::start_providers(inputs)
+            .await
+            .expect("the production composition starts its providers");
+        let directory = runtime.take_directory();
+        let name = ResourceTypeName::new(type_name);
+        let factory = directory
+            .lookup(&name)
+            .unwrap_or_else(|| panic!("the production composition registers {type_name}"));
+        let decoder = directory
+            .decoders()
+            .get(&name)
+            .cloned()
+            .unwrap_or_else(|| panic!("the production composition decodes {type_name}"));
+        runtime.drain().await.expect("the providers drain");
+        (factory, decoder)
+    }
+
+    fn telemetry_context(
+        row: StoredDesiredResource,
+        decoder: Arc<dyn SpecDecoder>,
+        manager: Arc<RecordingManagerEndpoint>,
+    ) -> ResourceContext {
+        let (effects_tx, _effects_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
+        ResourceContext::new(
+            row,
+            decoder,
+            manager,
+            Arc::new(RecordingRequeue::default()),
+            effects_tx,
+            notify_tx,
+        )
+    }
+
+    /// The `TelemetryBinding` row the production-registered driver realizes:
+    /// the Serving Provider's own collector Process and its ingest Endpoint,
+    /// named by that Provider's declared child set.
+    ///
+    /// The Service row the Binding admits must itself be observed Ready
+    /// through the manager, so an absent or unready Service leaves the row
+    /// fenced with no child committed.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_production_telemetry_binding_driver_materializes_the_serving_provider_children() {
+        const BINDING_TYPE: &str = "telemetry.d2bus.org.TelemetryBinding";
+        const SERVICE_TYPE: &str = "telemetry.d2bus.org.TelemetryService";
+        let (_dir, inputs, _readiness) = test_inputs();
+        let (factory, decoder) = production_driver_for(&inputs, BINDING_TYPE).await;
+
+        let manager = Arc::new(
+            RecordingManagerEndpoint::new()
+                .with_zone("test")
+                .with_owner_uid(GUEST_ROW_UID),
+        );
+        manager.add(
+            stored_row(
+                SERVICE_TYPE,
+                "ingest",
+                serde_json::json!({
+                    "providerRef": "Provider/observability-otel",
+                    "serviceRole": "authority",
+                    "ingestEndpointRefs": ["Endpoint/ingest"],
+                    "signals": ["metrics"],
+                    "quota": {},
+                    "policy": {},
+                }),
+            ),
+            ResourceStatus::Ready,
+        );
+        manager.add(
+            stored_row("Zone", "test", serde_json::json!({})),
+            ResourceStatus::Ready,
+        );
+        let mut ctx = telemetry_context(
+            stored_row(
+                BINDING_TYPE,
+                "metrics",
+                serde_json::json!({
+                    "providerRef": "Provider/observability-otel",
+                    "serviceRef": format!("{SERVICE_TYPE}/ingest"),
+                    "producerRef": "Zone/test",
+                }),
+            ),
+            decoder,
+            Arc::clone(&manager),
+        );
+        let mut driver = factory.create(ctx.key()).await;
+        driver
+            .reconcile(&mut ctx)
+            .await
+            .expect("the composed driver reconciles the telemetry Binding row");
+
+        let children = committed_children(&mut ctx).await;
+        let endpoint = children
+            .iter()
+            .find(|(key, _)| key.starts_with("Endpoint/"))
+            .map(|(key, spec)| (key.clone(), spec.clone()))
+            .expect("the collector's ingest Endpoint child");
+        assert!(
+            endpoint.0.ends_with("-ingest-endpoint"),
+            "the Endpoint child is the Serving Provider's declared ingest endpoint: {}",
+            endpoint.0
+        );
+        assert_eq!(
+            endpoint.1["providerRef"], "Provider/observability-otel",
+            "the ingest Endpoint is served by the telemetry Serving Provider"
+        );
+        assert_eq!(endpoint.1["endpointClass"], "service");
+        assert_eq!(endpoint.1["purpose"], "ingest-endpoint");
+        let collector = children
+            .iter()
+            .find(|(key, _)| key.starts_with("Process/"))
+            .map(|(key, spec)| (key.clone(), spec.clone()))
+            .expect("the collector Process child");
+        assert!(
+            collector.0.ends_with("-collector"),
+            "the Process child is the Serving Provider's declared collector: {}",
+            collector.0
+        );
+        assert_eq!(
+            collector.1["providerRef"], "Provider/system-minijail",
+            "the collector is launched by the Process controller under the minijail Provider"
+        );
+        assert_eq!(
+            collector.1["executionRef"], "Host/host-system",
+            "the collector runs on the host the Serving Provider declares"
+        );
+    }
+
+    /// A Service the Serving Provider has not made Ready admits no ingest
+    /// route, so the composed Binding driver fences instead of committing a
+    /// collector whose endpoint relationship was never admitted.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_production_telemetry_binding_driver_fences_on_an_unadmitted_service() {
+        const BINDING_TYPE: &str = "telemetry.d2bus.org.TelemetryBinding";
+        const SERVICE_TYPE: &str = "telemetry.d2bus.org.TelemetryService";
+        let (_dir, inputs, _readiness) = test_inputs();
+        let (factory, decoder) = production_driver_for(&inputs, BINDING_TYPE).await;
+
+        let manager = Arc::new(
+            RecordingManagerEndpoint::new()
+                .with_zone("test")
+                .with_owner_uid(GUEST_ROW_UID),
+        );
+        manager.add(
+            stored_row(
+                SERVICE_TYPE,
+                "ingest",
+                serde_json::json!({
+                    "providerRef": "Provider/observability-otel",
+                    "serviceRole": "authority",
+                    "ingestEndpointRefs": ["Endpoint/ingest"],
+                    "signals": ["metrics"],
+                    "quota": {},
+                    "policy": {},
+                }),
+            ),
+            ResourceStatus::Pending,
+        );
+        manager.add(
+            stored_row("Zone", "test", serde_json::json!({})),
+            ResourceStatus::Ready,
+        );
+        let mut ctx = telemetry_context(
+            stored_row(
+                BINDING_TYPE,
+                "metrics",
+                serde_json::json!({
+                    "providerRef": "Provider/observability-otel",
+                    "serviceRef": format!("{SERVICE_TYPE}/ingest"),
+                    "producerRef": "Zone/test",
+                }),
+            ),
+            decoder,
+            Arc::clone(&manager),
+        );
+        let mut driver = factory.create(ctx.key()).await;
+        driver
+            .reconcile(&mut ctx)
+            .await
+            .expect("the composed driver fences the row");
+        assert_eq!(
+            manager.ensure_order(),
+            Vec::<String>::new(),
+            "an unadmitted Service admits no ingest route, so no collector is materialized"
+        );
+    }
+
+    /// The `TelemetryService` row: a projection Service publishes its own
+    /// Ready projection from the composed driver, without reading any
+    /// dependency the ResourceContext surface cannot answer.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_production_telemetry_service_driver_publishes_the_projection_phase() {
+        const SERVICE_TYPE: &str = "telemetry.d2bus.org.TelemetryService";
+        let (_dir, inputs, _readiness) = test_inputs();
+        let (factory, decoder) = production_driver_for(&inputs, SERVICE_TYPE).await;
+
+        let manager = Arc::new(
+            RecordingManagerEndpoint::new()
+                .with_zone("test")
+                .with_owner_uid(GUEST_ROW_UID),
+        );
+        let mut ctx = telemetry_context(
+            stored_row(
+                SERVICE_TYPE,
+                "edge",
+                serde_json::json!({
+                    "providerRef": "Provider/observability-otel",
+                    "serviceRole": "projection",
+                    "ingestEndpointRefs": ["Endpoint/edge"],
+                    "signals": ["traces"],
+                    "quota": {},
+                    "policy": {},
+                }),
+            ),
+            decoder,
+            Arc::clone(&manager),
+        );
+        let mut driver = factory.create(ctx.key()).await;
+        driver
+            .reconcile(&mut ctx)
+            .await
+            .expect("the composed driver reconciles the telemetry Service row");
+        let status = ctx
+            .status::<d2b_provider_telemetry_service::TelemetryServiceStatus>()
+            .expect("the composed driver published the Service status");
+        assert_eq!(
+            status.phase,
+            d2b_provider_telemetry_service::TelemetryServicePhase::Ready,
+            "a projection Service needs no ingest route to be Ready"
+        );
+        assert_eq!(
+            manager.ensure_order(),
+            Vec::<String>::new(),
+            "a Service realizes nothing on a target, so the pass commits no child"
+        );
+    }
+
+
+    // -----------------------------------------------------------------------
+    // Production-path coverage for the display Wayland policy row.
+    //
+    // The display rows carry no Provider selector and no resource children,
+    // so the only thing that decides which family branch a row takes is the
+    // `InteractionType` the composition built its descriptor over. A policy
+    // row wired to the session branch would report Pending against a
+    // dependency set it never declares, with no failure anywhere; a session
+    // row wired to the policy branch would report Ready while realizing
+    // nothing.
+    // -----------------------------------------------------------------------
+
+    /// The composed display policy driver publishes the family's own Ready
+    /// projection and mutates no row.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_production_wayland_policy_driver_publishes_its_own_family_projection() {
+        const POLICY_TYPE: &str = "display-wayland.d2bus.org.WaylandPolicy";
+        let (_dir, inputs, _readiness) = test_inputs();
+        let (factory, decoder) = production_driver_for(&inputs, POLICY_TYPE).await;
+
+        let manager = Arc::new(
+            RecordingManagerEndpoint::new()
+                .with_zone("test")
+                .with_owner_uid(GUEST_ROW_UID),
+        );
+        let mut ctx = telemetry_context(
+            stored_row(POLICY_TYPE, "default", serde_json::json!({})),
+            decoder,
+            Arc::clone(&manager),
+        );
+        let mut driver = factory.create(ctx.key()).await;
+        driver
+            .reconcile(&mut ctx)
+            .await
+            .expect("the composed driver reconciles the display policy row");
+        let status = ctx
+            .status::<d2b_provider_wayland_policy::interaction::InteractionDriverStatus>()
+            .expect("the composed driver published the row status");
+        assert!(
+            status.ready,
+            "a display policy row reaches its own family branch, which realizes nothing and              reports Ready"
+        );
+        assert_eq!(
+            manager.ensure_order(),
+            Vec::<String>::new(),
+            "a display policy row realizes no resource children"
+        );
+    }
 }

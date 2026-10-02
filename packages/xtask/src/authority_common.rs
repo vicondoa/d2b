@@ -55,6 +55,24 @@ impl Declaration {
     }
 }
 
+/// Whether one declared Provider identity is a name the contracts admit as
+/// a resource name.
+///
+/// A declaration states the identity its own crate registers, and the
+/// crate's directory name is not that identity: `d2b-provider-guest-qemu-media`
+/// registers `runtime-qemu-media` and `d2b-provider-process-minijail`
+/// registers `system-minijail`. A convention that read the identity back out
+/// of the directory name therefore both published references the product
+/// does not have and refused the ones it does, which made a crate's real
+/// identity inexpressible. What a declaration owes is the grammar, not the
+/// spelling of the directory beside it, so this is the whole of what both
+/// declaration authorities gate: an identity the resource-name grammar
+/// refuses could never be written as a `Provider/<name>` reference, so a
+/// declaration naming one states a row no production surface could carry.
+pub(crate) fn admits_provider_identity(identity: &str) -> bool {
+    d2b_contracts_resource::v3::ResourceName::parse(identity).is_ok()
+}
+
 /// One provider crate that deliberately carries no file for `absent`, and
 /// why.
 ///
@@ -90,10 +108,37 @@ const PUBLISHES_A_SERVICE_PACKAGE: &str = "publishes a service package through i
 const DECLARES_VOCABULARY_IDENTITY_AND_ROWS: &str = "declares the ResourceType vocabulary it registers, its provider identity, and its operation rows; the service package it serves is declared by the crate that publishes it";
 /// A crate that declares its identity and its operation rows only.
 const DECLARES_IDENTITY_AND_ROWS: &str = "declares its provider identity and its operation rows; it owns no ResourceType vocabulary and publishes no service package";
+/// A crate that declares its provider identity and owns no other surface.
+const DECLARES_IDENTITY_ONLY: &str = "declares its provider identity and nothing else; it owns no ResourceType vocabulary, declares no operation row, and publishes no service package";
+/// A crate that owns a ResourceType vocabulary and spells an effect service
+/// the daemon's own composition hosts, where a registration row could carry
+/// neither half without claiming a hosting the composition does not do.
+const REGISTERS_NO_PLANE_FACING_SURFACE: &str = "declares the ResourceType vocabulary it registers; the effect service it spells is hosted by the daemon's own composition rather than through a registration row, so a `registrations.json` could carry neither half truthfully";
 
 /// Every provider crate that owns no file for a declaration kind, in crate-name
 /// order.
 const DECLARATION_ABSENCES: &[DeclarationAbsence] = &[
+    // The rows below that carry no `Declaration::Registrations` state a
+    // deliberate null, and the rule that keeps them null is this: a provider
+    // crate registers a Provider identity only when a production source
+    // OUTSIDE the provider crate graph names that identity - a NixOS module
+    // that admits or refuses a row for it, a resource contract constant that
+    // gates its spec, or a daemon fence that refuses a row naming anything
+    // else. The committed Provider matrix is not such a source: it is the
+    // inventory this declaration set replaces, so restating it here would
+    // make the matrix and this table two authorities for one fact.
+    //
+    // The crates under this comment implement other crates' surfaces and own
+    // no plane-facing vocabulary of their own, and no production source
+    // outside the crate graph names an identity for any of them:
+    // `d2b-provider-audio-pipewire`, `d2b-provider-observability-otel`,
+    // `d2b-provider-process-minijail`, `d2b-provider-supervisor`,
+    // `d2b-provider-test-controller`, and `d2b-provider-toolkit`. The
+    // `audio-pipewire` and `observability-otel` families are tracked by
+    // issues #629 and #630, and `process-minijail` is a
+    // `fixedBootstrapProviders` entry whose identity the foundation and
+    // activation lane declares. `d2b-provider-device-tpm` is the seventh
+    // crate that states no identity and carries its own row-level reason.
     DeclarationAbsence { crate_name: "d2b-provider-activation-nixos", absent: &[Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_AND_IDENTITY },
     DeclarationAbsence { crate_name: "d2b-provider-audio-binding", absent: &[Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_AND_IDENTITY },
     DeclarationAbsence { crate_name: "d2b-provider-audio-pipewire", absent: &Declaration::ALL, reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
@@ -101,23 +146,72 @@ const DECLARATION_ABSENCES: &[DeclarationAbsence] = &[
     DeclarationAbsence { crate_name: "d2b-provider-clipboard-wayland", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::Registrations], reason: PUBLISHES_A_SERVICE_PACKAGE },
     DeclarationAbsence { crate_name: "d2b-provider-config-nixos", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::Registrations], reason: PUBLISHES_A_SERVICE_PACKAGE },
     DeclarationAbsence { crate_name: "d2b-provider-credential", absent: &[Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_AND_IDENTITY },
-    DeclarationAbsence { crate_name: "d2b-provider-credential-entra", absent: &Declaration::ALL, reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
-    DeclarationAbsence { crate_name: "d2b-provider-credential-managed-identity", absent: &Declaration::ALL, reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
-    DeclarationAbsence { crate_name: "d2b-provider-credential-secret-service", absent: &Declaration::ALL, reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
+    // The three Credential sub-families register an identity the
+    // configuration layer names outside the crate graph: the
+    // `credential-entra` Zone assertions in
+    // `nixos-modules/options-zones-resources.nix`, the secret-service and
+    // managed-identity domain-placement refusals in
+    // `nixos-modules/options-resources.nix`, the relay `allowedProviders`
+    // sets in `nixos-modules/provider-runtime-contracts.nix`, and
+    // `CredentialProviderKind::as_str`'s closed match in
+    // `d2b-contracts-provider`.
+    DeclarationAbsence { crate_name: "d2b-provider-credential-entra", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_IDENTITY_ONLY },
+    DeclarationAbsence { crate_name: "d2b-provider-credential-managed-identity", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_IDENTITY_ONLY },
+    DeclarationAbsence { crate_name: "d2b-provider-credential-secret-service", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_IDENTITY_ONLY },
     DeclarationAbsence { crate_name: "d2b-provider-device", absent: &[Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_AND_IDENTITY },
-    DeclarationAbsence { crate_name: "d2b-provider-device-gpu", absent: &Declaration::ALL, reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
+    // `device-gpu` is named by the physical-DRM, x86_64-only, video-mode and
+    // shared-arbitration assertions in `nixos-modules/assertions.nix` and
+    // `nixos-modules/resources-device.nix`, and by
+    // `d2b-core`'s `DEVICE_GPU_PROVIDER_REF` dispatch constant.
+    DeclarationAbsence { crate_name: "d2b-provider-device-gpu", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_IDENTITY_ONLY },
     DeclarationAbsence { crate_name: "d2b-provider-device-security-key", absent: &[Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_AND_IDENTITY },
-    DeclarationAbsence { crate_name: "d2b-provider-device-tpm", absent: &Declaration::ALL, reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
+    // `device-tpm` stays null: the identity is named by production sources
+    // (`nixos-modules/assertions.nix`'s emulated-shape and startup-clear
+    // refusals, `nixos-modules/lib.nix`'s host account rows, and
+    // `d2b-core`'s `DEVICE_TPM_PROVIDER_REF` dispatch constant), but this
+    // crate spells a `ServiceDecl` (`tpm.d2bus.org/effects`) that no
+    // `registrations.json` can carry without also making the daemon host it:
+    // the crate has no `DriverDescriptor`, so declaring the service would
+    // fail the declaration-to-source parity gate, and declaring no service
+    // would leave a published service out of the registration table. Until
+    // the production composition carries a TPM effects factory the two
+    // forms are both false, and a documented null is the honest row.
+    DeclarationAbsence { crate_name: "d2b-provider-device-tpm", absent: &Declaration::ALL, reason: REGISTERS_NO_PLANE_FACING_SURFACE },
     DeclarationAbsence { crate_name: "d2b-provider-device-usbip", absent: &[Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_AND_IDENTITY },
     DeclarationAbsence { crate_name: "d2b-provider-display-wayland", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::Registrations], reason: PUBLISHES_A_SERVICE_PACKAGE },
+    // The vocabulary-owning rows that state no `Declaration::Registrations`
+    // are the second group held at null by the rule above: each of these
+    // crates owns a ResourceType vocabulary and nothing a production source
+    // outside the crate graph names a Provider identity for -
+    // `d2b-provider-emergency-policy`, `d2b-provider-execution-policy`,
+    // `d2b-provider-operation`, `d2b-provider-provider`, `d2b-provider-quota`,
+    // `d2b-provider-resource-export`, `d2b-provider-resource-import`,
+    // `d2b-provider-role`, `d2b-provider-role-binding`,
+    // `d2b-provider-seccomp-profile`, `d2b-provider-telemetry-binding`,
+    // `d2b-provider-telemetry-service`, `d2b-provider-zone`, and
+    // `d2b-provider-zone-link`.
+    //
+    // `d2b-provider-execution-policy` is the one that reads closest to a
+    // counterexample: `d2b-contracts-resource` publishes
+    // `EXECUTION_POLICY_PROVIDER_REF = "Provider/execution-policy"`, but
+    // nothing reads it - no admission compares a row's `providerRef` against
+    // it - so it is a named identity with no enforcement behind it, which is
+    // not the evidence a declaration needs.
     DeclarationAbsence { crate_name: "d2b-provider-emergency-policy", absent: &[Declaration::Operations, Declaration::Registrations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_ONLY },
     DeclarationAbsence { crate_name: "d2b-provider-endpoint", absent: &[Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_AND_IDENTITY },
     DeclarationAbsence { crate_name: "d2b-provider-execution-policy", absent: &[Declaration::Operations, Declaration::Registrations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_ONLY },
     DeclarationAbsence { crate_name: "d2b-provider-guest", absent: &[Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_AND_IDENTITY },
-    DeclarationAbsence { crate_name: "d2b-provider-guest-azure-container-apps", absent: &Declaration::ALL, reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
-    DeclarationAbsence { crate_name: "d2b-provider-guest-azure-virtual-machine", absent: &Declaration::ALL, reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
-    DeclarationAbsence { crate_name: "d2b-provider-guest-cloud-hypervisor", absent: &Declaration::ALL, reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
-    DeclarationAbsence { crate_name: "d2b-provider-guest-qemu-media", absent: &Declaration::ALL, reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
+    // The four runtime families register identities the configuration layer
+    // names outside the crate graph: the `runtimeProviderRefs` list and its
+    // per-provider assertion branches in
+    // `nixos-modules/provider-runtime-contracts.nix`, the qemu-media
+    // assertion block in `nixos-modules/assertions.nix`, and the
+    // `runtime-cloud-hypervisor` closure gate in
+    // `nixos-modules/guest-closures.nix`.
+    DeclarationAbsence { crate_name: "d2b-provider-guest-azure-container-apps", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_IDENTITY_ONLY },
+    DeclarationAbsence { crate_name: "d2b-provider-guest-azure-virtual-machine", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_IDENTITY_ONLY },
+    DeclarationAbsence { crate_name: "d2b-provider-guest-cloud-hypervisor", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_IDENTITY_ONLY },
+    DeclarationAbsence { crate_name: "d2b-provider-guest-qemu-media", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_IDENTITY_ONLY },
     DeclarationAbsence { crate_name: "d2b-provider-host", absent: &[Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_AND_IDENTITY },
     DeclarationAbsence { crate_name: "d2b-provider-network-local", absent: &[Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_IDENTITY_AND_ROWS },
     DeclarationAbsence { crate_name: "d2b-provider-notification-desktop", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::Registrations], reason: PUBLISHES_A_SERVICE_PACKAGE },
@@ -142,13 +236,32 @@ const DECLARATION_ABSENCES: &[DeclarationAbsence] = &[
     DeclarationAbsence { crate_name: "d2b-provider-telemetry-service", absent: &[Declaration::Operations, Declaration::Registrations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_ONLY },
     DeclarationAbsence { crate_name: "d2b-provider-test-controller", absent: &Declaration::ALL, reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
     DeclarationAbsence { crate_name: "d2b-provider-toolkit", absent: &Declaration::ALL, reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
-    DeclarationAbsence { crate_name: "d2b-provider-transport-azure-relay", absent: &Declaration::ALL, reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
-    DeclarationAbsence { crate_name: "d2b-provider-transport-vsock", absent: &Declaration::ALL, reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
+    // `transport-azure-relay` is named by the `runtimeProviderRefs` list and
+    // its credential-boundary assertion branch in
+    // `nixos-modules/provider-runtime-contracts.nix`, and by the gateway
+    // composition's refusal to take a Zone with no relay Provider.
+    DeclarationAbsence { crate_name: "d2b-provider-transport-azure-relay", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_IDENTITY_ONLY },
+    // The identity this crate registers is named by four independent
+    // production sources - the `runtimeProviderRefs` assertions in
+    // `nixos-modules/provider-runtime-contracts.nix`, the committed Provider
+    // matrix row, `ZoneLinkSpec::transport_provider_ref`, and the gateway
+    // composition's refusal to take a non-relay transport - so the crate
+    // declares it rather than leaving the configuration layer to assert an
+    // identity nothing states.
+    DeclarationAbsence { crate_name: "d2b-provider-transport-vsock", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_IDENTITY_ONLY },
     DeclarationAbsence { crate_name: "d2b-provider-user", absent: &[Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_AND_IDENTITY },
     DeclarationAbsence { crate_name: "d2b-provider-volume", absent: &[Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_AND_IDENTITY },
     DeclarationAbsence { crate_name: "d2b-provider-volume-binding", absent: &[Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_AND_IDENTITY },
-    DeclarationAbsence { crate_name: "d2b-provider-volume-local", absent: &Declaration::ALL, reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
-    DeclarationAbsence { crate_name: "d2b-provider-volume-virtiofs", absent: &Declaration::ALL, reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
+    // `volume-local` is named by the network-config Volume admission fence
+    // in `packages/d2bd/src/shared_provider_effects.rs`, which refuses any
+    // config Volume whose `providerRef` is not this family.
+    DeclarationAbsence { crate_name: "d2b-provider-volume-local", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_IDENTITY_ONLY },
+    // `volume-virtiofs` is named by `d2b-core`'s
+    // `SERVING_WORKER_PROVIDER_REF`, by the broker's serving-worker
+    // predicate, by the daemon's provider-ticket lookup, by the resource
+    // compiler's worker projection, and by the Zone template account in
+    // `nixos-modules/lib.nix`.
+    DeclarationAbsence { crate_name: "d2b-provider-volume-virtiofs", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_IDENTITY_ONLY },
     DeclarationAbsence { crate_name: "d2b-provider-wayland-policy", absent: &[Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_AND_IDENTITY },
     DeclarationAbsence { crate_name: "d2b-provider-wayland-session", absent: &[Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_AND_IDENTITY },
     DeclarationAbsence { crate_name: "d2b-provider-zone", absent: &[Declaration::Operations, Declaration::Registrations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_ONLY },

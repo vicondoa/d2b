@@ -2511,6 +2511,17 @@ impl AdmittedEffectTable {
         self.handlers.get(operation)
     }
 
+    /// The committed contract the table answers one `Operation` with.
+    ///
+    /// The declared side of the private-execution join: the table is sealed,
+    /// so exactly one implementation claims each `Operation` it carries and
+    /// this is that implementation's own contract.
+    pub fn declared(&self, operation: &ResourceRef) -> Option<&CallableOperation> {
+        self.handlers
+            .get(operation)
+            .map(|handler| handler.declared())
+    }
+
     /// Every `Operation` the table serves, in canonical order.
     pub fn operations(&self) -> impl Iterator<Item = &ResourceRef> {
         self.handlers.keys()

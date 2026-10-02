@@ -15434,6 +15434,13 @@ async fn open_resource_plane(
                 resource_runtime::ResourceRuntimeError::HandlerNotReady
             })?;
             inputs.zone = _zone.clone();
+            // The Zone's own verified bundle, applied by the plane before its
+            // manager spawns so the Zone's declared `Role` and `RoleBinding`
+            // rows are durable, published, and loaded before anything reads
+            // this Zone's authority. The remaining rows keep arriving through
+            // the plane's own ingest below, which is where the manager
+            // exists to reconcile them.
+            inputs.bundle = Some(materialization_bundle.clone());
             // U31: the family's own accepted view of the verified deployment
             // graph, so the Activation family refuses to plan a runner for a
             // deployment that did not publish it.

@@ -588,6 +588,27 @@ async fn answer_admitted_effect_frame(
     };
 
     let wiring = live_admitted_effects();
+    // The private execution values are resolved here, over this Zone's live
+    // accepted graph and the verified private bundle, rather than read from a
+    // serve-time snapshot: an effect must run against the authority the broker
+    // holds now. A bundle this broker cannot verify resolves no values, and an
+    // effect whose values the broker cannot prove is refused rather than run
+    // against a table of defaults.
+    let Some(values) = private_execution_values(wiring, &accepted) else {
+        let _ = write_refusal_audit_bounded(
+            &audit_log,
+            AuditWriteClass::Privileged,
+            ADMITTED_EFFECT_FRAME_KIND,
+            peer_uid,
+            peer_gid,
+            crate::envelope::UNPROVEN_EFFECT,
+            &zone,
+            "refused",
+        );
+        return connection
+            .send_json_frame(&refuse(crate::envelope::UNPROVEN_EFFECT))
+            .await;
+    };
     let boundary = crate::envelope::AdmittedEffectAdmission::new(
         admitted_effect_ledger(),
         &wiring.table,
@@ -598,7 +619,7 @@ async fn answer_admitted_effect_frame(
             posture,
             &zone,
             &accepted,
-            &wiring.values,
+            &values,
             &invocation,
             &request_fds,
         ));
@@ -1520,7 +1541,7 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
     // resolves an admitted invocation against the declared implementation
     // table and the broker's private execution values installed here, and
     // never against a table it builds for one call.
-    install_live_admitted_effects(&audit_log)?;
+    install_live_admitted_effects(&config, &audit_log)?;
 
     // Create the broker's own endpoint directory beside the rest of the
     // serve-time provisioning, and before any connection is accepted. The
@@ -7282,8 +7303,14 @@ fn install_live_operation_envelope(
 struct AdmittedEffectWiring {
     /// The sealed table of declared implementations.
     table: crate::envelope::AdmittedEffectTable,
-    /// The broker's own private execution values.
-    values: d2b_core::execution_plan::PrivateExecutionTable,
+    /// The broker's own private execution values, resolved per admission from
+    /// the verified private bundle rather than snapshotted at serve time: a
+    /// Zone's accepted graph is read live, so the values beside it must be
+    /// too.
+    bundle_path: PathBuf,
+    /// The broker's own private execution root, the only tree a resolved
+    /// destination may live under.
+    runtime_root: PathBuf,
     /// The chain-audit sink the boundary records its legs in.
     chain_audit: Arc<dyn d2b_audit::evidence_chain::ChainAuditSink>,
 }
@@ -7303,23 +7330,86 @@ static LIVE_ADMITTED_EFFECTS: OnceLock<AdmittedEffectWiring> = OnceLock::new();
 /// `Operation` the table does not carry is refused by name at admission, which
 /// is the contract's own `unknown-implementation` rule.
 ///
-/// The private execution values are the empty table, which refuses every
-/// lookup. That is the absence, not a default: the broker resolves a private
-/// source, view, identity, and executable from its accepted graph and its
-/// trusted implementation contract, and where it holds no value it refuses
-/// rather than inventing a uid, a program, or a mount policy.
-fn install_live_admitted_effects(audit_log: &Arc<AuditLog>) -> Result<(), RunError> {
+/// The private execution values are resolved per admission from the verified
+/// private bundle, over [`private_execution_values`]. They are not snapshotted
+/// here because they are a function of the Zone's live accepted graph: a
+/// serve-time snapshot would answer a call against the authority a Zone had
+/// when the broker started rather than the authority it holds now.
+fn install_live_admitted_effects(
+    config: &ServerConfig,
+    audit_log: &Arc<AuditLog>,
+) -> Result<(), RunError> {
     let table = crate::envelope::AdmittedEffectTable::new(Vec::new())
         .map_err(|error| RunError::Protocol(format!("admitted effect table: {error}")))?;
     LIVE_ADMITTED_EFFECTS
         .set(AdmittedEffectWiring {
             table,
-            values: d2b_core::execution_plan::PrivateExecutionTable::empty(),
+            bundle_path: config.bundle_path.clone(),
+            runtime_root: broker_runtime_root(config).to_path_buf(),
             chain_audit: Arc::new(AuditLogChainSink {
                 log: Arc::clone(audit_log),
             }),
         })
         .map_err(|_| RunError::Protocol("admitted effects installed twice".to_owned()))
+}
+
+/// Resolve the private execution values for one Zone from the broker's own
+/// authority, or refuse.
+///
+/// The bundle is loaded through [`load_kernel_resolver`], the same verified
+/// per-request reload authority every kernel that needs bundle knowledge
+/// already uses, and a bundle that is absent or fails its tamper check is a
+/// refusal rather than an empty table presented as a decision. There is no
+/// declared `Operation` implementation installed yet, so the committed set is
+/// empty; the join over the accepted graph still resolves every source,
+/// view, and destination the verified bundle names, and an effect whose
+/// executable or identity has no declaration behind it is refused for want of
+/// one rather than served with an invented value.
+fn private_execution_values(
+    wiring: &AdmittedEffectWiring,
+    accepted: &d2b_core::resource_authority::AcceptedGraph,
+) -> Option<d2b_core::execution_plan::PrivateExecutionTable> {
+    let resolver = match load_kernel_resolver(&wiring.bundle_path) {
+        BundleSlot::Loaded(resolver) => resolver,
+        BundleSlot::Unavailable | BundleSlot::Tampered { .. } => return None,
+    };
+    let values = crate::ops::private_execution::BundleExecutionValues::new(
+        resolver,
+        wiring.runtime_root.clone(),
+        // The AE16 fence's own rows. The broker's only record of a committed
+        // row's desired revision and digest is the authority projection that
+        // accepted it, and that record is not readable from here, so the
+        // broker observes none. An empty set refuses every effect at
+        // `effect-source-unproven` rather than admitting one against a
+        // dependency whose committed state it cannot show.
+        Vec::new(),
+    );
+    Some(d2b_core::execution_plan::PrivateExecutionTable::from_authority(
+        accepted,
+        admitted_effect_implementations(&wiring.table),
+        &values,
+    ))
+}
+
+/// Every committed `Operation` implementation the installed table serves.
+///
+/// This is the declared side of the resolver's join: the table refuses two
+/// implementations claiming one `Operation` when it is built, so this walk
+/// yields each committed contract at most once.
+fn admitted_effect_implementations(
+    table: &crate::envelope::AdmittedEffectTable,
+) -> Vec<(
+    d2b_contracts_resource::v3::ResourceRef,
+    d2b_contracts_resource::v3::CallableOperation,
+)> {
+    table
+        .operations()
+        .filter_map(|operation| {
+            table
+                .declared(operation)
+                .map(|callable| (operation.clone(), callable.clone()))
+        })
+        .collect()
 }
 
 /// The admitted-effect wiring this process installed at serve time.
@@ -7335,8 +7425,8 @@ fn live_admitted_effects() -> &'static AdmittedEffectWiring {
 /// first caller installs it and every later one keeps that one rather than
 /// replacing it.
 #[cfg(test)]
-fn init_admitted_effects(audit_log: &Arc<AuditLog>) {
-    let _ = install_live_admitted_effects(audit_log);
+fn init_admitted_effects(config: &ServerConfig, audit_log: &Arc<AuditLog>) {
+    let _ = install_live_admitted_effects(config, audit_log);
 }
 
 /// The envelope this process installed at serve time.
@@ -16746,7 +16836,7 @@ mod tests {
             )
             .expect("open audit log"),
         );
-        init_admitted_effects(&log);
+        init_admitted_effects(&config, &log);
         let limiter = Arc::new(tokio::sync::Mutex::new(IpcRateLimiter::new(64)));
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -16850,24 +16940,31 @@ mod tests {
             )
             .expect("open audit log"),
         );
-        init_admitted_effects(&log);
+        init_admitted_effects(&config, &log);
         (live_admitted_effects(), root)
     }
 
     /// The production install serves no admitted effect at all, and says so
     /// by name.
     ///
-    /// `install_live_admitted_effects` installs the empty table on purpose:
-    /// no declared `Operation` contract exists for an invocation to be
-    /// admitted against, and a table that served an invented handler would
-    /// be a second authority source. This drives the real admission over
-    /// the real installed wiring with a carrier that is well formed in every
-    /// other respect - it passes the screen, the Zone holds an accepted
-    /// graph, and it names a real `Operation` - so the `unknown-implementation`
-    /// refusal that comes back is the production table declining it and
-    /// nothing else. The moment a declared implementation is added to the
-    /// installed table, this case fails, because the answer stops being a
-    /// refusal.
+    /// `install_live_admitted_effects` installs the empty implementation
+    /// table on purpose: no declared `Operation` contract exists for an
+    /// invocation to be admitted against, and a table that served an invented
+    /// handler would be a second authority source. This drives the real
+    /// admission over the real installed wiring with a carrier that is well
+    /// formed in every other respect - it passes the screen, the Zone holds an
+    /// accepted graph, and it names a real `Operation` - so the
+    /// `unknown-implementation` refusal that comes back is the production table
+    /// declining it and nothing else. The moment a declared implementation is
+    /// added to the installed table, this case fails, because the answer stops
+    /// being a refusal.
+    ///
+    /// The private execution values are resolved through the production
+    /// resolver rather than read from a stored snapshot, so this case also
+    /// observes that resolution: the configured bundle path does not name a
+    /// verified bundle, so resolution refuses and the effect has no table to
+    /// resolve against at all. That refusal is the honest answer and is
+    /// checked separately below.
     #[tokio::test]
     async fn the_installed_admitted_effect_table_serves_no_operation() {
         use crate::envelope::{AdmittedEffectAdmission, ProjectionPosture, UNKNOWN_IMPLEMENTATION};
@@ -16901,6 +16998,25 @@ mod tests {
             "the invocation's expected dependencies all name the accepted Zone",
         );
 
+        // The production resolver, over the same installed wiring and the
+        // same accepted graph. The wiring's configured bundle path names no
+        // verified bundle in this configuration, so the resolver refuses
+        // rather than presenting an empty set of values as a decision, and
+        // that refusal is what the accept loop answers. This case therefore
+        // asserts the production answer is a refusal at the resolve step
+        // rather than at the implementation table, and the case below asserts
+        // the implementation table is empty in its own right.
+        assert!(
+            private_execution_values(wiring, &accepted).is_none(),
+            "an absent verified bundle resolves no private execution values",
+        );
+
+        // With the values resolved, the only remaining reason to refuse is the
+        // one this case is about. An empty table is the absence an absent
+        // bundle leaves behind, and it refuses every lookup rather than
+        // answering one with a default, so it is what the boundary sees when
+        // the values step is satisfied some other way.
+        let values = d2b_core::execution_plan::PrivateExecutionTable::empty();
         let boundary = AdmittedEffectAdmission::new(
             admitted_effect_ledger(),
             &wiring.table,
@@ -16911,7 +17027,7 @@ mod tests {
                 ProjectionPosture::Accepted,
                 accepted.zone().as_str(),
                 &accepted,
-                &wiring.values,
+                &values,
                 &invocation,
                 &[],
             )

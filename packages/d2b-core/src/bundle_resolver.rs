@@ -2450,6 +2450,32 @@ impl BundleResolver {
         self.runner_intents.get(id)
     }
 
+    /// Find the one trusted runner intent that carries `template`, refusing
+    /// ambiguity.
+    ///
+    /// The private runner artifact records the same trusted template identity
+    /// twice - as the per-role `role_id` and as the `profile_id` a v3
+    /// `Process` row selects - so both are matched, exactly as
+    /// [`Self::find_runner_intent_for_process`] matches them. This is the
+    /// narrower form of that lookup for the caller that holds only a
+    /// template: it answers when the verified bundle declares exactly one
+    /// intent for it, and `None` for every other case including a template
+    /// several VMs each declare. A caller that cannot say *which* execution
+    /// the template runs for therefore gets no intent rather than the first
+    /// one the bundle happens to hold, which is the difference between a
+    /// resolver and a guess.
+    pub fn find_unique_runner_intent_for_template(
+        &self,
+        template: &str,
+    ) -> Option<&ResolvedRunnerIntent> {
+        let mut matches = self
+            .runner_intents
+            .values()
+            .filter(|intent| intent.role_id == template || intent.profile_id == template);
+        let first = matches.next()?;
+        matches.next().is_none().then_some(first)
+    }
+
     /// Find the unique trusted runner intent for a Process template and
     /// execution binding.
     ///
@@ -2838,6 +2864,22 @@ impl BundleResolver {
         self.parsed_zone_resources.get(zone.as_str()).and_then(|bundle| {
             bundle.resources.iter().find(|resource| {
                 resource.resource_type().as_str() == "Guest"
+                    && resource.metadata().name().as_str() == name
+            })
+        })
+    }
+
+    /// Look up one zone-tagged v3 `Volume` resource by Zone + name.
+    ///
+    /// The same verified per-Zone resource bundle
+    /// [`Self::find_guest_resource`] reads: a `Volume`'s declared source
+    /// policy and named views are what decide where its bytes live on the
+    /// host, so they are authority the broker resolves rather than something
+    /// a caller states.
+    pub fn find_volume_resource(&self, zone: &ZoneId, name: &str) -> Option<&BundleResource> {
+        self.parsed_zone_resources.get(zone.as_str()).and_then(|bundle| {
+            bundle.resources.iter().find(|resource| {
+                resource.resource_type().as_str() == "Volume"
                     && resource.metadata().name().as_str() == name
             })
         })

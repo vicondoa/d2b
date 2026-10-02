@@ -599,15 +599,19 @@ filegroup(
 )
 
 # The committed new-graph closure `gen-new-graph` renders from the per-crate
-# provider declarations. No production composition reads these files yet; the
-# generation step and its drift gate own them until the cutover installs them
-# at the paths the closure manifest names.
+# provider declarations. Every `.rs` member is compiled by the production file
+# `build_closure.json` names as `compiledInto`, and nothing no production file
+# compiles is staged, so the members are named rather than globbed: a staged
+# file added without a consumer fails the generation step and its drift gate
+# instead of joining the closure silently.
 filegroup(
     name = "generated_new_graph",
-    srcs = glob([
-        "generated/new-graph/*.json",
-        "generated/new-graph/*.rs",
-    ]),
+    srcs = [
+        "generated/new-graph/build_closure.json",
+        "generated/new-graph/provider_registrations.rs",
+        "generated/new-graph/service_provider_catalog.rs",
+        "generated/new-graph/v3_converted_resource_types.rs",
+    ],
     visibility = ["//visibility:public"],
 )
 

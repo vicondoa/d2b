@@ -1,0 +1,5 @@
+{
+  "crate": "d2b-provider-credential-entra",
+  "provider": "credential-entra",
+  "services": []
+}

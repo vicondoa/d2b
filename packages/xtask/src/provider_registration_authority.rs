@@ -32,16 +32,15 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::authority_common::{collect_rs_files, declaration_paths, verify_committed, Declaration};
+use crate::authority_common::{
+    admits_provider_identity, collect_rs_files, declaration_paths, verify_committed, Declaration,
+};
 #[cfg(test)]
 use d2b_contracts_provider::v3::projection::PrivatePlanProjection;
 use serde::Deserialize;
 
 /// The directory-glob root the per-crate declarations live under.
 const PACKAGES_DIR: &str = "packages";
-
-/// The directory-name prefix that marks a package as a provider crate.
-const PROVIDER_PREFIX: &str = "d2b-provider-";
 
 /// The repository-relative generated artifact path: the staged closure copy
 /// the daemon's composition root `include!`s, so the declaration render and
@@ -178,15 +177,16 @@ fn parity_errors(repo_root: &Path) -> Result<Vec<String>, String> {
     let mut providers: BTreeMap<&str, &str> = BTreeMap::new();
     let mut services: BTreeMap<&str, &str> = BTreeMap::new();
     for (crate_name, declaration) in &declarations {
-        // The declared provider is the crate's own family by construction:
-        // the crate name spells the family it owns, so a declaration naming
-        // another family is a parity violation naming both.
-        let family = crate_name
-            .strip_prefix(PROVIDER_PREFIX)
-            .unwrap_or(crate_name);
-        if declaration.provider != family {
+        // The declared identity is gated on the resource-name grammar, not
+        // on the crate's directory name: `d2b-provider-guest-qemu-media`
+        // registers `runtime-qemu-media` and `d2b-provider-process-minijail`
+        // registers `system-minijail`, so reading the identity back out of
+        // the directory name made a crate's real identity inexpressible and
+        // published references no production surface carries. Uniqueness
+        // below is what keeps two crates off one identity.
+        if !admits_provider_identity(&declaration.provider) {
             errors.push(format!(
-                "provider-mismatch: crate {crate_name} declares provider {}; a crate declares only its own family",
+                "malformed-provider-identity: crate {crate_name} declares provider {}; a Provider identity is a resource name the contracts admit",
                 declaration.provider
             ));
         }
@@ -449,8 +449,18 @@ mod tests {
         }
 
         /// A declaration file for one fixture crate with the given services.
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn write_declaration(&self, crate_name: &str, services: &[&str]) {
+            self.write_declaration_for(
+                crate_name,
+                crate_name.strip_prefix("d2b-provider-").expect("provider prefix"),
+                services,
+            );
+        }
+
+        /// A declaration file for one fixture crate naming an explicit
+        /// provider identity, which need not be the directory's own suffix.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn write_declaration_for(&self, crate_name: &str, provider: &str, services: &[&str]) {
             let services = services
                 .iter()
                 .map(|service| format!("      \"{service}\""))
@@ -459,8 +469,7 @@ mod tests {
             self.write(
                 &format!("packages/{crate_name}/registrations.json"),
                 &format!(
-                    "{{\n  \"crate\": \"{crate_name}\",\n  \"provider\": \"{family}\",\n  \"services\": [\n{services}\n  ]\n}}\n",
-                    family = crate_name.strip_prefix("d2b-provider-").expect("provider prefix")
+                    "{{\n  \"crate\": \"{crate_name}\",\n  \"provider\": \"{provider}\",\n  \"services\": [\n{services}\n  ]\n}}\n"
                 ),
             );
         }
@@ -556,28 +565,43 @@ mod tests {
         );
     }
 
-    /// A declaration whose provider is not the crate's own family fails the
-    /// parity check.
+    /// A declaration whose provider identity the resource-name grammar
+    /// refuses fails the parity check. The identity is not held to the
+    /// crate's directory name: a crate registers the identity it is, and
+    /// the grammar is the whole of what a declared identity owes.
     #[test]
-    fn the_parity_check_fails_when_the_provider_is_not_the_crates_family() {
-        let fixture = Fixture::new("foreign-provider");
+    fn the_parity_check_fails_when_the_provider_is_not_a_resource_name() {
+        let fixture = Fixture::new("malformed-provider");
         fixture.write_sources("d2b-provider-fixture", &["fixture.d2bus.org/alpha"]);
-        fixture.write_declaration("d2b-provider-fixture", &["fixture.d2bus.org/alpha"]);
-        let path = fixture.root.join("packages/d2b-provider-fixture/registrations.json");
-        let text = fs::read_to_string(&path).expect("declaration");
-        fs::write(
-            &path,
-            text.replace("\"provider\": \"fixture\"", "\"provider\": \"foreign\""),
-        )
-        .expect("mutate");
+        fixture.write_declaration_for(
+            "d2b-provider-fixture",
+            "not a name",
+            &["fixture.d2bus.org/alpha"],
+        );
         let errors = parity_errors(&fixture.root).expect("parity loads");
         assert!(
             errors.iter().any(|error| {
-                error.contains("provider-mismatch")
+                error.contains("malformed-provider-identity")
                     && error.contains("d2b-provider-fixture")
-                    && error.contains("foreign")
+                    && error.contains("not a name")
             }),
-            "expected the provider violation naming both: {errors:?}"
+            "expected the identity violation naming both: {errors:?}"
+        );
+    }
+
+    /// A crate whose registered identity is not its directory's suffix
+    /// passes: `d2b-provider-guest-qemu-media` registers
+    /// `runtime-qemu-media`, and refusing that spelling is what made the
+    /// identity inexpressible in the first place.
+    #[test]
+    fn the_parity_check_admits_an_identity_the_directory_name_does_not_spell() {
+        let fixture = Fixture::new("renamed-identity");
+        fixture.write_sources("d2b-provider-guest-qemu-media", &[]);
+        fixture.write_declaration_for("d2b-provider-guest-qemu-media", "runtime-qemu-media", &[]);
+        assert_eq!(
+            parity_errors(&fixture.root).expect("parity loads"),
+            Vec::<String>::new(),
+            "an identity the directory name does not spell is a declared identity, not a violation"
         );
     }
 

@@ -20,8 +20,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use d2b_broker::authority_projection::AuthorityProjection;
 use d2b_contracts_broker::broker_wire::{
-    AuthorityPublicationEnvelope, AuthorityPublicationOpen, AuthorityPublicationResponse,
-    ZoneAuthorityState, PUBLICATION_PROJECTION_UNPROVEN,
+    AuthorityPublicationEnvelope, AuthorityPublicationOpen, AuthorityPublicationRequest,
+    AuthorityPublicationResponse, ZoneAuthorityState, PUBLICATION_PROJECTION_UNPROVEN,
 };
 use d2b_contracts_resource::v3::{
     AuthoritySubject, AuthoritySubjectKind, CanonicalJsonObject, DesiredDigest, DesiredRevision,
@@ -29,12 +29,12 @@ use d2b_contracts_resource::v3::{
 };
 use d2b_contracts_zone_session::v3::role::{AuthorizedRole, RoleResourceVerb, RoleRule};
 use d2b_contracts_zone_session::v3::RoleBindingSpec;
-use d2b_resource_runtime::authority_journal::DesiredMutation;
+use d2b_resource_runtime::authority_journal::{DesiredMutation, TransactionRecovery};
 use d2b_resource_runtime::spec_store::{
     ResourceKey, ResourceProvenance, SpecStore, StoredDesiredResource,
 };
 use d2b_resource_runtime::{
-    AuthorityPublisher, PublishedRow, ZoneProjection, publish, resynchronize,
+    AuthorityPublisher, PublishedRow, ZoneProjection, adopt_outstanding, publish, resynchronize,
 };
 use d2bd::authority_publication::{
     AuthorityPublicationCoordinator, AuthorityPublicationLink, CoordinatorPublisher,
@@ -76,6 +76,54 @@ impl AuthorityPublicationLink for ProjectionLink {
         &self,
         envelope: AuthorityPublicationEnvelope,
     ) -> Result<AuthorityPublicationResponse, String> {
+        self.projection
+            .serve(&envelope)
+            .await
+            .map_err(|error| error.to_string())
+    }
+}
+
+/// The same link with the one message that never arrives removed.
+///
+/// This is not a mock of the broker: it is the real projection behind it, and
+/// the only substitution is that `CommitChange` is answered as a transport
+/// that went away. Everything up to it - the fence, and the store's own durable
+/// commit of the candidate - really happened, so the store is left holding a
+/// transaction it committed and the broker never heard about, which is the one
+/// state a restart has to be able to finish.
+#[derive(Clone)]
+struct LossyCommitLink {
+    projection: Arc<AuthorityProjection>,
+}
+
+impl std::fmt::Debug for LossyCommitLink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LossyCommitLink(<the real broker projection, commits lost>)")
+    }
+}
+
+#[async_trait]
+impl AuthorityPublicationLink for LossyCommitLink {
+    async fn open_session(
+        &self,
+        open: AuthorityPublicationOpen,
+    ) -> Result<AuthorityPublicationResponse, String> {
+        self.projection
+            .open_session(open)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn serve(
+        &self,
+        envelope: AuthorityPublicationEnvelope,
+    ) -> Result<AuthorityPublicationResponse, String> {
+        if matches!(
+            envelope.request,
+            AuthorityPublicationRequest::CommitChange(_)
+        ) {
+            return Err("the commit never arrived".to_owned());
+        }
         self.projection
             .serve(&envelope)
             .await
@@ -138,6 +186,46 @@ impl Fixture {
             incarnation,
             bootstrap(),
         )
+    }
+
+    /// A publisher whose commits never reach the broker, so a publication
+    /// stops at the store's own durable commit and the transaction is left
+    /// owed an answer.
+    async fn lossy_publisher(&self) -> Arc<CoordinatorPublisher> {
+        let incarnation = self
+            .store
+            .store_incarnation()
+            .await
+            .expect("the store carries an incarnation");
+        CoordinatorPublisher::new(
+            Arc::new(AuthorityPublicationCoordinator::new(
+                ZONE,
+                incarnation.clone(),
+                bootstrap(),
+                Arc::new(LossyCommitLink {
+                    projection: Arc::clone(&self.projection),
+                }),
+            )),
+            incarnation,
+            bootstrap(),
+        )
+    }
+
+    /// Publish one row and expect the commit to be lost on the way to the
+    /// broker, leaving the store holding a transaction it committed durably
+    /// and the broker still holding the fence for it.
+    async fn publish_losing_the_commit(&self, desired: StoredDesiredResource) {
+        let error = publish(
+            &self.store,
+            DesiredMutation::Ensure(desired),
+            self.lossy_publisher().await.as_ref(),
+        )
+        .await
+        .expect_err("the commit never reached the broker");
+        assert!(
+            error.to_string().contains("never arrived"),
+            "the failure is the lost commit and nothing else: {error}"
+        );
     }
 
     /// Restart the broker over the same durable state, the way a service
@@ -338,6 +426,134 @@ async fn a_broker_restart_serves_again_once_the_manager_resynchronizes() {
         fixture.accepted_sequence().await,
         accepted_before + 1,
         "the post-restart publication advanced the accepted cursor"
+    );
+}
+
+
+/// The fence a store still owes a publication for survives the broker that
+/// wrote it.
+///
+/// This is the whole defect in one case. A candidate is fenced, the store
+/// commits it durably, and the `CommitChange` that would advance the broker's
+/// projection is lost. The store is now holding a transaction it committed and
+/// the broker has never heard of the revision - the exact state
+/// `adopt_outstanding` exists to finish, and the exact state a restart used to
+/// make impossible: the broker's open barrier overwrote the fence, so the one
+/// message that could discharge the transaction was refused for want of a fence
+/// that had been there all along, and the Zone could never serve again.
+#[tokio::test]
+async fn a_committed_but_unacknowledged_transaction_replays_after_a_restart() {
+    let mut fixture = Fixture::start().await;
+    fixture.publish_authority().await;
+    let accepted_before = fixture.accepted_sequence().await;
+    assert_eq!(accepted_before, 2, "two publications reached the broker");
+
+    // The store commits the candidate durably; the broker never learns of it.
+    fixture
+        .publish_losing_the_commit(row(
+            "Process",
+            "worker",
+            0x13,
+            &serde_json::to_vec(&serde_json::json!({ "declared": "worker" }))
+                .expect("the worker row renders"),
+        ))
+        .await;
+    let recovery = fixture
+        .store
+        .zone_recovery(ZONE)
+        .await
+        .expect("the store answers what it owes");
+    assert!(
+        recovery
+            .transactions
+            .iter()
+            .any(|(_, decision)| matches!(decision, TransactionRecovery::ReplayCommit { .. })),
+        "the store holds a committed transaction the broker never acknowledged: {recovery:?}"
+    );
+    assert!(
+        fixture
+            .store
+            .get(ResourceKey::new(ZONE, "Process", "worker"))
+            .await
+            .is_ok(),
+        "the desired row is durably committed, so the transaction is not partial work"
+    );
+    assert_eq!(
+        fixture.accepted_sequence().await,
+        accepted_before,
+        "the broker's projection never moved for the lost commit"
+    );
+    assert_eq!(
+        fixture.posture().await,
+        "fenced",
+        "the broker still holds the fence it wrote before the commit was lost"
+    );
+
+    fixture.restart_broker().await;
+
+    // The restart bumps the epoch and refuses the broker's own cached
+    // authority. What it must not do is erase the one record that lets the
+    // store finish the transaction it already committed.
+    assert_eq!(
+        fixture.posture().await,
+        "fenced",
+        "the prepared fence survived the restart rather than becoming reconciling"
+    );
+    assert_eq!(
+        fixture.accepted_sequence().await,
+        accepted_before,
+        "and the accepted cursor still did not move: nothing is served by the restart"
+    );
+
+    // The manager adopts what it owes. This is the production recovery path,
+    // in the production order: the transaction settles first, because a
+    // reconciliation would otherwise acknowledge past the revision the
+    // broker is being asked to accept.
+    adopt_outstanding(&fixture.store, ZONE, fixture.publisher().await.as_ref())
+        .await
+        .expect("the committed transaction replays against the surviving fence");
+    assert_eq!(
+        fixture.accepted_sequence().await,
+        accepted_before + 1,
+        "the replay installed the revision the store had already committed"
+    );
+    assert_eq!(
+        fixture
+            .store
+            .accepted_cursor(ZONE)
+            .await
+            .expect("the store answers its accepted cursor")
+            .expect("the store acknowledged a revision")
+            .sequence
+            .get(),
+        accepted_before + 1,
+        "and the store acknowledged it, so the Zone owes nothing"
+    );
+
+    resynchronize(&fixture.store, ZONE, fixture.publisher().await.as_ref())
+        .await
+        .expect("the reconciliation is proved and accepted");
+    assert_eq!(
+        fixture.posture().await,
+        "unfenced",
+        "the Zone left the restart barrier on its own"
+    );
+
+    // And it really does serve again: a further mutation fences and commits
+    // against the reconciled projection.
+    fixture
+        .publish(row(
+            "Process",
+            "second",
+            0x14,
+            &serde_json::to_vec(&serde_json::json!({ "declared": "second" }))
+                .expect("the second row renders"),
+        ))
+        .await;
+    assert_eq!(
+        fixture.accepted_sequence().await,
+        accepted_before + 2,
+        "the Zone publishes again after the replay"
     );
 }
 

@@ -1788,6 +1788,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-resource-compiler"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "base64",
+ "d2b-contracts",
+ "d2b-contracts-provider",
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
+ "d2b-core",
+ "regex",
+ "ring",
+ "rustix 0.38.44",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "d2b-resource-runtime"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1982,6 +2001,7 @@ dependencies = [
  "d2b-provider-zone",
  "d2b-provider-zone-link",
  "d2b-resource-api",
+ "d2b-resource-compiler",
  "d2b-resource-runtime",
  "d2b-resource-types",
  "d2b-session",

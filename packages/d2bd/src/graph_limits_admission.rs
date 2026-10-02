@@ -12,11 +12,17 @@
 //!
 //! The plane still installs the zone-local write fence, so no committed
 //! ceiling or reduction is enforced against a mutation today. This admission
-//! exists, is proven, and is what the install will replace the fence with;
-//! the install is held because the identity arm needs a per-Zone accepted
-//! graph and the only graph the daemon verifies today is scoped to the
-//! deployment. Installing it before that exists would refuse every mutation
-//! in every Zone-local plane.
+//! exists, is proven, and is what the install will replace the fence with.
+//!
+//! The per-Zone accepted graph the identity arm needs is no longer the
+//! blocker: the plane commits the Zone's own `Role` and `RoleBinding` rows
+//! through the store's fenced path before its manager spawns, so the graph
+//! built from them is rooted at that Zone. What blocks the install is the
+//! subject the other mutating entry points present - the owned-cascade
+//! boundaries render `zone/Type/name`, which is not the exact reference the
+//! evaluator reads, and no Zone bundle grants a cascade subject - so
+//! installing the identity arm today would refuse every owned-child commit
+//! in every Zone.
 //!
 //! # A Zone with no verified deployment graph would admit nothing
 //!

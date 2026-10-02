@@ -2217,6 +2217,7 @@ name = "d2bd"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
+ "base64",
  "clap",
  "d2b-audit",
  "d2b-broker",
@@ -2285,6 +2286,7 @@ dependencies = [
  "d2b-provider-zone",
  "d2b-provider-zone-link",
  "d2b-resource-api",
+ "d2b-resource-compiler",
  "d2b-resource-runtime",
  "d2b-resource-types",
  "d2b-session",
@@ -2298,6 +2300,7 @@ dependencies = [
  "parking_lot",
  "protobuf",
  "ractor",
+ "ring",
  "rustix 0.38.44",
  "serde",
  "serde_json",

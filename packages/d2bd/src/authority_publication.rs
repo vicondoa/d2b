@@ -743,6 +743,33 @@ impl AuthorityPublicationCoordinator {
                 pending: pending.transaction,
             });
         }
+        self.publish_commit(commit).await
+    }
+
+    /// Advance the broker's projection for a fence this process did not take.
+    ///
+    /// This is the recovery entry point, and it exists because the record
+    /// [`Self::commit`] matches against is per-process: the fence it would
+    /// match was written by a previous process, and that process's record of
+    /// it is gone. What survives is the store's own committed transaction and
+    /// the broker's own durable fence, and the broker is the authority on
+    /// whether that fence still exists - it re-checks the exact prepared
+    /// identity, the exact predecessor, and the exact committed bytes before it
+    /// installs anything. Every answer check below is unchanged, and a broker
+    /// that holds no such fence refuses by name, so nothing is given up except
+    /// a local echo that no longer exists.
+    pub async fn adopt_commit(
+        &self,
+        commit: &CommitCandidate,
+    ) -> Result<AcceptedPublication, PublicationError> {
+        self.publish_commit(commit).await
+    }
+
+    /// The commit round trip and its answer, shared by both entry points.
+    async fn publish_commit(
+        &self,
+        commit: &CommitCandidate,
+    ) -> Result<AcceptedPublication, PublicationError> {
         let envelope = self
             .envelope(AuthorityPublicationRequest::CommitChange(commit.to_request()))
             .await?;
@@ -755,7 +782,7 @@ impl AuthorityPublicationCoordinator {
         let AuthorityPublicationResponse::Accepted(accepted) = response else {
             return Err(PublicationError::UnmatchedCompletion {
                 completion: commit.transaction.clone(),
-                pending: pending.transaction,
+                pending: commit.transaction.clone(),
             });
         };
         if accepted.transaction != commit.transaction
@@ -764,7 +791,7 @@ impl AuthorityPublicationCoordinator {
         {
             return Err(PublicationError::UnmatchedCompletion {
                 completion: accepted.transaction,
-                pending: pending.transaction,
+                pending: commit.transaction.clone(),
             });
         }
         *self.accepted.lock().await = commit.committed.clone();
@@ -1450,6 +1477,33 @@ fn mutation_kind(kind: d2b_resource_runtime::MutationKind) -> PublicationMutatio
     }
 }
 
+/// Render one committed publication into the wire candidate this publisher's
+/// coordinator sends, under the cursor the broker holds now.
+///
+/// Both commit entry points build it this way, so a recovery replay and the
+/// live publication it replays are the same bytes on the wire.
+async fn commit_candidate(
+    publisher: &CoordinatorPublisher,
+    publication: &d2b_resource_runtime::CommittedPublication,
+) -> Result<CommitCandidate, d2b_resource_runtime::PublicationRefusal> {
+    // The committed publication's own Zone selects the coordinator, for the
+    // same reason the fence did.
+    let coordinator = publisher.coordinator(publication.zone.as_str())?;
+    coordinator.open_session().await.map_err(transport)?;
+    let expected = publisher.expected(publication.zone.as_str()).await?;
+    let (rows, removed) =
+        publication_rows(&publication.publication.rows, &publication.publication.removed)?;
+    let digest = publication_candidate_digest(&rows, &removed);
+    Ok(CommitCandidate {
+        transaction: transaction_token(publication.transaction)?,
+        store_incarnation: publisher.incarnation.clone(),
+        expected,
+        committed: AuthorityCursor { sequence: publication.sequence, digest },
+        rows,
+        removed,
+    })
+}
+
 #[async_trait]
 impl d2b_resource_runtime::AuthorityPublisher for CoordinatorPublisher {
     async fn prepare(
@@ -1504,23 +1558,32 @@ impl d2b_resource_runtime::AuthorityPublisher for CoordinatorPublisher {
         &self,
         publication: &d2b_resource_runtime::CommittedPublication,
     ) -> Result<d2b_resource_runtime::AcceptedRevision, d2b_resource_runtime::PublicationRefusal> {
-        // The committed publication's own Zone selects the coordinator, for
-        // the same reason the fence did.
-        let coordinator = self.coordinator(publication.zone.as_str())?;
-        coordinator.open_session().await.map_err(transport)?;
-        let expected = self.expected(publication.zone.as_str()).await?;
-        let (rows, removed) =
-            publication_rows(&publication.publication.rows, &publication.publication.removed)?;
-        let digest = publication_candidate_digest(&rows, &removed);
-        let commit = CommitCandidate {
-            transaction: transaction_token(publication.transaction)?,
-            store_incarnation: self.incarnation.clone(),
-            expected,
-            committed: AuthorityCursor { sequence: publication.sequence, digest },
-            rows,
-            removed,
-        };
-        let accepted = coordinator.commit(&commit).await.map_err(transport)?;
+        let commit = commit_candidate(self, publication).await?;
+        let accepted = self
+            .coordinator(publication.zone.as_str())?
+            .commit(&commit)
+            .await
+            .map_err(transport)?;
+        Ok(d2b_resource_runtime::AcceptedRevision {
+            transaction: publication.transaction,
+            sequence: accepted.sequence,
+            candidate: accepted.digest,
+        })
+    }
+
+    async fn adopt_committed(
+        &self,
+        publication: &d2b_resource_runtime::CommittedPublication,
+    ) -> Result<d2b_resource_runtime::AcceptedRevision, d2b_resource_runtime::PublicationRefusal> {
+        // The recovery entry point, for a fence a PREVIOUS process took. The
+        // broker decides whether that fence is still there, and it re-checks
+        // every fact the fence was written for before it installs anything.
+        let commit = commit_candidate(self, publication).await?;
+        let accepted = self
+            .coordinator(publication.zone.as_str())?
+            .adopt_commit(&commit)
+            .await
+            .map_err(transport)?;
         Ok(d2b_resource_runtime::AcceptedRevision {
             transaction: publication.transaction,
             sequence: accepted.sequence,

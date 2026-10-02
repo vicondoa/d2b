@@ -3876,6 +3876,7 @@ mod tests {
                     ),
                 ]),
                 foundation: None,
+                bundle: None,
             },
         )
     }

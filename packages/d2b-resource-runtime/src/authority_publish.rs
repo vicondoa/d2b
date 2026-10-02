@@ -218,6 +218,31 @@ pub trait AuthorityPublisher: Send + Sync + std::fmt::Debug {
         publication: &CommittedPublication,
     ) -> Result<AcceptedRevision, PublicationRefusal>;
 
+    /// Advance the broker's admitted projection for a transaction this process
+    /// did not fence.
+    ///
+    /// Recovery is the only caller, and it is a separate call rather than a
+    /// flag on [`Self::commit`] because the two have different preconditions.
+    /// An ordinary commit is the second half of a fence this process took, so
+    /// an implementation may and does match it against that record. A
+    /// recovering commit is the tail of a fence a PREVIOUS process took: the
+    /// record that would have matched it died with that process, and the only
+    /// durable evidence left is the store's own committed transaction. The
+    /// authority on whether a fence still exists is the broker, which re-checks
+    /// every fact a local record would have - the exact prepared identity, the
+    /// exact predecessor, and the exact committed bytes - before it installs
+    /// anything, so what this call gives up is a local echo that no longer
+    /// exists rather than a check on the commit.
+    ///
+    /// The default is [`Self::commit`], which is correct for any publisher
+    /// that does not keep a per-process record of the fences it took.
+    async fn adopt_committed(
+        &self,
+        publication: &CommittedPublication,
+    ) -> Result<AcceptedRevision, PublicationRefusal> {
+        self.commit(publication).await
+    }
+
     /// The Zone cursor the broker currently holds.
     ///
     /// A restarted manager reads this before it publishes anything, so it
@@ -466,7 +491,7 @@ pub async fn adopt_outstanding(
                         )));
                     }
                 };
-                let accepted = authority.commit(&committed).await?;
+                let accepted = authority.adopt_committed(&committed).await?;
                 store
                     .acknowledge(crate::authority_journal::AcceptedPublication {
                         transaction: committed.transaction,
@@ -491,7 +516,7 @@ pub async fn adopt_outstanding(
                     candidate: transaction.candidate.clone(),
                     publication,
                 };
-                let accepted = authority.commit(&committed).await?;
+                let accepted = authority.adopt_committed(&committed).await?;
                 store
                     .acknowledge(crate::authority_journal::AcceptedPublication {
                         transaction: committed.transaction,
