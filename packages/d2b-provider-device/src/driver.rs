@@ -49,8 +49,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use d2b_contracts_resource::v3::{
-    ControllerGeneration, DeviceEffectOperation, DeviceFunction, DeviceSpec, InventorySelector,
-    ResourceGeneration, ResourceRef, ResourceUid, ZoneId,
+    ControllerGeneration, DeviceClass, DeviceEffectOperation, DeviceFunction, DeviceSpec,
+    InventorySelector, ResourceGeneration, ResourceRef, ResourceUid, ZoneId,
 };
 use d2b_provider_toolkit::{
     ContextChildSurface, ProviderRow, SharedProviderDeclarationError, SharedProviderDriverArgs,
@@ -450,12 +450,26 @@ const DEVICE_EXECUTION_DOMAINS: &[&str] = &["host"];
 /// must hold an admitted binding for it, so a decode mode selects which
 /// admitted capability the worker reaches rather than which node path the
 /// launch is handed.
+///
+/// An emulated Device declares no inventory selector at all - the closed
+/// `InventorySelector` union says so outright ("an emulated device carries
+/// no selector") - and its capability is the Provider's own emulation rather
+/// than a host device node. Falling through to the empty arm for that shape
+/// produced an empty inventory, and an empty inventory is a refusal, so the
+/// row was abandoned before its Provider controller ran: the TPM controller
+/// never committed the state Volume its long-lived worker opens by pathname,
+/// the directory never landed, and the worker's spawn was then refused for
+/// an absent state-directory leaf. The emulated TPM therefore names the same
+/// `tpm` capability a selected physical TPM names. A *physical* Device that
+/// declares no selector is still refused: that is a malformed declaration,
+/// not an emulated one.
 pub fn declared_device_functions(
     component: DeviceComponent,
     spec: &DeviceSpec,
 ) -> Vec<DeviceFunction> {
     let selector = spec.inventory().selector();
     let functions: &[&str] = match (component, selector) {
+        (DeviceComponent::Tpm, None) if spec.device_class() == DeviceClass::Emulated => &["tpm"],
         (DeviceComponent::Tpm, Some(InventorySelector::Tpm { .. })) => &["tpm"],
         (DeviceComponent::Gpu, Some(InventorySelector::Drm { .. })) | (
             DeviceComponent::Gpu,
@@ -564,5 +578,107 @@ pub fn device_descriptor(args: DeviceDriverArgs) -> DriverDescriptor {
                 }),
             },
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DeviceComponent, declared_device_functions};
+    use d2b_contracts_resource::v3::DeviceSpec;
+
+    fn spec(value: serde_json::Value) -> DeviceSpec {
+        serde_json::from_value(value).expect("the wire spec decodes")
+    }
+
+    fn emulated_tpm(selector: serde_json::Value) -> DeviceSpec {
+        spec(serde_json::json!({
+            "deviceClass": "emulated",
+            "arbitration": "exclusive",
+            "maxConcurrentClaims": 1,
+            "inventory": { "selector": selector }
+        }))
+    }
+
+    fn physical(selector: serde_json::Value) -> serde_json::Result<DeviceSpec> {
+        serde_json::from_value(serde_json::json!({
+            "deviceClass": "physical",
+            "arbitration": "exclusive",
+            "maxConcurrentClaims": 1,
+            "inventory": { "selector": selector }
+        }))
+    }
+
+    /// The emulated TPM a Zone declares carries no host device node, so it
+    /// declares no selector at all. It still resolves its one named
+    /// capability: an empty inventory is a refusal, and a refusal here would
+    /// abandon the row before its Provider controller runs, which is what
+    /// left the TPM state Volume uncommitted and its worker's spawn refused
+    /// for an absent state-directory leaf.
+    #[test]
+    fn an_emulated_tpm_declares_no_selector_and_still_names_its_capability() {
+        let functions = declared_device_functions(DeviceComponent::Tpm, &emulated_tpm(
+            serde_json::Value::Null,
+        ));
+        assert_eq!(
+            functions.iter().map(|f| f.as_str()).collect::<Vec<_>>(),
+            vec!["tpm"],
+            "the emulated TPM names the capability its worker grant is minted from"
+        );
+    }
+
+    /// A physical TPM names a stable operator label and keeps the same
+    /// capability name, so the two shapes agree on the vocabulary.
+    #[test]
+    fn a_selected_physical_tpm_names_the_same_capability() {
+        let spec = spec(serde_json::json!({
+            "deviceClass": "physical",
+            "arbitration": "exclusive",
+            "maxConcurrentClaims": 1,
+            "inventory": { "selector": { "busClass": "tpm", "label": "tpm0" } }
+        }));
+        let functions = declared_device_functions(DeviceComponent::Tpm, &spec);
+        assert_eq!(
+            functions.iter().map(|f| f.as_str()).collect::<Vec<_>>(),
+            vec!["tpm"]
+        );
+    }
+
+    /// The closed `InventorySelector` union is discriminated on `busClass`,
+    /// so an *empty object* is not a member of it. A fixture that spells an
+    /// emulated Device's absent selector that way - Nix's empty attribute set
+    /// serializes to `{}` - produces a spec that does not decode at all, and
+    /// the resulting failure abandons the `Device` row before its Provider
+    /// controller runs. This pins the refusal so the spelling cannot come
+    /// back.
+    #[test]
+    fn an_empty_selector_object_is_not_a_declared_selector() {
+        let error = physical(serde_json::json!({})).expect_err("an empty selector is refused");
+        assert!(
+            error.to_string().contains("busClass"),
+            "the closed union refuses a selector that names no bus class: {error}"
+        );
+    }
+
+    /// A physical Device always names a stable operator-defined label, so a
+    /// physical GPU with no selector never reaches the capability table at
+    /// all. This is the fail-closed half of the fix: the emulated TPM is
+    /// admitted because its class says it carries no node, not because the
+    /// table stopped refusing missing selectors.
+    #[test]
+    fn a_physical_device_with_no_selector_is_refused_by_the_contract() {
+        physical(serde_json::Value::Null).expect_err("a physical Device must name a selector");
+    }
+
+    /// A GPU Device that names no DRM or PCI selector resolves nothing, so an
+    /// unbacked GPU grant stays unreachable.
+    #[test]
+    fn a_gpu_selector_that_names_no_backed_node_resolves_nothing() {
+        let spec = spec(serde_json::json!({
+            "deviceClass": "physical",
+            "arbitration": "exclusive",
+            "maxConcurrentClaims": 1,
+            "inventory": { "selector": { "busClass": "usb", "label": "not-a-gpu" } }
+        }));
+        assert!(declared_device_functions(DeviceComponent::Gpu, &spec).is_empty());
     }
 }

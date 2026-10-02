@@ -275,6 +275,16 @@ const GPU_REFUSAL_LINES: &str = concat!(
     "render|w1-gpu|video' | tail -n 40 || true",
 );
 
+/// The daemon's own account of a refused `Device` teardown. The Device
+/// family's teardown runs a finalizer that stops the worker and retains the
+/// state Volume, so the lines that matter here are the ones the delete verb
+/// and that finalizer write, not the worker's own launch evidence.
+const DELETE_REFUSAL_LINES: &str = concat!(
+    "journalctl -u d2bd.service --no-pager -o cat -b -n 4000 ",
+    "| grep -E 'delete|Delete|finaliz|Finaliz|tpm|Tpm|Volume|retain|Retain' ",
+    "| tail -n 40 || true",
+);
+
 /// The Device's revision, which the delete carries.
 const DEVICE_REVISION: &str = concat!(
     "jq -er '.resources[] | select(.type == \"Device\" and ",
@@ -776,10 +786,25 @@ pub fn assertions(control: &mut GuestControl) -> LegacyResult<()> {
     control.stage("tpm-teardown");
     control.succeed(&[&list_json("Device", DEVICE_PRE_DELETE)], None)?;
     let revision = control.succeed(&[DEVICE_REVISION], None)?.trim().to_owned();
-    control.succeed(
-        &[&d2b(&format!("delete Device/tpm0 --revision {revision}"), DEVICE_DELETE)],
+    // A refusing delete writes its error envelope to the same file the
+    // accepted path writes the row into, and the CLI renders that envelope on
+    // stdout. Reporting the exit code alone therefore said only that the
+    // teardown was refused, never which refusal, so the stage now carries the
+    // envelope and the daemon's own account of it.
+    let deleted = control.execute(
+        &d2b(&format!("delete Device/tpm0 --revision {revision}"), DEVICE_DELETE),
         None,
     )?;
+    if deleted.status != 0 {
+        let envelope = control.execute(&format!("cat {DEVICE_DELETE}"), None)?;
+        let journal = control.execute(DELETE_REFUSAL_LINES, None)?;
+        return Err(LegacyError::Assertion(format!(
+            "deleting Device/tpm0 must be accepted: exit {} envelope {} daemon {}",
+            deleted.status,
+            envelope.output.trim().replace('\n', " | "),
+            journal.output.trim().replace('\n', " | "),
+        )));
+    }
     control.diag_wait(
         "tpm-teardown",
         &format!(

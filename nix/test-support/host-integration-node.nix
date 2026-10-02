@@ -1716,6 +1716,17 @@ rec {
           # Provider's projection declares `Process/swtpm-tpm0`,
           # `EphemeralProcess/swtpm-flush-tpm0`, `Endpoint/tpm-tpm0` and
           # `Endpoint/tpm-ctrl-tpm0` as this Device's children.
+          #
+          # The `Device` contract says an emulated device carries no
+          # selector, and the closed `InventorySelector` union is
+          # discriminated on `busClass`, so an empty object is not a member
+          # of it: spelling the absent selector as `{}` produced a spec that
+          # did not decode, which abandoned this row before its Provider
+          # controller ran. The state Volume the controller owns was then
+          # never committed, the directory its long-lived worker opens by
+          # pathname never landed, and the worker's spawn was refused for an
+          # absent state-directory leaf. An emulated Device therefore leaves
+          # `inventory` empty.
           tpm0 = {
             type = "Device";
             metadata.ownerRef = "Guest/acceptance-guest";
@@ -1724,7 +1735,7 @@ rec {
               deviceClass = "emulated";
               arbitration = "exclusive";
               maxConcurrentClaims = 1;
-              inventory.selector = { };
+              inventory = { };
             };
           };
           # The GPU/video Devices: a full GPU with its video sidecar
