@@ -881,6 +881,7 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
+ "nix 0.29.0",
  "rustix 0.38.44",
  "schemars",
  "semver",

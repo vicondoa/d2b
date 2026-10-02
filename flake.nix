@@ -231,6 +231,8 @@
           cp -r ${./packages/d2b-zone-routing} $out/packages/d2b-zone-routing
           cp -r ${./packages/d2bd} $out/packages/d2bd
           cp -r ${./packages/d2bd-runtime} $out/packages/d2bd-runtime
+          mkdir -p $out/generated
+          cp -r ${./generated/new-graph} $out/generated/new-graph
           mkdir -p $out/docs/reference/schemas/v3/providers
           mkdir -p $out/docs/reference/policy
           cp ${./docs/reference/policy/principal-allocation.json} \
