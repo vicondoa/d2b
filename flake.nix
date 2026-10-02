@@ -854,7 +854,6 @@
           top = name: bundle.${name}.fixtureData;
         in {
           files = {
-            "privileges.json" = top "privilegesJson";
             "realm-workloads-launcher-v2.json" = top "realmWorkloadsLauncherV2Json";
             "bundle.json" = top "bundle";
           };
@@ -955,7 +954,6 @@
           publicManifestPath = "manifest.json";
           hostPath = "host.json";
           processesPath = "processes.json";
-          privilegesPath = "privileges.json";
           closures = [
             {
               vm = "corp-vm";
@@ -1002,7 +1000,6 @@
           cp ${fixtureProcessesJson} $out/processes.json
           cp ${fixtureManifest} $out/manifest.json
           cp ${fixtureClosure} $out/closures/corp-vm.json
-          cp ${bundle.privilegesJson.path} $out/privileges.json
           cp ${bundle.realmWorkloadsLauncherV2Json.path} $out/realm-workloads-launcher-v2.json
           cp ${fixtureBundlePath} $out/bundle.json
           cp ${bundle.zoneResourceBundles.local-root.path} $out/zones/local-root/resource-bundle.json

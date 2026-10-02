@@ -159,10 +159,20 @@ pub fn assertions(control: &mut GuestControl) -> LegacyResult<()> {
         "vmm-spawn",
         &vmm_socket_command,
         STORE_WAIT,
-        &[as_row(&guest_state_row)],
         &[
-            ("d2bd.service", "cloud-hypervisor"),
-            ("d2bd.service", "component-session"),
+            as_row(&guest_state_row),
+            (
+                "live process table",
+                "ps -eo pid=,ppid=,args= --no-headers 2>/dev/null | head -n 80 || true",
+            ),
+            (
+                "guest state rows",
+                "find /var/lib/d2b/zones/work/guests -maxdepth 3 2>/dev/null | head -n 60 || true",
+            ),
+        ],
+        &[
+            ("d2bd.service", ""),
+            ("d2b-broker.service", ""),
         ],
     )?;
 

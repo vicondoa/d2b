@@ -32,22 +32,14 @@ await_holding_lock = "deny"
 await_holding_refcell_ref = "deny"
 
 [features]
-# Forward the broker's legacy feature set: the layer1-bootstrap feature
-# rebuilds the bootstrap-shaped binary (a probe harness), and fake-backends
-# pulls d2b-host's matching fake backends for the W3 oracles.
-layer1-bootstrap = ["d2b-broker/layer1-bootstrap"]
+# `fake-backends` pulls d2b-host's matching fake backends for the W3
+# oracles. The bootstrap-shaped binary target is gone with the broker's
+# bootstrap wire.
 fake-backends = ["d2b-broker/fake-backends"]
 
 [[bin]]
 name = "d2b-broker"
 path = "src/main.rs"
-
-# The legacy bootstrap-shaped binary, built only when the feature is on
-# (the Nix and guest builds never enable it).
-[[bin]]
-name = "d2b-broker-layer1-bootstrap"
-path = "src/main.rs"
-required-features = ["layer1-bootstrap"]
 
 [dependencies]
 d2b-broker = { path = "../d2b-broker", version = "0.0.0-bootstrap" }

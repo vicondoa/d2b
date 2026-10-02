@@ -58,7 +58,8 @@ use d2b_contracts_broker::broker_wire::{
     publication_snapshot_digest,
 };
 use d2b_contracts_resource::v3::{
-    AdmissionStage, AuthoritySubject, DesiredDigest, RefusalReason, StoreIncarnation,
+    AdmissionStage, AuthoritySubject, CanonicalJsonObject, DesiredDigest, RefusalReason,
+    ResourceRef, StoreIncarnation, ZoneDesiredSequence,
 };
 use tokio::sync::{Mutex, mpsc, oneshot};
 
@@ -1149,5 +1150,233 @@ mod stall_regression_tests {
         );
 
         broker.finish();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The production publisher (KTD6-KTD7)
+// ---------------------------------------------------------------------------
+
+/// The manager's [`AuthorityPublisher`], bound to the daemon's own
+/// publication coordinator over the origination leg.
+///
+/// This is the whole production answer to "where does the fence come from":
+/// every durable Zone transaction the manager starts or recovers goes through
+/// this type, and every answer it returns is the broker's. It holds no
+/// desired state and decides nothing - it renders a staged projection into the
+/// wire shape the broker validates and reports what the broker answered.
+#[derive(Debug, Clone)]
+pub struct CoordinatorPublisher {
+    coordinator: Arc<AuthorityPublicationCoordinator>,
+    incarnation: StoreIncarnation,
+    subject: AuthoritySubject,
+}
+
+impl CoordinatorPublisher {
+    /// Bind a publisher to one Zone's coordinator, store generation, and the
+    /// identity the publication session runs under.
+    ///
+    /// The subject is the Zone's authenticated publication identity, not the
+    /// row being mutated: a publisher that presented a candidate's own
+    /// identity would be letting a row authorize its own introduction.
+    pub fn new(
+        coordinator: Arc<AuthorityPublicationCoordinator>,
+        incarnation: StoreIncarnation,
+        subject: AuthoritySubject,
+    ) -> Arc<Self> {
+        Arc::new(Self { coordinator, incarnation, subject })
+    }
+
+    /// The Zone's publication session, opened (or reused) on this leg.
+    async fn session(&self) -> Result<PublicationSession, d2b_resource_runtime::PublicationRefusal> {
+        self.coordinator.open_session().await.map_err(transport)
+    }
+
+    /// The cursor the broker holds, which every candidate must name as its
+    /// exact predecessor.
+    async fn expected(&self) -> Result<AuthorityCursor, d2b_resource_runtime::PublicationRefusal> {
+        Ok(self.coordinator.accepted().await)
+    }
+}
+
+/// One publication failure as the manager sees it.
+///
+/// The broker's own answer is preserved where it has one: a refusal carries
+/// its closed code, the stage that refused, and the typed reason, and none of
+/// them is flattened into a message that would read the same as a transport
+/// that never arrived.
+fn transport(error: PublicationError) -> d2b_resource_runtime::PublicationRefusal {
+    match error {
+        PublicationError::Refused { code, stage, reason, fenced } => {
+            d2b_resource_runtime::PublicationRefusal::Refused(format!(
+                "{code} at {stage:?} ({reason:?}, fenced: {fenced})"
+            ))
+        }
+        other => d2b_resource_runtime::PublicationRefusal::Refused(other.to_string()),
+    }
+}
+
+/// The wire spelling of one durable transaction identity.
+fn transaction_token(transaction: d2b_resource_runtime::TransactionId) -> Result<PublicationTransactionId, d2b_resource_runtime::PublicationRefusal> {
+    PublicationTransactionId::parse(transaction.to_string()).map_err(|error| {
+        d2b_resource_runtime::PublicationRefusal::Refused(format!(
+            "a transaction identity is not a wire token: {error}"
+        ))
+    })
+}
+
+/// The rows one publication carries to the broker, and the keys it retires.
+///
+/// Both the staged projection and the committed publication go through this
+/// one mapping, so the bytes a fence is validated against and the bytes a
+/// commit installs are the same bytes by construction rather than by two
+/// renderings that were meant to agree.
+///
+/// A row whose committed bytes are not a canonical object is refused rather
+/// than summarized: the broker stores the bytes it accepted and re-evaluates
+/// policy against them, so a projection this side shaped would be a second
+/// authority.
+fn publication_rows(
+    rows: &[d2b_resource_runtime::DesiredRow],
+    removed: &[d2b_resource_runtime::spec_store::ResourceKey],
+) -> Result<(Vec<AuthorityProjectionRow>, Vec<ResourceRef>), d2b_resource_runtime::PublicationRefusal>
+{
+    let mut published = Vec::with_capacity(rows.len());
+    for desired in rows {
+        let key = &desired.row.key;
+        let reference = ResourceRef::parse(format!("{}/{}", key.type_name, key.name).as_str())
+            .map_err(|error| {
+                d2b_resource_runtime::PublicationRefusal::Refused(format!(
+                    "{key} has no canonical reference: {error}"
+                ))
+            })?;
+        let admitted = CanonicalJsonObject::parse(&desired.row.spec).map_err(|error| {
+            d2b_resource_runtime::PublicationRefusal::Refused(format!(
+                "{key} commits bytes that are not a canonical desired object: {error}"
+            ))
+        })?;
+        published.push(AuthorityProjectionRow {
+            resource_ref: reference,
+            desired_revision: desired.revision,
+            desired_digest: desired.digest.clone(),
+            admitted,
+            // Relationship identity is resolved by the graph that owns the
+            // relationship, not restated here. A row published without it
+            // carries no accepted source, so the broker refuses that
+            // relationship rather than accepting one it cannot name - which is
+            // the correct answer for an absence and not for a committed one.
+            source_uid: None,
+            consumer_uid: None,
+        });
+    }
+    let mut retired = Vec::with_capacity(removed.len());
+    for key in removed {
+        retired.push(
+            ResourceRef::parse(format!("{}/{}", key.type_name, key.name).as_str()).map_err(
+                |error| {
+                    d2b_resource_runtime::PublicationRefusal::Refused(format!(
+                        "{key} has no canonical reference: {error}"
+                    ))
+                },
+            )?,
+        );
+    }
+    Ok((published, retired))
+}
+
+/// The rows one staged projection will commit, rendered for publication.
+fn staged_rows(
+    projection: &d2b_resource_runtime::Projection,
+) -> Result<(Vec<AuthorityProjectionRow>, Vec<ResourceRef>), d2b_resource_runtime::PublicationRefusal>
+{
+    let rows: Vec<d2b_resource_runtime::DesiredRow> =
+        projection.rows.iter().map(|row| row.row.clone()).collect();
+    let removed: Vec<d2b_resource_runtime::spec_store::ResourceKey> =
+        projection.removed.iter().map(|row| row.key.clone()).collect();
+    publication_rows(&rows, &removed)
+}
+
+/// The mutation class the broker re-evaluates.
+fn mutation_kind(kind: d2b_resource_runtime::MutationKind) -> PublicationMutationKind {
+    match kind {
+        d2b_resource_runtime::MutationKind::Create => PublicationMutationKind::Create,
+        d2b_resource_runtime::MutationKind::Update => PublicationMutationKind::UpdateSpec,
+        d2b_resource_runtime::MutationKind::Delete => PublicationMutationKind::Delete,
+    }
+}
+
+#[async_trait]
+impl d2b_resource_runtime::AuthorityPublisher for CoordinatorPublisher {
+    async fn prepare(
+        &self,
+        candidate: &d2b_resource_runtime::PublicationCandidate,
+    ) -> Result<d2b_resource_runtime::FencedTransaction, d2b_resource_runtime::PublicationRefusal> {
+        self.session().await?;
+        let expected = self.expected().await?;
+        if expected.sequence != candidate.expected {
+            // The store reserved its candidate against a predecessor the
+            // broker does not hold. Committing it would publish visibility
+            // for a revision built on an authority the broker has moved past.
+            return Err(d2b_resource_runtime::PublicationRefusal::Refused(format!(
+                "zone {} publishes against sequence {} while the broker holds {}",
+                candidate.zone,
+                candidate.expected.get(),
+                expected.sequence.get()
+            )));
+        }
+        let (rows, removed) = staged_rows(&candidate.projection)?;
+        let digest = publication_candidate_digest(&rows, &removed);
+        let request = PrepareCandidate {
+            transaction: transaction_token(candidate.transaction)?,
+            store_incarnation: self.incarnation.clone(),
+            expected,
+            committed: AuthorityCursor {
+                sequence: candidate.committed,
+                digest: digest.clone(),
+            },
+            subject: self.subject.clone(),
+            kind: mutation_kind(candidate.kind),
+            candidate: rows,
+            removed,
+        };
+        let prepared = self.coordinator.prepare(&request).await.map_err(transport)?;
+        Ok(d2b_resource_runtime::FencedTransaction {
+            transaction: candidate.transaction,
+            prepared: prepared.transaction.to_string(),
+            // The broker's own committed cursor is the fence's sequence; the
+            // caller already reserved that sequence in the store, and a broker
+            // that froze a different one is refusing by name rather than
+            // answering a question this half did not ask.
+            committed: prepared.committed.sequence,
+        })
+    }
+
+    async fn commit(
+        &self,
+        publication: &d2b_resource_runtime::CommittedPublication,
+    ) -> Result<d2b_resource_runtime::AcceptedRevision, d2b_resource_runtime::PublicationRefusal> {
+        self.session().await?;
+        let expected = self.expected().await?;
+        let (rows, removed) =
+            publication_rows(&publication.publication.rows, &publication.publication.removed)?;
+        let digest = publication_candidate_digest(&rows, &removed);
+        let commit = CommitCandidate {
+            transaction: transaction_token(publication.transaction)?,
+            store_incarnation: self.incarnation.clone(),
+            expected,
+            committed: AuthorityCursor { sequence: publication.sequence, digest },
+            rows,
+            removed,
+        };
+        let accepted = self.coordinator.commit(&commit).await.map_err(transport)?;
+        Ok(d2b_resource_runtime::AcceptedRevision {
+            transaction: publication.transaction,
+            sequence: accepted.sequence,
+            candidate: accepted.digest,
+        })
+    }
+
+    async fn accepted(&self) -> Result<ZoneDesiredSequence, d2b_resource_runtime::PublicationRefusal> {
+        Ok(self.expected().await?.sequence)
     }
 }

@@ -32,22 +32,21 @@
 //! (directory 0700 when it creates the directory); the database's
 //! `<name>-wal` and `<name>-shm` side files are tightened to 0600 as well.
 //!
-//! ## Store formats
+//! ## One format, and one write path
 //!
-//! [`StoreFormat`] names the two formats this module opens.
-//! [`Self::open`] keeps the production desired-row schema and does not move;
-//! [`Self::open_authority_journal`] opens the authority-journal format
-//! (U5, KTD5-KTD6), which persists a per-row desired revision, a per-Zone
-//! desired sequence, durable publication transactions, their outbox, and the
-//! accepted-publication cursor.
+//! The authority-journal format is the only format this store has. It
+//! persists a per-row desired revision, a per-Zone desired sequence, durable
+//! publication transactions, their outbox, and the accepted-publication
+//! cursor, so every authority change carries a durable identity of its own
+//! instead of borrowing the spec generation (KTD5-KTD6).
 //!
-//! The two formats never mix writes. A production-format store refuses every
-//! journal operation and an authority-journal store refuses the direct
-//! desired-row mutations, because a durable authority change that could be
-//! written outside the journal protocol is exactly the change KTD6 requires to
-//! be staged, fenced, published, and acknowledged. There is no migration
-//! between them: opening one format's database as the other is refused by
-//! [`crate::schema::apply_authority_journal`].
+//! There is deliberately no second way to write a desired row: the store
+//! exposes reads and the journal protocol, and a durable authority change
+//! that could commit without a staged candidate, an outbox entry, and an
+//! accepted-publication acknowledgment is exactly the change KTD6 requires to
+//! be staged, fenced, committed, and acknowledged. Opening a database written
+//! by an earlier release is refused by
+//! [`crate::schema::apply_authority_journal`] rather than converted.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, SyncSender};
@@ -55,7 +54,7 @@ use std::sync::mpsc::sync_channel;
 use std::time::Duration;
 
 use d2b_contracts_resource::v3::authority::{StoreIncarnation, ZoneDesiredSequence};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, params};
 use tokio::sync::oneshot;
 
 use crate::authority_journal::{
@@ -63,28 +62,14 @@ use crate::authority_journal::{
     PublicationTransaction, StagedMutation, ZoneRecovery,
 };
 use crate::identity::TransactionId;
-use crate::schema::StoreFormat;
 
 pub const MODULE_NAME: &str = "spec_store";
 
-/// The production format's projection. It stores no desired revision, so the
-/// trailing column is an explicit `NULL`: a production row can never be
-/// mistaken for a row whose revision was read back.
-pub(crate) const LEGACY_ROW_COLUMNS: &str = "zone, type, name, uid, generation, owner_uid, \
-     provenance, deleting, spec, metadata, created_at, NULL AS desired_revision";
-
-/// The authority-journal format's projection, which carries the durable
-/// desired revision the format exists to persist.
+/// The projection every read of a desired row goes through. It carries the
+/// durable desired revision, so a reader that wants the revision gets it and
+/// a reader that does not cannot read the row as one without it.
 pub(crate) const AUTHORITY_ROW_COLUMNS: &str = "zone, type, name, uid, generation, owner_uid, \
      provenance, deleting, spec, metadata, created_at, desired_revision";
-
-/// The projection the store's own format reads rows through.
-fn row_columns(format: StoreFormat) -> &'static str {
-    match format {
-        StoreFormat::DesiredRows => LEGACY_ROW_COLUMNS,
-        StoreFormat::AuthorityJournal => AUTHORITY_ROW_COLUMNS,
-    }
-}
 
 /// Deadline one writer request waits on the busy connection before failing.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -153,8 +138,8 @@ pub struct StoredDesiredResource {
     /// Owner resource uid, when this resource is an owned child (R8).
     pub owner_uid: Option<[u8; 16]>,
     pub provenance: ResourceProvenance,
-    /// Terminal desired state: set by [`SpecStore::mark_deleting`], cleared
-    /// only by removal (R10).
+    /// Terminal desired state: set by the deleting mutation, cleared only by
+    /// the removing one (R10).
     pub deleting: bool,
     pub spec: Vec<u8>,
     pub metadata: Vec<u8>,
@@ -169,7 +154,12 @@ pub struct SpecSelector {
     pub owner_uid: Option<[u8; 16]>,
 }
 
-/// Outcome of [`SpecStore::ensure`] (R7 idempotence).
+/// What one committed ensure produced (R7 idempotence).
+///
+/// This is the manager's read of the journal's [`CommitOutcome`], not a second
+/// write path: a row is only ever committed through
+/// [`SpecStore::commit_mutation`], so the generation and revision below are
+/// the ones that transaction committed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EnsureOutcome {
     /// Row absent: committed at generation 1 before this value returned.
@@ -227,8 +217,6 @@ pub enum SpecStoreError {
     Io(#[from] std::io::Error),
     #[error("spec store sqlite: {0}")]
     Sqlite(#[from] rusqlite::Error),
-    #[error("spec store migration: {0}")]
-    Migration(String),
     /// The writer's bounded queue (256 slots) is full: the call was not
     /// admitted. This is backpressure, never writer death - the writer is
     /// alive and the call can be retried. Per-caller handling: the manager
@@ -244,15 +232,9 @@ pub enum SpecStoreError {
     /// full queue - a full queue is [`Self::Busy`].
     #[error("spec store writer unavailable")]
     WriterGone,
-    /// The opened store's format cannot serve the requested operation: the
-    /// journal protocol is absent from the production format, and the direct
-    /// desired-row mutations are absent from the journal format, so no
-    /// durable authority change can be written outside the protocol.
-    #[error("spec store format {actual:?} cannot serve this operation, which requires {required:?}")]
-    WrongStoreFormat { actual: StoreFormat, required: StoreFormat },
-    /// The authority-journal schema could not be applied. The refusal case
-    /// carries the database's own `user_version`: this release starts from a
-    /// fresh store and never converts existing data.
+    /// The database's schema could not be applied. The refusal case carries
+    /// the database's own `user_version`: this release starts from a fresh
+    /// store and never converts existing data.
     #[error(transparent)]
     Schema(#[from] crate::schema::SchemaError),
     /// A publication transaction is not recorded in this store.
@@ -309,32 +291,9 @@ pub enum SpecStoreError {
 // ---------------------------------------------------------------------------
 
 enum Request {
-    Ensure {
-        row: StoredDesiredResource,
-        reply: oneshot::Sender<Result<EnsureOutcome, SpecStoreError>>,
-    },
-    Get {
-        key: ResourceKey,
-        reply: oneshot::Sender<Result<Option<StoredDesiredResource>, SpecStoreError>>,
-    },
-    List {
-        selector: SpecSelector,
-        reply: oneshot::Sender<Result<Vec<StoredDesiredResource>, SpecStoreError>>,
-    },
-    MarkDeleting {
-        key: ResourceKey,
-        reply: oneshot::Sender<Result<StoredDesiredResource, SpecStoreError>>,
-    },
-    RemoveAfterCleanup {
-        key: ResourceKey,
-        reply: oneshot::Sender<Result<(), SpecStoreError>>,
-    },
     History {
         limit: usize,
         reply: oneshot::Sender<Result<Vec<AuditRecord>, SpecStoreError>>,
-    },
-    Migrate {
-        reply: oneshot::Sender<Result<(), SpecStoreError>>,
     },
     StageMutation {
         mutation: DesiredMutation,
@@ -361,7 +320,7 @@ enum Request {
         key: ResourceKey,
         reply: oneshot::Sender<Result<DesiredRow, SpecStoreError>>,
     },
-    DesiredRows {
+    ReadDesiredRows {
         selector: SpecSelector,
         reply: oneshot::Sender<Result<Vec<DesiredRow>, SpecStoreError>>,
     },
@@ -382,45 +341,6 @@ enum Request {
     },
 }
 
-/// Run an operation only the authority-journal format provides.
-///
-/// The refusal is the enforcement point for KTD6: a production-format store
-/// has no publication journal, so it cannot stage, fence, publish, or
-/// acknowledge an authority change.
-fn journal_only<T>(
-    format: StoreFormat,
-    conn: &mut Connection,
-    run: impl FnOnce(&mut Connection) -> Result<T, SpecStoreError>,
-) -> Result<T, SpecStoreError> {
-    match format {
-        StoreFormat::AuthorityJournal => run(conn),
-        StoreFormat::DesiredRows => Err(SpecStoreError::WrongStoreFormat {
-            actual: format,
-            required: StoreFormat::AuthorityJournal,
-        }),
-    }
-}
-
-/// Run an operation only the production format provides.
-///
-/// The mirror image of [`journal_only`]: an authority-journal store has no
-/// direct desired-row mutation, because a durable authority change that could
-/// commit without an outbox entry and an accepted-publication acknowledgment
-/// would leave the broker's projection permanently behind the store.
-fn desired_rows_only<T>(
-    format: StoreFormat,
-    conn: &mut Connection,
-    run: impl FnOnce(&mut Connection) -> Result<T, SpecStoreError>,
-) -> Result<T, SpecStoreError> {
-    match format {
-        StoreFormat::DesiredRows => run(conn),
-        StoreFormat::AuthorityJournal => Err(SpecStoreError::WrongStoreFormat {
-            actual: format,
-            required: StoreFormat::DesiredRows,
-        }),
-    }
-}
-
 /// The writer thread's exclusive connection owner. All SQLite happens here.
 ///
 /// The blocking `recv` is the sanctioned bounded-worker channel boundary
@@ -428,263 +348,51 @@ fn desired_rows_only<T>(
 /// the blocking recv parks only the writer's own thread. The reply travels
 /// back over a `tokio::sync::oneshot`, exactly the loader_worker shape.
 #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
-fn writer_loop(mut conn: Connection, format: StoreFormat, requests: Receiver<Request>) {
+fn writer_loop(mut conn: Connection, requests: Receiver<Request>) {
     while let Ok(request) = requests.recv() {
         match request {
-            Request::Ensure { row, reply } => {
-                let result = desired_rows_only(format, &mut conn, |conn| {
-                    ensure_transactional(conn, row, format)
-                });
-                let _ = reply.send(result);
-            }
-            Request::Get { key, reply } => {
-                let _ = reply.send(get(&conn, &key, format).map(Some));
-            }
-            Request::List { selector, reply } => {
-                let _ = reply.send(list(&conn, &selector, format));
-            }
-            Request::MarkDeleting { key, reply } => {
-                let result = desired_rows_only(format, &mut conn, |conn| {
-                    mark_deleting_transactional(conn, &key, format)
-                });
-                let _ = reply.send(result);
-            }
-            Request::RemoveAfterCleanup { key, reply } => {
-                let result = desired_rows_only(format, &mut conn, |conn| {
-                    remove_after_cleanup(conn, &key, format)
-                });
-                let _ = reply.send(result);
-            }
             Request::History { limit, reply } => {
                 let _ = reply.send(history(&conn, limit));
             }
-            Request::Migrate { reply } => {
-                let result = desired_rows_only(format, &mut conn, |conn| {
-                    crate::schema::migrate(conn)
-                        .map_err(|err| SpecStoreError::Migration(err.to_string()))
-                });
-                let _ = reply.send(result);
-            }
             Request::StageMutation { mutation, reply } => {
-                let result = journal_only(format, &mut conn, |conn| {
-                    crate::authority_journal::stage_mutation(conn, mutation)
-                });
-                let _ = reply.send(result);
+                let _ = reply.send(crate::authority_journal::stage_mutation(&mut conn, mutation));
             }
             Request::RecordPrepared { transaction, prepared, reply } => {
-                let result = journal_only(format, &mut conn, |conn| {
-                    crate::authority_journal::record_prepared(conn, transaction, &prepared)
-                });
-                let _ = reply.send(result);
+                let _ = reply
+                    .send(crate::authority_journal::record_prepared(&mut conn, transaction, &prepared));
             }
             Request::CommitMutation { transaction, reply } => {
-                let result = journal_only(format, &mut conn, |conn| {
-                    crate::authority_journal::commit_mutation(conn, transaction)
-                });
-                let _ = reply.send(result);
+                let _ = reply.send(crate::authority_journal::commit_mutation(&mut conn, transaction));
             }
             Request::Acknowledge { accepted, reply } => {
-                let result = journal_only(format, &mut conn, |conn| {
-                    crate::authority_journal::acknowledge(conn, accepted)
-                });
-                let _ = reply.send(result);
+                let _ = reply.send(crate::authority_journal::acknowledge(&mut conn, accepted));
             }
             Request::CancelTransaction { transaction, reply } => {
-                let result = journal_only(format, &mut conn, |conn| {
-                    crate::authority_journal::cancel_transaction(conn, transaction)
-                });
-                let _ = reply.send(result);
+                let _ =
+                    reply.send(crate::authority_journal::cancel_transaction(&mut conn, transaction));
             }
             Request::DesiredRow { key, reply } => {
-                let result = journal_only(format, &mut conn, |conn| {
-                    crate::authority_journal::desired_row(conn, &key)
-                });
-                let _ = reply.send(result);
+                let _ = reply.send(crate::authority_journal::desired_row(&conn, &key));
             }
-            Request::DesiredRows { selector, reply } => {
-                let result = journal_only(format, &mut conn, |conn| {
-                    crate::authority_journal::desired_rows(conn, &selector)
-                });
-                let _ = reply.send(result);
+            Request::ReadDesiredRows { selector, reply } => {
+                let _ = reply.send(crate::authority_journal::desired_rows(&conn, &selector));
             }
             Request::ZoneSequence { zone, reply } => {
-                let result = journal_only(format, &mut conn, |conn| {
-                    crate::authority_journal::zone_sequence(conn, &zone)
-                });
-                let _ = reply.send(result);
+                let _ = reply.send(crate::authority_journal::zone_sequence(&conn, &zone));
             }
             Request::AcceptedCursor { zone, reply } => {
-                let result = journal_only(format, &mut conn, |conn| {
-                    crate::authority_journal::accepted_cursor(conn, &zone)
-                });
-                let _ = reply.send(result);
+                let _ = reply.send(crate::authority_journal::accepted_cursor(&conn, &zone));
             }
             Request::ZoneRecovery { zone, reply } => {
-                let result = journal_only(format, &mut conn, |conn| {
-                    crate::authority_journal::zone_recovery(conn, &zone)
-                });
-                let _ = reply.send(result);
+                let _ = reply.send(crate::authority_journal::zone_recovery(&conn, &zone));
             }
             Request::StoreIncarnation { reply } => {
-                let result = journal_only(format, &mut conn, |conn| {
-                    crate::authority_journal::store_incarnation(conn)
-                });
-                let _ = reply.send(result);
+                let _ = reply.send(crate::authority_journal::store_incarnation(&conn));
             }
         }
     }
     // Channel closed: the last handle dropped. Checkpoint and close cleanly.
     let _ = conn.pragma_update(None, "wal_checkpoint(TRUNCATE)", 0);
-}
-
-// ---------------------------------------------------------------------------
-fn ensure_transactional(
-    conn: &mut Connection,
-    row: StoredDesiredResource,
-    format: StoreFormat,
-) -> Result<EnsureOutcome, SpecStoreError> {
-    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    let outcome = ensure_transactional_inner(&tx, row, format)?;
-    tx.commit()?;
-    Ok(outcome)
-}
-
-/// One `resources` row as the ensure comparison reads it (spec section 9):
-/// generation, deleting mark, spec and metadata bytes, owner uid, provenance.
-/// An alias because the column tuple would otherwise exceed clippy's type
-/// complexity ceiling at its only two type sites.
-type ExistingRow = (u64, bool, Vec<u8>, Vec<u8>, Option<Vec<u8>>, String);
-
-fn ensure_transactional_inner(
-    tx: &rusqlite::Transaction<'_>,
-    row: StoredDesiredResource,
-    format: StoreFormat,
-) -> Result<EnsureOutcome, SpecStoreError> {
-    // Every column the row's readers observe is compared, not only the spec:
-    // a `metadata`-only ensure (the authored envelope the display status and
-    // the owned-child annotations read) must never be a silent no-op.
-    let existing: Option<ExistingRow> = tx
-        .query_row(
-            "SELECT generation, deleting, spec, metadata, owner_uid, provenance FROM resources \
-             WHERE zone = ?1 AND type = ?2 AND name = ?3",
-            params![row.key.zone, row.key.type_name, row.key.name],
-            |r| {
-                Ok((
-                    r.get::<_, i64>(0)? as u64,
-                    r.get::<_, i64>(1)? != 0,
-                    r.get::<_, Vec<u8>>(2)?,
-                    r.get::<_, Vec<u8>>(3)?,
-                    r.get::<_, Option<Vec<u8>>>(4)?,
-                    r.get::<_, String>(5)?,
-                ))
-            },
-        )
-        .optional()?;
-    let Some((
-        generation,
-        deleting,
-        existing_spec,
-        existing_metadata,
-        existing_owner,
-        existing_provenance,
-    )) = existing
-    else {
-        let stored = insert_new(tx, row)?;
-        insert_audit(
-            tx,
-            AuditWrite {
-                ts: now(),
-                subject: "resource.ensure",
-                provenance: stored.provenance.as_str(),
-                key: Some(&stored.key),
-                operation: "ensure.create",
-                generation_before: None,
-                generation_after: Some(stored.generation as i64),
-            },
-        )?;
-        return Ok(EnsureOutcome::Created(stored));
-    };
-    if deleting {
-        return Err(SpecStoreError::ResourceDeleting {
-            zone: row.key.zone.clone(),
-            type_name: row.key.type_name.clone(),
-            name: row.key.name.clone(),
-        });
-    }
-    let incoming_owner = row.owner_uid.map(|uid| uid.to_vec());
-    let spec_changed = existing_spec != row.spec;
-    if !spec_changed
-        && existing_metadata == row.metadata
-        && existing_owner == incoming_owner
-        && existing_provenance == row.provenance.as_str()
-    {
-        let stored =
-            load_row(tx, &row.key, format)?.expect("row present within its own transaction");
-        return Ok(EnsureOutcome::Unchanged(stored));
-    }
-    if !spec_changed {
-        // Spec bytes identical: the row's authored metadata, owner binding,
-        // and provenance still move to the incoming values, at the committed
-        // generation (identity and generation are the spec's contract; the
-        // annotation columns are not).
-        tx.execute(
-            "UPDATE resources SET owner_uid = ?4, provenance = ?5, metadata = ?6 \
-             WHERE zone = ?1 AND type = ?2 AND name = ?3",
-            params![
-                row.key.zone,
-                row.key.type_name,
-                row.key.name,
-                incoming_owner,
-                row.provenance.as_str(),
-                row.metadata,
-            ],
-        )?;
-        insert_audit(
-            tx,
-            AuditWrite {
-                ts: now(),
-                subject: "resource.ensure",
-                provenance: row.provenance.as_str(),
-                key: Some(&row.key),
-                operation: "ensure.metadata",
-                generation_before: Some(generation as i64),
-                generation_after: Some(generation as i64),
-            },
-        )?;
-        let stored =
-            load_row(tx, &row.key, format)?.expect("row present within its own transaction");
-        return Ok(EnsureOutcome::Updated(stored));
-    }
-    let next = generation + 1;
-    tx.execute(
-        "UPDATE resources SET generation = ?4, uid = ?5, owner_uid = ?6, provenance = ?7, \
-         spec = ?8, metadata = ?9 WHERE zone = ?1 AND type = ?2 AND name = ?3",
-        params![
-            row.key.zone,
-            row.key.type_name,
-            row.key.name,
-            next as i64,
-            row.uid.as_slice(),
-            incoming_owner,
-            row.provenance.as_str(),
-            row.spec,
-            row.metadata,
-        ],
-    )?;
-    insert_audit(
-        tx,
-        AuditWrite {
-            ts: now(),
-            subject: "resource.ensure",
-            provenance: row.provenance.as_str(),
-            key: Some(&row.key),
-            operation: "ensure.update",
-            generation_before: Some(generation as i64),
-            generation_after: Some(next as i64),
-        },
-    )?;
-    let stored = load_row(tx, &row.key, format)?.expect("row present within its own transaction");
-    Ok(EnsureOutcome::Updated(stored))
 }
 
 // ---------------------------------------------------------------------------
@@ -745,13 +453,6 @@ fn open_connection(path: &Path) -> Result<Connection, SpecStoreError> {
     Ok(conn)
 }
 
-// ---------------------------------------------------------------------------
-// Transactional operations (run on the writer thread)
-// ---------------------------------------------------------------------------
-
-fn begin_immediate(conn: &mut Connection) -> Result<(), SpecStoreError> {
-    Ok(conn.execute_batch("BEGIN IMMEDIATE")?)
-}
 
 /// One audit-log write committed with the transaction (spec section 9): a
 /// subject, the row provenance, the optional resource key, the operation, and
@@ -797,49 +498,6 @@ pub(crate) fn now() -> i64 {
         .unwrap_or(0)
 }
 
-fn insert_new(
-    tx: &rusqlite::Transaction<'_>,
-    row: StoredDesiredResource,
-) -> Result<StoredDesiredResource, SpecStoreError> {
-    let StoredDesiredResource {
-        key,
-        uid,
-        owner_uid,
-        provenance,
-        spec,
-        metadata,
-        ..
-    } = row;
-    let created_at = now();
-    tx.execute(
-        "INSERT INTO resources (zone, type, name, uid, generation, owner_uid, provenance, \
-         deleting, spec, metadata, created_at) \
-         VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, 0, ?7, ?8, ?9)",
-        params![
-            key.zone,
-            key.type_name,
-            key.name,
-            uid.as_slice(),
-            owner_uid.map(|u| u.to_vec()),
-            provenance.as_str(),
-            spec,
-            metadata,
-            created_at,
-        ],
-    )?;
-    Ok(StoredDesiredResource {
-        generation: 1,
-        deleting: false,
-        created_at,
-        key,
-        uid,
-        owner_uid,
-        provenance,
-        spec,
-        metadata,
-    })
-}
-
 /// One desired row read as plain SQLite types.
 ///
 /// Reading the columns and decoding them are separate steps so a decode
@@ -860,8 +518,8 @@ pub(crate) type DesiredRowTuple = (
     Option<i64>,
 );
 
-/// Read one desired row in [`ROW_COLUMNS`] order plus the trailing revision
-/// column the projection names.
+/// Read one desired row in [`AUTHORITY_ROW_COLUMNS`] order: the committed row
+/// plus its durable desired revision.
 pub(crate) fn desired_row_tuple(r: &rusqlite::Row<'_>) -> rusqlite::Result<DesiredRowTuple> {
     Ok((
         r.get(0)?,
@@ -928,159 +586,6 @@ pub(crate) fn decode_desired_row(
     Ok((row, revision))
 }
 
-/// The production format's decode: the same row, without a revision.
-fn row_from(r: &rusqlite::Row<'_>) -> Result<StoredDesiredResource, SpecStoreError> {
-    decode_desired_row(desired_row_tuple(r)?).map(|(row, _)| row)
-}
-
-fn load_row(
-    conn: &Connection,
-    key: &ResourceKey,
-    format: StoreFormat,
-) -> Result<Option<StoredDesiredResource>, SpecStoreError> {
-    let mut stmt = conn.prepare(&format!(
-        "SELECT {} FROM resources WHERE zone = ?1 AND type = ?2 AND name = ?3",
-        row_columns(format)
-    ))?;
-    let mut rows = stmt.query(params![key.zone, key.type_name, key.name])?;
-    match rows.next()? {
-        Some(row) => Ok(Some(row_from(row)?)),
-        None => Ok(None),
-    }
-}
-
-fn get(
-    conn: &Connection,
-    key: &ResourceKey,
-    format: StoreFormat,
-) -> Result<StoredDesiredResource, SpecStoreError> {
-    load_row(conn, key, format)?
-        .ok_or_else(|| SpecStoreError::NotFound {
-            zone: key.zone.clone(),
-            type_name: key.type_name.clone(),
-            name: key.name.clone(),
-        })
-}
-
-fn list(
-    conn: &Connection,
-    selector: &SpecSelector,
-    format: StoreFormat,
-) -> Result<Vec<StoredDesiredResource>, SpecStoreError> {
-    let sql = format!(
-        "SELECT {} FROM resources \
-         WHERE (?1 IS NULL OR zone = ?1) \
-           AND (?2 IS NULL OR type = ?2) \
-           AND (?3 IS NULL OR owner_uid = ?3) \
-         ORDER BY zone, type, name",
-        row_columns(format)
-    );
-    let zone = selector.zone.as_deref();
-    let type_name = selector.type_name.as_deref();
-    let owner = selector.owner_uid.map(|u| u.to_vec());
-    let mut stmt = conn.prepare(&sql)?;
-    let mut rows = stmt.query(params![zone, type_name, owner])?;
-    let mut out = Vec::new();
-    while let Some(row) = rows.next()? {
-        out.push(row_from(row)?);
-    }
-    Ok(out)
-}
-
-/// Set the terminal deleting mark (R10). Fails with
-/// [`SpecStoreError::NotFound`] when absent. Mutation + audit commit in one
-/// IMMEDIATE transaction before the caller sees the result.
-fn mark_deleting_transactional(
-    conn: &mut Connection,
-    key: &ResourceKey,
-    format: StoreFormat,
-) -> Result<StoredDesiredResource, SpecStoreError> {
-    begin_immediate(conn)?;
-    let result = (|| {
-        let Some(before) = load_row(conn, key, format)? else {
-            return Err(SpecStoreError::NotFound {
-                zone: key.zone.clone(),
-                type_name: key.type_name.clone(),
-                name: key.name.clone(),
-            });
-        };
-        if !before.deleting {
-            conn.execute(
-                "UPDATE resources SET deleting = 1 WHERE zone = ?1 AND type = ?2 AND name = ?3",
-                params![key.zone, key.type_name, key.name],
-            )?;
-            insert_audit(
-                conn,
-                AuditWrite {
-                    ts: now(),
-                    subject: "resource.deletion",
-                    provenance: before.provenance.as_str(),
-                    key: Some(key),
-                    operation: "deletion.mark",
-                    generation_before: Some(before.generation as i64),
-                    generation_after: Some(before.generation as i64),
-                },
-            )?;
-        }
-        Ok(load_row(conn, key, format)?.expect("row present within its own transaction"))
-    })();
-    match result {
-        Ok(row) => {
-            conn.execute_batch("COMMIT")?;
-            Ok(row)
-        }
-        Err(err) => {
-            let _ = conn.execute_batch("ROLLBACK");
-            Err(err)
-        }
-    }
-}
-
-/// Remove a row after cleanup completed (R10: the deleting mark, not this
-/// call, gates cleanup). Mutation + audit commit in one IMMEDIATE transaction.
-fn remove_after_cleanup(
-    conn: &mut Connection,
-    key: &ResourceKey,
-    format: StoreFormat,
-) -> Result<(), SpecStoreError> {
-    begin_immediate(conn)?;
-    let result = (|| {
-        let Some(existing) = load_row(conn, key, format)? else {
-            return Err(SpecStoreError::NotFound {
-                zone: key.zone.clone(),
-                type_name: key.type_name.clone(),
-                name: key.name.clone(),
-            });
-        };
-        conn.execute(
-            "DELETE FROM resources WHERE zone = ?1 AND type = ?2 AND name = ?3",
-            params![key.zone, key.type_name, key.name],
-        )?;
-        insert_audit(
-            conn,
-            AuditWrite {
-                ts: now(),
-                subject: "resource.deletion",
-                provenance: existing.provenance.as_str(),
-                key: Some(key),
-                operation: "deletion.removed",
-                generation_before: Some(existing.generation as i64),
-                generation_after: None,
-            },
-        )?;
-        Ok(())
-    })();
-    match result {
-        Ok(()) => {
-            conn.execute_batch("COMMIT")?;
-            Ok(())
-        }
-        Err(err) => {
-            let _ = conn.execute_batch("ROLLBACK");
-            Err(err)
-        }
-    }
-}
 
 fn history(conn: &Connection, limit: usize) -> Result<Vec<AuditRecord>, SpecStoreError> {
     let mut stmt = conn.prepare(
@@ -1120,15 +625,18 @@ fn history(conn: &Connection, limit: usize) -> Result<Vec<AuditRecord>, SpecStor
 /// pending requests. Callers needing multi-task access wrap this in `Arc`.
 pub struct SpecStore {
     path: PathBuf,
-    format: StoreFormat,
     sender: Option<SyncSender<Request>>,
     join: Option<std::thread::JoinHandle<()>>,
 }
 
 impl SpecStore {
-    /// Open (creating when absent) the store at `path`, apply pending
-    /// migrations, and start the writer thread. Returns after migrations are
-    /// committed.
+    /// Open (creating when absent) the store at `path` and start the writer
+    /// thread. Returns after the authority-journal schema is committed, so
+    /// the store's incarnation is durable before any caller can stage a
+    /// candidate in it.
+    ///
+    /// A database written by an earlier release is refused rather than
+    /// converted: the clean break starts from a fresh store.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, SpecStoreError> {
         Self::open_with_bound(path, 256)
     }
@@ -1136,49 +644,16 @@ impl SpecStore {
     /// [`Self::open`] with an explicit writer-queue bound. The production
     /// bound is 256; tests shrink it to inject queue-full backpressure.
     fn open_with_bound(path: impl Into<PathBuf>, bound: usize) -> Result<Self, SpecStoreError> {
-        Self::open_formatted(path, bound, StoreFormat::DesiredRows)
-    }
-
-    /// Open (creating when absent) an authority-journal store: the format
-    /// that persists a per-row desired revision, a per-Zone desired sequence,
-    /// durable publication transactions, their outbox, and the
-    /// accepted-publication cursor (KTD5-KTD6).
-    ///
-    /// Creating it applies [`crate::schema::apply_authority_journal`], which
-    /// refuses an existing production-format database instead of converting
-    /// it: the clean break starts from a fresh store.
-    pub fn open_authority_journal(path: impl Into<PathBuf>) -> Result<Self, SpecStoreError> {
-        Self::open_formatted(path, 256, StoreFormat::AuthorityJournal)
-    }
-
-    fn open_formatted(
-        path: impl Into<PathBuf>,
-        bound: usize,
-        format: StoreFormat,
-    ) -> Result<Self, SpecStoreError> {
         let path = path.into();
         let mut conn = open_connection(&path)?;
-        match format {
-            StoreFormat::DesiredRows => {
-                crate::schema::migrate(&mut conn)
-                    .map_err(|err| SpecStoreError::Migration(err.to_string()))?;
-            }
-            StoreFormat::AuthorityJournal => {
-                crate::schema::apply_authority_journal(&mut conn)?;
-            }
-        }
+        crate::schema::apply_authority_journal(&mut conn)?;
         tighten_file_modes(&path);
         let (sender, receiver) = sync_channel::<Request>(bound);
         let join = std::thread::Builder::new()
             .name("spec-store-writer".into())
-            .spawn(move || writer_loop(conn, format, receiver))
+            .spawn(move || writer_loop(conn, receiver))
             .map_err(|err| SpecStoreError::Io(std::io::Error::other(err.to_string())))?;
-        Ok(Self { path, format, sender: Some(sender), join: Some(join) })
-    }
-
-    /// The format this store was opened with.
-    pub fn format(&self) -> StoreFormat {
-        self.format
+        Ok(Self { path, sender: Some(sender), join: Some(join) })
     }
 
     /// The database file path this store opened.
@@ -1186,37 +661,22 @@ impl SpecStore {
         &self.path
     }
 
-    /// Idempotent desired-state write (R7). Rejects ensure against a
-    /// deleting row. Returns only after the commit.
-    pub async fn ensure(&self, row: StoredDesiredResource) -> Result<EnsureOutcome, SpecStoreError> {
-        self.call(|reply| Request::Ensure { row, reply }).await
-    }
-
+    /// One committed desired row, or [`SpecStoreError::NotFound`].
     pub async fn get(&self, key: ResourceKey) -> Result<StoredDesiredResource, SpecStoreError> {
-        match self.call(|reply| Request::Get { key: key.clone(), reply }).await? {
-            Some(row) => Ok(row),
-            None => Err(SpecStoreError::NotFound {
-                zone: key.zone,
-                type_name: key.type_name,
-                name: key.name,
-            }),
-        }
+        Ok(self.desired_row(key).await?.row)
     }
 
-    pub async fn list(&self, selector: SpecSelector) -> Result<Vec<StoredDesiredResource>, SpecStoreError> {
-        self.call(|reply| Request::List { selector, reply }).await
-    }
-
-    /// Commit the terminal deleting mark before cleanup starts (R10).
-    pub async fn mark_deleting(&self, key: ResourceKey) -> Result<StoredDesiredResource, SpecStoreError> {
-        self.call(|reply| Request::MarkDeleting { key, reply }).await
-    }
-
-    /// Remove the row once cleanup completed. There is no API surface for
-    /// writing status: the store only persists the envelope minus status (R6,
-    /// AE6 at unit scale).
-    pub async fn remove_after_cleanup(&self, key: ResourceKey) -> Result<(), SpecStoreError> {
-        self.call(|reply| Request::RemoveAfterCleanup { key, reply }).await
+    /// Every committed desired row the selector matches.
+    pub async fn list(
+        &self,
+        selector: SpecSelector,
+    ) -> Result<Vec<StoredDesiredResource>, SpecStoreError> {
+        Ok(self
+            .desired_rows(selector)
+            .await?
+            .into_iter()
+            .map(|desired| desired.row)
+            .collect())
     }
 
     /// Newest-first tail of committed-mutation audit records.
@@ -1224,20 +684,32 @@ impl SpecStore {
         self.call(move |reply| Request::History { limit, reply }).await
     }
 
-    /// Apply pending schema migrations explicitly (normally already applied
-    /// by [`Self::open`]); idempotent.
-    pub async fn migrate(&self) -> Result<(), SpecStoreError> {
-        self.call(|reply| Request::Migrate { reply }).await.map(|_| ())
-    }
-
     // -----------------------------------------------------------------
     // Authority-journal protocol (KTD5-KTD6)
     //
-    // Every call below commits before it returns, and every one of them is a
-    // complete transaction: the caller's broker I/O happens strictly between
-    // calls, so no open SQLite transaction, store lock, or source-reservation
-    // lock can cross the transport wait.
+    // This is the only way a desired row changes. Every call below commits
+    // before it returns, and every one of them is a complete transaction: the
+    // caller's broker I/O happens strictly between calls, so no open SQLite
+    // transaction, store lock, or source-reservation lock can cross the
+    // transport wait.
     // -----------------------------------------------------------------
+
+
+    /// One durable authority mutation, in the only order the protocol permits.
+    ///
+    /// The store is where a desired row changes, so this is its single write
+    /// path: see [`crate::authority_publish::publish`] for the ordering and
+    /// why each step is a separate transaction.
+    pub async fn publish(
+        &self,
+        mutation: DesiredMutation,
+        authority: &dyn crate::authority_publish::AuthorityPublisher,
+    ) -> Result<
+        crate::authority_publish::PublishOutcome,
+        crate::authority_publish::PublishError,
+    > {
+        crate::authority_publish::publish(self, mutation, authority).await
+    }
 
     /// The store generation this database is. A commit or acknowledgment
     /// naming a different incarnation names a different store, so ordinary
@@ -1269,7 +741,7 @@ impl SpecStore {
         &self,
         selector: SpecSelector,
     ) -> Result<Vec<DesiredRow>, SpecStoreError> {
-        self.call(|reply| Request::DesiredRows { selector, reply }).await
+        self.call(|reply| Request::ReadDesiredRows { selector, reply }).await
     }
 
     /// Stage one desired mutation and reserve its Zone sequence.
@@ -1390,14 +862,17 @@ impl Drop for SpecStore {
         }
     }
 }
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
     use super::*;
+    use crate::authority_journal::{CommitOutcome, DesiredMutation};
     use tempfile::TempDir;
 
     fn row(key: &str, spec: &[u8]) -> StoredDesiredResource {
@@ -1424,28 +899,89 @@ mod tests {
         SpecStore::open(dir.path().join("specs.db")).expect("open")
     }
 
-    /// Persist-then-reopen: rows, audit, and schema survive close/reopen and
-    /// migrations apply idempotently.
+    /// The store's own half of the protocol, without the broker round trip
+    /// between the steps: a manager drives exactly this sequence around the
+    /// fence it obtained out of band, and the store's mechanics are what
+    /// these tests are about.
+    async fn publish(store: &SpecStore, mutation: DesiredMutation) -> CommitOutcome {
+        let staged = store.stage_mutation(mutation).await.expect("stage");
+        store.record_prepared(staged.transaction, "prepared-1").await.expect("prepare");
+        let outcome = store.commit_mutation(staged.transaction).await.expect("commit");
+        if let CommitOutcome::Committed(committed) | CommitOutcome::AlreadyCommitted(committed) =
+            &outcome
+        {
+            store
+                .acknowledge(AcceptedPublication {
+                    transaction: committed.transaction,
+                    zone: committed.zone.clone(),
+                    incarnation: committed.incarnation.clone(),
+                    sequence: committed.sequence,
+                    candidate: committed.candidate.clone(),
+                })
+                .await
+                .expect("acknowledge");
+        }
+        outcome
+    }
+
+    /// The committed row a mutation produced, for the `Unchanged` outcome too.
+    fn committed_row(outcome: CommitOutcome) -> StoredDesiredResource {
+        match outcome {
+            CommitOutcome::Committed(committed) => committed.publication.rows[0].row.clone(),
+            CommitOutcome::AlreadyCommitted(committed) => committed.publication.rows[0].row.clone(),
+            CommitOutcome::Unchanged { row, .. } => row.row,
+        }
+    }
+
+    /// Persist-then-reopen: rows, audit, and the schema survive close/reopen,
+    /// and reopening an existing database rewrites nothing.
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn persist_then_reopen() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("specs.db");
-        {
+        let first = {
             let store = SpecStore::open(&path).unwrap();
-            let outcome = store.ensure(row("data", b"spec-v1")).await.unwrap();
-            assert!(matches!(outcome, EnsureOutcome::Created(_)));
-        }
-        // Reopen on the same file; run migrate() explicitly (idempotent).
+            let committed = committed_row(
+                publish(&store, DesiredMutation::Ensure(row("data", b"spec-v1"))).await,
+            );
+            assert_eq!(committed.generation, 1);
+            store.store_incarnation().await.unwrap()
+        };
         let store = SpecStore::open(&path).unwrap();
-        store.migrate().await.unwrap();
-        store.migrate().await.unwrap();
+        assert_eq!(store.store_incarnation().await.unwrap(), first, "one database, one incarnation");
         let got = store.get(ResourceKey::new("host", "Volume", "data")).await.unwrap();
         assert_eq!(got.spec, b"spec-v1");
         assert_eq!(got.generation, 1);
         assert!(!got.deleting);
         let history = store.history(10).await.unwrap();
-        assert!(history.iter().any(|rec| rec.operation == "ensure.create"));
+        assert!(history.iter().any(|rec| rec.operation == "authority.ensure"));
+    }
+
+    /// A database written by an earlier release is refused rather than
+    /// converted: its desired rows carry no revision and no journal, and
+    /// reading them through the protocol would report authority changes that
+    /// never happened.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn a_foreign_schema_version_is_refused_rather_than_converted() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("specs.db");
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE resources (zone TEXT); PRAGMA user_version = 1;")
+                .unwrap();
+        }
+        let Err(error) = SpecStore::open(&path) else {
+            panic!("an older store is refused, not reopened");
+        };
+        assert!(
+            matches!(
+                error,
+                SpecStoreError::Schema(crate::schema::SchemaError::RefusedSchema { user_version: 1 })
+            ),
+            "got {error:?}"
+        );
     }
 
     /// A stored row whose uid column is not the 16-byte identity the store
@@ -1459,7 +995,7 @@ mod tests {
         let path = dir.path().join("specs.db");
         {
             let store = SpecStore::open(&path).unwrap();
-            store.ensure(row("data", b"spec-v1")).await.unwrap();
+            publish(&store, DesiredMutation::Ensure(row("data", b"spec-v1"))).await;
         }
         let conn = rusqlite::Connection::open(&path).unwrap();
         conn.execute(
@@ -1489,43 +1025,23 @@ mod tests {
         assert!(matches!(error, SpecStoreError::CorruptRow { .. }));
     }
 
-    /// Durability boundary (AE1): ensure returns only after the commit. The
-    /// second store call observes the committed generation, proving the
-    /// first call's write was durable before its Ok.
+    /// Durability boundary (AE1): the commit returns only after the desired
+    /// rows are committed. The second call observes the committed generation,
+    /// proving the first call's write was durable before its Ok.
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    async fn ensure_returns_after_commit() {
+    async fn commit_returns_after_the_desired_rows_are_durable() {
         let dir = TempDir::new().unwrap();
         let store = open_in(&dir);
-        let first = store.ensure(row("data", b"spec-v1")).await.unwrap().row().clone();
+        let first = committed_row(publish(&store, DesiredMutation::Ensure(row("data", b"spec-v1"))).await);
         assert_eq!(first.generation, 1);
-        // A subsequent write in a *separate* transaction observes the commit.
-        let second = store
-            .ensure(row("data", b"spec-v2"))
-            .await
-            .unwrap()
-            .row()
-            .clone();
-        assert_eq!(second.generation, 2, "changed spec advances exactly once per ensure");
+        // A subsequent transaction observes the commit.
+        let second =
+            committed_row(publish(&store, DesiredMutation::Ensure(row("data", b"spec-v2"))).await);
+        assert_eq!(second.generation, 2, "changed spec advances exactly once per mutation");
         let read = store.get(first.key.clone()).await.unwrap();
         assert_eq!(read.generation, 2);
         assert_eq!(read.spec, b"spec-v2");
-    }
-
-    /// Idempotent Ensure (R7): equal spec keeps generation; changed spec
-    /// advances exactly one generation per call.
-    #[tokio::test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    async fn idempotent_ensure_generation() {
-        let dir = TempDir::new().unwrap();
-        let store = open_in(&dir);
-        let created = store.ensure(row("data", b"spec-v1")).await.unwrap();
-        let unchanged = store.ensure(row("data", b"spec-v1")).await.unwrap();
-        assert!(matches!(unchanged, EnsureOutcome::Unchanged(_)));
-        assert_eq!(unchanged.row().generation, created.row().generation);
-        let updated = store.ensure(row("data", b"spec-v2")).await.unwrap();
-        assert!(matches!(updated, EnsureOutcome::Updated(_)));
-        assert_eq!(updated.row().generation, created.row().generation + 1);
     }
 
     /// Deleting mark survives a simulated crash: the connection is dropped
@@ -1537,8 +1053,12 @@ mod tests {
         let path = dir.path().join("specs.db");
         {
             let store = SpecStore::open(&path).unwrap();
-            store.ensure(row("data", b"spec-v1")).await.unwrap();
-            store.mark_deleting(ResourceKey::new("host", "Volume", "data")).await.unwrap();
+            publish(&store, DesiredMutation::Ensure(row("data", b"spec-v1"))).await;
+            publish(
+                &store,
+                DesiredMutation::MarkDeleting(ResourceKey::new("host", "Volume", "data")),
+            )
+            .await;
             // Simulated crash: writer thread and connection torn down with no
             // graceful checkpoint (abandon the handle mid-flight).
             std::mem::forget(store);
@@ -1548,7 +1068,7 @@ mod tests {
         assert!(got.deleting, "deleting mark must survive crash");
     }
 
-    /// Ensure against a deleting row is rejected with a typed error; the
+    /// An ensure against a deleting row is rejected with a typed error; the
     /// deleting mark stays terminal until removal (R10).
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -1556,127 +1076,86 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = open_in(&dir);
         let key = ResourceKey::new("host", "Volume", "data");
-        store.ensure(row("data", b"spec-v1")).await.unwrap();
-        store.mark_deleting(key.clone()).await.unwrap();
-        let err = store.ensure(row("data", b"spec-v2")).await.unwrap_err();
-        assert!(matches!(err, SpecStoreError::ResourceDeleting { .. }), "got {err:?}");
-        // After cleanup removes the row, ensure recreates it fresh.
-        store.remove_after_cleanup(key.clone()).await.unwrap();
-        assert!(matches!(
-            store.ensure(row("data", b"spec-v2")).await.unwrap(),
-            EnsureOutcome::Created(_)
-        ));
+        publish(&store, DesiredMutation::Ensure(row("data", b"spec-v1"))).await;
+        publish(&store, DesiredMutation::MarkDeleting(key.clone())).await;
+        // The deleting mark is terminal, so the candidate is refused while it
+        // is staged: nothing is reserved and no Zone sequence is consumed for
+        // a mutation that could never commit.
+        let error = store
+            .stage_mutation(DesiredMutation::Ensure(row("data", b"spec-v2")))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, SpecStoreError::ResourceDeleting { .. }), "got {error:?}");
+        // After cleanup removes the row, an ensure recreates it fresh.
+        publish(&store, DesiredMutation::Remove(key)).await;
+        let created =
+            committed_row(publish(&store, DesiredMutation::Ensure(row("data", b"spec-v2"))).await);
+        assert_eq!(created.generation, 1, "a removed row is created fresh, never updated");
     }
 
-    /// Status-shaped writes have no API surface: nothing in this module's
-    /// public API accepts or persists a status payload (R6, AE6). Compile-level
-    /// assertion by exhaustiveness of the surface itself; repeated store
-    /// calls produce no audit records beyond the mutations themselves.
+    /// One Zone has at most one outstanding publication transaction, so two
+    /// writer handles on one database serialize by refusing the second
+    /// candidate by name rather than by racing the first one's fence.
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    async fn no_status_write_surface() {
-        let dir = TempDir::new().unwrap();
-        let store = open_in(&dir);
-        store.ensure(row("data", b"spec-v1")).await.unwrap();
-        // The only mutations are ensure/mark_deleting/remove_after_cleanup.
-        // If status churn had a path, it would appear as audit records; it
-        // cannot, because no request variant carries a status payload.
-        let history = store.history(100).await.unwrap();
-        assert!(history.iter().all(|rec| {
-            matches!(
-                rec.operation.as_str(),
-                "ensure.create" | "ensure.update" | "ensure.metadata" | "deletion.mark"
-                    | "deletion.removed"
-            )
-        }));
-    }
-
-    /// Concurrent writers serialize without SQLITE_BUSY surfacing: two
-    /// independent store handles on the same file hammer ensure on different
-    /// keys; `busy_timeout` + IMMEDIATE transactions absorb contention.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    async fn concurrent_writers_serialize() {
+    async fn a_second_writer_queues_behind_the_outstanding_transaction() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("specs.db");
-        let a = SpecStore::open(&path).unwrap();
-        let b = SpecStore::open(&path).unwrap();
-        let a = std::sync::Arc::new(a);
-        let b = std::sync::Arc::new(b);
-        let stores = [a.clone(), b];
+        let a = Arc::new(SpecStore::open(&path).unwrap());
+        let b = Arc::new(SpecStore::open(&path).unwrap());
         let mut handles = Vec::new();
-        for (store, name) in stores.into_iter().zip(["a", "b"]) {
-            for i in 0..25u32 {
-                let store = store.clone();
-                let spec = format!("spec-{i}").into_bytes();
-                let mut r = row(&format!("{name}-{i}"), &spec);
+        for (store, name) in [(Arc::clone(&a), "a"), (Arc::clone(&b), "b")] {
+            for i in 0..10u32 {
+                let store = Arc::clone(&store);
+                let mut r = row(&format!("{name}-{i}"), b"spec");
                 r.provenance = ResourceProvenance::Nix;
                 handles.push(tokio::spawn(async move {
-                    store.ensure(r).await.expect("ensure must not surface SQLITE_BUSY");
+                    // A refused candidate leaves the Zone fenced, so the
+                    // retry after the outstanding transaction settles is the
+                    // whole production behavior.
+                    for _ in 0..2_000 {
+                        match store.stage_mutation(DesiredMutation::Ensure(r.clone())).await {
+                            Ok(staged) => {
+                                publish_after_stage(&store, staged).await;
+                                return;
+                            }
+                            Err(SpecStoreError::ZoneTransactionOutstanding { .. }) => {
+                                tokio::time::sleep(Duration::from_millis(1)).await;
+                            }
+                            Err(error) => panic!("a staged mutation must not fail: {error:?}"),
+                        }
+                    }
+                    panic!("every mutation commits exactly once");
                 }));
             }
         }
         for handle in handles {
             handle.await.unwrap();
         }
-        let rows = store_list_all(&a).await;
-        assert_eq!(rows.len(), 50);
-        // Every row committed exactly once at generation 1.
-        assert!(rows.iter().all(|r| r.generation == 1));
-        // Audit recorded one create per mutation, from either writer.
+        let rows = a.list(SpecSelector::default()).await.unwrap();
+        assert_eq!(rows.len(), 20, "two writer handles, no lost or doubled row");
+        assert!(rows.iter().all(|row| row.generation == 1));
         let history = a.history(1000).await.unwrap();
-        assert_eq!(history.iter().filter(|rec| rec.operation == "ensure.create").count(), 50);
+        assert_eq!(history.iter().filter(|rec| rec.operation == "authority.ensure").count(), 20);
     }
 
-    async fn store_list_all(store: &SpecStore) -> Vec<StoredDesiredResource> {
-        store.list(SpecSelector::default()).await.unwrap()
-    }
-
-    /// A metadata-only ensure is not a silent no-op (issue: the display
-    /// status and owned-child annotations read the authored metadata): the
-    /// incoming metadata/owner binding are written without advancing the
-    /// committed generation, and a byte-identical ensure still returns
-    /// `Unchanged`.
-    #[tokio::test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    async fn metadata_only_ensure_writes_columns_without_a_generation() {
-        let dir = TempDir::new().unwrap();
-        let store = open_in(&dir);
-        let key = ResourceKey::new("host", "Volume", "data");
-        let created = store.ensure(row("data", b"spec-v1")).await.unwrap().row().clone();
-        assert_eq!(created.generation, 1);
-
-        // Same spec, new authored metadata: written at the same generation.
-        let mut with_metadata = row("data", b"spec-v1");
-        with_metadata.metadata = b"authored-2".to_vec();
-        let updated = store.ensure(with_metadata.clone()).await.unwrap();
-        assert!(
-            matches!(updated, EnsureOutcome::Updated(_)),
-            "a metadata-only ensure is a change, not Unchanged"
-        );
-        assert_eq!(
-            updated.row().generation,
-            created.generation,
-            "the metadata-only change does not advance the generation"
-        );
-        assert_eq!(updated.row().metadata, b"authored-2");
-        let read = store.get(key.clone()).await.unwrap();
-        assert_eq!(read.metadata, b"authored-2", "the incoming metadata is durable");
-        assert_eq!(read.spec, b"spec-v1", "the spec bytes are untouched");
-
-        // Byte-identical ensure: unchanged (no spurious write).
-        let unchanged = store.ensure(with_metadata).await.unwrap();
-        assert!(matches!(unchanged, EnsureOutcome::Unchanged(_)));
-
-        // Same spec, new owner binding: also a change, same generation.
-        let mut with_owner = row("data", b"spec-v1");
-        with_owner.metadata = b"authored-2".to_vec();
-        with_owner.owner_uid = Some(uid_for("owner"));
-        let owned = store.ensure(with_owner).await.unwrap();
-        assert!(matches!(owned, EnsureOutcome::Updated(_)));
-        assert_eq!(owned.row().generation, created.generation);
-        assert_eq!(owned.row().owner_uid, Some(uid_for("owner")));
-        assert_eq!(store.get(key).await.unwrap().owner_uid, Some(uid_for("owner")));
+    async fn publish_after_stage(store: &SpecStore, staged: StagedMutation) {
+        store.record_prepared(staged.transaction, "prepared-1").await.expect("prepare");
+        let outcome = store.commit_mutation(staged.transaction).await.expect("commit");
+        if let CommitOutcome::Committed(committed) | CommitOutcome::AlreadyCommitted(committed) =
+            &outcome
+        {
+            store
+                .acknowledge(AcceptedPublication {
+                    transaction: committed.transaction,
+                    zone: committed.zone.clone(),
+                    incarnation: committed.incarnation.clone(),
+                    sequence: committed.sequence,
+                    candidate: committed.candidate.clone(),
+                })
+                .await
+                .expect("acknowledge");
+        }
     }
 
     /// File posture (0600 store / WAL / SHM, 0700 dir) asserted after writes.
@@ -1687,7 +1166,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("private").join("specs.db");
         let store = SpecStore::open(&path).unwrap();
-        store.ensure(row("data", b"spec-v1")).await.unwrap();
+        publish(&store, DesiredMutation::Ensure(row("data", b"spec-v1"))).await;
         let mode = |p: PathBuf| async move {
             tokio::fs::metadata(&p)
                 .await
@@ -1711,7 +1190,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("zones").join("dev").join("spec-store.sqlite3");
         let store = SpecStore::open(&path).expect("open");
-        store.ensure(row("data", b"spec-v1")).await.unwrap();
+        publish(&store, DesiredMutation::Ensure(row("data", b"spec-v1"))).await;
         let side = |suffix: &str| path.with_file_name(format!("spec-store.sqlite3{suffix}"));
         let chmod = |p: PathBuf, mode: u32| async move {
             let file = tokio::fs::File::open(&p).await.unwrap_or_else(|error| panic!("{p:?}: {error}"));
@@ -1742,8 +1221,8 @@ mod tests {
         let store = open_in(&dir);
         let mut child = row("child", b"s");
         child.owner_uid = Some(uid_for("data"));
-        store.ensure(row("data", b"s")).await.unwrap();
-        store.ensure(child).await.unwrap();
+        publish(&store, DesiredMutation::Ensure(row("data", b"s"))).await;
+        publish(&store, DesiredMutation::Ensure(child)).await;
         let all = store.list(SpecSelector::default()).await.unwrap();
         assert_eq!(all.len(), 2);
         let by_owner = store
@@ -1780,9 +1259,12 @@ mod tests {
         // Flood the queue while the writer is stalled.
         let handles: Vec<_> = (0..3)
             .map(|i| {
-                let store = std::sync::Arc::clone(&store);
+                let store = Arc::clone(&store);
                 tokio::spawn(async move {
-                    store.ensure(row(&format!("data-{i}"), b"spec")).await
+                    store
+                        .zone_sequence("host")
+                        .await
+                        .map(|sequence| i as u64 ^ sequence.get())
                 })
             })
             .collect();
@@ -1791,7 +1273,7 @@ mod tests {
         drop(blocker);
         let mut outcomes = Vec::with_capacity(handles.len());
         for handle in handles {
-            outcomes.push(handle.await.expect("ensure task"));
+            outcomes.push(handle.await.expect("request task"));
         }
         assert!(
             outcomes.iter().any(|outcome| matches!(outcome, Err(SpecStoreError::Busy))),
@@ -1805,8 +1287,7 @@ mod tests {
         );
         // The writer survived: round-trips still work after the backlog
         // drains.
-        let outcome = store.ensure(row("data", b"spec-v1")).await.unwrap();
-        assert!(matches!(outcome, EnsureOutcome::Created(_)));
+        assert_eq!(store.zone_sequence("host").await.unwrap().get(), 0);
     }
 
     /// Failure taxonomy (U4): a killed writer is terminal. Dropping the
@@ -1821,7 +1302,7 @@ mod tests {
         // Kill the writer: dropping the sender closes the channel (the
         // writer drains pending requests, checkpoints, and exits).
         drop(store.sender.take());
-        let err = store.ensure(row("data", b"spec-v1")).await.unwrap_err();
+        let err = store.zone_sequence("host").await.unwrap_err();
         assert!(
             matches!(err, SpecStoreError::WriterGone),
             "a dead writer is terminal WriterGone, got {err:?}"

@@ -27,7 +27,7 @@ use d2b_resource_runtime::spec_store::{
     ResourceKey, ResourceProvenance, SpecSelector, SpecStore, SpecStoreError, StoredDesiredResource,
 };
 use d2b_resource_runtime::{
-    AcceptedPublication, DesiredRow, StoreFormat, TransactionId, TransactionRecovery,
+    AcceptedPublication, DesiredRow, TransactionId, TransactionRecovery,
 };
 use tempfile::TempDir;
 
@@ -68,7 +68,7 @@ fn rowed(zone: &str, name: &str, spec: &[u8]) -> StoredDesiredResource {
 }
 
 fn open(dir: &TempDir) -> SpecStore {
-    SpecStore::open_authority_journal(dir.path().join("authority.db")).expect("open journal store")
+    SpecStore::open(dir.path().join("authority.db")).expect("open store")
 }
 
 fn database(path: &Path) -> PathBuf {
@@ -286,7 +286,7 @@ async fn desired_row_and_outbox_commit_atomically_under_injected_write_failures(
     for (table, operation) in [("resources", "UPDATE"), ("audit_log", "INSERT"), ("publication_outbox", "INSERT")] {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("authority.db");
-        let store = SpecStore::open_authority_journal(&path).unwrap();
+        let store = SpecStore::open(&path).unwrap();
         publish(&store, DesiredMutation::Ensure(row("data", b"spec-v1"))).await;
         let before = store.desired_row(key("data")).await.unwrap();
 
@@ -354,7 +354,7 @@ async fn staged_prepared_and_committed_transactions_recover_after_restart_withou
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("authority.db");
     let (staged_id, prepared_id, committed_id) = {
-        let store = SpecStore::open_authority_journal(&path).unwrap();
+        let store = SpecStore::open(&path).unwrap();
 
         // Failure boundary 1: staged, no fence, no desired row.
         let staged = store
@@ -387,7 +387,7 @@ async fn staged_prepared_and_committed_transactions_recover_after_restart_withou
         (staged_id, prepared_id, committed_id)
     };
 
-    let store = SpecStore::open_authority_journal(&path).unwrap();
+    let store = SpecStore::open(&path).unwrap();
     let incarnation = store.store_incarnation().await.unwrap();
 
     // Boundary 1: the staged candidate may exist and the desired rows are
@@ -616,7 +616,7 @@ async fn a_second_mutation_queues_behind_the_outstanding_transaction() {
 async fn an_exhausted_counter_fails_explicitly_instead_of_wrapping() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("authority.db");
-    let store = SpecStore::open_authority_journal(&path).unwrap();
+    let store = SpecStore::open(&path).unwrap();
     publish(&store, DesiredMutation::Ensure(row("data", b"spec-v1"))).await;
     let ceiling = i64::MAX;
 
@@ -635,23 +635,23 @@ async fn an_exhausted_counter_fails_explicitly_instead_of_wrapping() {
     assert_eq!(store.zone_sequence(ZONE).await.unwrap().get(), ceiling as u64);
 
     // With the Zone sequence usable again, the row's own revision is what
-    // refuses the commit.
+    // refuses the mutation - and it refuses it while the candidate is staged,
+    // because that is where the revision it would commit at is decided.
     {
         let conn = rusqlite::Connection::open(database(&path)).unwrap();
         conn.execute("UPDATE zone_desired_sequence SET sequence = 1", []).unwrap();
     }
-    let staged = store
-        .stage_mutation(DesiredMutation::Ensure(row("data", b"spec-v2")))
-        .await
-        .unwrap();
-    store.record_prepared(staged.transaction, "prepared-2").await.unwrap();
-    let exhausted_row = store.commit_mutation(staged.transaction).await;
+    let exhausted_row = store.stage_mutation(DesiredMutation::Ensure(row("data", b"spec-v2"))).await;
     assert!(
         matches!(exhausted_row, Err(SpecStoreError::RowRevisionExhausted { .. })),
-        "an exhausted row revision refuses the commit"
+        "an exhausted row revision refuses the mutation"
+    );
+    assert!(
+        !store.zone_recovery(ZONE).await.unwrap().has_outstanding(),
+        "a refused candidate reserves nothing, so the Zone is not left fenced"
     );
 
-    // Proved absent: the refused commit wrote nothing.
+    // Proved absent: the refused mutation wrote nothing.
     let row = store.desired_row(key("data")).await.unwrap();
     assert_eq!(row.row.spec, b"spec-v1");
     assert_eq!(revision_of(&row), ceiling as u64);
@@ -675,26 +675,29 @@ async fn an_exhausted_counter_fails_explicitly_instead_of_wrapping() {
 // Format, freshness, and the store-generation fence
 // ---------------------------------------------------------------------------
 
-/// The clean break: an existing production-format store is refused rather
-/// than converted, and the journal format never accepts a direct desired-row
-/// mutation that could commit without an outbox entry.
+/// The clean break: a store written by an earlier release is refused rather
+/// than converted, and the journal protocol is the only write path a
+/// committed store has at all.
 #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn an_existing_production_store_is_refused_rather_than_converted() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("store.db");
     {
-        let production = SpecStore::open(&path).unwrap();
-        assert_eq!(production.format(), StoreFormat::DesiredRows);
-        production
-            .ensure(StoredDesiredResource {
-                deleting: false,
-                ..row("data", b"spec-v1")
-            })
-            .await
-            .unwrap();
+        // The shape an earlier release left behind: desired rows with no
+        // revision column and no publication journal.
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE resources (\
+                 zone TEXT NOT NULL, type TEXT NOT NULL, name TEXT NOT NULL, uid BLOB NOT NULL,\
+                 generation INTEGER NOT NULL, owner_uid BLOB, provenance TEXT NOT NULL,\
+                 deleting INTEGER NOT NULL DEFAULT 0, spec BLOB NOT NULL, metadata BLOB NOT NULL,\
+                 created_at INTEGER NOT NULL, PRIMARY KEY (zone, type, name));\
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
     }
-    let refused = SpecStore::open_authority_journal(&path).map(|_| ());
+    let refused = SpecStore::open(&path).map(|_| ());
     assert!(
         matches!(
             refused,
@@ -703,42 +706,6 @@ async fn an_existing_production_store_is_refused_rather_than_converted() {
             ))
         ),
         "an old store is refused, not migrated: {refused:?}"
-    );
-
-    // The production store still works: refusing to convert is not refusing
-    // to serve.
-    let production = SpecStore::open(&path).unwrap();
-    assert_eq!(production.get(key("data")).await.unwrap().spec, b"spec-v1");
-
-    // The journal format refuses the direct desired-row mutations.
-    let journal_dir = TempDir::new().unwrap();
-    let journal = open(&journal_dir);
-    assert_eq!(journal.format(), StoreFormat::AuthorityJournal);
-    let bypass = journal
-        .ensure(StoredDesiredResource {
-            deleting: false,
-            ..row("data", b"spec-v1")
-        })
-        .await;
-    assert!(
-        matches!(bypass, Err(SpecStoreError::WrongStoreFormat { required: StoreFormat::DesiredRows, .. })),
-        "an authority mutation cannot be written outside the journal protocol"
-    );
-    let deleting_bypass = journal.mark_deleting(key("data")).await;
-    assert!(matches!(deleting_bypass, Err(SpecStoreError::WrongStoreFormat { .. })));
-    let removal_bypass = journal.remove_after_cleanup(key("data")).await;
-    assert!(matches!(removal_bypass, Err(SpecStoreError::WrongStoreFormat { .. })));
-
-    // And the production store refuses the journal protocol.
-    let production = SpecStore::open(&path).unwrap();
-    let journalled = production
-        .stage_mutation(DesiredMutation::Ensure(row("data", b"spec-v1")))
-        .await;
-    assert!(
-        matches!(
-            journalled,
-            Err(SpecStoreError::WrongStoreFormat { required: StoreFormat::AuthorityJournal, .. })
-        )
     );
 }
 
@@ -751,7 +718,7 @@ async fn an_existing_production_store_is_refused_rather_than_converted() {
 async fn no_store_transaction_is_open_across_the_broker_wait() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("authority.db");
-    let store = SpecStore::open_authority_journal(&path).unwrap();
+    let store = SpecStore::open(&path).unwrap();
 
     let staged = store
         .stage_mutation(DesiredMutation::Ensure(row("data", b"spec-v1")))
@@ -817,13 +784,13 @@ async fn the_store_incarnation_is_minted_once_per_database() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("authority.db");
     let first = {
-        let store = SpecStore::open_authority_journal(&path).unwrap();
+        let store = SpecStore::open(&path).unwrap();
         let incarnation = store.store_incarnation().await.unwrap();
         assert!(incarnation.as_str().starts_with("store-"));
         drop(store);
         incarnation
     };
-    let reopened = SpecStore::open_authority_journal(&path).unwrap();
+    let reopened = SpecStore::open(&path).unwrap();
     assert_eq!(reopened.store_incarnation().await.unwrap(), first);
 
     let other_dir = TempDir::new().unwrap();

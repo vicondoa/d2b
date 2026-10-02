@@ -189,16 +189,6 @@ _SURFACES = {
         "package": "tests/unit/nix",
         "raw_cases": True,
     },
-    "privileges-json-drift": {
-        "cases": [],
-        "files": [
-            "docs/reference/policy/broker-operations.json",
-        ],
-        "modules": [
-            "nixos-modules/privileges-json.nix",
-        ],
-        "raw_cases": True,
-    },
     # The isolated new-graph policy surface (U33). Its only staged inputs are
     # the test-owned projection and the test-owned surface; no production
     # option module and no generated artifact participate, so the new graph's

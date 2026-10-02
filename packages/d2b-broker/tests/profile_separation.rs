@@ -1,22 +1,16 @@
 use d2b_broker::runtime::{BrokerMode, parse_command};
 
 #[path = "common/mod.rs"]
-#[cfg(not(feature = "layer1-bootstrap"))]
 mod common;
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 use std::os::fd::AsRawFd;
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 use common::{D2BD_UID, TestBroker};
-#[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_broker::protocol::{connect_seqpacket, recv_json_frame, send_json_frame};
-#[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_contracts_broker::broker_wire::{
     AuditJoinContext, BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse,
     CanonicalAuditDigest, EnvelopeInvokeRequest, HelloRequest,
 };
-#[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_contracts_resource::v3::ResourceUid;
 
 fn parse(args: &[&str]) -> BrokerMode {
@@ -93,7 +87,6 @@ fn requests_cannot_select_a_profile() {
 }
 
 #[test]
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn host_and_guest_instances_keep_separate_runtime_bindings() {
     let host = TestBroker::spawn_profile("host-instance-", "host-instance", "host", D2BD_UID);
     let guest = TestBroker::spawn_profile("guest-instance-", "guest-instance", "guest", D2BD_UID);
@@ -172,7 +165,6 @@ fn host_and_guest_instances_keep_separate_runtime_bindings() {
 }
 
 #[test]
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn host_executor_consumes_lifecycle_lease_once_through_the_cell_kernels() {
     // U11 retired the typed lease arm with its row: the host executor's
     // lease now rides the generic consume-cell kernel through the

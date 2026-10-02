@@ -22,7 +22,6 @@ d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 ractor.workspace = true
 rusqlite.workspace = true
-rusqlite_migration.workspace = true
 thiserror = "2"
 # v3 resource-runtime rewrite (U3): deterministic resource uids (R8) hash
 # the stable `(zone, type, name)` identity so owned-child graphs and

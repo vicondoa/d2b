@@ -234,6 +234,9 @@ async fn manager_fixture() -> ManagerFixture {
     let args = d2b_resource_runtime::ResourceManagerArgs {
         zone: TEST_ZONE.to_owned(),
         store,
+        // No broker in this fixture: the recording publisher fences and
+        // accepts what the manager publishes.
+        authority: d2b_resource_runtime::test_support::RecordingPublisher::new(),
         providers: {
             let mut providers = d2b_resource_runtime::provider::ProviderDirectory::new();
             providers

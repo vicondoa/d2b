@@ -22381,11 +22381,10 @@ mod public_status_tests {
     /// Write a self-hashed v3 zone-native bundle; the zone-resource-bundle
     /// hash the loader verifies for `schemaVersion >= 2`.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn write_v3_native_bundle(bundle_path: &Path, privileges_path: &Path, generator: &str) {
+    fn write_v3_native_bundle(bundle_path: &Path, generator: &str) {
         let mut bundle = json!({
             "bundleVersion": 1,
             "schemaVersion": "v3",
-            "privilegesPath": privileges_path.display().to_string(),
             "zones": [],
             "artifactHashes": {},
             "generation": {
@@ -22458,7 +22457,6 @@ mod public_status_tests {
         let bundle_path = root.join("bundle.json");
         let processes_path = root.join("processes.json");
         let host_path = root.join("host.json");
-        let privileges_path = root.join("privileges.json");
         let closures_dir = root.join("closures");
         fs::create_dir_all(&closures_dir).expect("closures dir");
         let vm_a_state_dir = vm_a_state_dir
@@ -22599,15 +22597,6 @@ mod public_status_tests {
             &host_path,
         )
         .expect("copy host fixture");
-        fs::write(
-            &privileges_path,
-            serde_json::to_vec_pretty(&json!({
-                "schemaVersion": "v2",
-                "operations": []
-            }))
-            .expect("privileges json"),
-        )
-        .expect("write privileges");
 
         let vm_a_toplevel = root.join("store/vm-a-system");
         let vm_b_toplevel = root.join("store/vm-b-system");
@@ -22660,12 +22649,11 @@ mod public_status_tests {
         )
         .expect("write vm-b closure");
 
-        write_v3_native_bundle(&bundle_path, &privileges_path, "public-status-test");
+        write_v3_native_bundle(&bundle_path, "public-status-test");
 
         for path in [
             &bundle_path,
             &host_path,
-            &privileges_path,
             &processes_path,
             &public_manifest_path,
             &closures_dir.join("vm-a.json"),
@@ -25444,18 +25432,17 @@ mod broker_dispatch_tests {
     /// bundles) with a self-consistent `bundleHash`, mirroring the
     /// `sha256(bundle with artifactHashes:null, no bundleHash)` contract
     /// `verify_bundle_hash` enforces for `schemaVersion >= 2`.
-    fn write_v3_native_bundle(bundle_path: &Path, privileges_path: &Path, generator: &str) {
-        write_v3_native_bundle_with_optional_host(bundle_path, privileges_path, None, generator)
+    fn write_v3_native_bundle(bundle_path: &Path, generator: &str) {
+        write_v3_native_bundle_with_optional_host(bundle_path, None, generator)
     }
 
     /// Like [`write_v3_native_bundle`] but declaring a hashed `host.json`
-    /// contract artifact beside the privileges artifact, for tests that exercise
+    /// contract artifact, for tests that exercise
     /// the declared host contract (the NetworkManager unmanaged drop-in)
     /// through the bundle resolver.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_v3_native_bundle_with_optional_host(
         bundle_path: &Path,
-        privileges_path: &Path,
         host_path: Option<&Path>,
         generator: &str,
     ) {
@@ -25477,7 +25464,6 @@ mod broker_dispatch_tests {
         let mut bundle = json!({
             "bundleVersion": 1,
             "schemaVersion": "v3",
-            "privilegesPath": privileges_path.display().to_string(),
             "zones": [],
             "artifactHashes": artifact_hashes,
             "generation": {
@@ -25551,7 +25537,6 @@ mod broker_dispatch_tests {
         let manifest_path = bundle_dir.join("vms.json");
         let processes_path = bundle_dir.join("processes.json");
         let bundle_path = bundle_dir.join("bundle.json");
-        let privileges_path = bundle_dir.join("privileges.json");
         let api_socket = root.join("vm-a.api.sock");
 
         write_json_file(
@@ -25644,16 +25629,11 @@ mod broker_dispatch_tests {
                 ]
             }),
         );
-        write_json_file(
-            &privileges_path,
-            &json!({ "schemaVersion": "v2", "operations": [] }),
-        );
-        write_v3_native_bundle(&bundle_path, &privileges_path, "tests");
+        write_v3_native_bundle(&bundle_path, "tests");
         for path in [
             &manifest_path,
             &processes_path,
             &bundle_path,
-            &privileges_path,
         ] {
             fs::set_permissions(path, fs::Permissions::from_mode(0o640))
                 .expect("chmod minimal bundle fixture");
@@ -25711,7 +25691,6 @@ mod broker_dispatch_tests {
         let manifest_path = bundle_dir.join("vms.json");
         let processes_path = bundle_dir.join("processes.json");
         let bundle_path = bundle_dir.join("bundle.json");
-        let privileges_path = bundle_dir.join("privileges.json");
 
         write_json_file(
             &manifest_path,
@@ -25776,16 +25755,11 @@ mod broker_dispatch_tests {
             }),
         );
         write_json_file(&processes_path, &processes);
-        write_json_file(
-            &privileges_path,
-            &json!({ "schemaVersion": "v2", "operations": [] }),
-        );
-        write_v3_native_bundle(&bundle_path, &privileges_path, "tests");
+        write_v3_native_bundle(&bundle_path, "tests");
         for path in [
             &manifest_path,
             &processes_path,
             &bundle_path,
-            &privileges_path,
         ] {
             fs::set_permissions(path, fs::Permissions::from_mode(0o640))
                 .expect("chmod custom bundle fixture");
@@ -29289,13 +29263,6 @@ mod broker_dispatch_tests {
                 d2b_core::bundle::Bundle {
                     bundle_version: 1,
                     schema_version: "v3".to_owned(),
-                    privileges_path: state
-                        .config
-                        .artifacts
-                        .bundle_path
-                        .with_file_name("privileges.json")
-                        .display()
-                        .to_string(),
                     storage_path: None,
                     realm_workloads_launcher_v2_path: None,
                     generation: d2b_core::bundle::BundleGeneration {
@@ -29445,22 +29412,16 @@ mod broker_dispatch_tests {
         let root = test_daemon_state_dir(test_name);
         let bundle_dir = root.join("bundle-fixture");
         let bundle_path = bundle_dir.join("bundle.json");
-        let privileges_path = bundle_dir.join("privileges.json");
         let host_path = bundle_dir.join("host.json");
         if let Some(host_contract) = host_contract {
             write_json_file(&host_path, host_contract);
         }
-        write_json_file(
-            &privileges_path,
-            &json!({ "schemaVersion": "v2", "operations": [] }),
-        );
         write_v3_native_bundle_with_optional_host(
             &bundle_path,
-            &privileges_path,
             host_contract.map(|_| host_path.as_path()),
             "tests",
         );
-        let mut fixture_paths = vec![&bundle_path, &privileges_path];
+        let mut fixture_paths = vec![&bundle_path];
         if host_contract.is_some() {
             fixture_paths.push(&host_path);
         }
@@ -30770,7 +30731,6 @@ mod broker_dispatch_tests {
         let manifest_path = bundle_dir.join("vms.json");
         let processes_path = bundle_dir.join("processes.json");
         let bundle_path = bundle_dir.join("bundle.json");
-        let privileges_path = bundle_dir.join("privileges.json");
         // Copy the shared host fixture to a test-owned file at 0o640 so
         // secure_open_and_read's mode check passes for the BundleVerifyPolicy.
         let host_path = bundle_dir.join("host.json");
@@ -30868,16 +30828,11 @@ mod broker_dispatch_tests {
                 ]
             }),
         );
-        write_json_file(
-            &privileges_path,
-            &json!({ "schemaVersion": "v2", "operations": [] }),
-        );
-        write_v3_native_bundle(&bundle_path, &privileges_path, "tests");
+        write_v3_native_bundle(&bundle_path, "tests");
         for path in [
             &manifest_path,
             &processes_path,
             &bundle_path,
-            &privileges_path,
         ] {
             fs::set_permissions(path, fs::Permissions::from_mode(0o640))
                 .expect("chmod obs bundle fixture");

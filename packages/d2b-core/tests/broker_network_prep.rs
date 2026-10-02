@@ -24,7 +24,6 @@ fn trusted_bundle_resolves_network_operation_rows_without_wire_paths() {
             bundle_version: 1,
             schema_version: "v3".to_owned(),
 
-            privileges_path: "privileges.json".to_owned(),
             storage_path: None,
 
             realm_workloads_launcher_v2_path: None,
@@ -90,7 +89,6 @@ fn resolver_with_bundle_hash(bundle_hash: Option<String>) -> BundleResolver {
             bundle_version: 1,
             schema_version: "v3".to_owned(),
 
-            privileges_path: "privileges.json".to_owned(),
             storage_path: None,
 
             realm_workloads_launcher_v2_path: None,

@@ -160,7 +160,7 @@ pub fn assertions(control: &mut GuestControl) -> LegacyResult<()> {
         &endpoint_realized(),
         CHILD_REALIZED,
         &rows,
-        &[("d2bd.service", BINDING_NAME)],
+        &[("d2bd.service", ""), ("d2b-broker.service", "")],
     )?;
     control.diag_wait(
         "serving-socket",

@@ -28,59 +28,37 @@
 //! a new handler arm stays `pub(crate)` until something outside this
 //! crate imports it, and the integration tests are the only thing that
 //! reopens an arm.
-//!
-//! `cfg_attr(feature = "layer1-bootstrap", allow(dead_code))` on an arm
-//! declaration below marks a surface the legacy bootstrap dispatcher never
-//! reaches: that dispatcher answers every live op with a typed
-//! `Unimplemented` instead of routing it here, so under that feature the
-//! whole arm is unreachable. The gate is scoped to the feature and to the one
-//! module; the default (real-wire) build keeps full dead-code checking on
-//! every item inside it.
 
 // Cgroup v2 delegation + pidfd handoff ops.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))] // unreachable under the legacy bootstrap dispatcher, see the module note
 pub(crate) mod cgroup;
 // Public arm: `tests/pidfd_handoff_scm_rights.rs` and
 // `tests/pidfd_real_spawner.rs` import it from outside the crate.
 pub mod pidfd;
 // Bridge / TAP / NM / IPv6 / IfName / state-dir ops.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))] // unreachable under the legacy bootstrap dispatcher, see the module note
 pub(crate) mod hosts;
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))] // unreachable under the legacy bootstrap dispatcher, see the module note
 pub(crate) mod nm;
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))] // unreachable under the legacy bootstrap dispatcher, see the module note
 pub(crate) mod route;
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))] // unreachable under the legacy bootstrap dispatcher, see the module note
 pub(crate) mod state_dir;
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))] // unreachable under the legacy bootstrap dispatcher, see the module note
 pub(crate) mod storage_contract;
 // Trusted identity + derived directories of one `w1-swtpm` launch.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))] // unreachable under the legacy bootstrap dispatcher, see the module note
 pub(crate) mod swtpm_identity;
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))] // unreachable under the legacy bootstrap dispatcher, see the module note
 pub(crate) mod sysctl;
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))] // unreachable under the legacy bootstrap dispatcher, see the module note
 pub(crate) mod tap;
 // Nftables + USBIP firewall skeleton ops.
 // Public arm: `tests/bridge_lifecycle.rs` imports it from outside the
 // crate.
 pub mod network;
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))] // unreachable under the legacy bootstrap dispatcher, see the module note
 pub(crate) mod nft;
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))] // unreachable under the legacy bootstrap dispatcher, see the module note
 pub(crate) mod usbip_firewall;
 // Per-busid USBIP exclusivity lock helper.
 pub(crate) mod usbip_lock;
 // Broker-side USBIP host inspection and physical-policy enforcement.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))] // unreachable under the legacy bootstrap dispatcher, see the module note
 pub(crate) mod usbip_host;
 
 // Kernel-module + device-fd handoff ops.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))] // unreachable under the legacy bootstrap dispatcher, see the module note
 pub(crate) mod device;
 // Trusted scope of one Device-owned worker launch (row -> Device -> Guest
 // pin, per-Guest socket directory, Device row uid derivation).
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))] // unreachable under the legacy bootstrap dispatcher, see the module note
 pub(crate) mod device_worker;
 pub(crate) mod consumer_principal;
 // Exact-endpoint ACL wire (U18, R23): the private resolution of a socket name
@@ -91,15 +69,12 @@ pub(crate) mod consumer_principal;
 pub mod endpoint_access;
 // Broker-owned host-path bounds for the ACL grants that reach outside the
 // broker runtime tree (served view roots, host session runtime directory).
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))] // unreachable under the legacy bootstrap dispatcher, see the module note
 pub(crate) mod launch_acl_bounds;
 // GPU-specific role, allowlist, and restart identity preflight.
 pub(crate) mod gpu;
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))] // unreachable under the legacy bootstrap dispatcher, see the module note
 pub(crate) mod modprobe;
 // Security-key hidraw open op: resolves stable selector → opens
 // hidraw fd for `d2bd`'s long-lived CTAPHID relay session.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))] // unreachable under the legacy bootstrap dispatcher, see the module note
 pub(crate) mod security_key;
 // Broker SpawnRunner preflight + spawn helper, and the effective Volume
 // presentation (U11, KTD11) it resolves.
@@ -109,7 +84,6 @@ pub mod spawn_runner;
 // Broker reconcile executors (nft / sysctl / hosts / ip route) with
 // FakeReconcileExecutor for unit tests + the SystemReconcileExecutor
 // for production shellouts.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))] // unreachable under the legacy bootstrap dispatcher, see the module note
 pub(crate) mod exec_reconcile;
 
 // Audit-helper introduced by s2; reusable by s1/s3/s4 going forward.
@@ -117,7 +91,6 @@ pub(crate) mod exec_reconcile;
 // `tests/security_key_broker.rs` import it from outside the crate.
 pub mod audit_op;
 // Broker-owned source-to-target NixOS generation handoff journal and replay.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))] // unreachable under the legacy bootstrap dispatcher, see the module note
 pub(crate) mod host_generation_handoff;
 // The one-shot ownership-bounded reset runner (U32, KTD15): the offline
 // `d2b host reset` path that removes the previous release's host state
@@ -140,7 +113,6 @@ pub(crate) mod store_sync_audit;
 // projection of the host-confidential `StoreSync` terminal audit record
 // (ADR 0027). Written to the alloy-readable export directory; never
 // carries caller identity, retained generations, or any host path.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))] // unreachable under the legacy bootstrap dispatcher, see the module note
 pub(crate) mod store_sync_export;
 
 // Single-inode ownership/mode posture for broker-created store-view
@@ -156,12 +128,10 @@ pub mod store_view_farm;
 
 // Per-VM writable store overlay disk-image provisioning. Runs before
 // SpawnRunner when `DiskInit` plan-ops are present.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))] // unreachable under the legacy bootstrap dispatcher, see the module note
 pub(crate) mod disk_init;
 
 // qemu-media physical USB enrollment/open by opaque ref. Raw device identity
 // stays in root-only registry/runtime artifacts outside the Nix store.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))] // unreachable under the legacy bootstrap dispatcher, see the module note
 pub(crate) mod media;
 use std::fmt;
 use std::path::PathBuf;

@@ -4,7 +4,7 @@
   "features": [
     "fake-backends"
   ],
-  "lockSha256": "6fdc29ffff500a0ece75c42406cb35be7764c11d6bba33a7b67af6b8a6ba3ce7",
+  "lockSha256": "e91399a438dadf50e5bbf58e66fdfcf377c5d3613faecfc6c706c0a9eafa3602",
   "policyPackageCount": 80,
   "policyPackageIds": [
     "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -89,7 +89,7 @@
     "zmij@1.0.23#registry+https://github.com/rust-lang/crates.io-index"
   ],
   "productionPackageCount": 71,
-  "resolveNodeCount": 413,
+  "resolveNodeCount": 412,
   "roots": [
     "d2b-broker"
   ],

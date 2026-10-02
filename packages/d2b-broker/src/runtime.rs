@@ -7,24 +7,20 @@
 
 use std::env;
 use std::fs;
-#[cfg(not(feature = "layer1-bootstrap"))]
 use std::future::Future;
 use std::io;
-#[cfg(not(feature = "layer1-bootstrap"))]
 use std::pin::Pin;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
-#[cfg(not(feature = "layer1-bootstrap"))]
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 // Test-only sync fakes keep `std::sync::Mutex` per the plan's test-helper
 // assumption (sanctioned inline allows at flip time); production state is
-// `tokio::sync` (plan U8). The fakes exist only on the non-bootstrap wire.
-#[cfg(all(test, not(feature = "layer1-bootstrap")))]
+// `tokio::sync` (plan U8). The fakes exist only on the broker's test build.
+#[cfg(test)]
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-#[cfg(not(feature = "layer1-bootstrap"))]
 use std::{
     collections::{BTreeSet, HashMap},
     sync::{LazyLock, OnceLock},
@@ -34,54 +30,29 @@ use std::{
 // The accepted descriptor is wrapped where it is accepted (the reactor's
 // listener), so the bootstrap build - which serves the same listener - has no
 // direct user of the raw-fd helper.
-#[cfg(not(feature = "layer1-bootstrap"))]
 use crate::sys::owned_fd_from_raw;
 use crate::sys::{path_safe, peer_credentials};
-#[cfg(not(feature = "layer1-bootstrap"))]
 use hmac::{Hmac, Mac};
-#[cfg(not(feature = "layer1-bootstrap"))]
 use nix::libc;
-#[cfg(not(feature = "layer1-bootstrap"))]
 use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
-#[cfg(not(feature = "layer1-bootstrap"))]
 use nix::unistd::dup;
 use serde_json::Value;
-#[cfg(not(feature = "layer1-bootstrap"))]
 use sha2::{Digest, Sha256};
-#[cfg(not(feature = "layer1-bootstrap"))]
 use tracing::info;
 use tracing::warn;
 
 use crate::audit::{AuditLog, AuditWriteClass};
-#[cfg(not(feature = "layer1-bootstrap"))]
 use crate::audit::{BROKER_VERSION, new_event_id, result_for_decision};
-#[cfg(not(feature = "layer1-bootstrap"))]
 use crate::ops::audit_op::{
     BrokerAuditRecordClass, OpAuditRecord, OperationFields, UsbAuditDeviceIdentity,
     UsbSerialCorrelation, UsbSerialCorrelationKeyRotationAudit,
 };
-#[cfg(not(feature = "layer1-bootstrap"))]
 use crate::protocol::{AsyncSeqpacket, AsyncSeqpacketListener, bind_seqpacket};
-#[cfg(feature = "layer1-bootstrap")]
-use crate::protocol::{
-    AsyncSeqpacket, AsyncSeqpacketListener, bind_seqpacket, connect_seqpacket, recv_json_frame,
-    send_json_frame,
-};
-
-#[cfg(feature = "layer1-bootstrap")]
-use crate::bootstrap::wire::{BrokerRequest, BrokerResponse, CallerRole, RequestEnvelope};
-#[cfg(feature = "layer1-bootstrap")]
-use d2b_contracts_broker::broker_wire::BrokerProfile;
-#[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_contracts_broker::broker_wire::{
     AuditJoinContext, BrokerCallerRole as CallerRole, BrokerErrorResponse, BrokerProfile,
     BrokerRequest, BrokerRequestEnvelope as RequestEnvelope, BrokerResponse, CanonicalAuditDigest,
     RunnerRole,
 };
-#[cfg(feature = "layer1-bootstrap")]
-type AuditJoinContext = ();
-
-#[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_core::bundle_resolver::BundleResolver;
 
 /// Default socket path.  When `LISTEN_FDS=1` (socket activation) this path
@@ -95,7 +66,6 @@ const DEFAULT_SOCKET_PATH: &str = "/run/d2b/priv.sock";
 /// (`socket_runtime_dir`), so this is the fallback fence for
 /// [`crate::live_handlers::grant_serving_worker_launch_acls`] when the
 /// configured path has no parent.
-#[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
 const DEFAULT_BROKER_RUNTIME_DIR: &str = "/run/d2b";
 const DEFAULT_GUEST_SOCKET_PATH: &str = "/run/d2b/guest-broker.sock";
 /// Audit records land under
@@ -124,13 +94,10 @@ const IPC_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
 /// family's method-timeout precedent (5s). A probe that exceeds the bound
 /// is treated exactly like a failed probe (host not ready / effect not
 /// applied), never a stall of the dispatch worker.
-#[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
 const PW_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_IPC_RATE_LIMIT_MAX_BUCKETS: usize = 4096;
-#[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
 const MAX_MODULE_NAME_LEN: usize = 64;
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 /// One wire variant every current broker must answer with the
 /// stale-wire-version refusal, never with a pre-dispatch
 /// wire-malformed-json drop (KTD10).
@@ -154,7 +121,6 @@ pub struct RetiredWireVariant {
     pub retired_in_version: u32,
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 /// The production retirement table.
 ///
 /// U10 retired the process-family wire variants here, each entry added in
@@ -270,7 +236,6 @@ pub const RETIRED_WIRE_VARIANTS: &[RetiredWireVariant] = &[
     },
 ];
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 /// The variant one frame's `request.kind` names, when the envelope's request
 /// is shaped the way the closed wire spells it.
 ///
@@ -290,7 +255,6 @@ fn request_kind(envelope: &Value) -> Option<&str> {
 /// The retired-variant entry one wire variant name matches, when the table
 /// carries it.
 ///
-#[cfg(not(feature = "layer1-bootstrap"))]
 /// The gate's lookup, public so a mixed-version fixture can exercise it the
 /// way the production accept loop does; the variant name is the frame's
 /// `request.kind` ([`request_kind`]).
@@ -301,7 +265,6 @@ pub fn retired_wire_variant<'a>(
     retired.iter().find(|entry| entry.variant == kind)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 /// Whether one decoded-as-JSON request names a retired wire variant of
 /// `retired`, for the gate in [`handle_connection`].
 fn retired_variant_for<'a>(
@@ -311,7 +274,6 @@ fn retired_variant_for<'a>(
     retired_wire_variant(request_kind(envelope)?, retired)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 /// The typed refusal one retired-variant call is answered with.
 ///
 /// The `kind` is the envelope's stale-wire-version code (`STALE_WIRE_VERSION`,
@@ -361,7 +323,6 @@ pub struct EffectFrameRefusal {
 }
 
 impl EffectFrameRefusal {
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     fn new(code: &'static str, variant: Option<&str>) -> Self {
         Self {
             code,
@@ -387,11 +348,9 @@ impl std::error::Error for EffectFrameRefusal {}
 /// authority projection: the accepted invocation ids, the recorded initiating
 /// subjects of root invocations, and one terminal outcome per idempotency key
 /// are broker-owned, not per-connection.
-#[cfg(not(feature = "layer1-bootstrap"))]
 static ADMITTED_EFFECT_LEDGER: OnceLock<crate::envelope::EffectLedger> = OnceLock::new();
 
 /// The broker process's admitted-effect ledger, created on first use.
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub fn admitted_effect_ledger() -> &'static crate::envelope::EffectLedger {
     ADMITTED_EFFECT_LEDGER.get_or_init(crate::envelope::EffectLedger::new)
 }
@@ -421,7 +380,6 @@ pub fn admitted_effect_ledger() -> &'static crate::envelope::EffectLedger {
 /// Returns the [`EffectFrameRefusal`] naming the closed code the frame was
 /// refused under. No return value carries a caller-supplied string, so a
 /// refusal cannot echo a payload back.
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub fn admit_effect_frame(
     envelope: &Value,
 ) -> Result<d2b_contracts_broker::broker_wire::AdmittedEffectInvocation, EffectFrameRefusal> {
@@ -483,7 +441,6 @@ pub fn admit_effect_frame(
 ///
 /// Returns the `BrokerResponse` the caller is owed when the screen refuses the
 /// frame under one of [`crate::envelope::ADMITTED_EFFECT_REFUSALS`].
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn screen_admitted_effect_frame(
     frame: &Value,
 ) -> Result<d2b_contracts_broker::broker_wire::AdmittedEffectInvocation, BrokerResponse> {
@@ -512,7 +469,6 @@ fn screen_admitted_effect_frame(
 ///    accepted, unfenced authority for admits no effect.
 /// 6. The boundary itself, over the process-lifetime ledger, the serve-time
 ///    implementation table, and the broker's own private execution values.
-#[cfg(not(feature = "layer1-bootstrap"))]
 async fn answer_admitted_effect_frame(
     connection: AsyncSeqpacket,
     server: &Server,
@@ -716,7 +672,6 @@ pub struct ServerConfig {
     /// `--forward-socket`, else `D2B_BROKER_FORWARD_SOCKET`.
     pub forward_socket_path: Option<PathBuf>,
     pub test_mode: bool,
-    #[cfg(not(feature = "layer1-bootstrap"))]
     /// The wire variants this broker refuses with the stale-wire-version
     /// code, gated on the Hello-negotiated wire version (KTD10).
     ///
@@ -751,23 +706,6 @@ pub enum BrokerMode {
     Host(ServerConfig),
     Guest(ServerConfig),
     Reset(ResetOptions),
-    #[cfg(feature = "layer1-bootstrap")]
-    ProbeHello {
-        socket_path: PathBuf,
-        test_uid: Option<u32>,
-    },
-    #[cfg(feature = "layer1-bootstrap")]
-    ProbeStub {
-        socket_path: PathBuf,
-        test_uid: Option<u32>,
-        operation: String,
-    },
-    #[cfg(feature = "layer1-bootstrap")]
-    ProbeExportAudit {
-        socket_path: PathBuf,
-        test_uid: Option<u32>,
-        caller_role: CallerRole,
-    },
 }
 
 /// A process-entry failure surfaced by [`parse_command`] or [`run`]:
@@ -810,45 +748,31 @@ pub(crate) enum BrokerError {
         operation: &'static str,
         target_wave: &'static str,
     },
-    /// USBIP live device routing ops (`UsbipBind`, `UsbipUnbind`,
-    /// `UsbipProxyReconcile`) were out of scope for the initial broker
-    /// and were wired into the non-bootstrap real-wire dispatch later,
-    /// so this variant is only constructed by the bootstrap dispatch arm.
-    #[cfg_attr(not(feature = "layer1-bootstrap"), allow(dead_code))]
-    UnknownOperation {
-        operation: &'static str,
-    },
     AuditRequiresAdmin,
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     HostShutdownRestricted,
     /// Broker started without a loadable bundle at
     /// `ServerConfig.bundle_path`; bundle-dependent real-wire ops cannot
     /// resolve their `BundleOpId` refs and refuse fail-closed.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     BundleResolverUnavailable,
     /// Bundle artifact at `ServerConfig.bundle_path` failed the
     /// tamper-resistance check (symlink / owner / mode / hash). Every
     /// incoming operation surfaces this error until the broker is
     /// restarted with a clean bundle.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     BundleTampered {
         path: String,
         reason: String,
     },
     /// The daemon-supplied `bundle_*_intent_ref` did not resolve
     /// against the bundle's intent table.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     BundleIntentMissing {
         kind: &'static str,
         intent_id: String,
     },
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     UsbipDeviceNotAllowed {
         busid: String,
         vendor: u16,
         product: u16,
     },
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     UsbipPolicyMismatch {
         busid: String,
         reason: &'static str,
@@ -857,7 +781,6 @@ pub(crate) enum BrokerError {
     /// different VM. The daemon maps this to `LockConflict` via the
     /// wire kind `"Broker.UsbipLockConflict"` without string-matching on
     /// a redacted `LiveHandler` message.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     UsbipLockConflict {
         busid: String,
         owner: String,
@@ -865,24 +788,18 @@ pub(crate) enum BrokerError {
     /// `UsbipBind` refused because the physical USB device is absent in
     /// sysfs. The daemon maps this to `RuntimeAbsent` via the wire kind
     /// `"Broker.UsbipDeviceAbsent"`.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     UsbipDeviceAbsent {
         busid: String,
     },
     /// The live executor reported an error (nft/route/sysctl shellout
     /// failed, pidfd open failed, spawn preflight failed, etc).
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     LiveHandler(String),
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     CoexistenceRefused {
         manager: d2b_core::host_w3::FirewallManager,
         rationale: String,
     },
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     NftScriptParseFailed(String),
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     CarveoutOrderingViolation(String),
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     NftablesDriftDetected {
         expected: String,
         observed: String,
@@ -915,7 +832,6 @@ pub(crate) enum BrokerError {
     /// [`BrokerError::audit`] is a deliberate no-op so the generic dispatch
     /// error path never writes a SECOND record for the same attempt
     /// (exactly one terminal StoreSync record per attempt).
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     StoreSyncFailed {
         error_stage: &'static str,
         message: String,
@@ -924,12 +840,10 @@ pub(crate) enum BrokerError {
     PeerCredentialRefused {
         operation: &'static str,
     },
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     ProfileOperationRefused {
         profile: BrokerProfile,
         operation: &'static str,
     },
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     RequestValidation {
         operation: &'static str,
         reason: &'static str,
@@ -943,7 +857,6 @@ pub(crate) enum BrokerError {
     /// the carrier screen or inside admission. Nothing the payload carried
     /// reaches the wire: the kind IS the refusal, and the detail is a fixed
     /// phrase per code.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     AdmittedEffectRefused {
         code: &'static str,
     },
@@ -972,35 +885,6 @@ where
     let subcommand = args
         .next()
         .ok_or_else(|| RunError::Usage("usage: d2b-broker [host|guest] [options]".to_owned()))?;
-    #[cfg(feature = "layer1-bootstrap")]
-    match subcommand.as_str() {
-        "probe-hello" => {
-            let (socket_path, test_uid) = parse_probe_flags(args.collect())?;
-            return Ok(BrokerMode::ProbeHello {
-                socket_path,
-                test_uid,
-            });
-        }
-        "probe-stub" => {
-            let rest: Vec<String> = args.collect();
-            let (socket_path, test_uid, operation) = parse_stub_flags(&rest)?;
-            return Ok(BrokerMode::ProbeStub {
-                socket_path,
-                test_uid,
-                operation,
-            });
-        }
-        "probe-export-audit" => {
-            let rest: Vec<String> = args.collect();
-            let (socket_path, test_uid, caller_role) = parse_export_flags(&rest)?;
-            return Ok(BrokerMode::ProbeExportAudit {
-                socket_path,
-                test_uid,
-                caller_role,
-            });
-        }
-        _ => {}
-    }
     if subcommand == "reset" {
         return parse_reset_options(args.collect());
     }
@@ -1190,7 +1074,6 @@ where
                 .map(PathBuf::from)
         }),
         test_mode,
-#[cfg(not(feature = "layer1-bootstrap"))]
         // No variant is retired on this tree yet; the gate ships with the
         // production table empty and a fixture table exercising it.
         retired_wire_variants: RETIRED_WIRE_VARIANTS,
@@ -1283,38 +1166,6 @@ pub fn run(command: BrokerMode) -> Result<(), RunError> {
         // variant no arm covers.
         BrokerMode::Reset(options) => run_reset(&options),
         BrokerMode::Host(config) | BrokerMode::Guest(config) => run_server(config),
-        #[cfg(feature = "layer1-bootstrap")]
-        BrokerMode::ProbeHello {
-            socket_path,
-            test_uid,
-        } => run_probe(
-            socket_path,
-            test_peer_uid_frame(crate::bootstrap::wire::probe_hello(), test_uid),
-            true,
-        ),
-        #[cfg(feature = "layer1-bootstrap")]
-        BrokerMode::ProbeStub {
-            socket_path,
-            test_uid,
-            operation,
-        } => {
-            let request = crate::bootstrap::wire::probe_stub(&operation)
-                .ok_or_else(|| RunError::Usage(format!("unknown stub operation: {operation}")))?;
-            run_probe(socket_path, test_peer_uid_frame(request, test_uid), true)
-        }
-        #[cfg(feature = "layer1-bootstrap")]
-        BrokerMode::ProbeExportAudit {
-            socket_path,
-            test_uid,
-            caller_role,
-        } => run_probe(
-            socket_path,
-            test_peer_uid_frame(
-                crate::bootstrap::wire::probe_export_audit(caller_role),
-                test_uid,
-            ),
-            false,
-        ),
     }
 }
 
@@ -1636,7 +1487,6 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
     // same root the daemon's ProviderSet state lives under) and recover the
     // durable one-time records; a malformed durable file fails the broker
     // closed at startup rather than replaying grants silently.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     crate::state_cells::init_broker_store(&config.state_dir)
         .map_err(|error| RunError::Protocol(format!("state cell store: {error}")))?;
 
@@ -1663,7 +1513,6 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
     // records (root record per invocation, correlation record per nested
     // leg) into the same daily audit log the typed arms use, so the
     // envelope's KTD6 correlation surface is durable in production.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     install_live_operation_envelope(&config, &audit_log)?;
 
     // Install the admitted-effect wiring beside it, from the same serve-time
@@ -1671,7 +1520,6 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
     // resolves an admitted invocation against the declared implementation
     // table and the broker's private execution values installed here, and
     // never against a table it builds for one call.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     install_live_admitted_effects(&audit_log)?;
 
     // Create the broker's own endpoint directory beside the rest of the
@@ -1682,7 +1530,6 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
     // reachable, and inert. It is created HERE rather than lazily inside the
     // grant path so a request never invents the tree its own effect runs
     // against, and the refusal for an absent directory stays.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     // Provision the endpoint directory the exact-endpoint ACL surface resolves
     // sockets inside, so that surface is reachable rather than inert.
     //
@@ -1725,7 +1572,6 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
     });
 
     // Start background SIGCHLD reap loop on the shared reactor.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     start_sigchld_reaper(&runtime, Arc::clone(&audit_log));
 
     let nested_dispatches = DispatchPool::new(NESTED_DISPATCH_WORKERS);
@@ -1744,7 +1590,6 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
 }
 
 /// Outcome of a bundle load attempt at broker startup.
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[derive(Debug)]
 pub(crate) enum BundleSlot {
     /// Bundle loaded and verified successfully.
@@ -1757,7 +1602,6 @@ pub(crate) enum BundleSlot {
     Tampered { path: String, reason: String },
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) fn try_load_resolver(bundle_path: &Path) -> BundleSlot {
     try_load_resolver_with_policy(
         bundle_path,
@@ -1771,7 +1615,6 @@ pub(crate) fn try_load_resolver(bundle_path: &Path) -> BundleSlot {
 /// per-test temp bundle loads. The kernel needs a resolver only for the
 /// USBIP backend device-bind extension; every other invocation stays
 /// bundle-free.
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) fn load_kernel_resolver(bundle_path: &Path) -> BundleSlot {
     #[cfg(test)]
     {
@@ -1796,7 +1639,6 @@ pub(crate) fn load_kernel_resolver(bundle_path: &Path) -> BundleSlot {
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) fn try_load_resolver_with_policy(
     bundle_path: &Path,
     policy: &d2b_core::bundle_resolver::BundleVerifyPolicy,
@@ -1850,7 +1692,6 @@ pub(crate) fn try_load_resolver_with_policy(
 /// `BrokerResponse::Error { kind: "Broker.BundleResolverUnavailable" }` when
 /// the bundle is absent or unreadable. Exposed for the
 /// `bundle_tampered_broker` integration test.
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub fn probe_bundle_load_response(bundle_path: &std::path::Path) -> BrokerResponse {
     match try_load_resolver(bundle_path) {
         BundleSlot::Loaded(_) => ack_response("BundleLoad"),
@@ -1865,7 +1706,6 @@ pub fn probe_bundle_load_response(bundle_path: &std::path::Path) -> BrokerRespon
 /// Tests that need to control uid/gid/mode requirements (e.g. to avoid requiring
 /// root in CI) pass `current_user_policy()` so the uid check passes and only the
 /// intended tamper reason fires.
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub fn probe_bundle_load_response_with_policy(
     bundle_path: &std::path::Path,
     policy: &d2b_core::bundle_resolver::BundleVerifyPolicy,
@@ -2031,7 +1871,6 @@ async fn handle_connection(connection: AsyncSeqpacket, server: &Server) -> io::R
             .await;
         return Ok(());
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     let (envelope, request_fds, test_peer_uid) = {
         // The frame decodes as JSON first so the retired-wire gate can
         // recognize a variant the current enum no longer carries: a retired
@@ -2106,24 +1945,6 @@ async fn handle_connection(connection: AsyncSeqpacket, server: &Server) -> io::R
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         (envelope, request_fds, test_peer_uid)
     };
-    #[cfg(feature = "layer1-bootstrap")]
-    let (envelope, request_fds, test_peer_uid) = {
-        // The bootstrap wire decodes as JSON first for the same reason the
-        // production wire does: the harness-only peer-uid override is a frame
-        // member beside the envelope and is unwrapped before the strict
-        // decode.
-        let Some(mut envelope_value) = connection.recv_json_frame::<Value>().await? else {
-            return Ok(());
-        };
-        let test_peer_uid = if server.config.test_mode {
-            take_test_peer_uid(&mut envelope_value)?
-        } else {
-            None
-        };
-        let envelope: RequestEnvelope = serde_json::from_value(envelope_value)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        (envelope, Vec::new(), test_peer_uid)
-    };
     // The kernel `SO_PEERCRED` uid is the authenticated caller. The frame's
     // harness-only override stands in for it only in a `--test-mode` broker,
     // and only for the gates: `peer_uid` stays the audited frame source.
@@ -2137,16 +1958,11 @@ async fn handle_connection(connection: AsyncSeqpacket, server: &Server) -> io::R
     // this leg's reply inside an outer forwarded call, so routing it onto
     // the outer pool can park it behind the very call that waits on it
     // (NESTED_DISPATCH_WORKERS).
-    #[cfg(not(feature = "layer1-bootstrap"))]
     let nested_leg = matches!(
         &envelope.request,
         d2b_contracts_broker::broker_wire::BrokerRequest::EnvelopeInvoke(req)
             if req.chain_root_invocation_id.is_some()
     );
-    // The layer1-bootstrap protocol carries no envelope chain (its request
-    // type is BootstrapCall), so no leg can present a chain root.
-    #[cfg(feature = "layer1-bootstrap")]
-    let nested_leg = false;
     let pool = if nested_leg {
         Arc::clone(&server.nested_dispatches)
     } else {
@@ -2160,24 +1976,9 @@ async fn handle_connection(connection: AsyncSeqpacket, server: &Server) -> io::R
             // with `block_on` on the broker's dispatch runtime - the same
             // bridge the envelope arms used before the chain went async - so
             // the pool's bounded-worker semantics are unchanged.
-            #[cfg(not(feature = "layer1-bootstrap"))]
             {
                 #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
                 envelope_call_runtime().block_on(answer_request(
-                    envelope,
-                    request_fds,
-                    peer_uid,
-                    effective_uid,
-                    peer_gid,
-                    peer_pid,
-                    &config,
-                    &audit_log,
-                    &ipc_rate_limiter,
-                ))
-            }
-            #[cfg(feature = "layer1-bootstrap")]
-            {
-                bootstrap_dispatch_runtime().block_on(answer_request(
                     envelope,
                     request_fds,
                     peer_uid,
@@ -2197,7 +1998,6 @@ async fn handle_connection(connection: AsyncSeqpacket, server: &Server) -> io::R
 
     match outcome {
         RequestOutcome::Reply(response, fds) => {
-            #[cfg(not(feature = "layer1-bootstrap"))]
             {
                 if fds.is_empty() {
                     connection.send_json_frame(&response).await
@@ -2213,11 +2013,6 @@ async fn handle_connection(connection: AsyncSeqpacket, server: &Server) -> io::R
                     drop(fds);
                     Ok(())
                 }
-            }
-            #[cfg(feature = "layer1-bootstrap")]
-            {
-                let _ = fds; // layer1-bootstrap dispatch never returns fds
-                connection.send_json_frame(&response).await
             }
         }
         RequestOutcome::Silence => Ok(()),
@@ -2256,10 +2051,6 @@ async fn answer_request(
     audit_log: &AuditLog,
     ipc_rate_limiter: &tokio::sync::Mutex<IpcRateLimiter>,
 ) -> io::Result<RequestOutcome> {
-    #[cfg(feature = "layer1-bootstrap")]
-    let _ = &request_fds; // the bootstrap wire carries no request descriptors
-    #[cfg(feature = "layer1-bootstrap")]
-    let _ = peer_uid; // the profile-refusal audit that names the kernel uid is production-wire only
     // Load the bundle resolver from the configured `bundle_path` for every
     // request. The broker is socket-activated but can remain alive across
     // `nixos-rebuild switch`; treating the bundle as process-lifetime
@@ -2267,7 +2058,6 @@ async fn answer_request(
     // after a switch. Per-request reload keeps broker authority aligned with
     // the current on-disk bundle while preserving fail-closed tamper
     // handling.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     let (resolver, bundle_tamper) = match try_load_resolver(&config.bundle_path) {
         BundleSlot::Loaded(resolver) => (Some(resolver), None),
         BundleSlot::Unavailable => (None, None),
@@ -2276,7 +2066,6 @@ async fn answer_request(
     let request = envelope.request;
     let operation = request.op_name();
     let opaque_target_id = request.opaque_target_id();
-    #[cfg(not(feature = "layer1-bootstrap"))]
     if !config.profile.allows_request(&request) {
         let error = BrokerError::ProfileOperationRefused {
             profile: config.profile,
@@ -2366,10 +2155,7 @@ async fn answer_request(
     }
 
     if let Err(error) = validate_broker_request(&request) {
-        #[cfg(not(feature = "layer1-bootstrap"))]
         let audit_join = envelope.audit_join.clone();
-        #[cfg(feature = "layer1-bootstrap")]
-        let audit_join = None;
         let audit_context = DispatchAuditContext {
             peer_pid,
             peer_role: envelope.caller_role.for_display().to_owned(),
@@ -2378,7 +2164,6 @@ async fn answer_request(
             started_at: Instant::now(),
             audit_join,
         };
-        #[cfg(not(feature = "layer1-bootstrap"))]
         if let Err(audit_error) = error.audit(
             audit_log,
             effective_uid,
@@ -2391,24 +2176,9 @@ async fn answer_request(
         ) {
             tracing::error!(error = ?audit_error, "broker validation error audit failed");
         }
-        #[cfg(feature = "layer1-bootstrap")]
-        if let Err(audit_error) = error.audit(
-            audit_log,
-            effective_uid,
-            peer_gid,
-            &envelope.caller_role,
-            &audit_context,
-            operation,
-            opaque_target_id,
-        ) {
-            tracing::error!(error = ?audit_error, "broker validation error audit failed");
-        }
         return Ok(RequestOutcome::Reply(error.into_response(), Vec::new()));
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     let audit_join = envelope.audit_join.as_ref();
-    #[cfg(feature = "layer1-bootstrap")]
-    let audit_join: Option<&AuditJoinContext> = None;
     let audit_context = DispatchAuditContext::from_request_with_join(
         &request,
         peer_pid,
@@ -2416,7 +2186,6 @@ async fn answer_request(
         audit_join,
     )
     .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("{err:?}")))?;
-    #[cfg(not(feature = "layer1-bootstrap"))]
     let dispatch_outcome = if let Some((path, reason)) = bundle_tamper {
         Err(BrokerError::BundleTampered { path, reason })
     } else {
@@ -2433,22 +2202,10 @@ async fn answer_request(
         )
         .await
     };
-    #[cfg(feature = "layer1-bootstrap")]
-    let dispatch_outcome = dispatch_request(
-        request,
-        effective_uid,
-        peer_gid,
-        envelope.caller_role.clone(),
-        &audit_context,
-        config,
-        audit_log,
-    )
-    .map(DispatchResult::no_fds);
 
     let (response, fds) = match dispatch_outcome {
         Ok(result) => (result.response, result.fds),
         Err(error) => {
-            #[cfg(not(feature = "layer1-bootstrap"))]
             if let Err(audit_error) = error.audit(
                 audit_log,
                 effective_uid,
@@ -2456,18 +2213,6 @@ async fn answer_request(
                 &envelope.caller_role,
                 &audit_context,
                 resolver.as_deref(),
-                operation,
-                opaque_target_id,
-            ) {
-                tracing::error!(error = ?audit_error, "broker terminal error audit failed");
-            }
-            #[cfg(feature = "layer1-bootstrap")]
-            if let Err(audit_error) = error.audit(
-                audit_log,
-                effective_uid,
-                peer_gid,
-                &envelope.caller_role,
-                &audit_context,
                 operation,
                 opaque_target_id,
             ) {
@@ -2506,14 +2251,12 @@ fn write_refusal_audit_bounded(
 
 /// Real-wire dispatch results can carry zero-or-more `OwnedFd`s
 /// alongside the JSON response. Bootstrap dispatch never carries fds.
-#[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
 #[derive(Debug)]
 struct DispatchResult {
     response: BrokerResponse,
     fds: Vec<OwnedFd>,
 }
 
-#[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
 impl DispatchResult {
     fn no_fds(response: BrokerResponse) -> Self {
         Self {
@@ -2656,12 +2399,6 @@ impl IpcRateLimiter {
     }
 }
 
-#[cfg(feature = "layer1-bootstrap")]
-fn validate_broker_request(_request: &BrokerRequest) -> Result<(), BrokerError> {
-    Ok(())
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "network provenance core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn validate_network_authority(scope_id: &str, intent_id: &str) -> Result<(), &'static str> {
     if scope_id.starts_with("env:")
@@ -2681,7 +2418,6 @@ fn validate_network_authority(scope_id: &str, intent_id: &str) -> Result<(), &'s
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "network provenance core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn validate_uid_network_authority(
     scope_id: &str,
@@ -2730,7 +2466,6 @@ fn validate_uid_network_authority(
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "network provenance core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn validate_network_scope_provenance(
     scope_id: &str,
@@ -2751,7 +2486,6 @@ fn validate_network_scope_provenance(
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "network provenance core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn validate_tap_create_provenance(
     bundle_tap_intent_ref: &d2b_contracts::types::BundleOpId,
@@ -2851,7 +2585,6 @@ fn validate_tap_create_provenance(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "network provenance core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn network_provenance(
     zone_uid: d2b_contracts_resource::v3::ResourceUid,
@@ -2869,7 +2602,6 @@ fn network_provenance(
     )
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "network provenance core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn require_installed_network_generation(
     resolver: &BundleResolver,
@@ -2891,7 +2623,6 @@ fn require_installed_network_generation(
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn validate_broker_request(request: &BrokerRequest) -> Result<(), BrokerError> {
     // Shape-only defense in depth after d2bd has accepted and classified
     // the local peer. Do not add role/bundle authorization here: dispatch must
@@ -2982,12 +2713,10 @@ fn validate_broker_request(request: &BrokerRequest) -> Result<(), BrokerError> {
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn validate_usbip_busid_wire(bus_id: &str) -> Result<(), &'static str> {
     d2b_contracts::usbip::validate_bus_id(bus_id).map_err(|_| "invalid-usbip-busid")
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn validate_module_name(module_name: &str) -> Result<(), &'static str> {
     if module_name.is_empty() {
         return Err("empty-module-name");
@@ -3010,17 +2739,14 @@ fn validate_module_name(module_name: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn validate_scope_like_id(value: &str) -> Result<(), &'static str> {
     validate_small_wire_id(value, 128, "invalid-scope-id")
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn validate_bundle_op_id(value: &str) -> Result<(), &'static str> {
     validate_small_wire_id(value, 192, "invalid-bundle-op-id")
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn validate_small_wire_id(
     value: &str,
     max_len: usize,
@@ -3064,11 +2790,6 @@ impl DispatchAuditContext {
         peer_pid: i32,
         caller_role: &CallerRole,
     ) -> Result<Self, BrokerError> {
-        #[cfg(feature = "layer1-bootstrap")]
-        {
-            Self::from_request_with_join(request, peer_pid, caller_role, None)
-        }
-        #[cfg(not(feature = "layer1-bootstrap"))]
         {
             let join = match request.authoritative_audit_join() {
                 Some((zone_id, operation_identity)) => Some(AuditJoinContext {
@@ -3091,11 +2812,9 @@ impl DispatchAuditContext {
         caller_role: &CallerRole,
         audit_join: Option<&AuditJoinContext>,
     ) -> Result<Self, BrokerError> {
-        #[cfg(not(feature = "layer1-bootstrap"))]
         if audit_join.is_none() && Self::request_requires_audit_join(request) {
             return Err(BrokerError::Protocol("audit-join-required".to_owned()));
         }
-        #[cfg(not(feature = "layer1-bootstrap"))]
         if let Some(supplied) = audit_join
             && let Some((zone_id, operation_identity)) = request.authoritative_audit_join()
         {
@@ -3125,14 +2844,12 @@ impl DispatchAuditContext {
         self.started_at.elapsed().as_micros() as u64
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn request_requires_audit_join(request: &BrokerRequest) -> bool {
         request.requires_authoritative_audit_join()
     }
 }
 
 fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
-    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::QemuMediaEnroll(req) = request {
         return Ok(serde_json::json!({
             "vmId": req.vm_id.as_str(),
@@ -3141,20 +2858,17 @@ fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
             "tracingSpanIdPresent": req.tracing_span_id.is_some(),
         }));
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::QemuMediaRefreshRegistry(req) = request {
         return Ok(serde_json::json!({
             "tracingSpanIdPresent": req.tracing_span_id.is_some(),
         }));
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::QemuMediaBoot(req) = request {
         return Ok(serde_json::json!({
             "vmId": req.vm_id.as_str(),
             "tracingSpanIdPresent": req.tracing_span_id.is_some(),
         }));
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::QemuMediaSystemPowerdown(req) | BrokerRequest::QemuMediaQuit(req) =
         request
     {
@@ -3163,7 +2877,6 @@ fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
             "tracingSpanIdPresent": req.tracing_span_id.is_some(),
         }));
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::QemuMediaQueryStatus(req) = request {
         return Ok(serde_json::json!({
             "vmId": req.vm_id.as_str(),
@@ -3171,7 +2884,6 @@ fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
             "tracingSpanIdPresent": req.tracing_span_id.is_some(),
         }));
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::QemuMediaAttach(req) | BrokerRequest::QemuMediaDetach(req) = request {
         return Ok(serde_json::json!({
             "vmId": req.vm_id.as_str(),
@@ -3179,14 +2891,12 @@ fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
             "tracingSpanIdPresent": req.tracing_span_id.is_some(),
         }));
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::UsbipBind(req) = request {
         return Ok(serde_json::json!({
             "bundleUsbipBindIntentRef": req.bundle_usbip_bind_intent_ref.as_str(),
             "tracingSpanIdPresent": req.tracing_span_id.is_some(),
         }));
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::UsbipUnbind(req) = request {
         return Ok(serde_json::json!({
             "bundleUsbipBindIntentRef": req.bundle_usbip_bind_intent_ref.as_str(),
@@ -3194,21 +2904,18 @@ fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
             "tracingSpanIdPresent": req.tracing_span_id.is_some(),
         }));
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::UsbipBindFirewallRule(req) = request {
         return Ok(serde_json::json!({
             "bundleUsbipFirewallIntentRef": req.bundle_usbip_firewall_intent_ref.as_str(),
             "tracingSpanIdPresent": req.tracing_span_id.is_some(),
         }));
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::UsbipProxyReconcile(req) = request {
         return Ok(serde_json::json!({
             "scopeId": req.scope_id.as_str(),
             "tracingSpanIdPresent": req.tracing_span_id.is_some(),
         }));
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::EndpointObserve(req)
     | BrokerRequest::EndpointGrantAccess(req)
     | BrokerRequest::EndpointRevokeAccess(req) = request
@@ -3244,163 +2951,6 @@ fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
     }
 }
 
-#[cfg(feature = "layer1-bootstrap")]
-fn dispatch_request(
-    request: BrokerRequest,
-    caller_uid: u32,
-    caller_gid: u32,
-    caller_role: CallerRole,
-    _audit_context: &DispatchAuditContext,
-    _config: &ServerConfig,
-    audit_log: &AuditLog,
-) -> Result<BrokerResponse, BrokerError> {
-    match request {
-        BrokerRequest::Hello { .. } => {
-            audit_log
-                .write_entry_with_caller_ids(
-                    "Hello",
-                    caller_uid,
-                    caller_gid,
-                    "callable-read-only",
-                    "daemon-handshake",
-                    "ok",
-                )
-                .map_err(|err| BrokerError::Protocol(err.to_string()))?;
-            Ok(hello_ok_response(_config.profile))
-        }
-        BrokerRequest::ExportBrokerAudit { since, filter } => handle_export_broker_audit(
-            since.as_deref(),
-            filter.as_deref(),
-            caller_uid,
-            caller_gid,
-            caller_role,
-            audit_log,
-        ),
-        BrokerRequest::ApplyNftables { .. } => Err(BrokerError::Unimplemented {
-            operation: "ApplyNftables",
-            target_wave: "W3",
-        }),
-        BrokerRequest::ApplyNmUnmanaged { .. } => Err(BrokerError::Unimplemented {
-            operation: "ApplyNmUnmanaged",
-            target_wave: "W3",
-        }),
-        BrokerRequest::ApplyRoute { .. } => Err(BrokerError::Unimplemented {
-            operation: "ApplyRoute",
-            target_wave: "W3",
-        }),
-        BrokerRequest::ApplySysctl { .. } => Err(BrokerError::Unimplemented {
-            operation: "ApplySysctl",
-            target_wave: "W3",
-        }),
-        BrokerRequest::CreateOrReconcileUsersGroups { .. } => Err(BrokerError::Unimplemented {
-            operation: "CreateOrReconcileUsersGroups",
-            target_wave: "W3",
-        }),
-        BrokerRequest::CreatePersistentTap { .. } => Err(BrokerError::Unimplemented {
-            operation: "CreatePersistentTap",
-            target_wave: "W3",
-        }),
-        BrokerRequest::CreateTapFd { .. } => Err(BrokerError::Unimplemented {
-            operation: "CreateTapFd",
-            target_wave: "W3",
-        }),
-        BrokerRequest::DelegateCgroupV2 { .. } => Err(BrokerError::Unimplemented {
-            operation: "DelegateCgroupV2",
-            target_wave: "W3",
-        }),
-        BrokerRequest::InjectSecretById { .. } => Err(BrokerError::Unimplemented {
-            operation: "InjectSecretById",
-            target_wave: "W8",
-        }),
-        BrokerRequest::LaunchMinijailChild { .. } => Err(BrokerError::Unimplemented {
-            operation: "LaunchMinijailChild",
-            target_wave: "W5",
-        }),
-        BrokerRequest::ModprobeIfAllowed { .. } => Err(BrokerError::Unimplemented {
-            operation: "ModprobeIfAllowed",
-            target_wave: "W3",
-        }),
-        BrokerRequest::OpenCgroupDir { .. } => Err(BrokerError::Unimplemented {
-            operation: "OpenCgroupDir",
-            target_wave: "W3",
-        }),
-        BrokerRequest::OpenDevice { .. } => Err(BrokerError::Unimplemented {
-            operation: "OpenDevice",
-            target_wave: "W3",
-        }),
-        BrokerRequest::OpenFuse { .. } => Err(BrokerError::Unimplemented {
-            operation: "OpenFuse",
-            target_wave: "W3",
-        }),
-        BrokerRequest::OpenKvm { .. } => Err(BrokerError::Unimplemented {
-            operation: "OpenKvm",
-            target_wave: "W3",
-        }),
-        BrokerRequest::OpenPidfd { .. } => Err(BrokerError::Unimplemented {
-            operation: "OpenPidfd",
-            target_wave: "W4-fu",
-        }),
-        BrokerRequest::OpenVhostNet { .. } => Err(BrokerError::Unimplemented {
-            operation: "OpenVhostNet",
-            target_wave: "W3",
-        }),
-        BrokerRequest::PrepareRuntimeDir { .. } => Err(BrokerError::Unimplemented {
-            operation: "PrepareRuntimeDir",
-            target_wave: "W3",
-        }),
-        BrokerRequest::PrepareStateDir { .. } => Err(BrokerError::Unimplemented {
-            operation: "PrepareStateDir",
-            target_wave: "W3",
-        }),
-        BrokerRequest::StoreSync { .. } => Err(BrokerError::Unimplemented {
-            operation: "StoreSync",
-            target_wave: "P2",
-        }),
-        BrokerRequest::ReadSecretById { .. } => Err(BrokerError::Unimplemented {
-            operation: "ReadSecretById",
-            target_wave: "W8",
-        }),
-        BrokerRequest::RotateSecretById { .. } => Err(BrokerError::Unimplemented {
-            operation: "RotateSecretById",
-            target_wave: "W8",
-        }),
-        BrokerRequest::SetBridgePortFlags { .. } => Err(BrokerError::Unimplemented {
-            operation: "SetBridgePortFlags",
-            target_wave: "W3",
-        }),
-        BrokerRequest::SpawnRunner { .. } => Err(BrokerError::Unimplemented {
-            operation: "SpawnRunner",
-            target_wave: "W4-fu",
-        }),
-        BrokerRequest::UpdateHostsFile { .. } => Err(BrokerError::Unimplemented {
-            operation: "UpdateHostsFile",
-            target_wave: "W3",
-        }),
-        BrokerRequest::UsbipBind { .. } => Err(BrokerError::UnknownOperation {
-            operation: "UsbipBind",
-        }),
-        BrokerRequest::UsbipBindFirewallRule { .. } => Err(BrokerError::Unimplemented {
-            operation: "UsbipBindFirewallRule",
-            target_wave: "W3",
-        }),
-        BrokerRequest::UsbipExplicitBind { .. } => Err(BrokerError::Unimplemented {
-            operation: "UsbipExplicitBind",
-            target_wave: "W5",
-        }),
-        BrokerRequest::UsbipExplicitFirewallRule { .. } => Err(BrokerError::Unimplemented {
-            operation: "UsbipExplicitFirewallRule",
-            target_wave: "W5",
-        }),
-        BrokerRequest::UsbipProxyReconcile { .. } => Err(BrokerError::UnknownOperation {
-            operation: "UsbipProxyReconcile",
-        }),
-        BrokerRequest::UsbipUnbind { .. } => Err(BrokerError::UnknownOperation {
-            operation: "UsbipUnbind",
-        }),
-    }
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn request_accepts_fd(request: &BrokerRequest) -> bool {
     matches!(request, BrokerRequest::EnvelopeInvoke(_))
 }
@@ -3424,7 +2974,6 @@ fn request_accepts_fd(request: &BrokerRequest) -> bool {
 /// `d2b_provider_volume_virtiofs::WORKER_TEMPLATE`): those are separate,
 /// cross-crate decisions the broker only *reads*, and the broker must never
 /// re-derive them from request fields.
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn intent_is_serving_worker_template(
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
@@ -3460,7 +3009,6 @@ fn intent_is_serving_worker_template(
 /// a fence value checked against the intent. The request only selects the
 /// controller-role contract, which the role fence checks against the trusted
 /// intent.
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 enum LaunchPosture {
@@ -3482,7 +3030,6 @@ enum LaunchPosture {
     ServingWorker,
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 impl LaunchPosture {
     /// Resolve the posture ONCE, from the trusted intent, at the point the
     /// dispatch arm resolves that intent.
@@ -3608,7 +3155,6 @@ impl LaunchPosture {
 /// opened to its own principal with per-runner ACLs
 /// ([`crate::live_handlers::grant_serving_worker_launch_acls`]) instead of
 /// borrowing the daemon's credentials.
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn prepare_runner_launch_identity(
     posture: LaunchPosture,
@@ -3668,7 +3214,6 @@ fn prepare_runner_launch_identity(
 /// broker opens is bounded by it, so it is the broker's own serve-time trusted
 /// tree. No request names it: a request names a socket NAME, and the broker
 /// joins that onto a directory derived from here.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn broker_runtime_root(config: &ServerConfig) -> &Path {
     config
         .socket_path
@@ -3678,7 +3223,6 @@ fn broker_runtime_root(config: &ServerConfig) -> &Path {
 
 
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_request_with_request_fds(
     request: BrokerRequest,
@@ -3711,7 +3255,6 @@ async fn dispatch_request_with_request_fds(
     .await
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(clippy::too_many_arguments)]
 // Production dispatch enters at `dispatch_request_with_request_fds`; only
 // this crate's unit tests need to substitute a backend.
@@ -3742,7 +3285,6 @@ async fn dispatch_request_with_backend<B: DispatchBackend>(
     .await
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
     request: BrokerRequest,
@@ -5658,7 +5200,6 @@ struct AuditBundleMetadata<'a> {
     bundle_hash: &'a str,
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn audit_bundle_metadata(resolver: Option<&BundleResolver>) -> AuditBundleMetadata<'_> {
     match resolver {
         Some(resolver) => AuditBundleMetadata {
@@ -5672,7 +5213,6 @@ fn audit_bundle_metadata(resolver: Option<&BundleResolver>) -> AuditBundleMetada
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn caller_role_authz_result(caller_role: &CallerRole) -> &'static str {
     match caller_role {
         CallerRole::AdminUid { .. } | CallerRole::RootUid { .. } => "admin",
@@ -5682,7 +5222,6 @@ fn caller_role_authz_result(caller_role: &CallerRole) -> &'static str {
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn audit_timestamp_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -5690,7 +5229,6 @@ fn audit_timestamp_ms() -> u128 {
         .as_millis()
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(clippy::too_many_arguments)]
 fn write_decision_op_record_impl(
     audit_log: &AuditLog,
@@ -5767,7 +5305,6 @@ fn write_decision_op_record_impl(
         .map_err(|err| BrokerError::Protocol(err.to_string()))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(clippy::too_many_arguments)]
 fn write_success_op_record_impl(
     audit_log: &AuditLog,
@@ -5801,7 +5338,6 @@ fn write_success_op_record_impl(
     )
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn runner_signal_name(signal: d2b_contracts_broker::broker_wire::RunnerSignal) -> &'static str {
     match signal {
@@ -5811,7 +5347,6 @@ fn runner_signal_name(signal: d2b_contracts_broker::broker_wire::RunnerSignal) -
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn runner_signal_number(signal: d2b_contracts_broker::broker_wire::RunnerSignal) -> i32 {
     match signal {
@@ -5821,11 +5356,9 @@ fn runner_signal_number(signal: d2b_contracts_broker::broker_wire::RunnerSignal)
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 const RUNNER_PIDFD_REGISTRY_CELL: &str = "runner-pidfd-registry";
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn cell_store_error(error: crate::state_cells::CellStoreError) -> BrokerError {
     BrokerError::Protocol(error.to_string())
 }
@@ -5840,11 +5373,9 @@ fn cell_store_error(error: crate::state_cells::CellStoreError) -> BrokerError {
 /// spawn state, so the recorded principal is [`BROKER_PRINCIPAL`]; the
 /// reconciler reads (`contains`/`remove`/`keys`) are principal-agnostic,
 /// matching the map semantics they replace.
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RunnerPidfdCell;
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 impl RunnerPidfdCell {
     pub(crate) fn cell() -> (&'static str, crate::catalog::CellDurability) {
         let row = crate::catalog::BrokerOperationRow::find("DeregisterRunnerPidfd")
@@ -5915,7 +5446,6 @@ impl RunnerPidfdCell {
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) fn runner_pidfds() -> RunnerPidfdCell {
     RunnerPidfdCell
 }
@@ -5927,7 +5457,6 @@ pub(crate) fn runner_pidfds() -> RunnerPidfdCell {
 /// non-blocking `try_lock` (the critical sections are single map
 /// operations, never held across an await). A `Busy` collision is handled
 /// per site exactly like the old poisoned path (error / skip / retry).
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) fn controller_bootstrap_registry() -> &'static tokio::sync::Mutex<HashMap<String, OwnedFd>>
 {
     static REGISTRY: LazyLock<tokio::sync::Mutex<HashMap<String, OwnedFd>>> =
@@ -5935,7 +5464,6 @@ pub(crate) fn controller_bootstrap_registry() -> &'static tokio::sync::Mutex<Has
     &REGISTRY
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[derive(Clone)]
 pub(crate) struct RunnerRegistration {
     #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
@@ -5959,7 +5487,6 @@ pub(crate) struct RunnerRegistration {
     pub(crate) guest_execution: Option<d2b_contracts_broker::broker_wire::GuestExecutionBinding>,
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 impl std::fmt::Debug for RunnerRegistration {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("RunnerRegistration(<redacted>)")
@@ -5970,7 +5497,6 @@ impl std::fmt::Debug for RunnerRegistration {
 ///
 /// `tokio::sync` per plan U8 (see [`controller_bootstrap_registry`] for
 /// the access model): synchronous callers use the non-blocking `try_lock`.
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) fn runner_metadata_registry(
 ) -> &'static tokio::sync::Mutex<HashMap<String, RunnerRegistration>> {
     static REGISTRY: LazyLock<tokio::sync::Mutex<HashMap<String, RunnerRegistration>>> =
@@ -5978,7 +5504,6 @@ pub(crate) fn runner_metadata_registry(
     &REGISTRY
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn register_runner_metadata(
     runner_id: &str,
@@ -6022,7 +5547,6 @@ fn register_runner_metadata(
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn register_runner_metadata_from_open(
     runner_id: &str,
@@ -6071,7 +5595,6 @@ fn register_runner_metadata_from_open(
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) fn runner_registry_key(
     vm_id: &str,
     role_id: &str,
@@ -6092,7 +5615,6 @@ pub(crate) fn runner_registry_key(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn runner_intent_id_for_open_pidfd(vm_id: &str, role_id: &str) -> String {
     let process_role_id = match role_id {
@@ -6102,7 +5624,6 @@ fn runner_intent_id_for_open_pidfd(vm_id: &str, role_id: &str) -> String {
     d2b_core::bundle_resolver::intent_id_legacy_runner(vm_id, process_role_id)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(clippy::too_many_arguments)]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn registration_matches(
@@ -6155,7 +5676,6 @@ fn registration_matches(
         && registration.guest_execution.as_ref() == guest_execution
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn rebind_guest_execution_registration(
     registration: &mut RunnerRegistration,
@@ -6195,7 +5715,6 @@ fn rebind_guest_execution_registration(
     Ok(true)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn remove_runner_metadata(runner_id: &str) {
     // Non-blocking try-lock (plan U8): a Busy collision skips the removal
     // exactly like the old poisoned path; the caller retries or the next
@@ -6205,7 +5724,6 @@ fn remove_runner_metadata(runner_id: &str) {
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 async fn observe_registered_runner(
     request: &d2b_contracts_broker::broker_wire::ObserveRunnerRequest,
@@ -6381,7 +5899,6 @@ let mut metadata_registry = runner_metadata_registry().try_lock().map_err(|_| {
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 async fn discover_runner_candidate(
     request: &d2b_contracts_broker::broker_wire::ObserveRunnerRequest,
@@ -6460,7 +5977,6 @@ async fn discover_runner_candidate(
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 enum RunnerExecutableObservation {
@@ -6470,7 +5986,6 @@ enum RunnerExecutableObservation {
     Vanished,
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 impl RunnerExecutableObservation {
     #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
     fn is_verified(self, broker_owned_provenance: bool) -> bool {
@@ -6490,7 +6005,6 @@ impl RunnerExecutableObservation {
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 async fn observe_runner_executable(
     executable: io::Result<PathBuf>,
@@ -6508,7 +6022,6 @@ async fn observe_runner_executable(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 async fn classify_executable_path(actual: &Path, expected: &Path) -> RunnerExecutableObservation {
     let actual = match tokio::fs::canonicalize(actual).await {
@@ -6569,13 +6082,11 @@ async fn classify_executable_path(actual: &Path, expected: &Path) -> RunnerExecu
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 async fn executable_paths_match(actual: &Path, expected: &Path) -> bool {
     classify_executable_path(actual, expected).await == RunnerExecutableObservation::Matching
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn present_unverified_runner_response(
     request: &d2b_contracts_broker::broker_wire::ObserveRunnerRequest,
@@ -6592,7 +6103,6 @@ fn present_unverified_runner_response(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn reap_registered_runner_after_observation(
     request: &d2b_contracts_broker::broker_wire::ObserveRunnerRequest,
@@ -6613,7 +6123,6 @@ fn reap_registered_runner_after_observation(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn absent_runner_response(
     request: &d2b_contracts_broker::broker_wire::ObserveRunnerRequest,
@@ -6629,7 +6138,6 @@ fn absent_runner_response(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn select_runner_candidate(
     candidates: impl IntoIterator<Item = (i32, u64, bool)>,
@@ -6645,13 +6153,11 @@ fn select_runner_candidate(
     Ok(candidate)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 async fn read_runner_executable(pid: i32) -> io::Result<PathBuf> {
     tokio::fs::read_link(format!("/proc/{pid}/exe")).await
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 // R11 inventory: `read_proc_start_time_ticks` is the shared /proc stat
 // reader of the runner-identity surface. It stays synchronous because the
 // sync reap-test scaffolding (plain `#[test]` fns driving `Command::spawn` /
@@ -6685,7 +6191,6 @@ fn read_proc_start_time_ticks(pid: i32) -> Result<Option<u64>, BrokerError> {
         .map_err(|_| BrokerError::LiveHandler("invalid proc start time".to_owned()))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 async fn proc_cgroup_matches(pid: i32, expected_subtree: &str) -> bool {
     if expected_subtree.is_empty() {
@@ -6713,7 +6218,6 @@ async fn proc_cgroup_matches(pid: i32, expected_subtree: &str) -> bool {
 /// sanctioned shape for sync readers, never a surviving `std::sync::Mutex`
 /// (plan KD1). The critical sections are single deque operations, never
 /// held across an await.
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) fn child_reap_buffer() -> &'static tokio::sync::Mutex<
     std::collections::VecDeque<d2b_contracts_broker::broker_wire::ChildReapedNotification>,
 > {
@@ -6725,19 +6229,16 @@ pub(crate) fn child_reap_buffer() -> &'static tokio::sync::Mutex<
     &BUFFER
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 const CHILD_REAP_BUFFER_CAP: usize = 256;
 
 /// Wake-up for waiters on the reap buffer (the reap tests' event-driven
 /// waits): `notify_waiters` is called after every push, so a waiter parks
 /// on the event instead of polling on a fixed cadence. A no-op when no
 /// waiter is registered.
-#[cfg(not(feature = "layer1-bootstrap"))]
 static CHILD_REAP_NOTIFY: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
 /// Push one notification to the ring buffer under a held guard.
 /// If the buffer is full, drops the oldest entry and logs a warning.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn push_child_reap_notification_locked(
     buf: &mut std::collections::VecDeque<
         d2b_contracts_broker::broker_wire::ChildReapedNotification,
@@ -6761,7 +6262,6 @@ fn push_child_reap_notification_locked(
 /// Push one notification from an async context (the SIGCHLD reap task).
 /// Waits for the lock, so the primary reaper's notification is never
 /// dropped under a concurrent reader.
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) async fn push_child_reap_notification_async(
     notif: d2b_contracts_broker::broker_wire::ChildReapedNotification,
 ) {
@@ -6774,7 +6274,6 @@ pub(crate) async fn push_child_reap_notification_async(
 /// dropped with a warning only when another push/drain momentarily holds
 /// the lock (sub-microsecond critical sections); the reap outcome is still
 /// carried by the ReapChild response and the audit record.
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) fn push_child_reap_notification(
     notif: d2b_contracts_broker::broker_wire::ChildReapedNotification,
 ) {
@@ -6786,7 +6285,6 @@ pub(crate) fn push_child_reap_notification(
 }
 
 /// Drain the ring buffer (used by PollChildReaped handler).
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 pub(crate) fn drain_child_reap_buffer()
 -> Vec<d2b_contracts_broker::broker_wire::ChildReapedNotification> {
@@ -6799,7 +6297,6 @@ pub(crate) fn drain_child_reap_buffer()
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn register_runner_pidfd(runner_id: &str, pidfd: &OwnedFd) -> Result<(), BrokerError> {
     let duplicated = dup(pidfd.as_raw_fd())
@@ -6808,7 +6305,6 @@ fn register_runner_pidfd(runner_id: &str, pidfd: &OwnedFd) -> Result<(), BrokerE
     runner_pidfds().insert(runner_id, duplicated)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn remove_runner_registries(runner_id: &str) -> bool {
     // Keep the metadata ordering aligned with observation and deregistration
     // so reap cleanup cannot deadlock with a concurrent registry update; the
@@ -6841,7 +6337,6 @@ fn remove_runner_registries(runner_id: &str) -> bool {
 /// legitimate re-spawn never collides here; a collision is a
 /// concurrent/duplicate spawn and must fail closed. See issue #64
 /// work-review (W1fu1/fu2).
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) fn reserve_runner_id_for_spawn(runner_id: &str) -> Result<(), BrokerError> {
     let Some(pidfd) = runner_pidfds().get(runner_id) else {
         return Ok(());
@@ -6898,7 +6393,6 @@ pub(crate) fn reserve_runner_id_for_spawn(runner_id: &str) -> Result<(), BrokerE
     )))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn signal_registered_runner(
     runner_id: &str,
@@ -6913,7 +6407,6 @@ fn signal_registered_runner(
         .map_err(|err| BrokerError::LiveHandler(format!("pidfd_send_signal({runner_id}): {err}")))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn tracing_span_id_str(
     tracing_span_id: Option<&d2b_contracts::types::TracingSpanId>,
 ) -> Option<&str> {
@@ -6924,7 +6417,6 @@ fn tracing_span_id_str(
 /// stable header `error_kind` slug recorded on the terminal StoreSync
 /// failure/denial audit record (ADR 0027). The full signed shape lives in
 /// `operation_fields`; this slug is the coarse, greppable category.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn store_sync_error_kind(stage: crate::ops::store_sync_audit::ErrorStage) -> &'static str {
     use crate::ops::store_sync_audit::ErrorStage;
     match stage {
@@ -6942,7 +6434,6 @@ fn store_sync_error_kind(stage: crate::ops::store_sync_audit::ErrorStage) -> &'s
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 trait DispatchBackend {
     /// The committed-operation envelope this process serves.
     ///
@@ -7103,7 +6594,6 @@ trait DispatchBackend {
     >;
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 struct LiveDispatchBackend {
     daemon_gid: u32,
     #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
@@ -7114,14 +6604,12 @@ struct LiveDispatchBackend {
     forward_socket_path: Option<PathBuf>,
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 struct RunnerPreopenedFds {
     child_fds: Vec<std::os::fd::OwnedFd>,
     response_fds: Vec<std::os::fd::OwnedFd>,
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 async fn prepare_runner_preopened_fds(
     _plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
@@ -7265,7 +6753,6 @@ async fn prepare_runner_preopened_fds(
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 impl DispatchBackend for LiveDispatchBackend {
     fn operation_envelope(&self) -> &crate::envelope::BrokerEnvelope {
         // The envelope is installed once at serve time with the kernel
@@ -7693,7 +7180,6 @@ impl DispatchBackend for LiveDispatchBackend {
 /// which has no reactor by construction. The set is built the way the
 /// broker's other runtimes are (`enable_all`, capped workers), and exists
 /// only when a committed operation's arm actually calls the envelope.
-#[cfg(not(feature = "layer1-bootstrap"))]
 static ENVELOPE_CALL_RUNTIME: std::sync::LazyLock<tokio::runtime::Runtime> =
     std::sync::LazyLock::new(|| {
         tokio::runtime::Builder::new_multi_thread()
@@ -7709,33 +7195,10 @@ static ENVELOPE_CALL_RUNTIME: std::sync::LazyLock<tokio::runtime::Runtime> =
             .expect("broker envelope-call runtime")
     });
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn envelope_call_runtime() -> &'static tokio::runtime::Runtime {
     &ENVELOPE_CALL_RUNTIME
 }
 
-/// The runtime the layer1-bootstrap wire's dispatch chain runs on.
-///
-/// The bootstrap wire's dispatch body is synchronous (every live arm is an
-/// `Unimplemented` refusal), but it shares the async `answer_request` shape
-/// with the production wire, so its pool jobs bridge the same way on a
-/// single-thread runtime.
-#[cfg(feature = "layer1-bootstrap")]
-static BOOTSTRAP_DISPATCH_RUNTIME: std::sync::LazyLock<tokio::runtime::Runtime> =
-    std::sync::LazyLock::new(|| {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("bootstrap dispatch runtime")
-    });
-
-#[cfg(feature = "layer1-bootstrap")]
-fn bootstrap_dispatch_runtime() -> &'static tokio::runtime::Runtime {
-    &BOOTSTRAP_DISPATCH_RUNTIME
-}
-
-/// The committed-operation envelope of this broker instance.
-///
 /// The rows are the committed catalog. The dispatch step answers per
 /// operation from the mixed kernel seam (U10): the broker-generic kernel
 /// rows run in-broker on the kernel handler table, and every other
@@ -7743,25 +7206,21 @@ fn bootstrap_dispatch_runtime() -> &'static tokio::runtime::Runtime {
 /// envelope is built once at serve time from the fixed process config
 /// (runtime input, so a plain `OnceLock` cell rather than a `LazyLock`),
 /// and an invocation identifier is unique across the instance's lifetime.
-#[cfg(not(feature = "layer1-bootstrap"))]
 static LIVE_OPERATION_ENVELOPE: OnceLock<crate::envelope::BrokerEnvelope> = OnceLock::new();
 
 /// Install the envelope at serve time, before any connection is accepted.
 /// The production chain-audit sink: every in-broker envelope leg's record
 /// lands in the same daily audit log the typed dispatch arms write.
-#[cfg(not(feature = "layer1-bootstrap"))]
 struct AuditLogChainSink {
     log: Arc<AuditLog>,
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 impl d2b_audit::evidence_chain::ChainAuditSink for AuditLogChainSink {
     fn record(&self, record: &d2b_audit::evidence_chain::ChainRecord) -> std::io::Result<()> {
         self.log.write_chain_record(record)
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn install_live_operation_envelope(
     config: &ServerConfig,
     audit_log: &Arc<AuditLog>,
@@ -7807,7 +7266,6 @@ fn install_live_operation_envelope(
 /// Installed once at serve time beside the committed-operation envelope, and
 /// built from the same serve-time inputs, so the accept loop's gate never
 /// constructs a table of its own.
-#[cfg(not(feature = "layer1-bootstrap"))]
 struct AdmittedEffectWiring {
     /// The sealed table of declared implementations.
     table: crate::envelope::AdmittedEffectTable,
@@ -7819,7 +7277,6 @@ struct AdmittedEffectWiring {
 
 /// The admitted-effect wiring this process installed, absent until
 /// [`install_live_admitted_effects`] runs.
-#[cfg(not(feature = "layer1-bootstrap"))]
 static LIVE_ADMITTED_EFFECTS: OnceLock<AdmittedEffectWiring> = OnceLock::new();
 
 /// Install the admitted-effect wiring at serve time, before any connection is
@@ -7838,7 +7295,6 @@ static LIVE_ADMITTED_EFFECTS: OnceLock<AdmittedEffectWiring> = OnceLock::new();
 /// source, view, identity, and executable from its accepted graph and its
 /// trusted implementation contract, and where it holds no value it refuses
 /// rather than inventing a uid, a program, or a mount policy.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn install_live_admitted_effects(audit_log: &Arc<AuditLog>) -> Result<(), RunError> {
     let table = crate::envelope::AdmittedEffectTable::new(Vec::new())
         .map_err(|error| RunError::Protocol(format!("admitted effect table: {error}")))?;
@@ -7854,7 +7310,6 @@ fn install_live_admitted_effects(audit_log: &Arc<AuditLog>) -> Result<(), RunErr
 }
 
 /// The admitted-effect wiring this process installed at serve time.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn live_admitted_effects() -> &'static AdmittedEffectWiring {
     LIVE_ADMITTED_EFFECTS
         .get()
@@ -7866,38 +7321,33 @@ fn live_admitted_effects() -> &'static AdmittedEffectWiring {
 /// The wiring is process-lifetime, exactly as the live envelope is, so the
 /// first caller installs it and every later one keeps that one rather than
 /// replacing it.
-#[cfg(all(test, not(feature = "layer1-bootstrap")))]
+#[cfg(test)]
 fn init_admitted_effects(audit_log: &Arc<AuditLog>) {
     let _ = install_live_admitted_effects(audit_log);
 }
 
 /// The envelope this process installed at serve time.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn live_operation_envelope() -> &'static crate::envelope::BrokerEnvelope {
     LIVE_OPERATION_ENVELOPE
         .get()
         .expect("live envelope installed at serve time before any dispatch")
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "vm start prerequisite core: no routed dispatch arm runs the vm start action list")]
 fn require_resolver_ref(resolver: Option<&BundleResolver>) -> Result<&BundleResolver, BrokerError> {
     resolver.ok_or(BrokerError::BundleResolverUnavailable)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn require_resolver(
     resolver: Option<&Arc<BundleResolver>>,
 ) -> Result<&Arc<BundleResolver>, BrokerError> {
     resolver.ok_or(BrokerError::BundleResolverUnavailable)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn live_exec(config: &ServerConfig) -> crate::ops::exec_reconcile::SystemLiveExec {
     crate::ops::exec_reconcile::SystemLiveExec::new(config.d2bd_uid, config.d2bd_gid)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) async fn dispatch_set_bridge_port_flags_inner(
     req: &d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest,
     resolver: &BundleResolver,
@@ -7931,12 +7381,10 @@ pub(crate) async fn dispatch_set_bridge_port_flags_inner(
         .map_err(|err| BrokerError::LiveHandler(err.to_string()))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) fn nft_binary_path() -> PathBuf {
     PathBuf::from(env::var("D2B_BROKER_NFT_BINARY").unwrap_or_else(|_| "/usr/sbin/nft".to_owned()))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) fn nft_hash_sidecar_path() -> PathBuf {
     PathBuf::from(
         env::var("D2B_BROKER_NFT_HASH_PATH")
@@ -7944,29 +7392,24 @@ pub(crate) fn nft_hash_sidecar_path() -> PathBuf {
     )
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) async fn persisted_nft_hash()
 -> Result<Option<String>, crate::ops::exec_reconcile::ReconcileExecError> {
     crate::ops::nft::read_persisted_nft_hash(&nft_hash_sidecar_path()).await
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) fn ip_binary_path() -> PathBuf {
     PathBuf::from(env::var("D2B_BROKER_IP_BINARY").unwrap_or_else(|_| "/usr/sbin/ip".to_owned()))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) fn render_nft_destroy_script(family: &str, table: &str) -> String {
     format!("table {family} {table} {{\n}}\n")
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) fn destroy_sysctl_value(key: &str) -> Result<&'static str, BrokerError> {
     crate::ops::sysctl::destroy_value_for_key(key)
         .ok_or_else(|| BrokerError::Protocol(format!("unsupported host-destroy sysctl key: {key}")))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn usbip_binary_path() -> PathBuf {
     PathBuf::from(
         env::var("D2B_BROKER_USBIP_BINARY").unwrap_or_else(|_| "/usr/sbin/usbip".to_owned()),
@@ -7978,12 +7421,10 @@ fn usbip_binary_path() -> PathBuf {
 /// opaque string; the bundle index is the `processes.vms[*].vm` field.
 /// We use the wire value as both the opaque key and the human-readable
 /// name today - the daemon emits them identically.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn lookup_vm_name(_resolver: &Arc<BundleResolver>, vm_id: &d2b_contracts::types::VmId) -> String {
     vm_id.as_str().to_owned()
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "vm start prerequisite core: no routed dispatch arm runs the vm start action list")]
 fn apply_vm_start_prerequisites(
     resolver: &BundleResolver,
@@ -7998,7 +7439,6 @@ fn apply_vm_start_prerequisites(
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "vm start prerequisite core: no routed dispatch arm runs the vm start action list")]
 fn execute_vm_start_action(
     intent: &d2b_core::bundle_resolver::ResolvedVmStartIntent,
@@ -8037,11 +7477,9 @@ fn execute_vm_start_action(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[cfg(test)]
 static TEST_USB_SYSFS_ROOT: OnceLock<PathBuf> = OnceLock::new();
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn usb_device_sysfs_root() -> &'static Path {
     #[cfg(test)]
     if let Some(path) = TEST_USB_SYSFS_ROOT.get() {
@@ -8067,7 +7505,6 @@ fn usbip_lock_path_for_intent(
 }
 
 #[cfg(not(test))]
-#[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
 fn usbip_lock_path_for_intent(
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
 ) -> PathBuf {
@@ -8129,7 +7566,6 @@ impl Drop for TestKernelBundleResolver {
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "usb identity probe: no routed dispatch arm reads usb device identity from sysfs")]
 async fn read_usb_device_identity(sysfs_root: &Path, bus_id: &str) -> Result<(u16, u16), BrokerError> {
     if d2b_contracts::usbip::validate_bus_id(bus_id).is_err() {
@@ -8143,14 +7579,12 @@ async fn read_usb_device_identity(sysfs_root: &Path, bus_id: &str) -> Result<(u1
     Ok((vendor, product))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UsbAuditSerialHmacKeySlot {
     Current,
     Previous,
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct UsbAuditSerialHmacKey {
     slot: UsbAuditSerialHmacKeySlot,
@@ -8158,14 +7592,12 @@ struct UsbAuditSerialHmacKey {
     key: Vec<u8>,
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct UsbAuditSerialHmacKeyring {
     current: UsbAuditSerialHmacKey,
     previous: Option<UsbAuditSerialHmacKey>,
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 async fn usb_audit_device_identity_for_busid(
     sysfs_root: &Path,
     bus_id: &str,
@@ -8193,7 +7625,6 @@ async fn usb_audit_device_identity_for_busid(
     ))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn usb_audit_device_identity(
     identity: (u16, u16),
     serial: Option<&str>,
@@ -8217,7 +7648,6 @@ fn usb_audit_device_identity(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn usb_serial_correlation(
     serial: &str,
     key: &UsbAuditSerialHmacKey,
@@ -8234,35 +7664,24 @@ fn usb_serial_correlation(
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 const USB_AUDIT_SERIAL_HMAC_KEY_BYTES: usize = 32;
-#[cfg(not(feature = "layer1-bootstrap"))]
 const USB_AUDIT_SERIAL_HMAC_RANDOM_BYTES: usize = USB_AUDIT_SERIAL_HMAC_KEY_BYTES + 16;
-#[cfg(not(feature = "layer1-bootstrap"))]
 const USB_AUDIT_SERIAL_HMAC_KEY_DIR: &str = "usb-audit-serial-hmac";
-#[cfg(not(feature = "layer1-bootstrap"))]
 const USB_AUDIT_SERIAL_HMAC_CURRENT_KEY_FILE: &str = "current.key";
-#[cfg(not(feature = "layer1-bootstrap"))]
 const USB_AUDIT_SERIAL_HMAC_PREVIOUS_KEY_FILE: &str = "previous.key";
-#[cfg(not(feature = "layer1-bootstrap"))]
 const USB_AUDIT_SERIAL_HMAC_KEY_MAGIC: &str = "d2b-usb-audit-serial-hmac-v1";
-#[cfg(not(feature = "layer1-bootstrap"))]
 const USB_AUDIT_SERIAL_CORRELATION_VERSION: &str = "d2b-usb-audit-serial-v1";
-#[cfg(not(feature = "layer1-bootstrap"))]
 const USB_AUDIT_SERIAL_HMAC_PREVIOUS_KEY_GRACE_WINDOW_SECONDS: u64 = 30 * 24 * 60 * 60;
 /// Rotation-window / rotation-audit dedupe sets.
 ///
 /// `tokio::sync` per plan U8: the dispatch arms reach them through the
 /// non-blocking `try_lock`; a `Busy` collision degrades exactly like the
 /// old poisoned path (the dedupe is skipped, never a hard failure).
-#[cfg(not(feature = "layer1-bootstrap"))]
 static USB_AUDIT_SERIAL_HMAC_ROTATION_LOGGED: LazyLock<tokio::sync::Mutex<HashMap<String, ()>>> =
     LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
-#[cfg(not(feature = "layer1-bootstrap"))]
 static USB_AUDIT_SERIAL_HMAC_ROTATION_AUDIT_LOGGED: LazyLock<tokio::sync::Mutex<HashMap<String, ()>>> =
     LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn usb_serial_correlation_key_rotation_audit(
     keyring: &UsbAuditSerialHmacKeyring,
 ) -> Option<UsbSerialCorrelationKeyRotationAudit> {
@@ -8278,14 +7697,12 @@ fn usb_serial_correlation_key_rotation_audit(
         })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn usb_audit_serial_hmac_rotation_dedupe_key(
     audit: &UsbSerialCorrelationKeyRotationAudit,
 ) -> String {
     format!("{}|{}", audit.previous_key_id, audit.current_key_id)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn mark_usb_audit_serial_hmac_rotation_audit_logged(
     audit: &UsbSerialCorrelationKeyRotationAudit,
 ) -> Option<String> {
@@ -8302,14 +7719,12 @@ fn mark_usb_audit_serial_hmac_rotation_audit_logged(
     Some(dedupe_key)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn unmark_usb_audit_serial_hmac_rotation_audit_logged(dedupe_key: &str) {
     if let Ok(mut logged) = USB_AUDIT_SERIAL_HMAC_ROTATION_AUDIT_LOGGED.try_lock() {
         logged.remove(dedupe_key);
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn log_usb_audit_serial_hmac_rotation_window(keyring: &UsbAuditSerialHmacKeyring) {
     let Some(audit) = usb_serial_correlation_key_rotation_audit(keyring) else {
         return;
@@ -8334,7 +7749,6 @@ fn log_usb_audit_serial_hmac_rotation_window(keyring: &UsbAuditSerialHmacKeyring
     );
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 async fn usb_audit_serial_hmac_keyring(
     state_dir: &Path,
     test_mode: bool,
@@ -8365,7 +7779,6 @@ async fn usb_audit_serial_hmac_keyring(
 /// [`usb_audit_serial_hmac_keyring`], whose job runs it on the bounded probe
 /// seat, so the directory ensures, the `O_NOFOLLOW` opens, the dir-fd key
 /// create, and the dir-fd fsync never run on an executor worker.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn build_usb_audit_serial_hmac_keyring(
     key_dir: &Path,
     test_mode: bool,
@@ -8387,7 +7800,6 @@ fn build_usb_audit_serial_hmac_keyring(
     Ok(UsbAuditSerialHmacKeyring { current, previous })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn usb_audit_serial_hmac_key_dir(state_dir: &Path) -> PathBuf {
     state_dir
         .join("secrets")
@@ -8398,7 +7810,6 @@ fn usb_audit_serial_hmac_key_dir(state_dir: &Path) -> PathBuf {
 /// owned by root outside test mode. Blocking-work body: reached only from
 /// [`build_usb_audit_serial_hmac_keyring`] on the bounded probe seat, so the
 /// openat walk, the mkdir, and the mode/owner stamp stay off the executor.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn ensure_usb_audit_serial_hmac_key_dir(
     key_dir: &Path,
     test_mode: bool,
@@ -8424,7 +7835,6 @@ fn ensure_usb_audit_serial_hmac_key_dir(
 /// [`build_usb_audit_serial_hmac_keyring`] on the bounded probe seat. The
 /// open is `O_NOFOLLOW | O_CLOEXEC`, and the descriptor it returns is
 /// validated as a root-only regular file before any byte is read.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn read_usb_audit_serial_hmac_key_file(
     path: &Path,
     slot: UsbAuditSerialHmacKeySlot,
@@ -8455,7 +7865,6 @@ fn read_usb_audit_serial_hmac_key_file(
 
 /// The root-only regular-file check, on the descriptor the caller already
 /// holds: no path is re-resolved between the open and the check.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn validate_usb_audit_serial_hmac_key_metadata(
     file: &fs::File,
     test_mode: bool,
@@ -8473,7 +7882,6 @@ fn validate_usb_audit_serial_hmac_key_metadata(
 
 /// Create the current key through the dir-fd `openat` create, then read it
 /// back so the caller uses exactly the bytes that reached the disk.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn create_usb_audit_serial_hmac_key(
     key_dir: &Path,
     test_mode: bool,
@@ -8507,7 +7915,6 @@ fn create_usb_audit_serial_hmac_key(
 /// [`build_usb_audit_serial_hmac_keyring`] on the bounded probe seat, so the
 /// dir-fd create, the 0o400 stamp, and the file and directory fsyncs stay
 /// off the executor.
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 fn write_new_usb_audit_serial_hmac_key_file(
     dir_fd: &OwnedFd,
@@ -8528,7 +7935,6 @@ fn write_new_usb_audit_serial_hmac_key_file(
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn generate_usb_audit_serial_hmac_key() -> Result<UsbAuditSerialHmacKey, BrokerError> {
     let random = read_high_entropy_bytes(USB_AUDIT_SERIAL_HMAC_RANDOM_BYTES)?;
     let (key, id_bytes) = random.split_at(USB_AUDIT_SERIAL_HMAC_KEY_BYTES);
@@ -8541,7 +7947,6 @@ fn generate_usb_audit_serial_hmac_key() -> Result<UsbAuditSerialHmacKey, BrokerE
 
 /// Read `len` bytes from the kernel CSPRNG. Blocking-work body: reached only
 /// from [`build_usb_audit_serial_hmac_keyring`] on the bounded probe seat.
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 fn read_high_entropy_bytes(len: usize) -> Result<Vec<u8>, BrokerError> {
     use std::io::Read as _;
@@ -8559,7 +7964,6 @@ fn read_high_entropy_bytes(len: usize) -> Result<Vec<u8>, BrokerError> {
     Ok(bytes)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn render_usb_audit_serial_hmac_key(key: &UsbAuditSerialHmacKey) -> String {
     format!(
         "{USB_AUDIT_SERIAL_HMAC_KEY_MAGIC}\nkey_id={}\nkey_hex={}\n",
@@ -8568,7 +7972,6 @@ fn render_usb_audit_serial_hmac_key(key: &UsbAuditSerialHmacKey) -> String {
     )
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn parse_usb_audit_serial_hmac_key(
     contents: &str,
     slot: UsbAuditSerialHmacKeySlot,
@@ -8602,7 +8005,6 @@ fn parse_usb_audit_serial_hmac_key(
     Ok(UsbAuditSerialHmacKey { slot, key_id, key })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn usb_audit_key_id_is_safe(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 96
@@ -8611,7 +8013,6 @@ fn usb_audit_key_id_is_safe(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn decode_fixed_hex_key(value: &str, len: usize) -> Result<Vec<u8>, BrokerError> {
     if value.len() != len * 2 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(BrokerError::LiveHandler(
@@ -8628,7 +8029,6 @@ fn decode_fixed_hex_key(value: &str, len: usize) -> Result<Vec<u8>, BrokerError>
         .collect()
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn lower_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -8640,7 +8040,6 @@ fn lower_hex(bytes: &[u8]) -> String {
     out
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 async fn read_usb_serial_for_audit(sysfs_root: &Path, bus_id: &str) -> Option<String> {
     if d2b_contracts::usbip::validate_bus_id(bus_id).is_err() {
         return None;
@@ -8655,7 +8054,6 @@ async fn read_usb_serial_for_audit(sysfs_root: &Path, bus_id: &str) -> Option<St
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "usb identity probe: no routed dispatch arm reads usb device identity from sysfs")]
 async fn usb_device_node_for_busid(sysfs_root: &Path, bus_id: &str) -> Result<PathBuf, BrokerError> {
     d2b_contracts::usbip::validate_bus_id(bus_id)
@@ -8668,7 +8066,6 @@ async fn usb_device_node_for_busid(sysfs_root: &Path, bus_id: &str) -> Result<Pa
     )))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "usb identity probe: no routed dispatch arm reads usb device identity from sysfs")]
 async fn read_usb_decimal_attr(device_dir: &Path, attr: &str, bus_id: &str) -> Result<u16, BrokerError> {
     let path = device_dir.join(attr);
@@ -8686,21 +8083,21 @@ async fn read_usb_decimal_attr(device_dir: &Path, attr: &str, bus_id: &str) -> R
     })
 }
 
-#[cfg(all(test, not(feature = "layer1-bootstrap")))]
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TestUsbipBackendAclEvent {
     Grant { uid: u32 },
     Revoke { uid: u32 },
 }
 
-#[cfg(all(test, not(feature = "layer1-bootstrap")))]
+#[cfg(test)]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn test_usbip_backend_acl_events() -> &'static Mutex<Vec<TestUsbipBackendAclEvent>> {
     static EVENTS: OnceLock<Mutex<Vec<TestUsbipBackendAclEvent>>> = OnceLock::new();
     EVENTS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-#[cfg(all(test, not(feature = "layer1-bootstrap")))]
+#[cfg(test)]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn take_test_usbip_backend_acl_events() -> Vec<TestUsbipBackendAclEvent> {
     let mut events = test_usbip_backend_acl_events()
@@ -8709,7 +8106,6 @@ fn take_test_usbip_backend_acl_events() -> Vec<TestUsbipBackendAclEvent> {
     std::mem::take(&mut *events)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 async fn rollback_usbip_bind_after_audit_failure<B: DispatchBackend>(
     backend: &B,
     resolver: &Arc<BundleResolver>,
@@ -8751,7 +8147,6 @@ async fn rollback_usbip_bind_after_audit_failure<B: DispatchBackend>(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 async fn rollback_usbip_bind_after_acl_grant_failure<B: DispatchBackend>(
     backend: &B,
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
@@ -8788,7 +8183,6 @@ async fn rollback_usbip_bind_after_acl_grant_failure<B: DispatchBackend>(
     grant_error
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 async fn handle_usbip_acl_revoke_failure_after_unbind(
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
     preserve_durable_claim: bool,
@@ -8848,15 +8242,12 @@ async fn handle_usbip_acl_revoke_failure_after_unbind(
     revoke_error
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 const USBIP_BACKEND_ACL_GRANT_ATTEMPTS: usize = 20;
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "USBIP backend ACL retry pacing; only the unrouted USBIP backend bind helpers sleep on it")]
 const USBIP_BACKEND_ACL_GRANT_RETRY_SLEEP: std::time::Duration =
     std::time::Duration::from_millis(100);
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 async fn retry_usbip_backend_acl_grant<'a, V, G, R, S>(
     uid: u32,
     mut verify_device_node: V,
@@ -8917,7 +8308,6 @@ where
     }))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn grant_usbip_backend_device_acl(
     resolver: &Arc<BundleResolver>,
@@ -8987,7 +8377,6 @@ async fn grant_usbip_backend_device_acl(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn revoke_usbip_backend_device_acl(
     resolver: &Arc<BundleResolver>,
@@ -9017,7 +8406,6 @@ async fn revoke_usbip_backend_device_acl(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 async fn reconcile_active_usbip_backend_acls(
     resolver: &Arc<BundleResolver>,
 ) -> Result<(), BrokerError> {
@@ -9062,7 +8450,6 @@ async fn reconcile_active_usbip_backend_acls(
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn usbip_backend_runner_intent<'a>(
     resolver: &'a Arc<BundleResolver>,
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
@@ -9082,7 +8469,6 @@ fn usbip_backend_runner_intent<'a>(
 /// Resolve the env USBIP backend runner UID for the explicit attach path.
 /// Returns the UID of the `sys-<env>-usbipd/backend` runner so the broker
 /// can grant the per-device ACL without needing a full `ResolvedUsbipBindIntent`.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn explicit_usbip_backend_uid(
     resolver: &Arc<BundleResolver>,
     env: &str,
@@ -9102,7 +8488,6 @@ fn explicit_usbip_backend_uid(
 /// attach. Cross-checks the request IPs against the env's declared host config
 /// values to prevent the daemon from installing rules for a different env's
 /// bridge. Returns the rule body string on success.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn build_explicit_usbip_rule_body(
     resolver: &BundleResolver,
     env: &str,
@@ -9199,7 +8584,6 @@ fn build_explicit_usbip_rule_body(
 /// attach path. Unlike `grant_usbip_backend_device_acl` this does NOT check a
 /// vendor/product allowlist; the explicit path carries no bundle allowlist.
 /// Retries up to 20 times with 100ms sleep (same policy as the declared path).
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn grant_explicit_usbip_backend_acl(
     resolver: &Arc<BundleResolver>,
@@ -9251,7 +8635,7 @@ async fn grant_explicit_usbip_backend_acl(
 /// Stability check for explicit USBIP device ACL grant. Uses
 /// `inspect_usbip_host_device` (no allowlist check) to verify the device at
 /// `bus_id` still matches `expected_identity` and `expected_device_node`.
-#[cfg(all(not(feature = "layer1-bootstrap"), not(test)))]
+#[cfg(not(test))]
 async fn verify_explicit_usbip_device_stable(
     bus_id: &str,
     expected_identity: (u16, u16),
@@ -9279,7 +8663,6 @@ async fn verify_explicit_usbip_device_stable(
 
 /// Revoke the per-device ACL from the env's USBIP backend runner for the
 /// explicit attach path rollback. Best-effort; failures are logged only.
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn revoke_explicit_usbip_backend_acl(
     resolver: &Arc<BundleResolver>,
@@ -9322,7 +8705,6 @@ async fn revoke_explicit_usbip_backend_acl(
 /// nftables state.
 ///
 /// Entries for `excluding_bus_id` are skipped (caller adds its own carveout).
-#[cfg(not(feature = "layer1-bootstrap"))]
 async fn collect_active_explicit_usbip_carveouts(
     resolver: &BundleResolver,
     excluding_bus_id: &str,
@@ -9392,7 +8774,6 @@ async fn collect_active_explicit_usbip_carveouts(
 /// Build the nft firewall decision for an explicit USBIP attach. Starts from
 /// the host nft base, preserves all currently-active declared and explicit
 /// carve-outs, and inserts the new carve-out for `bus_id`.
-#[cfg(not(feature = "layer1-bootstrap"))]
 async fn build_usbip_explicit_firewall_decision(
     resolver: &BundleResolver,
     host_nft_intent: &d2b_core::bundle_resolver::ResolvedNftIntent,
@@ -9521,7 +8902,6 @@ fn runner_role_for_process_role(
 ///
 /// SINGLE EVALUATION POINT for the alias: spawn validation and observation
 /// both read it instead of re-listing the match.
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn wire_role_id_for_intent(intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent) -> &str {
     match intent.role {
@@ -9530,7 +8910,6 @@ fn wire_role_id_for_intent(intent: &d2b_core::bundle_resolver::ResolvedRunnerInt
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn validate_sandbox_launch_plan(
     req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
@@ -9771,7 +9150,6 @@ fn validate_sandbox_launch_plan(
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn capability_matches(
     class: d2b_contracts_resource::v3::process::CapabilityClass,
@@ -9795,7 +9173,6 @@ fn capability_matches(
     capability == expected
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn typed_process_identity(
     resource_ref: Option<&d2b_contracts_resource::v3::ResourceRef>,
@@ -9861,7 +9238,6 @@ fn typed_process_identity(
     Ok(true)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn typed_control_identity_complete(
     resource_ref: Option<&d2b_contracts_resource::v3::ResourceRef>,
@@ -9894,7 +9270,6 @@ fn typed_control_identity_complete(
         && template_identity.is_some_and(|identity| identity != [0; 32])
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn private_runtime_scope(
     zone_uid: &d2b_contracts_resource::v3::ResourceUid,
@@ -9921,7 +9296,6 @@ fn private_runtime_scope(
     digest.finalize().into()
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn validate_typed_process_metadata(
     typed: bool,
@@ -10102,7 +9476,6 @@ fn validate_typed_process_metadata(
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn runtime_scope_segment(scope: [u8; 32]) -> String {
     let mut rendered = String::with_capacity(64);
@@ -10112,7 +9485,6 @@ fn runtime_scope_segment(scope: [u8; 32]) -> String {
     format!("process-{rendered}")
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn private_cgroup_placement(
     placement: &d2b_core::sandbox_profile::CgroupPlacement,
@@ -10193,7 +9565,6 @@ fn private_cgroup_placement(
 /// A launch whose intent is not a Device-owned worker role resolves
 /// [`DeviceWorkerLaunch::default`]: it has no Device-derived runtime path and
 /// no per-Guest socket directory to open.
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn resolve_device_worker_launch(
     resolver: &BundleResolver,
@@ -10241,7 +9612,6 @@ fn resolve_device_worker_launch(
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "runner lifecycle core: the committed row puts the wire owner on the family crate, so no arm in this crate calls it")]
 fn validate_spawn_runner_request_matches_intent(
     req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
@@ -10391,7 +9761,6 @@ fn validate_spawn_runner_request_matches_intent(
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "usb identity probe: no routed dispatch arm reads usb device identity from sysfs")]
 async fn read_hex_u16(path: PathBuf, bus_id: &str) -> Result<u16, BrokerError> {
     let raw = tokio::fs::read_to_string(&path).await.map_err(|err| {
@@ -10408,7 +9777,6 @@ async fn read_hex_u16(path: PathBuf, bus_id: &str) -> Result<u16, BrokerError> {
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "usbip binding core: no routed dispatch arm enforces the allowlist or looks the bind intent up")]
 async fn enforce_usbip_allowlist(
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
@@ -10420,7 +9788,6 @@ async fn enforce_usbip_allowlist(
     Ok((inspection.vendor, inspection.product))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn map_usbip_host_inspection_error_for_intent(
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
     err: crate::ops::usbip_host::UsbipHostInspectionError,
@@ -10462,7 +9829,6 @@ fn map_usbip_host_inspection_error_for_intent(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) async fn extend_usbip_backend_device_binds(
     resolver: &BundleResolver,
     vm_id: &str,
@@ -10527,7 +9893,6 @@ pub(crate) async fn extend_usbip_backend_device_binds(
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "audio runner property core: no routed dispatch arm extends the pipewire environment")]
 async fn extend_audio_runner_pipewire_props(
     vm_id: &str,
@@ -10569,7 +9934,6 @@ async fn extend_audio_runner_pipewire_props(
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "audio runner property core: no routed dispatch arm extends the pipewire environment")]
 fn audio_input_target_node(
     env: &[String],
@@ -10590,7 +9954,6 @@ fn audio_input_target_node(
     Ok(Some(raw.to_owned()))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "audio runner property core: no routed dispatch arm extends the pipewire environment")]
 fn audio_state_value<'a>(
     value: &'a Value,
@@ -10611,7 +9974,6 @@ fn audio_state_value<'a>(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) async fn cleanup_stale_sockets(paths: &[PathBuf]) -> Result<(), BrokerError> {
     for path in paths {
         cleanup_stale_unix_socket(path).await?;
@@ -10619,7 +9981,6 @@ pub(crate) async fn cleanup_stale_sockets(paths: &[PathBuf]) -> Result<(), Broke
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) async fn cleanup_video_stale_socket(
     role: &d2b_contracts_broker::broker_wire::RunnerRole,
     argv: &[String],
@@ -10637,7 +9998,6 @@ pub(crate) async fn cleanup_video_stale_socket(
     cleanup_stale_unix_socket_without_probe(&path, "video socket preflight").await
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 async fn video_socket_path(argv: &[String]) -> Result<PathBuf, BrokerError> {
     let mut iter = argv.iter();
     while let Some(arg) = iter.next() {
@@ -10665,7 +10025,6 @@ async fn video_socket_path(argv: &[String]) -> Result<PathBuf, BrokerError> {
 // socket masks the failure and host telemetry silently stops flowing.
 // Mirror the cloud-hypervisor / video preflight: drop a provably-stale
 // (non-listening) socket before spawn so obs-VM restarts self-heal.
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) async fn cleanup_otel_host_bridge_stale_socket(
     role: &d2b_contracts_broker::broker_wire::RunnerRole,
     argv: &[String],
@@ -10686,7 +10045,6 @@ pub(crate) async fn cleanup_otel_host_bridge_stale_socket(
     cleanup_stale_unix_socket_without_probe(&path, "otel-host-bridge socket preflight").await
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn otel_host_bridge_socket_path(argv: &[String]) -> Result<PathBuf, BrokerError> {
     for arg in argv {
         if let Some(rest) = arg.strip_prefix("UNIX-LISTEN:") {
@@ -10702,7 +10060,6 @@ fn otel_host_bridge_socket_path(argv: &[String]) -> Result<PathBuf, BrokerError>
     ))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 async fn cleanup_stale_unix_socket(path: &Path) -> Result<(), BrokerError> {
     let metadata = match tokio::fs::symlink_metadata(path).await {
         Ok(metadata) => metadata,
@@ -10745,7 +10102,6 @@ async fn cleanup_stale_unix_socket(path: &Path) -> Result<(), BrokerError> {
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 async fn cleanup_stale_unix_socket_without_probe(path: &Path, context: &str) -> Result<(), BrokerError> {
     let metadata = match tokio::fs::symlink_metadata(path).await {
         Ok(metadata) => metadata,
@@ -10777,7 +10133,6 @@ async fn cleanup_stale_unix_socket_without_probe(path: &Path, context: &str) -> 
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 async fn unix_socket_listening_path(path: &Path) -> bool {
     const SO_ACCEPTCON: u64 = 0x0001_0000;
     let expected = path.to_string_lossy();
@@ -10796,7 +10151,6 @@ async fn unix_socket_listening_path(path: &Path) -> bool {
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 async fn build_usbip_firewall_decision(
     resolver: &BundleResolver,
     host_nft_intent: &d2b_core::bundle_resolver::ResolvedNftIntent,
@@ -10871,7 +10225,6 @@ async fn build_usbip_firewall_decision(
         .map_err(|err| BrokerError::LiveHandler(err.to_string()))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn find_usbip_firewall_intent_or_wildcard(
     resolver: &BundleResolver,
     intent_id: &str,
@@ -10892,7 +10245,6 @@ fn find_usbip_firewall_intent_or_wildcard(
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn parse_usbip_firewall_intent_id(intent_id: &str) -> Option<(String, String)> {
     let rest = intent_id.strip_prefix("usbip-fw:env:")?;
     let (env, bus_id) = rest.split_once(":bus:")?;
@@ -10903,7 +10255,6 @@ fn parse_usbip_firewall_intent_id(intent_id: &str) -> Option<(String, String)> {
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 async fn active_dynamic_usbip_bind_intents(
     resolver: &BundleResolver,
 ) -> Vec<d2b_core::bundle_resolver::ResolvedUsbipBindIntent> {
@@ -10925,7 +10276,6 @@ async fn active_dynamic_usbip_bind_intents(
         .collect()
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 async fn active_locked_usbip_bind_intents(
     resolver: &BundleResolver,
 ) -> Result<Vec<d2b_core::bundle_resolver::ResolvedUsbipBindIntent>, BrokerError> {
@@ -10950,7 +10300,6 @@ async fn active_locked_usbip_bind_intents(
     Ok(out)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn find_usbip_bind_intent_or_wildcard(
     resolver: &BundleResolver,
     intent_id: &str,
@@ -10968,7 +10317,6 @@ fn find_usbip_bind_intent_or_wildcard(
     Some(dynamic_usbip_bind_intent(source, &bus_id))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn parse_usbip_bind_intent_id(intent_id: &str) -> Option<(String, String, String)> {
     let rest = intent_id.strip_prefix("usbip-bind:env:")?;
     let (env, rest) = rest.split_once(":vm:")?;
@@ -10980,7 +10328,6 @@ fn parse_usbip_bind_intent_id(intent_id: &str) -> Option<(String, String, String
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "usbip binding core: no routed dispatch arm enforces the allowlist or looks the bind intent up")]
 fn find_usbip_bind_intent_for(
     resolver: &BundleResolver,
@@ -11004,7 +10351,6 @@ fn find_usbip_bind_intent_for(
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(dead_code, reason = "usbip binding core: no routed dispatch arm enforces the allowlist or looks the bind intent up")]
 fn find_usbip_bind_intent_by_busid(
     resolver: &BundleResolver,
@@ -11025,7 +10371,6 @@ fn find_usbip_bind_intent_by_busid(
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn find_wildcard_usbip_bind_intent_for(
     resolver: &BundleResolver,
     vm_name: &str,
@@ -11045,7 +10390,6 @@ fn find_wildcard_usbip_bind_intent_for(
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn static_usbip_busid_owner(resolver: &BundleResolver, bus_id: &str) -> Option<String> {
     resolver.usbip_bind_intent_ids().find_map(|id| {
         let intent = resolver.find_usbip_bind_intent(id)?;
@@ -11057,7 +10401,6 @@ fn static_usbip_busid_owner(resolver: &BundleResolver, bus_id: &str) -> Option<S
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn dynamic_usbip_bind_intent(
     source: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
     bus_id: &str,
@@ -11077,47 +10420,8 @@ fn dynamic_usbip_bind_intent(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn usbip_lock_path_for_busid(bus_id: &str) -> PathBuf {
     PathBuf::from(format!("/run/d2b/locks/usbip/{bus_id}"))
-}
-
-#[cfg(feature = "layer1-bootstrap")]
-fn handle_export_broker_audit(
-    since: Option<&str>,
-    filter: Option<&str>,
-    caller_uid: u32,
-    caller_gid: u32,
-    caller_role: CallerRole,
-    audit_log: &AuditLog,
-) -> Result<BrokerResponse, BrokerError> {
-    if !caller_role_is_admin(&caller_role) {
-        audit_log
-            .write_entry_with_caller_ids(
-                "ExportBrokerAudit",
-                caller_uid,
-                caller_gid,
-                "callable-read-only",
-                "audit-log",
-                "denied",
-            )
-            .map_err(|err| BrokerError::Protocol(err.to_string()))?;
-        return Err(BrokerError::AuditRequiresAdmin);
-    }
-    let lines = audit_log
-        .export_lines(since, filter)
-        .map_err(|err| BrokerError::Protocol(err.to_string()))?;
-    audit_log
-        .write_entry_with_caller_ids(
-            "ExportBrokerAudit",
-            caller_uid,
-            caller_gid,
-            "callable-read-only",
-            "audit-log",
-            "ok",
-        )
-        .map_err(|err| BrokerError::Protocol(err.to_string()))?;
-    Ok(export_broker_audit_ok_response(lines))
 }
 
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
@@ -11165,116 +10469,6 @@ fn prepare_socket_path(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "layer1-bootstrap")]
-fn run_probe(
-    socket_path: PathBuf,
-    frame: Value,
-    expect_response: bool,
-) -> Result<(), RunError> {
-    let socket = connect_seqpacket(&socket_path)?;
-    send_json_frame(socket.as_raw_fd(), &frame)?;
-    let response = recv_json_frame::<BrokerResponse>(socket.as_raw_fd())?;
-    if let Some(response) = response {
-        println!(
-            "{}",
-            serde_json::to_string(&response).map_err(|err| RunError::Protocol(err.to_string()))?
-        );
-        Ok(())
-    } else if expect_response {
-        Err(RunError::Protocol(
-            "connection closed before response".to_owned(),
-        ))
-    } else {
-        Err(RunError::Protocol(
-            "connection closed before export response".to_owned(),
-        ))
-    }
-}
-
-#[cfg(feature = "layer1-bootstrap")]
-/// One flag arm of the shared bootstrap parser: it sees the flag name, the
-/// remaining arguments, and the cursor, and advances the cursor past the
-/// arguments it consumed.
-type FlagArm<'a> = dyn FnMut(&str, &[String], &mut usize) -> Result<(), RunError> + 'a;
-
-#[cfg(feature = "layer1-bootstrap")]
-fn parse_common_flags(
-    rest: &[String],
-    extra: &mut FlagArm<'_>,
-) -> Result<(PathBuf, Option<u32>), RunError> {
-    let mut socket_path = PathBuf::from(DEFAULT_SOCKET_PATH);
-    let mut test_uid = None;
-    let mut index = 0;
-    while index < rest.len() {
-        match rest[index].as_str() {
-            "--socket-path" => {
-                index += 1;
-                socket_path = PathBuf::from(expect_arg(rest, index, "--socket-path")?);
-            }
-            "--test-uid" => {
-                index += 1;
-                test_uid = Some(
-                    expect_arg(rest, index, "--test-uid")?
-                        .parse()
-                        .map_err(|_| RunError::Usage("invalid --test-uid".to_owned()))?,
-                );
-            }
-            other => extra(other, rest, &mut index)?,
-        }
-        index += 1;
-    }
-    Ok((socket_path, test_uid))
-}
-
-#[cfg(feature = "layer1-bootstrap")]
-fn parse_probe_flags(rest: Vec<String>) -> Result<(PathBuf, Option<u32>), RunError> {
-    parse_common_flags(&rest, &mut |flag, _, _| {
-        Err(RunError::Usage(format!("unknown probe flag: {flag}")))
-    })
-}
-
-#[cfg(feature = "layer1-bootstrap")]
-fn parse_stub_flags(rest: &[String]) -> Result<(PathBuf, Option<u32>, String), RunError> {
-    let mut operation = None;
-    let (socket_path, test_uid) = parse_common_flags(rest, &mut |flag, rest, index| {
-        if flag != "--operation" {
-            return Err(RunError::Usage(format!("unknown probe-stub flag: {flag}")));
-        }
-        *index += 1;
-        operation = Some(expect_arg(rest, *index, "--operation")?.to_owned());
-        Ok(())
-    })?;
-    Ok((
-        socket_path,
-        test_uid,
-        operation.ok_or_else(|| RunError::Usage("missing --operation".to_owned()))?,
-    ))
-}
-
-#[cfg(feature = "layer1-bootstrap")]
-fn parse_export_flags(rest: &[String]) -> Result<(PathBuf, Option<u32>, CallerRole), RunError> {
-    let mut caller_role = None;
-    let (socket_path, test_uid) = parse_common_flags(rest, &mut |flag, rest, index| {
-        if flag != "--caller-role" {
-            return Err(RunError::Usage(format!(
-                "unknown probe-export-audit flag: {flag}"
-            )));
-        }
-        *index += 1;
-        caller_role = crate::bootstrap::wire::caller_role_from_cli(expect_arg(
-            rest,
-            *index,
-            "--caller-role",
-        )?);
-        Ok(())
-    })?;
-    Ok((
-        socket_path,
-        test_uid,
-        caller_role.ok_or_else(|| RunError::Usage("missing --caller-role".to_owned()))?,
-    ))
-}
-
 fn expect_arg<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a str, RunError> {
     args.get(index)
         .map(String::as_str)
@@ -11282,11 +10476,6 @@ fn expect_arg<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a st
 }
 
 fn caller_role_is_admin(caller_role: &CallerRole) -> bool {
-    #[cfg(feature = "layer1-bootstrap")]
-    {
-        caller_role.is_admin_uid()
-    }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     {
         matches!(
             caller_role,
@@ -11304,34 +10493,19 @@ impl BrokerError {
         caller_gid: u32,
         caller_role: &CallerRole,
         audit_context: &DispatchAuditContext,
-        #[cfg(not(feature = "layer1-bootstrap"))] resolver: Option<&BundleResolver>,
+        resolver: Option<&BundleResolver>,
         operation: &str,
         opaque_target_id: &str,
     ) -> io::Result<()> {
-        #[cfg(not(feature = "layer1-bootstrap"))]
         let bundle_metadata = audit_bundle_metadata(resolver);
-        #[cfg(not(feature = "layer1-bootstrap"))]
         let authz_result = caller_role_authz_result(caller_role);
-        #[cfg(feature = "layer1-bootstrap")]
-        let bundle_metadata = AuditBundleMetadata {
-            bundle_version: "unknown",
-            bundle_hash: "",
-        };
-        #[cfg(feature = "layer1-bootstrap")]
-        let authz_result = "launcher";
-        #[cfg(feature = "layer1-bootstrap")]
-        let _ = caller_role;
-        #[cfg(not(feature = "layer1-bootstrap"))]
         let supplied_join = audit_context
             .audit_join
             .as_ref()
             .map(|join| (join.zone_id.as_str(), join.operation_identity.as_str()));
-        #[cfg(feature = "layer1-bootstrap")]
-        let supplied_join = None;
         let has_typed_terminal = matches!(
             self,
             Self::Unimplemented { .. }
-                | Self::UnknownOperation { .. }
                 | Self::UsbipDeviceNotAllowed { .. }
                 | Self::UsbipPolicyMismatch { .. }
                 | Self::CoexistenceRefused { .. }
@@ -11408,40 +10582,6 @@ impl BrokerError {
                     bundle_metadata.bundle_hash,
                     audit_context.duration_us(),
                     Some(serde_json::json!({ "target_wave": target_wave })),
-                    supplied_join,
-                )?;
-            }
-            Self::UnknownOperation { operation: op } => {
-                audit_log.write_entry_with_caller_ids(
-                    operation,
-                    caller_uid,
-                    caller_gid,
-                    "unknown-operation",
-                    opaque_target_id,
-                    "denied",
-                )?;
-                audit_log.record_with_join(
-                    op,
-                    opaque_target_id,
-                    caller_uid,
-                    caller_gid,
-                    audit_context.peer_pid,
-                    audit_context.peer_role.as_str(),
-                    authz_result,
-                    "",
-                    opaque_target_id,
-                    audit_context.verb.as_str(),
-                    audit_context.request_fields.clone(),
-                    "denied-unknown",
-                    Some("unknown-operation"),
-                    None,
-                    bundle_metadata.bundle_version,
-                    bundle_metadata.bundle_hash,
-                    audit_context.duration_us(),
-                    Some(serde_json::json!({
-                        "reason": "broker does not yet implement USBIP live-device-routing ops",
-                        "target_wave": "W6"
-                    })),
                     supplied_join,
                 )?;
             }
@@ -11901,13 +11041,6 @@ impl BrokerError {
                 operation,
                 target_wave,
             } => unimplemented_response(operation, target_wave),
-            Self::UnknownOperation { operation } => error_response(
-                "unknown-operation",
-                operation,
-                Some("W6"),
-                &format!("{operation} is USBIP live-device-routing and is not yet implemented."),
-                "USBIP live-device-routing is not yet implemented; only `UsbipBindFirewallRule` skeleton support ships today.",
-            ),
             Self::AuditRequiresAdmin => authz_audit_requires_admin_response(),
             Self::HostShutdownRestricted => error_response(
                 "host-shutdown-restricted",
@@ -11935,7 +11068,7 @@ impl BrokerError {
                 "BundleResolver",
                 Some("W12"),
                 "broker operation failed; details are available only in the redacted audit channel",
-                "Restore the trusted bundle at the broker-configured bundle path and retry; the broker reloads the bundle on the next request.",
+                "rebuild the bundle from a trusted source (nixos-rebuild switch) and verify ownership root:d2bd 0640; refuse to run mutating verbs until the bundle is restored",
             ),
             Self::BundleTampered { .. } => error_response(
                 "bundle-tampered",
@@ -12153,7 +11286,6 @@ fn profile_capabilities(profile: BrokerProfile) -> Vec<String> {
 /// the closed-set wire kind plus the operator-facing message, by the same
 /// path-free contract the wire error envelope uses. `BrokerError`'s
 /// `Debug` is redacted, so the kernel surface cannot format it directly.
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) fn broker_error_kernel_detail(error: BrokerError) -> String {
     match error.into_response() {
         BrokerResponse::Error(response) => {
@@ -12164,15 +11296,6 @@ pub(crate) fn broker_error_kernel_detail(error: BrokerError) -> String {
 }
 
 fn hello_ok_response(profile: BrokerProfile) -> BrokerResponse {
-    #[cfg(feature = "layer1-bootstrap")]
-    {
-        BrokerResponse::HelloOk {
-            server_version: "0.0.0-w2-bootstrap".to_owned(),
-            selected_version: "0.0.0-test".to_owned(),
-            capabilities: profile_capabilities(profile),
-        }
-    }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     {
         BrokerResponse::Hello(d2b_contracts_broker::broker_wire::HelloResponse {
             server_version: "0.0.0-w2".to_owned(),
@@ -12182,19 +11305,12 @@ fn hello_ok_response(profile: BrokerProfile) -> BrokerResponse {
     }
 }
 
-#[cfg(feature = "layer1-bootstrap")]
-fn export_broker_audit_ok_response(lines: Vec<String>) -> BrokerResponse {
-    BrokerResponse::ExportBrokerAuditOk { lines }
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn export_broker_audit_ok_response(
     page: d2b_contracts_broker::broker_wire::ExportBrokerAuditResponse,
 ) -> BrokerResponse {
     BrokerResponse::ExportBrokerAudit(page)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn ack_response(operation: &str) -> BrokerResponse {
     BrokerResponse::Ack(d2b_contracts_broker::broker_wire::AckResponse {
         accepted: true,
@@ -12287,17 +11403,6 @@ fn error_response(
 ) -> BrokerResponse {
     let message = redact_public_detail(message);
     let remediation = redact_public_detail(remediation);
-    #[cfg(feature = "layer1-bootstrap")]
-    {
-        BrokerResponse::Error {
-            kind: kind.to_owned(),
-            operation: operation.to_owned(),
-            target_wave: target_wave.map(str::to_owned),
-            message,
-            remediation,
-        }
-    }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     {
         BrokerResponse::Error(d2b_contracts_broker::broker_wire::BrokerErrorResponse {
             kind: kind.to_owned(),
@@ -12335,7 +11440,6 @@ fn redact_public_detail(detail: &str) -> String {
 /// runs on rather than owning a runtime of its own. The pidfd registry Mutex
 /// is safe to lock from a tokio task: it is never held across an await, and
 /// the reaper's `waitid` calls are non-blocking (`WNOHANG`).
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn start_sigchld_reaper(runtime: &tokio::runtime::Runtime, audit_log: Arc<AuditLog>) {
     // Publish the audit handle so the targeted post-spawn reap can
     // write the same forensic ChildReaped record the SIGCHLD loop does.
@@ -12379,7 +11483,6 @@ fn start_sigchld_reaper(runtime: &tokio::runtime::Runtime, audit_log: Arc<AuditL
 /// U8): the primary reaper's notification is never dropped under a
 /// concurrent reader. The `waitid` probes themselves stay non-blocking
 /// (`WNOHANG`), so no await is held across a syscall.
-#[cfg(not(feature = "layer1-bootstrap"))]
 async fn reap_all_pidfds(audit_log: &AuditLog) {
     use d2b_contracts_broker::broker_wire::{
         ChildExitKind, ChildExitStatus, ChildReapedNotification,
@@ -12444,7 +11547,6 @@ async fn reap_all_pidfds(audit_log: &AuditLog) {
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn reaped_at_ms_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -12458,7 +11560,6 @@ fn reaped_at_ms_now() -> i64 {
 /// audit record the SIGCHLD loop writes, without threading an
 /// `AuditLog` reference through the `DispatchBackend::spawn_runner`
 /// trait boundary.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn broker_audit_log_handle() -> &'static OnceLock<Arc<AuditLog>> {
     static HANDLE: OnceLock<Arc<AuditLog>> = OnceLock::new();
     &HANDLE
@@ -12483,7 +11584,6 @@ fn broker_audit_log_handle() -> &'static OnceLock<Arc<AuditLog>> {
 /// audit record is appended. `ECHILD` means the SIGCHLD loop already
 /// reaped it (also a clean terminal state); `StillAlive` leaves the
 /// child for the SIGCHLD loop.
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TargetedReapOutcome {
     Reaped,
@@ -12492,7 +11592,6 @@ pub(crate) enum TargetedReapOutcome {
     Failed,
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) fn targeted_reap_runner(
     runner_id: &str,
     pidfd: std::os::fd::BorrowedFd<'_>,
@@ -12567,7 +11666,6 @@ pub(crate) fn targeted_reap_runner(
 /// write the forensic audit record when the process-global audit
 /// handle is available. Mirrors [`remove_and_notify`] but resolves the
 /// audit log from the global handle instead of a passed reference.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn deliver_targeted_reap(
     runner_id: &str,
     notif: d2b_contracts_broker::broker_wire::ChildReapedNotification,
@@ -12591,7 +11689,6 @@ fn deliver_targeted_reap(
 /// The registry-removal + audit half shared by the sync and async reap
 /// notification paths; the notification push differs only in how it takes
 /// the buffer lock (plan U8).
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn remove_and_notify_common(
     runner_id: &str,
     notif: &d2b_contracts_broker::broker_wire::ChildReapedNotification,
@@ -12619,7 +11716,6 @@ fn remove_and_notify_common(
 /// Remove the registry entry, push the `ChildReaped` notification, and
 /// write the forensic audit record, from a synchronous context (the
 /// targeted post-spawn reap). The push takes the non-blocking `try_lock`.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn remove_and_notify(
     runner_id: &str,
     notif: d2b_contracts_broker::broker_wire::ChildReapedNotification,
@@ -12632,7 +11728,6 @@ fn remove_and_notify(
 
 /// The async variant of [`remove_and_notify`]: the push waits on the
 /// buffer lock so the SIGCHLD reaper's notification is never dropped.
-#[cfg(not(feature = "layer1-bootstrap"))]
 async fn remove_and_notify_async(
     runner_id: &str,
     notif: d2b_contracts_broker::broker_wire::ChildReapedNotification,
@@ -12647,10 +11742,8 @@ async fn remove_and_notify_async(
 /// sit in uninterruptible sleep), so [`cleanup_spawned_runner_after_failure`]
 /// polls `waitid` with `WNOHANG` under this deadline instead of parking the
 /// executor worker on a blocking wait for as long as the child takes to die.
-#[cfg(not(feature = "layer1-bootstrap"))]
 const SPAWN_ROLLBACK_REAP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
 /// Poll interval for the spawn-rollback reap.
-#[cfg(not(feature = "layer1-bootstrap"))]
 const SPAWN_ROLLBACK_REAP_POLL: std::time::Duration = std::time::Duration::from_millis(10);
 
 /// Kill and asynchronously reap a child when a post-spawn commit step fails.
@@ -12664,7 +11757,6 @@ const SPAWN_ROLLBACK_REAP_POLL: std::time::Duration = std::time::Duration::from_
 /// owns the zombie (it is signal-driven and reaps on death), the next spawn
 /// reservation evicts the stale entry once the process is gone, and while
 /// the child is still alive the entry keeps refusing a duplicate spawn.
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) async fn cleanup_spawned_runner_after_failure(
     runner_id: &str,
     pidfd: std::os::fd::BorrowedFd<'_>,
@@ -12801,29 +11893,20 @@ pub(crate) async fn serve_authority_publication_open(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(not(feature = "layer1-bootstrap"))]
     use d2b_contracts::types::BundleOpId;
-    #[cfg(not(feature = "layer1-bootstrap"))]
     use d2b_contracts_broker::broker_wire::GuestExecutionBinding;
     use nix::unistd::Gid;
-    #[cfg(not(feature = "layer1-bootstrap"))]
     use serde::Serialize;
     use serde_json::Value;
-    #[cfg(not(feature = "layer1-bootstrap"))]
     use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
-    #[cfg(not(feature = "layer1-bootstrap"))]
     use std::os::fd::OwnedFd;
-    #[cfg(not(feature = "layer1-bootstrap"))]
     use std::path::Path;
     use std::path::PathBuf;
-    #[cfg(not(feature = "layer1-bootstrap"))]
     use std::sync::Arc;
-    #[cfg(not(feature = "layer1-bootstrap"))]
     use std::sync::MutexGuard;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     static TEST_USB_SYSFS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     #[test]
@@ -12844,7 +11927,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn network_request_validation_rejects_legacy_and_mixed_scope_refs() {
         let zone_uid =
@@ -12900,7 +11982,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn network_request_validation_rejects_swapped_projection_sysctl_and_hosts_refs() {
         // U12 retired the typed network-family frames: the shape
@@ -13003,7 +12084,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn tap_create_rejects_the_all_none_legacy_shape() {
         // U12 retired the typed CreatePersistentTap frame: the envelope
@@ -13038,7 +12118,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usb_sysfs_test_lock() -> MutexGuard<'static, ()> {
         TEST_USB_SYSFS_LOCK
@@ -13047,7 +12126,6 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn runner_role_mapping_covers_video_and_spawnable_roles() {
         use d2b_contracts_broker::broker_wire::RunnerRole;
@@ -13081,7 +12159,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn guest_execution_binding(session_generation: u64) -> GuestExecutionBinding {
         GuestExecutionBinding {
             target_uid: d2b_contracts_resource::v3::ResourceUid::parse(
@@ -13096,7 +12173,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn guest_runner_registration(binding: GuestExecutionBinding) -> RunnerRegistration {
         RunnerRegistration {
             vm_id: "guest-vm".to_owned(),
@@ -13120,7 +12196,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn guest_runner_registration_rebinds_to_a_newer_session() {
         let mut registration = guest_runner_registration(guest_execution_binding(1));
@@ -13137,7 +12212,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn guest_runner_registration_rejects_stale_or_changed_bindings() {
         for generation in [1, 0] {
@@ -13191,7 +12265,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn qemu_media_enroll_request_fields_redact_raw_busid() {
         let request = BrokerRequest::QemuMediaEnroll(
@@ -13215,7 +12288,6 @@ mod tests {
         assert!(!rendered.contains("usb-Vendor_SecretSerial"));
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn qemu_media_hotplug_request_fields_redact_runtime_busid() {
         let request = BrokerRequest::QemuMediaAttach(
@@ -13235,7 +12307,6 @@ mod tests {
         assert!(!rendered.contains("usb-Vendor_SecretSerial"));
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usbip_request_fields_project_trace_presence_without_trace_value() {
         let trace = d2b_contracts::types::TracingSpanId::new("usb-start-0000000000000001");
@@ -13279,7 +12350,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn qemu_media_boot_request_fields_are_vm_only() {
         let request =
@@ -13296,7 +12366,6 @@ mod tests {
         assert!(!rendered.contains("usb-Vendor_SecretSerial"));
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn qemu_media_lifecycle_request_fields_are_bounded() {
         let request = BrokerRequest::QemuMediaQueryStatus(
@@ -13350,7 +12419,6 @@ mod tests {
         // a source-scanning test would fail on a comment. An arm moved out of the
         // match therefore has to move one of these names with it - which is
         // exactly the moment the retirement has to be decided.
-        #[cfg(not(feature = "layer1-bootstrap"))]
         const DISPATCHED: &[&str] = &[
             "ApplyHostGenerationHandoff",
             "DelegateCgroupV2",
@@ -13399,7 +12467,6 @@ mod tests {
             "UsbipUnbind",
             "ValidateLockSpec",
         ];
-        #[cfg(not(feature = "layer1-bootstrap"))]
         {
             let dispatched: BTreeSet<&str> = DISPATCHED.iter().copied().collect();
             assert_eq!(
@@ -13444,7 +12511,6 @@ mod tests {
         // path - a row that can be dispatched but cannot be audited. The
         // reserved stubs never serve a request, so no record shape is expected
         // of them.
-        #[cfg(not(feature = "layer1-bootstrap"))]
         {
             // Served, but their records carry no typed field shape yet. Pinned
             // so the gap cannot grow while the audit shapes are brought up to
@@ -13489,7 +12555,6 @@ mod tests {
         // by name through the fallback arm; the mirror image is a row that is
         // neither stubbed nor dispatchable, which would be a row the broker
         // commits and then cannot reach at all.
-        #[cfg(not(feature = "layer1-bootstrap"))]
         {
             let mut both_stubbed_and_dispatchable: Vec<&str> = Vec::new();
             for name in crate::catalog::WIRE_VARIANTS {
@@ -13552,7 +12617,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_json_file<T: Serialize>(path: &Path, value: &T) {
         use std::os::unix::fs::PermissionsExt;
@@ -13568,7 +12632,6 @@ mod tests {
         fs::set_permissions(path, perms).expect("chmod test json to 0640");
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     struct TestBundle {
         bundle_path: PathBuf,
         manifest_path: PathBuf,
@@ -13584,7 +12647,6 @@ mod tests {
         resolver: Arc<BundleResolver>,
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn build_test_bundle(root: &Path) -> TestBundle {
         use d2b_contracts_resource::v3::IfName;
         use d2b_core::bundle::{Bundle, BundleGeneration};
@@ -13855,7 +12917,6 @@ mod tests {
         let bundle = Bundle {
             bundle_version: 1,
             schema_version: "v3".to_owned(),
-            privileges_path: "privileges.json".to_owned(),
             storage_path: Some("storage.json".to_owned()),
             realm_workloads_launcher_v2_path: None,
             generation: BundleGeneration {
@@ -13897,7 +12958,6 @@ mod tests {
     /// The test bundle's storage contract: one declared directory row whose
     /// `path_template` is `store_root`, which is the shared-storage root
     /// the serving-worker ACL grant proves `--shared-dir=` against.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn test_storage_contract(store_root: &Path) -> d2b_core::storage::StorageJson {
         use d2b_contracts::contract_id::{ContractId, PathTemplate};
         use d2b_core::storage::{
@@ -13950,7 +13010,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn set_usbip_allowlist(
         bundle: &mut TestBundle,
         allowlist: Vec<d2b_core::host::VendorProductPair>,
@@ -13959,7 +13018,6 @@ mod tests {
         resolver.test_set_usbip_allowlist("corp-vm", allowlist);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn prepare_test_usb_sysfs_device(vendor: &str, product: &str, devpath: &str) -> PathBuf {
         let root = d2b_core::test_support::scratch_root("runtime-usb-sysfs").join("runtime-usb-sysfs-root");
@@ -13978,7 +13036,6 @@ mod tests {
         root
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn test_server_config(root: &Path, manifest_path: &Path) -> ServerConfig {
         ServerConfig {
             profile: BrokerProfile::Host,
@@ -14004,12 +13061,10 @@ mod tests {
             // every forwarded operation, which is the fail-closed default.
             forward_socket_path: None,
             test_mode: true,
-            #[cfg(not(feature = "layer1-bootstrap"))]
             retired_wire_variants: RETIRED_WIRE_VARIANTS,
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn test_usbip_intent_with_lock(
         root: &Path,
@@ -14027,7 +13082,6 @@ mod tests {
     /// appended for `config` (today's rotated file). Returns the parsed
     /// records plus the raw JSON objects so tests can assert both the
     /// typed shape and the exact serialized key-set.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn read_store_sync_export(
         config: &ServerConfig,
@@ -14062,7 +13116,6 @@ mod tests {
 
     /// Assert the exported JSON object's key-set equals the signed
     /// allow-list and that no redaction field leaked.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn assert_export_allow_list(obj: &serde_json::Map<String, serde_json::Value>) {
         use crate::ops::store_sync_export::{EXPORTED_KEYS, REDACTED_KEYS};
         let mut actual: Vec<&str> = obj.keys().map(String::as_str).collect();
@@ -14081,7 +13134,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn executable_identity_accepts_trusted_symlink_paths() {
@@ -14090,7 +13142,6 @@ mod tests {
         assert!(executable_paths_match(&actual, expected).await);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn executable_identity_accepts_static_wrapper_exec_target() {
@@ -14115,7 +13166,6 @@ mod tests {
         .await);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn executable_observation_keeps_permission_denied_distinct_from_a_mismatch() {
@@ -14130,7 +13180,6 @@ mod tests {
         assert!(observed.is_verified_for_registered(true, true));
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn typed_process_cgroup_scope_is_private_and_collision_safe() {
         let placement = d2b_core::sandbox_profile::CgroupPlacement {
@@ -14147,7 +13196,6 @@ mod tests {
         assert!(first.subtree.starts_with("d2b.slice/process-"));
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn typed_zone_guest_cgroup_scope_is_private_and_collision_safe() {
         let placement = d2b_core::sandbox_profile::CgroupPlacement {
@@ -14166,7 +13214,6 @@ mod tests {
         assert!(first.subtree.starts_with("d2b.slice/process-"));
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn typed_runner_registry_keys_use_opaque_runtime_scope() {
         let resource_ref =
@@ -14199,7 +13246,6 @@ mod tests {
         assert!(!first.contains("Process/worker"));
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn typed_process_metadata_rejects_substituted_provider_and_template() {
         let intent = d2b_core::test_support::ResolvedRunnerIntentBuilder::new()
@@ -14263,7 +13309,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn typed_spawn_allowlist_rejects_identity_and_runtime_substitutions() {
         use d2b_contracts::types::{BundleOpId, RoleId, VmId};
@@ -14384,7 +13429,6 @@ mod tests {
     /// an untyped ProviderController). The returned posture is the carried
     /// value the rest of the arm reads (uid/gid, response indices, backend
     /// escrow custody).
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn admission_posture(
         req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
         intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
@@ -14396,7 +13440,6 @@ mod tests {
         Ok(posture)
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn provider_controller_template_identity(profile_id: &str) -> [u8; 32] {
         let mut digest = Sha256::new();
         digest.update(b"d2b-process-template-v1");
@@ -14404,7 +13447,6 @@ mod tests {
         digest.finalize().into()
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn provider_identity_digest(provider_name: &str) -> [u8; 32] {
         let mut digest = Sha256::new();
         digest.update(b"d2b-process-provider-v1");
@@ -14418,7 +13460,6 @@ mod tests {
     /// (`uid = gid = principal >= 50_000`, in-NS root mapped to it). The
     /// single raw condition lives in `intent_is_serving_worker_template`;
     /// every fixture below reaches it through the production code paths.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn serving_worker_runner_intent() -> d2b_core::bundle_resolver::ResolvedRunnerIntent {
         let mut intent = d2b_core::test_support::ResolvedRunnerIntentBuilder::new()
             .with_intent_id("runner:vm:host-system:role:volume-worker")
@@ -14440,7 +13481,6 @@ mod tests {
 
     /// A fully typed Process launch request for `intent`, in the shape the
     /// dispatch arm sees after daemon-side classification.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn typed_runner_request(
         intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
         role: RunnerRole,
@@ -14526,7 +13566,6 @@ mod tests {
     /// Executor identity is deliberately NOT part of it: no posture decides
     /// it (`prepare_runner_launch_identity` takes it from the trusted intent,
     /// and `serving_worker_launch_runs_as_the_intent_principal` pins that).
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[derive(Debug, PartialEq, Eq)]
     struct PostureDecisions {
         bootstrap_response_index: Option<u32>,
@@ -14539,7 +13578,6 @@ mod tests {
         rejects_over_max_fds: bool,
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn posture_decisions(posture: LaunchPosture) -> PostureDecisions {
         PostureDecisions {
             bootstrap_response_index: posture.bootstrap_response_index(),
@@ -14559,7 +13597,6 @@ mod tests {
     /// the trusted-intent fence, and the posture predicate itself ignores
     /// every request field, so no request can select the daemon uid/gid,
     /// the in-namespace root mapping, or the zero-fd escrow exemption.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn untyped_provider_controller_cannot_claim_serving_worker_posture() {
         use d2b_contracts::types::{BundleOpId, RoleId, VmId};
@@ -14654,7 +13691,6 @@ mod tests {
     /// VolumeBinding, keeps the zero-fd escrow exemption (enforced: an
     /// escrow-shaped descriptor set is refused), runs as the trusted intent's
     /// principal, and advertises no bootstrap index.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn serving_worker_posture_decides_the_whole_launch() {
         use d2b_contracts_resource::v3::ResourceRef;
@@ -14744,7 +13780,6 @@ mod tests {
     /// posture, and the serving worker's two ticket-named trees are opened to
     /// that principal with per-runner ACLs instead: this drives the same
     /// entry point the dispatch arm calls, with the daemon's own ticket argv.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn serving_worker_launch_runs_as_the_intent_principal() {
@@ -14831,7 +13866,6 @@ mod tests {
     /// It must carry the bootstrap escrow descriptor (the broker retains it
     /// as registry custody and returns no duplicate), keeps the intent
     /// uid/gid, and its owner fence is the bundle owner.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn controller_escrow_posture_decides_the_whole_launch() {
         use d2b_contracts_resource::v3::ResourceRef;
@@ -14890,7 +13924,6 @@ mod tests {
     /// Ordinary runner posture: the descriptor decision set at once. No
     /// escrow descriptor is admitted or advertised, and the console-socket
     /// index is used when the launch carries extra response fds.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn standard_posture_decides_the_whole_launch() {
         use d2b_core::processes::ProcessRole;
@@ -14936,7 +13969,6 @@ mod tests {
     /// controller: zero escrow descriptors, the intent's principal uid/gid,
     /// and a Device owner (the Device the row is declared under). Its template
     /// identity is the declared template, not the per-row role id.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn device_worker_posture_decides_the_whole_launch() {
         use d2b_contracts_resource::v3::ResourceRef;
@@ -15018,7 +14050,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn open_pidfd_maps_cloud_hypervisor_compat_role_to_bundle_intent() {
         assert_eq!(
@@ -15031,7 +14062,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn dummy_fd() -> OwnedFd {
         std::fs::File::open("/dev/null")
@@ -15039,7 +14069,6 @@ mod tests {
             .into()
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn is_uuid_v4_like(value: &str) -> bool {
         let chars: Vec<char> = value.chars().collect();
         chars.len() == 36
@@ -15051,7 +14080,6 @@ mod tests {
             && matches!(chars.get(19), Some('8' | '9' | 'a' | 'b'))
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[derive(Default)]
     struct FakeDispatchBackend {
         registered_runners: Mutex<std::collections::BTreeSet<String>>,
@@ -15059,14 +14087,12 @@ mod tests {
         envelope: crate::envelope::BrokerEnvelope,
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum FakeUsbipEvent {
         Bind { intent_id: String },
         Unbind { intent_id: String },
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     impl FakeDispatchBackend {
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn remember_runner(&self, runner_id: &str) -> Result<(), BrokerError> {
@@ -15106,7 +14132,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     impl DispatchBackend for FakeDispatchBackend {
         fn operation_envelope(&self) -> &crate::envelope::BrokerEnvelope {
             &self.envelope
@@ -15341,7 +14366,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn qemu_media_lifecycle_dispatch_audits_mutations_but_not_status_poll() {
@@ -15450,7 +14474,6 @@ mod tests {
     /// from an accepted socket, matching a runner intent - stays on the
     /// family side after the cut, so the broker-side surface is exactly
     /// this kernel seam.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn retired_process_family_kernels_dispatch_through_the_envelope() {
@@ -15765,7 +14788,6 @@ mod tests {
     /// the pure-admission seed-dnsmasq-lease kernel is pinned on its full
     /// admit/refuse surface, and the field-contract kernels are pinned on
     /// their payload refusals.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn retired_network_family_kernels_dispatch_through_the_envelope() {
@@ -16277,7 +15299,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn consume_cell_and_complete_cell_dispatch_through_the_envelope() {
@@ -16370,7 +15391,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn consume_cell_concurrent_callers_have_exactly_one_winner() {
@@ -16439,7 +15459,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn consume_cell_durable_records_refuse_replay_after_store_reopen() {
         // Restart-replay resistance (AE2) over the kernel's durable leg:
@@ -16823,7 +15842,6 @@ mod tests {
     /// This is the whole production entry: the frame is written to a real
     /// seqpacket pair and [`handle_connection`] reads it, screens it, and
     /// answers. Nothing here is a seam the broker does not use in production.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn serve_one_frame(label: &str, frame: &serde_json::Value) -> BrokerResponse {
         use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
@@ -16882,7 +15900,6 @@ mod tests {
     /// JSON, it is not a `RequestEnvelope`, and the typed decode dropped it as
     /// malformed wire with the connection closed and no answer. Now the caller
     /// is told, by name, exactly what it presented.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn the_accept_loop_refuses_a_raw_launch_posture_by_name() {
         use crate::envelope::AUTHORITY_PARAMETER;
@@ -16908,7 +15925,6 @@ mod tests {
     /// the broker can show no accepted, unfenced authority for the Zone it
     /// names. It is a refusal, not a fall-through to the typed path and not a
     /// permissive admit.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn the_accept_loop_refuses_an_effect_for_a_zone_with_no_accepted_projection() {
         use crate::envelope::UNACCEPTED_PROJECTION;
@@ -16933,7 +15949,6 @@ mod tests {
     /// [`install_live_admitted_effects`] serve calls, so what a case below
     /// observes is the table and the private values production resolved at
     /// startup, not a table this module's tests assembled.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn production_admitted_effect_wiring(label: &str) -> (&'static AdmittedEffectWiring, PathBuf) {
         let root = test_audit_dir(label);
         fs::create_dir_all(&root).expect("create audit test dir");
@@ -16965,7 +15980,6 @@ mod tests {
     /// nothing else. The moment a declared implementation is added to the
     /// installed table, this case fails, because the answer stops being a
     /// refusal.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[tokio::test]
     async fn the_installed_admitted_effect_table_serves_no_operation() {
         use crate::envelope::{AdmittedEffectAdmission, ProjectionPosture, UNKNOWN_IMPLEMENTATION};
@@ -17030,7 +16044,6 @@ mod tests {
     /// path the accept loop runs, rather than the screen behind it: the
     /// observable is the response a peer would actually receive, so the
     /// closed code and the fixed operator phrase are both pinned here.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn a_raw_launch_posture_is_refused_at_the_boundary_with_its_named_code() {
         use crate::envelope::{ADMITTED_EFFECT_REFUSALS, AUTHORITY_PARAMETER};
@@ -17068,7 +16081,6 @@ mod tests {
     /// production path, under its own closed code: there is no translation and
     /// no route into a legacy handler, and a retired variant keeps the code
     /// that names the version boundary it has not moved past.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn a_legacy_frame_is_refused_at_the_boundary_with_its_own_code() {
         use crate::envelope::{LEGACY_EFFECT_REQUEST, STALE_WIRE_VERSION};
@@ -17098,7 +16110,6 @@ mod tests {
     /// effect, and the refusal is the boundary's own closed code rather than a
     /// bypass. The posture is read from the broker's own projection, so an
     /// absent store is an absent authority - never an unconditional admit.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[tokio::test]
     async fn an_unaccepted_projection_answers_its_own_closed_code() {
         use crate::envelope::{ProjectionPosture, UNACCEPTED_PROJECTION};
@@ -17172,7 +16183,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn spawn_process_usbip_backend_extends_mount_policy_with_device_binds() {
@@ -17265,7 +16275,6 @@ mod tests {
     /// a launch it refuses with `presentation-requires-mount-realization` and
     /// NO ordinary Process launch reaches its binary. The realization is
     /// derived from the row's own mount policy, so this exact row launches.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn spawn_process_applies_the_production_mount_policy_rather_than_refusing_it() {
@@ -17315,7 +16324,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn spawn_process_serving_worker_grants_ticket_tree_acls() {
@@ -17398,7 +16406,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn spawn_process_cloud_hypervisor_unlinks_stale_socket_before_spawn() {
@@ -17465,7 +16472,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn spawn_process_refuses_a_second_live_spawn_for_the_same_runner() {
@@ -17561,7 +16567,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn publish_trusted_context_updates_the_store_and_acks_the_epoch() {
@@ -17680,7 +16685,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn the_ownership_matrix_preflight_caller_answers_through_the_envelope_end_to_end() {
@@ -17795,7 +16799,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn an_absent_forwarding_peer_refuses_the_preflight_with_the_unregistered_handler_code() {
@@ -17867,7 +16870,6 @@ mod tests {
     /// rendezvous-shaped half and answers only from bytes it read off the
     /// accepted connection, so the operation/zone/payload assertions are
     /// grounded in what actually crossed the socket.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn an_envelope_invoke_root_call_crosses_the_carrier_and_returns_the_result() {
@@ -17986,7 +16988,6 @@ mod tests {
     /// holds is refused with the envelope's closed `unregistered-handler`
     /// code inside the `EnvelopeInvoke` response, so the caller sees the
     /// refusal code and the invocation id instead of a transport error.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn an_envelope_invoke_call_without_a_serving_peer_refuses_with_the_closed_code() {
@@ -18053,7 +17054,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn an_unwritable_state_dir_refuses_publications_fail_closed_without_taking_the_broker_down() {
@@ -18148,7 +17148,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn dispatch_request_writes_typed_op_audit_records_for_all_live_arms() {
@@ -18494,7 +17493,6 @@ mod tests {
     /// unprivileged. `host_generation` controls the resolved generation so
     /// a mismatching wire token can deterministically force a pre-lock
     /// failure. Returns the bundle plus the per-VM hardlink-farm root.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn store_sync_dispatch_bundle(root: &Path, host_generation: u32) -> (TestBundle, PathBuf) {
         use d2b_contracts_resource::v3::ZoneId;
@@ -18536,7 +17534,6 @@ mod tests {
 
     /// Build a minimal verified v3 zone resource bundle carrying one Guest
     /// (`corp-vm`) so zone-native accessors resolve it in the `work` Zone.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn zone_bundle_with_guest(zone: &str, guest: &str) -> Vec<u8> {
         use std::collections::BTreeMap;
 
@@ -18573,7 +17570,6 @@ mod tests {
         serde_json::to_vec(&bundle).expect("serialize zone resource bundle")
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn store_sync_request(
         generation_token: u32,
     ) -> d2b_contracts_broker::broker_wire::BrokerRequest {
@@ -18595,7 +17591,6 @@ mod tests {
     /// W3 success emission must survive the W4 dispatch-arm refactor: the
     /// first (non-fast) sync emits EXACTLY ONE allowed terminal record with
     /// the deferred-cleanup `ok_non_fast_path` shape.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn store_sync_dispatch_emits_single_success_record() {
@@ -18703,7 +17698,6 @@ mod tests {
     /// surface of the converted call: a valid join builds the context
     /// without panicking, and a supplied join that mismatches the request's
     /// canonical join is refused with the typed Protocol error.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn from_request_refuses_a_malformed_audit_join_with_a_typed_protocol_error() {
         let request = store_sync_request(7);
@@ -18741,7 +17735,6 @@ mod tests {
     /// A second sync of the same closure must take the fast path and still
     /// emit EXACTLY ONE allowed record carrying `skipped_fast_path` +
     /// `fast_path`.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn store_sync_dispatch_fast_path_emits_single_skipped_record() {
@@ -18840,7 +17833,6 @@ mod tests {
     /// `failed` terminal record (decision = errored), leak no guest
     /// metadata, and NOT produce a duplicate record when the outer
     /// error-audit path runs.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn store_sync_dispatch_failure_emits_single_signed_failure_record() {
@@ -19002,7 +17994,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn otel_host_bridge_socket_path_errors_without_unix_listen() {
         let argv = vec![
@@ -19015,7 +18006,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn cleanup_otel_host_bridge_stale_socket_noop_for_other_role() {
@@ -19027,7 +18017,6 @@ mod tests {
             .expect("non-bridge role is a no-op");
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn cleanup_otel_host_bridge_stale_socket_rejects_path_outside_otel_runtime_dir() {
@@ -19053,8 +18042,6 @@ mod tests {
     // declaring provider's tests (U10d2). The
     // `spawn_runner_rejects_otel_host_bridge_intent_for_non_obs_vm`
     // broker-side test was retired with the typed `SpawnRunner` arm.
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    #[cfg(not(feature = "layer1-bootstrap"))]
     // The retired `SignalRunner` arm refused a runner the broker's
     // metadata registry did not know (`NoPidfd`). The U10 kernel surface
     // is registry-free by design - the daemon passes the pidfd it
@@ -19160,7 +18147,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_bind_rejects_device_outside_allowlist() {
@@ -19202,7 +18188,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_bind_rejects_missing_allowlist_as_required_policy() {
@@ -19233,7 +18218,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_bind_rejects_topology_mismatch_as_required_policy() {
@@ -19283,7 +18267,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usb_broker_ipc_refuses_non_daemon_so_peercred_before_dispatch() {
@@ -19414,7 +18397,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_retired_variant_call_from_an_old_binary_is_refused_with_the_stale_wire_code_and_audited() {
@@ -19508,7 +18490,6 @@ mod tests {
     /// A current wire variant passes the gate: the Value-first decode with
     /// an empty production retirement table serves the request exactly as
     /// the typed decode did, so the gate is a tax only retired variants pay.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_current_wire_variant_passes_the_retired_wire_gate() {
@@ -19585,7 +18566,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usb_broker_ipc_validation_rejects_traversal_and_oversized_inputs() {
         use d2b_contracts::types::{BundleOpId, ScopeId};
@@ -19665,7 +18645,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usb_broker_ipc_validation_is_shape_only_not_authorization() {
         use d2b_contracts::types::{BundleOpId, ScopeId};
@@ -19699,7 +18678,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn tap_create_validation_binds_every_identity_component_before_dispatch() {
         use d2b_contracts::types::{BundleOpId, RoleId, VmId};
@@ -19853,7 +18831,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn tap_fd_validation_requires_the_same_complete_identity() {
         use d2b_contracts::types::{BundleOpId, RoleId, VmId};
@@ -19935,7 +18912,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usb_broker_public_errors_are_fail_secure() {
         let sensitive = [
@@ -19983,7 +18959,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usb_audit_identity_keeps_vid_pid_and_redacts_raw_serial() {
         let identity = usb_audit_device_identity(
@@ -20005,7 +18980,6 @@ mod tests {
         assert!(!encoded.contains("serial-should-never-serialize"));
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usb_audit_identity_uses_deterministic_hmac_serial_correlation() {
         let keyring = UsbAuditSerialHmacKeyring {
@@ -20037,7 +19011,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usb_audit_identity_emits_current_and_previous_key_correlations() {
         let keyring = UsbAuditSerialHmacKeyring {
@@ -20069,7 +19042,6 @@ mod tests {
         assert_eq!(previous.hmac_sha256.len(), 64);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usb_audit_rotation_event_is_scrubbed_and_bounded() {
         let keyring = UsbAuditSerialHmacKeyring {
@@ -20118,7 +19090,6 @@ mod tests {
         assert!(!rendered.contains("1-2.3"));
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_bind_audit_failure_rolls_back_backend_bind_and_acl() {
@@ -20185,7 +19156,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_bind_acl_grant_failure_releases_lock_after_successful_rollback_unbind() {
@@ -20227,7 +19197,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_bind_acl_grant_failure_does_not_rollback_same_vm_replay() {
@@ -20267,7 +19236,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_bind_audit_failure_does_not_rollback_same_vm_replay() {
@@ -20312,7 +19280,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_proxy_reconcile_skips_absent_locked_device_acl_refresh() {
@@ -20351,7 +19318,6 @@ mod tests {
         let _ = fs::remove_dir_all(&sysfs_root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_unbind_acl_revoke_failure_releases_lock_when_device_is_unbound() {
@@ -20386,7 +19352,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_unbind_acl_revoke_failure_preserves_lock_when_device_still_bound() {
@@ -20435,7 +19400,6 @@ mod tests {
     // ------------------------------------------------------------------
 
     /// Helper that tracks grant/revoke calls for retry function unit tests.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[derive(Default, Debug)]
     struct AclCallLog {
         grants: Vec<PathBuf>,
@@ -20443,7 +19407,6 @@ mod tests {
         sleeps: usize,
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn retry_acl_grant_succeeds_immediately_when_node_is_stable() {
@@ -20473,7 +19436,6 @@ mod tests {
         assert_eq!(log.sleeps, 0, "no sleep on first-attempt success");
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn retry_acl_grant_converges_after_transient_node_change() {
@@ -20533,7 +19495,6 @@ mod tests {
         assert_eq!(log.sleeps, 1, "exactly one sleep between attempts");
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn retry_acl_grant_fails_when_verify_permanently_fails() {
@@ -20575,7 +19536,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn retry_acl_grant_revokes_before_every_retry_on_post_grant_verify_failure() {
@@ -20629,7 +19589,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn retry_acl_grant_tolerates_benign_enoent_during_revoke() {
@@ -20687,7 +19646,6 @@ mod tests {
         assert!(log.grants.contains(&node_b), "retry grant on stable node B");
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usb_audit_rotation_audit_dedupe_suppresses_repeats_and_allows_retry() {
         let unique = SystemTime::now()
@@ -20713,7 +19671,6 @@ mod tests {
         unmark_usb_audit_serial_hmac_rotation_audit_logged(&retry_dedupe_key);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_bind_with_previous_serial_hmac_key_emits_one_rotation_audit_record_per_key_pair() {
@@ -20918,7 +19875,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn usb_audit_serial_hmac_keyring_creates_root_only_current_key_and_reads_previous() {
@@ -21093,7 +20049,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_static_busid_owner_is_global_authority() {
@@ -21198,7 +20153,6 @@ mod tests {
                     started_at: Instant::now(),
                     audit_join: None,
                 };
-                #[cfg(not(feature = "layer1-bootstrap"))]
                 case.error
                     .audit(
                         &log,
@@ -21207,18 +20161,6 @@ mod tests {
                         &CallerRole::AdminUid { uid: 1000 },
                         &audit_context,
                         None,
-                        case.operation,
-                        &case.target_id,
-                    )
-                    .expect("audit error");
-                #[cfg(feature = "layer1-bootstrap")]
-                case.error
-                    .audit(
-                        &log,
-                        1000,
-                        caller_gid,
-                        &CallerRole::AdminUid { uid: 1000 },
-                        &audit_context,
                         case.operation,
                         &case.target_id,
                     )
@@ -21266,7 +20208,6 @@ mod tests {
         let _ = fs::remove_dir_all(&audit_dir);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     mod reap_tests {
         use super::*;
         use d2b_contracts_broker::broker_wire::{
@@ -22041,7 +20982,6 @@ mod tests {
     /// server read the first connection's frame inline on its accept thread,
     /// so the second client's request stayed in the listen backlog, unaccepted,
     /// until the silent connection closed - and the read below timed out.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_silent_connection_does_not_hold_the_next_request() {

@@ -78,7 +78,6 @@ fn bundle() -> Bundle {
         bundle_version: 4,
         schema_version: "v2".to_owned(),
 
-        privileges_path: "privileges.json".to_owned(),
         storage_path: None,
 
         realm_workloads_launcher_v2_path: None,

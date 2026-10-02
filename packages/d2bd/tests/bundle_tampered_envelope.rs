@@ -57,7 +57,6 @@ fn minimal_bundle_json() -> Vec<u8> {
         "publicManifestPath": "vms.json",
         "hostPath": "host.json",
         "processesPath": "processes.json",
-        "privilegesPath": "privileges.json",
         "closures": [],
         "minijailProfiles": [],
         "managedKeys": {

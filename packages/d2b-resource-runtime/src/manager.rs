@@ -57,12 +57,15 @@ use std::time::Duration;
 
 use ractor::{Actor, ActorCell, ActorProcessingErr, ActorRef};
 use tokio::sync::oneshot;
+use crate::authority_journal::{CommitOutcome, CommittedPublication, DesiredMutation, TransactionRecovery};
+use crate::authority_publish::{AuthorityPublisher, PublicationRefusal, PublishError};
 use crate::context::{
     ChildEnsure, ManagerEndpoint, SpecDecoder, WatchId,
     WatchRegistration as InternalWatchRegistration,
 };
 use crate::spec_store::EnsureOutcome;
 use crate::error::ResourceError;
+use crate::authority_journal::AcceptedPublication;
 use crate::identity::{ResourceKey, ResourceProvenance, ResourceTypeName, StoredDesiredResource};
 use crate::provider::ProviderDirectory;
 use crate::resource::{ResourceActor, ResourceActorArgs, ResourceMsg, ResourceStatus};
@@ -627,6 +630,9 @@ pub enum ResourceManagerMsg {
 pub struct ResourceManagerState {
     zone: String,
     store: Arc<SpecStore>,
+    /// The broker half of every durable authority mutation (KTD6): the two
+    /// calls that cross the privileged boundary, bound to this Zone.
+    authority: Arc<dyn AuthorityPublisher>,
     providers: Arc<ProviderDirectory>,
     hub: Arc<WatchHub>,
     admission: Arc<dyn MutationAdmission>,
@@ -853,6 +859,110 @@ impl ResourceManagerState {
         self.by_owner.get(key).is_some_and(|children| !children.is_empty())
     }
 
+    /// Adopt, or explicitly refuse, every transaction this Zone still owes
+    /// an outcome for (R41, AE18).
+    ///
+    /// This runs before any row is loaded and before any actor spawns, so a
+    /// restart never cleans up against authority the broker has not
+    /// accepted: a staged or prepared candidate that committed nothing is
+    /// released on both sides, and a committed candidate whose
+    /// acknowledgment was lost is republished exactly as it committed.
+    pub(crate) async fn adopt_outstanding(&self) -> Result<(), ResourceError> {
+        let recovery = self
+            .store
+            .zone_recovery(&self.zone)
+            .await
+            .map_err(ResourceError::from)?;
+        for (_, decision) in recovery.transactions {
+            match decision {
+                TransactionRecovery::ResumeOrDiscard { transaction } => {
+                    self.store
+                        .cancel_transaction(transaction.transaction)
+                        .await
+                        .map_err(ResourceError::from)?;
+                }
+                TransactionRecovery::ReplayOrCancel { transaction } => {
+                    // The broker holds a fence for a candidate that committed
+                    // nothing. The store still holds the exact projection that
+                    // fence was validated against, so recovery replays it
+                    // rather than releasing the fence: an abandoned fence
+                    // would be a lock this half could forget to unlock.
+                    let replayed =
+                        self.store
+                            .commit_mutation(transaction.transaction)
+                            .await
+                            .map_err(ResourceError::from)?;
+                    let committed = match replayed {
+                        CommitOutcome::Committed(committed)
+                        | CommitOutcome::AlreadyCommitted(committed) => committed,
+                        CommitOutcome::Unchanged { .. } => {
+                            return Err(ResourceError::ManagerRejected {
+                                reason: format!(
+                                    "publication transaction {} replayed a candidate that \
+                                     commits nothing",
+                                    transaction.transaction
+                                ),
+                            });
+                        }
+                    };
+                    let CommittedPublication {
+                        transaction,
+                        zone,
+                        incarnation,
+                        sequence,
+                        candidate,
+                        ..
+                    } = &committed;
+                    let accepted =
+                        self.authority.commit(&committed).await.map_err(ResourceError::Publication)?;
+                    self.store
+                        .acknowledge(AcceptedPublication {
+                            transaction: *transaction,
+                            zone: zone.clone(),
+                            incarnation: incarnation.clone(),
+                            sequence: *sequence,
+                            candidate: candidate.clone(),
+                        })
+                        .await
+                        .map_err(ResourceError::from)?;
+                    if accepted.sequence != *sequence {
+                        return Err(ResourceError::Publication(
+                            PublicationRefusal::UnknownTransaction { transaction: accepted.transaction },
+                        ));
+                    }
+                }
+                TransactionRecovery::ReplayCommit { transaction, publication } => {
+                    let committed = CommittedPublication {
+                        transaction: transaction.transaction,
+                        zone: transaction.zone.clone(),
+                        incarnation: transaction.incarnation.clone(),
+                        sequence: transaction.sequence,
+                        candidate: transaction.candidate.clone(),
+                        publication,
+                    };
+                    let accepted =
+                        self.authority.commit(&committed).await.map_err(ResourceError::Publication)?;
+                    self.store
+                        .acknowledge(crate::authority_journal::AcceptedPublication {
+                            transaction: committed.transaction,
+                            zone: committed.zone.clone(),
+                            incarnation: committed.incarnation.clone(),
+                            sequence: committed.sequence,
+                            candidate: committed.candidate.clone(),
+                        })
+                        .await
+                        .map_err(ResourceError::from)?;
+                    if accepted.sequence != committed.sequence {
+                        return Err(ResourceError::Publication(
+                            PublicationRefusal::UnknownTransaction { transaction: accepted.transaction },
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Retire one cleanup-completed row whose owned children are gone: drop
     /// the durable row, retire the index entries, and publish the deletion.
     /// An owner whose own cleanup completed while this row was still alive
@@ -864,7 +974,10 @@ impl ResourceManagerState {
             .get(key)
             .and_then(|row| row.owner_uid)
             .and_then(|owner_uid| self.by_uid.get(&owner_uid).cloned());
-        let _ = self.store.remove_after_cleanup(key.clone()).await;
+        let _ = self
+            .store
+            .publish(DesiredMutation::Remove(key.clone()), self.authority.as_ref())
+            .await;
         // The realization is gone; its directory record goes with it (U13).
         // Releasing one assignment never touches the guest session, another
         // assignment, or another realization (R20).
@@ -986,7 +1099,19 @@ impl ResourceManagerState {
                 metadata: row.metadata.clone(),
             },
         )?;
-        let outcome = self.store.ensure(row).await.map_err(ResourceError::from)?;
+        // The durability boundary (KTD6): the mutation is staged, fenced by
+        // the broker, committed, and acknowledged before this returns, so the
+        // actor that observes the committed row also observes the accepted
+        // revision that authorizes it.
+        let outcome = self
+            .store
+            .publish(DesiredMutation::Ensure(row), self.authority.as_ref())
+            .await
+            .map_err(ResourceError::from)?
+            .ensure()
+            .ok_or(ResourceError::ManagerRejected {
+                reason: "an ensure committed no desired row".to_owned(),
+            })?;
         let committed = outcome.row().clone();
         let changed = matches!(outcome, EnsureOutcome::Created(_) | EnsureOutcome::Updated(_));
         self.index_row(committed.clone());
@@ -1063,8 +1188,18 @@ impl ResourceManagerState {
         // `Delete` message below, so the driver's pre-drain hook never runs
         // against a row that still admits new authority, and every child
         // ensure that names this parent is refused from here on.
-        match self.store.mark_deleting(key.clone()).await {
-            Ok(row) => {
+        match self
+            .store
+            .publish(DesiredMutation::MarkDeleting(key.clone()), self.authority.as_ref())
+            .await
+        {
+            Ok(outcome) => {
+                let row = outcome
+                    .row()
+                    .map(|row| row.row.clone())
+                    .ok_or(ResourceError::ManagerRejected {
+                        reason: "the deleting mark committed no desired row".to_owned(),
+                    })?;
                 let generation = row.generation;
                 self.rows.insert(key.clone(), row);
                 self.statuses.insert(key.clone(), ResourceStatus::Deleting);
@@ -1076,8 +1211,10 @@ impl ResourceManagerState {
                     source: ChangeSource::Desired,
                 }).await;
             }
-            Err(SpecStoreError::NotFound { .. }) => return Ok(()),
-            Err(error) => return Err(error.into()),
+            // An absent row is not an error: deletion is idempotent, and a
+            // row retired by an earlier attempt has nothing left to fence.
+            Err(PublishError::Store(SpecStoreError::NotFound { .. })) => return Ok(()),
+            Err(error) => return Err(ResourceError::from(error)),
         }
         match self.actors.get(key).cloned() {
             Some(actor) => {
@@ -1309,6 +1446,10 @@ pub struct ResourceManagerArgs {
     pub zone: String,
     /// The single-writer spec store persisting desired rows.
     pub store: Arc<SpecStore>,
+    /// The broker half of the freeze / commit / publish / acknowledge order
+    /// (KTD6). A manager with no publication binding has no fence, so every
+    /// durable mutation is refused rather than committed unfenced.
+    pub authority: Arc<dyn AuthorityPublisher>,
     /// The per-type provider registry producing resource drivers.
     pub providers: ProviderDirectory,
     pub hub: Arc<WatchHub>,
@@ -1361,6 +1502,7 @@ impl Actor for ResourceManager {
         let mut state = ResourceManagerState {
             zone: args.zone,
             store: args.store,
+            authority: args.authority,
             providers: Arc::new(args.providers),
             hub,
             admission: args.admission,
@@ -1389,6 +1531,15 @@ impl Actor for ResourceManager {
             revision_epoch: 0,
         };
         state.revision_epoch = state.hub.snapshot_revision().epoch;
+        // R41, AE18: every transaction this Zone still owes an outcome for
+        // is adopted or explicitly refused before any row is read and before
+        // any actor spawns. A restart never loads desired rows, and never
+        // cleans up against them, while a candidate the broker has not
+        // accepted is still outstanding.
+        state
+            .adopt_outstanding()
+            .await
+            .map_err(|error| ActorProcessingErr::from(error.to_string()))?;
         // Restart recovery (F2, R15): load durable specs and spawn one actor
         // per row; each actor reconstructs observed state by discovery and
         // adoption on its target. Rows without a registered provider factory
@@ -2678,6 +2829,8 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn resumed_delete_holds_reloaded_parent_until_children_retire() {
+        use crate::authority_journal::CommitOutcome;
+        use crate::authority_journal::DesiredMutation;
         use crate::identity::ResourceProvenance;
         use crate::spec_store::StoredDesiredResource;
 
@@ -2703,22 +2856,56 @@ mod tests {
                 created_at: 0,
             }
         };
-        store.ensure(row(&volume, None, b"vol")).await.expect("volume row");
-        store
-            .ensure(row(&binding, Some(uid(&volume)), b"binding"))
-            .await
-            .expect("binding row");
-        store
-            .ensure(row(&worker, Some(uid(&binding)), b"worker"))
-            .await
-            .expect("worker row");
-        store
-            .ensure(row(&endpoint, Some(uid(&binding)), b"endpoint"))
-            .await
-            .expect("endpoint row");
+        // These rows are written through the store's own protocol rather
+        // than through a manager, so the restart under test sees exactly the
+        // durable state a crashed daemon would.
+        let publisher = crate::test_support::RecordingPublisher::new();
+        let commit = |store: Arc<crate::spec_store::SpecStore>, mutation| {
+            let publisher = Arc::clone(&publisher);
+            async move {
+                let staged = store.stage_mutation(mutation).await.expect("stage");
+                store
+                    .record_prepared(staged.transaction, &format!("prepared-{}", staged.transaction))
+                    .await
+                    .expect("prepare");
+                let outcome = store.commit_mutation(staged.transaction).await.expect("commit");
+                if let CommitOutcome::Committed(committed)
+                | CommitOutcome::AlreadyCommitted(committed) = &outcome
+                {
+                    let _ = publisher.accept(committed).await;
+                    store
+                        .acknowledge(crate::authority_journal::AcceptedPublication {
+                            transaction: committed.transaction,
+                            zone: committed.zone.clone(),
+                            incarnation: committed.incarnation.clone(),
+                            sequence: committed.sequence,
+                            candidate: committed.candidate.clone(),
+                        })
+                        .await
+                        .expect("acknowledge");
+                }
+            }
+        };
+        let store_for_rows = Arc::clone(&store);
+        commit(Arc::clone(&store_for_rows), DesiredMutation::Ensure(row(&volume, None, b"vol"))).await;
+        commit(
+            Arc::clone(&store_for_rows),
+            DesiredMutation::Ensure(row(&binding, Some(uid(&volume)), b"binding")),
+        )
+        .await;
+        commit(
+            Arc::clone(&store_for_rows),
+            DesiredMutation::Ensure(row(&worker, Some(uid(&binding)), b"worker")),
+        )
+        .await;
+        commit(
+            Arc::clone(&store_for_rows),
+            DesiredMutation::Ensure(row(&endpoint, Some(uid(&binding)), b"endpoint")),
+        )
+        .await;
         // Crash mid-delete: every row carries the durable deleting mark.
         for key in [&volume, &binding, &worker, &endpoint] {
-            store.mark_deleting(key.clone()).await.expect("deleting mark");
+            commit(Arc::clone(&store_for_rows), DesiredMutation::MarkDeleting(key.clone())).await;
         }
 
         // The durable load order that puts the children ahead of the owner.

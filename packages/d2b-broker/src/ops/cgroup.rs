@@ -508,7 +508,6 @@ pub mod test_harness {
 #[derive(Debug)]
 // The real-wire dispatcher opens the cgroup dir; the bootstrap dispatcher
 // compiles no cgroup arm, so this pair has no reader there.
-#[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
 pub struct LiveOpenCgroupDirOutcome {
     pub cgroup_path: PathBuf,
     pub fd: OwnedFd,
@@ -516,7 +515,6 @@ pub struct LiveOpenCgroupDirOutcome {
 
 // The real-wire dispatcher delegates the slice; the bootstrap dispatcher
 // compiles no cgroup arm, so this handler has no caller there.
-#[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
 pub fn live_delegate_cgroup_v2(
     exec: &SystemLiveExec,
     resolver: &BundleResolver,
@@ -550,7 +548,6 @@ pub fn live_delegate_cgroup_v2(
 
 // The real-wire dispatcher opens the cgroup dir; the bootstrap dispatcher
 // compiles no cgroup arm, so this handler has no caller there.
-#[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
 pub fn live_open_cgroup_dir(
     exec: &SystemLiveExec,
     resolver: &BundleResolver,

@@ -11,8 +11,6 @@ pub struct Bundle {
     pub bundle_version: u32,
     /// Schema version directory used to validate all artifacts in this bundle.
     pub schema_version: String,
-    /// Private privileges.json artifact path.
-    pub privileges_path: String,
     /// Private storage lifecycle artifact path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_path: Option<String>,
@@ -36,8 +34,7 @@ pub struct Bundle {
     /// bundle artifact loaded by the resolver.
     ///
     /// Keys match the path strings stored in the bundle path fields: absolute
-    /// paths for `privileges_path`, `storage_path`, and
-    /// `realm_workloads_launcher_v2_path`. Values are
+    /// paths for `storage_path` and `realm_workloads_launcher_v2_path`. Values are
     /// `"sha256:<hex64>"` strings.
     ///
     /// When `None`, per-artifact hash verification is skipped (backwards

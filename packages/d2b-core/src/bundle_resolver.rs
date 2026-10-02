@@ -203,7 +203,6 @@ struct ZoneNativeBundleIndex {
     bundle_hash: String,
     bundle_version: u32,
     schema_version: String,
-    privileges_path: String,
     storage_path: Option<String>,
     /// Private site-runtime contract (`site.json`). Optional: a bundle that
     /// predates the artifact leaves the site facts absent.
@@ -1407,7 +1406,6 @@ impl BundleResolver {
         let bundle = Bundle {
             bundle_version: index.bundle_version,
             schema_version: index.schema_version,
-            privileges_path: normalize_zone_native_ref(bundle_root, &index.privileges_path)?,
             storage_path: index
                 .storage_path
                 .as_deref()
@@ -6956,7 +6954,6 @@ mod tests {
                 bundle_version: 4,
                 schema_version: "v2".to_owned(),
 
-                privileges_path: "privileges.json".to_owned(),
                 storage_path: None,
 
                 realm_workloads_launcher_v2_path: None,
@@ -7183,7 +7180,6 @@ mod tests {
                 bundle_version: 11,
                 schema_version: "v2".to_owned(),
 
-                privileges_path: "privileges.json".to_owned(),
                 storage_path: None,
 
                 realm_workloads_launcher_v2_path: None,
@@ -7940,7 +7936,6 @@ mod tests {
                 bundle_version: 11,
                 schema_version: "v2".to_owned(),
 
-                privileges_path: "privileges.json".to_owned(),
                 storage_path: None,
 
                 realm_workloads_launcher_v2_path: None,
@@ -8418,7 +8413,6 @@ mod tests {
             "artifactHashes": serde_json::Value::Null,
             "bundleVersion": 1,
             "schemaVersion": "v3",
-            "privilegesPath": "privileges.json",
             "storagePath": "storage.json",
             "zones": [{ "zone": zone, "path": zone_bundle_key.as_str() }],
             "generation": {
@@ -8726,7 +8720,6 @@ mod tests {
             bundle_version: 1,
             schema_version: "v3".to_owned(),
 
-            privileges_path: "privileges.json".to_owned(),
             storage_path: None,
 
             realm_workloads_launcher_v2_path: None,
@@ -8799,7 +8792,6 @@ mod tests {
             "artifactHashes": null,
             "bundleVersion": 1,
             "schemaVersion": "v3",
-            "privilegesPath": "privileges.json",
             "sitePath": "site.json",
             "zones": [],
             "generation": {
@@ -9068,7 +9060,6 @@ mod tests {
             bundle_version: 1,
             schema_version: "v3".to_owned(),
 
-            privileges_path: "privileges.json".to_owned(),
             storage_path: None,
 
             realm_workloads_launcher_v2_path: None,
@@ -9133,7 +9124,6 @@ mod tests {
             bundle_version: 1,
             schema_version: "v3".to_owned(),
 
-            privileges_path: "privileges.json".to_owned(),
             storage_path: None,
 
             realm_workloads_launcher_v2_path: None,
@@ -10855,7 +10845,7 @@ mod tests {
     }
     #[test]
     fn zone_native_index_accepts_optional_storage_path() {
-        let base = r#"{"artifactHashes":{},"bundleHash":"x","bundleVersion":1,"schemaVersion":"v3","privilegesPath":"/etc/d2b/privileges.json","zones":[],"generation":{"generator":"t","sourceRevision":null,"generatedAt":null}}"#;
+        let base = r#"{"artifactHashes":{},"bundleHash":"x","bundleVersion":1,"schemaVersion":"v3","zones":[],"generation":{"generator":"t","sourceRevision":null,"generatedAt":null}}"#;
         let without: ZoneNativeBundleIndex =
             serde_json::from_str(base).expect("pre-storage index parses");
         assert!(without.storage_path.is_none());

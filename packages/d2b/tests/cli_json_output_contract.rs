@@ -394,7 +394,6 @@ fn build_hermetic_bundle_tree(fixtures: &Path, dir: &Path) {
     let obj = bundle.as_object_mut().expect("bundle is an object");
     obj.insert("hostPath".to_owned(), json!("host.json"));
     obj.insert("processesPath".to_owned(), json!("processes.json"));
-    obj.insert("privilegesPath".to_owned(), json!("privileges.json"));
     fs::write(
         dir.join("bundle.json"),
         serde_json::to_vec_pretty(&bundle).expect("serialize rewritten bundle"),

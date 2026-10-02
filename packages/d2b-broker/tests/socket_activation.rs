@@ -22,7 +22,6 @@
 //! The `3>&<fd>` redirect duplicates the inherited listen socket to fd 3;
 //! `dup2` (internally used by the shell) clears FD_CLOEXEC on fd 3.
 
-#![cfg(not(feature = "layer1-bootstrap"))]
 
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd};

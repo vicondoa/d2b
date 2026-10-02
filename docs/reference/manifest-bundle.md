@@ -23,7 +23,6 @@ Providers, and `d2b-broker`. It is not a public lifecycle API.
 | `realm-identity.json` | private compatibility artifact | Transitional identity metadata; credential and session authority remains in Zone Resources. |
 | `realm-workloads-launcher-v2.json` | private, daemon-served | Argv-free launcher metadata exposed only through the authorized daemon API. |
 | `unsafe-local-workloads.json` | private | Validated unsafe-local Provider intent resolved by `d2bd`. |
-| `privileges.json` | private | Public API and broker authorization policy. |
 | `closures/zones/<zone>/<guest>.json` | private | Zone/Guest-qualified evaluated system closure and broker StoreSync metadata. |
 | `minijail-profile.json` | private | Typed sandbox profile metadata used by approved Providers. |
 

@@ -73,12 +73,9 @@ d2b_rust_library(
 d2b_rust_test(
     name = "d2b_resource_api_test",
     compile_data = ["Cargo.toml"],
-    crate = ":d2b_resource_api",
+    crate = ":d2b_resource_api_test_support",
     args = ["--test-threads=1"],
-    deps = [
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-provider-quota:d2b_provider_quota",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    deps = all_crate_deps(normal_dev = True, cargo_only = True),
 )
 
 # keep

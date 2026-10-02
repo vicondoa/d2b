@@ -23,7 +23,6 @@
 //!
 //! - `docs/reference/policy/broker-operations.json`, the merged rows document
 //!   [`crate::gen_broker_operations::render_artifacts`] still merges into;
-//! - `nixos-modules/privileges-json.nix`, the handwritten privilege copy;
 //! - `docs/reference/policy/principal-allocation.json`, the handwritten
 //!   principal table;
 //! - [`crate::gen_broker_operations`]'s merge step and
@@ -88,7 +87,6 @@ pub(crate) const NEW_GRAPH_DECLARATION_INPUTS: &[&str] = &[
 pub(crate) const RETIRED_AUTHORITY_SOURCES: &[&str] = &[
     "docs/reference/policy/broker-operations.json",
     "docs/reference/policy/principal-allocation.json",
-    "nixos-modules/privileges-json.nix",
     "gen_broker_operations::merge_catalog",
     "gen_broker_operations::build_catalog",
     "operation_row_authority::COMMITTED_SERVICE_FACET_SCOPES",
@@ -1233,7 +1231,6 @@ mod tests {
         for expected in [
             "docs/reference/policy/broker-operations.json",
             "docs/reference/policy/principal-allocation.json",
-            "nixos-modules/privileges-json.nix",
             "operation_row_authority::COMMITTED_SERVICE_FACET_SCOPES",
         ] {
             assert!(retired.contains(&expected), "{expected} is a named exclusion");

@@ -24,10 +24,6 @@ let
 
   artifactHashInputs = [
     {
-      key = "/etc/d2b/privileges.json";
-      path = config.d2b._bundle.privilegesJson.path;
-    }
-    {
       key = "/etc/d2b/storage.json";
       path = config.d2b._bundle.storageJson.path;
     }
@@ -51,7 +47,6 @@ let
     artifactHashes = null;
     bundleVersion = 1;
     schemaVersion = "v3";
-    privilegesPath = "/etc/d2b/privileges.json";
     storagePath = "/etc/d2b/storage.json";
     sitePath = "/etc/d2b/site.json";
     realmWorkloadsLauncherV2Path =

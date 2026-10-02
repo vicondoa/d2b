@@ -670,7 +670,6 @@ mod tests {
         let bundle = Bundle {
             bundle_version: 6,
             schema_version: "v2".to_owned(),
-            privileges_path: "privileges.json".to_owned(),
             storage_path: Some("storage.json".to_owned()),
             realm_workloads_launcher_v2_path: None,
             generation: d2b_core::bundle::BundleGeneration {

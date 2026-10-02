@@ -1,17 +1,12 @@
 use d2b_contracts_broker::broker_wire::BrokerProfile;
 
 #[path = "common/mod.rs"]
-#[cfg(not(feature = "layer1-bootstrap"))]
 mod common;
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 use std::os::fd::AsRawFd;
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 use common::{D2BD_UID, TestBroker};
-#[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_broker::protocol::{connect_seqpacket, recv_json_frame, send_json_frame};
-#[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse, EnvelopeInvokeRequest,
 };
@@ -110,7 +105,6 @@ fn guest_profile_rejects_every_host_only_effect_class() {
 }
 
 #[test]
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn guest_binary_rejects_host_effects_before_bundle_mutation() {
     // U12 retired the typed ApplyNftables arm: the host-only effect now
     // rides the broker-generic apply-nftables kernel through the
@@ -167,7 +161,6 @@ fn guest_binary_rejects_host_effects_before_bundle_mutation() {
 }
 
 #[test]
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn guest_binary_refuses_an_old_runner_frame_at_the_wire_gate() {
     use d2b_broker::runtime::RETIRED_WIRE_VARIANTS;
 

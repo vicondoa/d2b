@@ -304,6 +304,9 @@ async fn harness(lifecycles: HashMap<String, Lifecycle>) -> Harness {
     let args = ResourceManagerArgs {
         zone: ZONE.to_owned(),
         store,
+        // No broker in this fixture: the recording publisher fences and
+        // accepts what the manager publishes.
+        authority: d2b_resource_runtime::test_support::RecordingPublisher::new(),
         providers,
         hub,
         admission: Arc::new(AllowAll),

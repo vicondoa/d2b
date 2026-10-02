@@ -106,7 +106,7 @@ tracing = "0.1"
 # debugging impossible.
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 serde_json.workspace = true
-socket2 = "0.5"
+socket2 = { version = "0.5", features = ["all"] }
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net", "fs", "io-util"] }
 # R16 (U14): only the ttrpc async surface is used; the `sync` feature is gone.

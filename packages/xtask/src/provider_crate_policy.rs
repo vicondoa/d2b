@@ -1128,12 +1128,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "permanent:the broker is pinned provider-free;the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/runtime.rs",
-        token: "device_gpu",
-        family: "device-gpu",
-        retires_with: "the tpm/device census step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/seccomp_compile_tests.rs",
         token: "device_gpu",
         family: "device-gpu",
@@ -1176,12 +1170,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/runtime.rs",
-        token: "device_security_key",
-        family: "device-security-key",
-        retires_with: "the security-key census step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/seccomp_compile_tests.rs",
         token: "device_security_key",
         family: "device-security-key",
@@ -1220,12 +1208,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/kernel_ops.rs",
         token: "swtpm",
-        family: "device-tpm",
-        retires_with: "the tpm/device census step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/runtime.rs",
-        token: "device_tpm",
         family: "device-tpm",
         retires_with: "the tpm/device census step",
     },
@@ -1310,12 +1292,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/shared_provider_effects.rs",
         token: "usbip",
-        family: "device-usbip",
-        retires_with: "the usbip census step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/runtime.rs",
-        token: "device_usbip",
         family: "device-usbip",
         retires_with: "the usbip census step",
     },
@@ -1663,20 +1639,8 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/bootstrap.rs",
-        token: "sysctl",
-        family: "activation-nixos",
-        retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/live_handlers.rs",
         token: "sysctl",
-        family: "activation-nixos",
-        retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/bootstrap.rs",
-        token: "modprobe",
         family: "activation-nixos",
         retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
     },
@@ -2433,12 +2397,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/bootstrap.rs",
-        token: "usbip",
-        family: "device-usbip",
-        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-control/src/public_wire.rs",
         token: "usbip",
         family: "device-usbip",
@@ -2753,12 +2711,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/live_handlers.rs",
-        token: "nftables",
-        family: "network-local",
-        retires_with: "the network-fds census step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/bootstrap.rs",
         token: "nftables",
         family: "network-local",
         retires_with: "the network-fds census step",
@@ -3144,12 +3096,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/foundation_seed.rs",
-        token: "minijail",
-        family: "system-minijail",
-        retires_with: "the system-minijail family rollout into its provider crate",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/bootstrap.rs",
         token: "minijail",
         family: "system-minijail",
         retires_with: "the system-minijail family rollout into its provider crate",
@@ -5721,12 +5667,6 @@ const SHARED_STRUCTURAL_KNOWLEDGE_RATCHET: &[SharedStructuralKnowledgeExemption]
         module: "nixos-modules/lib.nix",
         class: "role-literal",
         symbol: "virtiofsd",
-        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
-    },
-    SharedStructuralKnowledgeExemption {
-        module: "nixos-modules/privileges-json.nix",
-        class: "role-literal",
-        symbol: "audio",
         retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
     },
     SharedStructuralKnowledgeExemption {

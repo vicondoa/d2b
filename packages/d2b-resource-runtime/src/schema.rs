@@ -1,99 +1,16 @@
-//! Embedded SQLite schema migrations for the spec store.
+//! The spec store's schema, in one place.
 //!
-//! The migration list is the single source of schema truth. Migrations apply
-//! on [`crate::spec_store::SpecStore::open`] via `rusqlite_migration` and are
-//! idempotent by construction (`user_version` bookkeeping), so reopen after a
-//! restart never rewrites an existing schema.
-//!
-//! The authority-journal format (plan unit U5, KTD5-KTD6) is the second
-//! store format, and it is deliberately not a migration of this one: it is
-//! created only on a fresh database, and a database at any other
-//! `user_version` is refused rather than converted. See [`StoreFormat`] and
-//! [`apply_authority_journal`].
-
-use rusqlite_migration::{M, Migrations};
-
-/// All schema migrations, oldest first. Never edit a shipped migration; append.
-pub fn migrations() -> Migrations<'static> {
-    Migrations::new(vec![
-        M::up(
-            r#"
-            CREATE TABLE resources (
-                zone         TEXT    NOT NULL,
-                type         TEXT    NOT NULL,
-                name         TEXT    NOT NULL,
-                uid          BLOB    NOT NULL,
-                generation   INTEGER NOT NULL,
-                owner_uid    BLOB,
-                provenance   TEXT    NOT NULL
-                    CHECK (provenance IN ('nix', 'api', 'resource')),
-                deleting     INTEGER NOT NULL DEFAULT 0,
-                spec         BLOB    NOT NULL,
-                metadata     BLOB    NOT NULL,
-                created_at   INTEGER NOT NULL,
-                PRIMARY KEY (zone, type, name)
-            );
-            CREATE INDEX resources_owner_uid ON resources (owner_uid);
-            CREATE INDEX resources_zone_type ON resources (zone, type);
-            CREATE TABLE audit_log (
-                id                INTEGER PRIMARY KEY AUTOINCREMENT,
-                ts                INTEGER NOT NULL,
-                subject           TEXT    NOT NULL,
-                provenance        TEXT    NOT NULL,
-                resource_zone     TEXT,
-                resource_type     TEXT,
-                resource_name     TEXT,
-                operation         TEXT    NOT NULL,
-                generation_before INTEGER,
-                generation_after  INTEGER,
-                detail            BLOB
-            );
-            CREATE INDEX audit_log_subject_ts ON audit_log (subject, ts);
-            "#,
-        ),
-    ])
-}
-
-/// Apply pending migrations to `conn` and report the resulting schema version.
-pub fn migrate(conn: &mut rusqlite::Connection) -> Result<(), rusqlite_migration::Error> {
-    migrations().to_latest(conn)
-}
-
-/// The two store formats this module owns.
-///
-/// The production composition keeps [`Self::DesiredRows`] and this change
-/// does not move it: the authority-journal format is a distinct schema
-/// version that the new graph construction opens explicitly. There is no
-/// path from one format to the other, because the clean break starts from a
-/// fresh store rather than converting existing data.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StoreFormat {
-    /// The production desired-row schema: spec, metadata, ownership, and the
-    /// audit log, with the spec generation as the only ordering value.
-    DesiredRows,
-    /// The authority-journal schema: everything [`Self::DesiredRows`]
-    /// carries plus a per-row desired revision, a per-Zone desired
-    /// sequence, durable publication transactions, their outbox, and the
-    /// accepted-publication cursor (KTD5-KTD6).
-    AuthorityJournal,
-}
-
-impl StoreFormat {
-    /// The SQLite `user_version` this format stamps.
-    pub const fn user_version(self) -> i64 {
-        match self {
-            Self::DesiredRows => 1,
-            Self::AuthorityJournal => AUTHORITY_JOURNAL_USER_VERSION,
-        }
-    }
-}
+//! [`apply_authority_journal`] is the whole of it: the authority-journal
+//! format is the only format this store has, it is created on a fresh
+//! database, and a database at any other `user_version` is refused rather
+//! than converted. The clean break starts from a fresh store, so there is no
+//! migration list to append to and no second schema to keep coherent.
 
 /// `user_version` of the authority-journal store format.
 ///
-/// It is deliberately distinct from the production format's `1`: a database
-/// at any other version is refused by [`apply_authority_journal`] rather than
-/// converted, so an existing store is never read as if it carried desired
-/// revisions and a publication journal it never had.
+/// A database at any other version is refused rather than converted, so a
+/// store written by an earlier release is never read as if it carried
+/// desired revisions and a publication journal it never had.
 pub const AUTHORITY_JOURNAL_USER_VERSION: i64 = 2;
 
 /// The complete authority-journal schema.
@@ -152,6 +69,7 @@ const AUTHORITY_JOURNAL_SCHEMA: &str = r#"
         sequence         INTEGER NOT NULL,
         candidate_digest TEXT    NOT NULL,
         candidate        BLOB    NOT NULL,
+        projection       BLOB,
         state            TEXT    NOT NULL
             CHECK (state IN ('staged', 'prepared', 'committed', 'accepted', 'cancelled')),
         prepared_id      TEXT,
@@ -194,9 +112,9 @@ pub enum SchemaOutcome {
 /// Why the authority-journal schema could not be applied.
 #[derive(Debug, thiserror::Error)]
 pub enum SchemaError {
-    /// The database carries another format's `user_version`. This is a
-    /// refusal, not a pending migration: the authority-journal format has no
-    /// migration into it, and the clean break expects a fresh store.
+    /// The database carries another `user_version`. This is a refusal, not a
+    /// pending migration: this format has no migration into it, and the clean
+    /// break expects a fresh store.
     #[error("spec store schema version {user_version} is not the authority-journal format ({AUTHORITY_JOURNAL_USER_VERSION}); this release starts from a fresh store and never converts existing data")]
     RefusedSchema { user_version: i64 },
     #[error("spec store schema: {0}")]
@@ -208,12 +126,12 @@ pub enum SchemaError {
 }
 
 /// Create the authority-journal schema when `conn` is fresh, and refuse a
-/// database that already carries another format.
+/// database that already carries another schema version.
 ///
-/// The refusal is the point: an old store has desired rows with no desired
-/// revision and no publication journal, and reading them through the journal
-/// protocol would report authority changes that never happened. Reopening the
-/// same authority-journal database is idempotent.
+/// The refusal is the point: a store written by an earlier release has
+/// desired rows with no desired revision and no publication journal, and
+/// reading them through the journal protocol would report authority changes
+/// that never happened. Reopening the same database is idempotent.
 pub fn apply_authority_journal(
     conn: &mut rusqlite::Connection,
 ) -> Result<SchemaOutcome, SchemaError> {

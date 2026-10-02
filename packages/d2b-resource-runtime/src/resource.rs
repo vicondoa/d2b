@@ -1518,6 +1518,10 @@ pub(crate) mod test_support {
         let args = crate::manager::ResourceManagerArgs {
             zone: zone.to_string(),
             store: store.clone(),
+            // The actor test harness has no broker: the recording publisher
+            // fences and accepts what the manager publishes, which is what
+            // these fixtures assert against - the actor's own lifecycle.
+            authority: crate::test_support::RecordingPublisher::new(),
             providers,
             hub: hub.clone(),
             admission: Arc::new(crate::manager::AllowAll),

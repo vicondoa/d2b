@@ -884,7 +884,6 @@ fn persist(path: &Path, state: &PersistedTrustedContext) -> Result<(), TrustedCo
 /// dispatch routes the publish wire variant through it, and the envelope
 /// would mint from it. `run_server` is the only production writer; tests
 /// initialize it against a scratch root.
-#[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
 static TRUSTED_CONTEXT_STORE: std::sync::OnceLock<TrustedContextStore> = std::sync::OnceLock::new();
 
 /// Open the process's trusted-context store under the daemon state root.
@@ -901,7 +900,6 @@ pub(crate) fn init_trusted_context_store(state_dir: &Path) -> Result<(), Trusted
 
 /// The async twin of [`init_trusted_context_store`], for the dispatch path
 /// that opens the store lazily on the first publication arrival.
-#[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
 pub(crate) async fn init_trusted_context_store_async(
     state_dir: &Path,
 ) -> Result<(), TrustedContextStoreError> {
@@ -912,7 +910,6 @@ pub(crate) async fn init_trusted_context_store_async(
 
 /// The broker process's trusted-context store, absent until
 /// [`init_trusted_context_store`] runs.
-#[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
 pub(crate) fn trusted_context_store() -> Option<&'static TrustedContextStore> {
     TRUSTED_CONTEXT_STORE.get()
 }

@@ -9,7 +9,6 @@
   "retiredAuthoritySources": [
     "docs/reference/policy/broker-operations.json",
     "docs/reference/policy/principal-allocation.json",
-    "nixos-modules/privileges-json.nix",
     "gen_broker_operations::merge_catalog",
     "gen_broker_operations::build_catalog",
     "operation_row_authority::COMMITTED_SERVICE_FACET_SCOPES",

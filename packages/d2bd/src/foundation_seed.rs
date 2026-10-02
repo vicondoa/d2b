@@ -296,6 +296,7 @@ impl FoundationSeed {
         &self,
         store: &SpecStore,
         providers: &ProviderDirectory,
+        authority: &dyn d2b_resource_runtime::AuthorityPublisher,
     ) -> Result<SeedReport, SeedError> {
         // Durable rows from earlier boots resolve references exactly as the
         // declared set does: a restart revalidates against everything.
@@ -382,7 +383,7 @@ impl FoundationSeed {
             unchanged: 0,
         };
         for row in &rows {
-            match self.write(store, row).await? {
+            match self.write(store, row, authority).await? {
                 EnsureOutcome::Unchanged(_) => report.unchanged += 1,
                 EnsureOutcome::Created(_) | EnsureOutcome::Updated(_) => {}
             }
@@ -391,7 +392,20 @@ impl FoundationSeed {
         Ok(report)
     }
 
-    async fn write(&self, store: &SpecStore, row: &PendingRow) -> Result<EnsureOutcome, SeedError> {
+    /// Commit one seeded row through the store's only write path.
+    ///
+    /// The seed is not exempt from the fence: a seeded row is a desired
+    /// authority change exactly like any other, so it is staged, frozen,
+    /// committed, published, and acknowledged in the same order the manager
+    /// uses. A row the broker refuses is refused here too, which is what
+    /// keeps the verified deployment graph and the broker's accepted
+    /// projection the same set.
+    async fn write(
+        &self,
+        store: &SpecStore,
+        row: &PendingRow,
+        authority: &dyn d2b_resource_runtime::AuthorityPublisher,
+    ) -> Result<EnsureOutcome, SeedError> {
         let stored = StoredDesiredResource {
             key: row.key.clone(),
             uid: deterministic_uid(&row.key),
@@ -404,9 +418,13 @@ impl FoundationSeed {
             created_at: 0,
         };
         store
-            .ensure(stored)
+            .publish(d2b_resource_runtime::DesiredMutation::Ensure(stored), authority)
             .await
-            .map_err(|error| SeedError::Store(error.to_string()))
+            .map_err(|error| SeedError::Store(error.to_string()))?
+            .ensure()
+            .ok_or_else(|| {
+                SeedError::Store(format!("seeded row {} committed no desired row", row.reference()))
+            })
     }
 
     // -- Verified deployment graph ----------------------------------------
@@ -2416,8 +2434,11 @@ use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, 
         fixture: &Fixture,
         declarations: FoundationDeclarations,
     ) -> Result<SeedReport, SeedError> {
+        // No broker in this fixture: the recording publisher fences and
+        // accepts what the seed publishes.
+        let publisher = d2b_resource_runtime::test_support::RecordingPublisher::new();
         FoundationSeed::new(declarations, fixture.allocation.clone())
-            .run(&fixture.store, &fixture.providers)
+            .run(&fixture.store, &fixture.providers, publisher.as_ref())
             .await
     }
 

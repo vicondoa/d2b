@@ -229,6 +229,21 @@ pub enum SharedProviderEffectError {
     Pending,
     /// The Provider path is not currently available and should retry.
     Unavailable,
+    /// The Provider path is not currently available and should retry, and the
+    /// Provider named the closed reason it is not.
+    ///
+    /// The plain [`Self::Unavailable`] arm is what every Provider adapter
+    /// returns, and at the erased driver boundary it classifies to one
+    /// `shared-provider-unavailable` code that names nothing. A Provider that
+    /// has already reduced its own typed refusal to a closed code - the TPM
+    /// controller's `device-tpm-state-integrity-failure`, its
+    /// `device-tpm-effect-transient` - hands that code here instead, so the
+    /// row's own `driver reconcile` line names the cause. Without it the cause
+    /// exists only in the one `tracing::warn!` the adapter wrote before
+    /// flattening it, which a bounded journal tail does not have to contain:
+    /// the row then reports `kind=shared-provider-unavailable` and nothing
+    /// else for the whole retry history.
+    UnavailableWithCause(&'static str),
     /// Fresh resource or assignment evidence failed closed.
     InvalidResource,
 }
@@ -238,6 +253,7 @@ impl core::fmt::Display for SharedProviderEffectError {
         formatter.write_str(match self {
             Self::Pending => "shared-provider-effect-pending",
             Self::Unavailable => "shared-provider-effect-unavailable",
+            Self::UnavailableWithCause(_) => "shared-provider-effect-unavailable",
             Self::InvalidResource => "shared-provider-resource-invalid",
         })
     }
@@ -284,15 +300,31 @@ impl SharedProviderDriverErrorKind {
 }
 
 /// One classified shared host-provider driver failure.
+///
+/// `cause` is the closed code a Provider adapter attached when it had already
+/// reduced its own typed refusal to one, carried through classification onto
+/// the row's own failure note. `None` is the ordinary case: the adapter
+/// returned the bare `shared-provider-unavailable` and named nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SharedProviderDriverError {
     kind: SharedProviderDriverErrorKind,
     op: DriverOp,
+    cause: Option<&'static str>,
 }
 
 impl SharedProviderDriverError {
     const fn new(kind: SharedProviderDriverErrorKind, op: DriverOp) -> Self {
-        Self { kind, op }
+        Self {
+            kind,
+            op,
+            cause: None,
+        }
+    }
+
+    /// The closed code the Provider named, when it named one.
+    const fn with_cause(mut self, cause: &'static str) -> Self {
+        self.cause = Some(cause);
+        self
     }
 }
 
@@ -789,6 +821,12 @@ impl<C: Copy + core::fmt::Debug + Eq + Send + Sync + 'static, S: Default + Send 
             SharedProviderEffectError::Unavailable => {
                 self.error(SharedProviderDriverErrorKind::ProviderUnavailable, op)
             }
+            // The Provider named the reason it is unavailable, so the row's
+            // own failure carries it rather than only the adapter's one log
+            // line. See `SharedProviderEffectError::UnavailableWithCause`.
+            SharedProviderEffectError::UnavailableWithCause(cause) => self
+                .error(SharedProviderDriverErrorKind::ProviderUnavailable, op)
+                .with_cause(cause),
         }
     }
 }
@@ -818,9 +856,13 @@ impl<C: Copy + core::fmt::Debug + Eq + Send + Sync + 'static, S: Default + Send 
     type Error = SharedProviderDriverError;
 
     fn classify_error(&self, error: &SharedProviderDriverError) -> DriverFailure {
-        match error.kind.class() {
+        let failure = match error.kind.class() {
             FailureClass::Retryable => DriverFailure::retryable(error.op),
             FailureClass::Terminal => DriverFailure::terminal(error.op),
+        };
+        match error.cause {
+            Some(cause) => failure.with_note(cause),
+            None => failure,
         }
     }
 

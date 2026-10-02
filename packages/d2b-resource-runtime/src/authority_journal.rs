@@ -343,6 +343,50 @@ pub struct StagedMutation {
     pub sequence: ZoneDesiredSequence,
     pub candidate: DesiredDigest,
     pub staged_at: i64,
+    /// The exact committed state this candidate installs, or `None` when it
+    /// changes nothing.
+    ///
+    /// The store decides this while the candidate is staged, before any
+    /// broker I/O, because the broker's fence has to validate the bytes the
+    /// commit will write - not a guess at them. Committing applies exactly
+    /// what the fence already validated.
+    pub projection: Option<Projection>,
+}
+
+/// The exact committed state one staged candidate installs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Projection {
+    /// The rows this transaction writes, at the revision it commits them at.
+    pub rows: Vec<ProjectedRow>,
+    /// The rows this transaction retires.
+    pub removed: Vec<RetiredRow>,
+    /// The audit facts the commit records alongside them.
+    pub audit: ProjectedAudit,
+}
+
+/// One row a staged candidate will write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectedRow {
+    /// The generation the row was at before this mutation, or `None` when
+    /// this mutation creates it.
+    pub generation_before: Option<u64>,
+    pub row: DesiredRow,
+}
+
+/// One row a staged candidate will retire.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetiredRow {
+    pub key: ResourceKey,
+    pub provenance: ResourceProvenance,
+    pub generation: u64,
+}
+
+/// The audit facts the commit records with a projected mutation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectedAudit {
+    pub provenance: ResourceProvenance,
+    pub generation_before: Option<u64>,
+    pub generation_after: Option<u64>,
 }
 
 /// One pending publication: the exact committed bytes the broker validates.
@@ -807,6 +851,21 @@ fn decode_transaction(
     })
 }
 
+/// The projected committed state staging decided, or `None` when the
+/// candidate changed nothing and the commit settles without publishing.
+fn load_projection(
+    conn: &Connection,
+    transaction: TransactionId,
+) -> Result<Option<Vec<u8>>, SpecStoreError> {
+    conn.query_row(
+        "SELECT projection FROM authority_transaction WHERE transaction_id = ?1",
+        params![transaction.as_bytes().as_slice()],
+        |row| row.get::<_, Option<Vec<u8>>>(0),
+    )
+    .optional()?
+    .ok_or(SpecStoreError::TransactionNotFound { transaction })
+}
+
 const TRANSACTION_COLUMNS: &str = "transaction_id, zone, incarnation, sequence, \
      candidate_digest, candidate, state, prepared_id, created_at, updated_at";
 
@@ -956,7 +1015,7 @@ fn decode_row(reader: &mut CanonicalReader<'_>) -> Result<DesiredRow, SpecStoreE
 /// One committed desired row with its revision.
 pub fn desired_row(conn: &Connection, key: &ResourceKey) -> Result<DesiredRow, SpecStoreError> {
     let sql = format!(
-        "SELECT {}, desired_revision FROM resources WHERE zone = ?1 AND type = ?2 AND name = ?3",
+        "SELECT {} FROM resources WHERE zone = ?1 AND type = ?2 AND name = ?3",
         crate::spec_store::AUTHORITY_ROW_COLUMNS
     );
     let row = conn
@@ -991,7 +1050,7 @@ pub fn desired_rows(
     selector: &SpecSelector,
 ) -> Result<Vec<DesiredRow>, SpecStoreError> {
     let sql = format!(
-        "SELECT {}, desired_revision FROM resources \
+        "SELECT {} FROM resources \
          WHERE (?1 IS NULL OR zone = ?1) \
            AND (?2 IS NULL OR type = ?2) \
            AND (?3 IS NULL OR owner_uid = ?3) \
@@ -1052,18 +1111,23 @@ pub fn stage_mutation(
     // seen.
     advance_zone_sequence(&tx, &zone, sequence)?;
     let staged_at = now();
-    let payload = mutation.encode();
+    // The committed state this candidate installs is decided here, while the
+    // candidate is durable and nothing has moved: the broker's fence is
+    // validated against these bytes, and the commit writes exactly them.
+    let projection = project(&tx, &mutation)?;
+    let encoded = projection.as_ref().map(encode_projection);
     tx.execute(
         "INSERT INTO authority_transaction (transaction_id, zone, incarnation, sequence, \
-         candidate_digest, candidate, state, prepared_id, committed_at, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, NULL, ?8, ?8)",
+         candidate_digest, candidate, projection, state, prepared_id, committed_at, created_at, \
+         updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, NULL, ?9, ?9)",
         params![
             transaction.as_bytes().as_slice(),
             zone,
             incarnation.as_str(),
             encode_persisted_counter(sequence.get()),
             candidate.as_str(),
-            payload,
+            mutation.encode(),
+            encoded,
             PublicationState::Staged.as_str(),
             staged_at,
         ],
@@ -1076,6 +1140,7 @@ pub fn stage_mutation(
         sequence,
         candidate,
         staged_at,
+        projection,
     })
 }
 
@@ -1154,48 +1219,27 @@ pub fn commit_mutation(
     let candidate = DesiredMutation::decode(&load_candidate(&tx, transaction)?)?;
     let zone = existing.zone.clone();
     let sequence = existing.sequence;
-    let (rows, removed, audit) = match &candidate {
-        DesiredMutation::Ensure(row) => match apply_ensure(&tx, row.clone())? {
-            EnsureApply::Changed { row: desired, generation_before, generation_after } => (
-                vec![desired],
-                Vec::new(),
-                audit_for(&candidate, row.provenance, generation_before, Some(generation_after)),
-            ),
-            EnsureApply::Unchanged(unchanged) => {
-                settle_without_publication(&tx, &existing)?;
-                tx.commit()?;
-                return Ok(CommitOutcome::Unchanged {
-                    transaction,
-                    sequence,
-                    row: unchanged,
-                });
-            }
-        },
-        DesiredMutation::MarkDeleting(key) => match apply_mark_deleting(&tx, key)? {
-            DeleteApply::Changed { row: desired, provenance, generation } => (
-                vec![desired],
-                Vec::new(),
-                audit_for(&candidate, provenance, Some(generation), Some(generation)),
-            ),
-            DeleteApply::Unchanged(unchanged) => {
-                settle_without_publication(&tx, &existing)?;
-                tx.commit()?;
-                return Ok(CommitOutcome::Unchanged {
-                    transaction,
-                    sequence,
-                    row: unchanged,
-                });
-            }
-        },
-        DesiredMutation::Remove(key) => {
-            let (provenance, generation) = apply_remove(&tx, key)?;
-            (
-                Vec::new(),
-                vec![key.clone()],
-                audit_for(&candidate, provenance, Some(generation), None),
-            )
+    // The commit is a pure state transition: it writes what staging decided
+    // and what the broker's fence already validated, never a fresh decision.
+    let projection = match load_projection(&tx, transaction)? {
+        Some(encoded) => decode_projection(&encoded)?,
+        None => {
+            let unchanged = desired_row(&tx, candidate.key())?;
+            settle_without_publication(&tx, &existing)?;
+            tx.commit()?;
+            return Ok(CommitOutcome::Unchanged { transaction, sequence, row: unchanged });
         }
     };
+    write_projection(&tx, &projection)?;
+    let audit = audit_for(
+        &candidate,
+        projection.audit.provenance,
+        projection.audit.generation_before,
+        projection.audit.generation_after,
+    );
+    let rows: Vec<DesiredRow> = projection.rows.iter().map(|row| row.row.clone()).collect();
+    let removed: Vec<ResourceKey> =
+        projection.removed.iter().map(|row| row.key.clone()).collect();
     let payload = encode_payload(&rows, &removed);
     insert_audit(&tx, audit)?;
     tx.execute(
@@ -1494,15 +1538,6 @@ fn advance_zone_sequence(
 // Desired-row writes
 // ---------------------------------------------------------------------------
 
-enum EnsureApply {
-    Changed { row: DesiredRow, generation_before: Option<u64>, generation_after: u64 },
-    Unchanged(DesiredRow),
-}
-
-enum DeleteApply {
-    Changed { row: DesiredRow, provenance: ResourceProvenance, generation: u64 },
-    Unchanged(DesiredRow),
-}
 
 /// The committed row at `key`, or `None` when the row is absent.
 ///
@@ -1513,7 +1548,7 @@ fn lookup_desired_row(
     key: &ResourceKey,
 ) -> Result<Option<DesiredRow>, SpecStoreError> {
     let sql = format!(
-        "SELECT {}, desired_revision FROM resources WHERE zone = ?1 AND type = ?2 AND name = ?3",
+        "SELECT {} FROM resources WHERE zone = ?1 AND type = ?2 AND name = ?3",
         crate::spec_store::AUTHORITY_ROW_COLUMNS
     );
     let found = conn
@@ -1535,7 +1570,20 @@ fn lookup_desired_row(
     }
 }
 
-/// Apply one desired row.
+/// One row at the revision this store just allocated for it.
+fn projected_row(row: StoredDesiredResource, revision: DesiredRevision) -> DesiredRow {
+    let digest = digest_of(&canonical_row_bytes(&row, revision));
+    DesiredRow { row, revision, digest }
+}
+
+/// The exact committed state one candidate installs, or `None` when it
+/// changes nothing.
+///
+/// This is the whole of what a desired mutation decides, and it is decided
+/// once: the revision a row commits at, the generation it lands on, and the
+/// bytes it carries are fixed while the candidate is staged, so the broker's
+/// fence validates the very bytes the commit writes instead of a prediction
+/// of them. Nothing here writes; [`write_projection`] is the only writer.
 ///
 /// The revision advances on every branch that changes a committed column, and
 /// the branches differ in *which* column moved, never in whether the row is
@@ -1548,24 +1596,42 @@ fn lookup_desired_row(
 ///   contract, while the revision advances, because an ownership or metadata
 ///   change invalidates earlier effect authority exactly like a spec change;
 /// - nothing differs: no write, no revision, no publication.
-fn apply_ensure(
+fn project(
     conn: &Connection,
-    row: StoredDesiredResource,
-) -> Result<EnsureApply, SpecStoreError> {
+    candidate: &DesiredMutation,
+) -> Result<Option<Projection>, SpecStoreError> {
+    match candidate {
+        DesiredMutation::Ensure(row) => project_ensure(conn, row),
+        DesiredMutation::MarkDeleting(key) => project_mark_deleting(conn, key),
+        DesiredMutation::Remove(key) => project_remove(conn, key),
+    }
+}
+
+fn project_ensure(
+    conn: &Connection,
+    row: &StoredDesiredResource,
+) -> Result<Option<Projection>, SpecStoreError> {
+    let exhausted = || SpecStoreError::RowRevisionExhausted {
+        zone: row.key.zone.clone(),
+        type_name: row.key.type_name.clone(),
+        name: row.key.name.clone(),
+    };
     let Some(existing) = lookup_desired_row(conn, &row.key)? else {
-        let revision = next_desired_revision(DesiredRevision::INITIAL).map_err(|_| {
-            SpecStoreError::RowRevisionExhausted {
-                zone: row.key.zone.clone(),
-                type_name: row.key.type_name.clone(),
-                name: row.key.name.clone(),
-            }
-        })?;
-        insert_row(conn, row.clone(), revision)?;
-        return Ok(EnsureApply::Changed {
-            row: desired_row(conn, &row.key)?,
-            generation_before: None,
-            generation_after: 1,
-        });
+        let revision = next_desired_revision(DesiredRevision::INITIAL).map_err(|_| exhausted())?;
+        let created = StoredDesiredResource {
+            generation: 1,
+            deleting: false,
+            created_at: now(),
+            ..row.clone()
+        };
+        return Ok(Some(Projection {
+            rows: vec![ProjectedRow {
+                generation_before: None,
+                row: projected_row(created, revision),
+            }],
+            removed: Vec::new(),
+            audit: ProjectedAudit { provenance: row.provenance, generation_before: None, generation_after: Some(1) },
+        }));
     };
     if existing.row.deleting {
         return Err(SpecStoreError::ResourceDeleting {
@@ -1574,121 +1640,64 @@ fn apply_ensure(
             name: row.key.name.clone(),
         });
     }
-    let incoming_owner = row.owner_uid.map(|uid| uid.to_vec());
     let spec_changed = existing.row.spec != row.spec;
     if !spec_changed
         && existing.row.metadata == row.metadata
-        && existing.row.owner_uid.map(|uid| uid.to_vec()) == incoming_owner
+        && existing.row.owner_uid == row.owner_uid
         && existing.row.provenance == row.provenance
     {
-        return Ok(EnsureApply::Unchanged(existing));
+        return Ok(None);
     }
-    let revision = next_desired_revision(existing.revision).map_err(|_| {
-        SpecStoreError::RowRevisionExhausted {
-            zone: row.key.zone.clone(),
-            type_name: row.key.type_name.clone(),
-            name: row.key.name.clone(),
-        }
-    })?;
-    if spec_changed {
-        let next_generation = existing.row.generation.checked_add(1).ok_or_else(|| {
+    let revision = next_desired_revision(existing.revision).map_err(|_| exhausted())?;
+    // Identity and generation are the spec's contract; the annotation columns
+    // are not, so a metadata-only or owner-only change lands on the
+    // generation the row already committed at.
+    let generation = if spec_changed {
+        existing.row.generation.checked_add(1).ok_or_else(|| {
             SpecStoreError::GenerationExhausted {
                 zone: row.key.zone.clone(),
                 type_name: row.key.type_name.clone(),
                 name: row.key.name.clone(),
             }
-        })?;
-        conn.execute(
-            "UPDATE resources SET generation = ?4, uid = ?5, owner_uid = ?6, provenance = ?7, \
-             spec = ?8, metadata = ?9 WHERE zone = ?1 AND type = ?2 AND name = ?3",
-            params![
-                row.key.zone,
-                row.key.type_name,
-                row.key.name,
-                encode_persisted_counter(next_generation),
-                row.uid.as_slice(),
-                incoming_owner,
-                row.provenance.as_str(),
-                row.spec,
-                row.metadata,
-            ],
-        )?;
+        })?
     } else {
-        conn.execute(
-            "UPDATE resources SET owner_uid = ?4, provenance = ?5, metadata = ?6 \
-             WHERE zone = ?1 AND type = ?2 AND name = ?3",
-            params![
-                row.key.zone,
-                row.key.type_name,
-                row.key.name,
-                incoming_owner,
-                row.provenance.as_str(),
-                row.metadata,
-            ],
-        )?;
-    }
-    set_row_revision(conn, &row.key, revision)?;
-    let committed = desired_row(conn, &row.key)?;
-    Ok(EnsureApply::Changed {
-        generation_after: committed.row.generation,
-        generation_before: Some(existing.row.generation),
-        row: committed,
-    })
+        existing.row.generation
+    };
+    let projected = StoredDesiredResource {
+        uid: row.uid,
+        generation,
+        owner_uid: row.owner_uid,
+        provenance: row.provenance,
+        deleting: false,
+        spec: row.spec.clone(),
+        metadata: row.metadata.clone(),
+        created_at: existing.row.created_at,
+        ..row.clone()
+    };
+    Ok(Some(Projection {
+        rows: vec![ProjectedRow {
+            generation_before: Some(existing.row.generation),
+            row: projected_row(projected, revision),
+        }],
+        removed: Vec::new(),
+        audit: ProjectedAudit {
+            provenance: row.provenance,
+            generation_before: Some(existing.row.generation),
+            generation_after: Some(generation),
+        },
+    }))
 }
 
-fn insert_row(
-    conn: &Connection,
-    row: StoredDesiredResource,
-    revision: DesiredRevision,
-) -> Result<(), SpecStoreError> {
-    conn.execute(
-        "INSERT INTO resources (zone, type, name, uid, generation, desired_revision, owner_uid, \
-         provenance, deleting, spec, metadata, created_at) \
-         VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, 0, ?8, ?9, ?10)",
-        params![
-            row.key.zone,
-            row.key.type_name,
-            row.key.name,
-            row.uid.as_slice(),
-            encode_persisted_counter(revision.get()),
-            row.owner_uid.map(|uid| uid.to_vec()),
-            row.provenance.as_str(),
-            row.spec,
-            row.metadata,
-            now(),
-        ],
-    )?;
-    Ok(())
-}
-
-fn set_row_revision(
+/// Project the terminal deleting mark, which advances the revision exactly
+/// once and is idempotent after that.
+fn project_mark_deleting(
     conn: &Connection,
     key: &ResourceKey,
-    revision: DesiredRevision,
-) -> Result<(), SpecStoreError> {
-    conn.execute(
-        "UPDATE resources SET desired_revision = ?4 WHERE zone = ?1 AND type = ?2 AND name = ?3",
-        params![
-            key.zone,
-            key.type_name,
-            key.name,
-            encode_persisted_counter(revision.get()),
-        ],
-    )?;
-    Ok(())
-}
-
-/// Set the terminal deleting mark, advancing the revision exactly once.
-fn apply_mark_deleting(
-    conn: &Connection,
-    key: &ResourceKey,
-) -> Result<DeleteApply, SpecStoreError> {
+) -> Result<Option<Projection>, SpecStoreError> {
     let existing = desired_row(conn, key)?;
     if existing.row.deleting {
-        return Ok(DeleteApply::Unchanged(existing));
+        return Ok(None);
     }
-    let provenance = existing.row.provenance;
-    let generation = existing.row.generation;
     let revision = next_desired_revision(existing.revision).map_err(|_| {
         SpecStoreError::RowRevisionExhausted {
             zone: key.zone.clone(),
@@ -1696,32 +1705,165 @@ fn apply_mark_deleting(
             name: key.name.clone(),
         }
     })?;
-    conn.execute(
-        "UPDATE resources SET deleting = 1, desired_revision = ?4 \
-         WHERE zone = ?1 AND type = ?2 AND name = ?3",
-        params![
-            key.zone,
-            key.type_name,
-            key.name,
-            encode_persisted_counter(revision.get()),
-        ],
-    )?;
-    Ok(DeleteApply::Changed { row: desired_row(conn, key)?, provenance, generation })
+    let generation = existing.row.generation;
+    let provenance = existing.row.provenance;
+    let marked = StoredDesiredResource { deleting: true, ..existing.row.clone() };
+    Ok(Some(Projection {
+        rows: vec![ProjectedRow {
+            generation_before: Some(generation),
+            row: projected_row(marked, revision),
+        }],
+        removed: Vec::new(),
+        audit: ProjectedAudit {
+            provenance,
+            generation_before: Some(generation),
+            generation_after: Some(generation),
+        },
+    }))
 }
 
-/// Retire the row. The revision dies with the row; the Zone sequence and the
-/// outbox entry are what tell the broker the relationship is gone.
-fn apply_remove(
+/// Project a retirement. The revision dies with the row; the Zone sequence and
+/// the outbox entry are what tell the broker the relationship is gone.
+fn project_remove(
     conn: &Connection,
     key: &ResourceKey,
-) -> Result<(ResourceProvenance, u64), SpecStoreError> {
+) -> Result<Option<Projection>, SpecStoreError> {
     let existing = desired_row(conn, key)?;
-    conn.execute(
-        "DELETE FROM resources WHERE zone = ?1 AND type = ?2 AND name = ?3",
-        params![key.zone, key.type_name, key.name],
-    )?;
-    Ok((existing.row.provenance, existing.row.generation))
+    Ok(Some(Projection {
+        rows: Vec::new(),
+        removed: vec![RetiredRow {
+            key: key.clone(),
+            provenance: existing.row.provenance,
+            generation: existing.row.generation,
+        }],
+        audit: ProjectedAudit {
+            provenance: existing.row.provenance,
+            generation_before: Some(existing.row.generation),
+            generation_after: None,
+        },
+    }))
 }
+
+/// Write exactly what [`project`] decided.
+fn write_projection(conn: &Connection, projection: &Projection) -> Result<(), SpecStoreError> {
+    for projected in &projection.rows {
+        let row = &projected.row.row;
+        if projected.generation_before.is_none() {
+            conn.execute(
+                "INSERT INTO resources (zone, type, name, uid, generation, desired_revision, \
+                 owner_uid, provenance, deleting, spec, metadata, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![
+                    row.key.zone,
+                    row.key.type_name,
+                    row.key.name,
+                    row.uid.as_slice(),
+                    encode_persisted_counter(row.generation),
+                    encode_persisted_counter(projected.row.revision.get()),
+                    row.owner_uid.map(|uid| uid.to_vec()),
+                    row.provenance.as_str(),
+                    row.deleting,
+                    row.spec,
+                    row.metadata,
+                    row.created_at,
+                ],
+            )?;
+            continue;
+        }
+        conn.execute(
+            "UPDATE resources SET uid = ?4, generation = ?5, desired_revision = ?6, owner_uid = ?7, \
+             provenance = ?8, deleting = ?9, spec = ?10, metadata = ?11 \
+             WHERE zone = ?1 AND type = ?2 AND name = ?3",
+            params![
+                row.key.zone,
+                row.key.type_name,
+                row.key.name,
+                row.uid.as_slice(),
+                encode_persisted_counter(row.generation),
+                encode_persisted_counter(projected.row.revision.get()),
+                row.owner_uid.map(|uid| uid.to_vec()),
+                row.provenance.as_str(),
+                row.deleting,
+                row.spec,
+                row.metadata,
+            ],
+        )?;
+    }
+    for retired in &projection.removed {
+        conn.execute(
+            "DELETE FROM resources WHERE zone = ?1 AND type = ?2 AND name = ?3",
+            params![retired.key.zone, retired.key.type_name, retired.key.name],
+        )?;
+    }
+    Ok(())
+}
+
+fn encode_projection(projection: &Projection) -> Vec<u8> {
+    let mut out = Canonical::new();
+    out.u64(projection.rows.len() as u64);
+    for projected in &projection.rows {
+        out.flag(projected.generation_before.is_some());
+        out.u64(projected.generation_before.unwrap_or_default());
+        out.bytes(&projected.row.canonical_bytes());
+    }
+    out.u64(projection.removed.len() as u64);
+    for retired in &projection.removed {
+        out.text(&retired.key.zone);
+        out.text(&retired.key.type_name);
+        out.text(&retired.key.name);
+        out.u8(provenance_tag(retired.provenance));
+        out.u64(retired.generation);
+    }
+    out.u8(provenance_tag(projection.audit.provenance));
+    out.flag(projection.audit.generation_before.is_some());
+    out.u64(projection.audit.generation_before.unwrap_or_default());
+    out.flag(projection.audit.generation_after.is_some());
+    out.u64(projection.audit.generation_after.unwrap_or_default());
+    out.finish()
+}
+
+fn decode_projection(payload: &[u8]) -> Result<Projection, SpecStoreError> {
+    let mut reader = CanonicalReader::new(payload);
+    let row_count = reader.u64()?;
+    let mut rows = Vec::with_capacity(usize::try_from(row_count).unwrap_or(0));
+    for _ in 0..row_count {
+        // The flag and the counter are always both present: a present flag
+        // over a missing counter would leave the reader one field short and
+        // every later value misread.
+        let present = reader.flag()?;
+        let generation_before = reader.u64()?;
+        let generation_before = present.then_some(generation_before);
+        let encoded = reader.bytes()?;
+        rows.push(ProjectedRow {
+            generation_before,
+            row: decode_row(&mut CanonicalReader::new(encoded))?,
+        });
+    }
+    let removed_count = reader.u64()?;
+    let mut removed = Vec::with_capacity(usize::try_from(removed_count).unwrap_or(0));
+    for _ in 0..removed_count {
+        removed.push(RetiredRow {
+            key: ResourceKey::new(reader.text()?, reader.text()?, reader.text()?),
+            provenance: provenance_from_tag(reader.u8()?),
+            generation: reader.u64()?,
+        });
+    }
+    let provenance = provenance_from_tag(reader.u8()?);
+    let before_present = reader.flag()?;
+    let generation_before = reader.u64()?;
+    let after_present = reader.flag()?;
+    let generation_after = reader.u64()?;
+    Ok(Projection {
+        rows,
+        removed,
+        audit: ProjectedAudit {
+            provenance,
+            generation_before: before_present.then_some(generation_before),
+            generation_after: after_present.then_some(generation_after),
+        },
+    })
+}
+
 
 /// The audit record committed with the mutation, in the same transaction.
 ///

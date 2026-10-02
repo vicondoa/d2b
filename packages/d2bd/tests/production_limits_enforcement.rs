@@ -378,6 +378,9 @@ async fn spawn_plane(
     let args = ResourceManagerArgs {
         zone: zone_name.to_owned(),
         store: Arc::clone(&store),
+        // No broker in this fixture: the recording publisher fences and
+        // accepts what the manager publishes.
+        authority: d2b_resource_runtime::test_support::RecordingPublisher::new(),
         providers,
         hub: Arc::new(d2b_resource_runtime::watch::WatchHub::new(
             &d2b_resource_runtime::revision::SystemClock,
@@ -682,19 +685,29 @@ async fn the_plane_usage_source_counts_the_committed_rows() {
     let directory = tempfile::tempdir().expect("a temporary store directory");
     let store = Arc::new(SpecStore::open(directory.path().join("specs.sqlite")).expect("store"));
     let source = PlaneZoneUsage { store: Arc::clone(&store), zone: zone() };
+    // No broker in this fixture: the recording publisher fences and accepts
+    // what the store publishes.
+    let publisher = d2b_resource_runtime::test_support::RecordingPublisher::new();
     for (type_name, name) in [("User", "operator"), ("Volume", "data"), ("Guest", "vm")] {
         store
-            .ensure(d2b_resource_runtime::spec_store::StoredDesiredResource {
-                key: key(type_name, name),
-                uid: d2b_resource_runtime::manager::deterministic_uid(&key(type_name, name)),
-                generation: 1,
-                owner_uid: None,
-                provenance: ResourceProvenance::Api,
-                deleting: false,
-                spec: Vec::new(),
-                metadata: Vec::new(),
-                created_at: 0,
-            })
+            .publish(
+                d2b_resource_runtime::DesiredMutation::Ensure(
+                    d2b_resource_runtime::spec_store::StoredDesiredResource {
+                        key: key(type_name, name),
+                        uid: d2b_resource_runtime::manager::deterministic_uid(
+                            &key(type_name, name),
+                        ),
+                        generation: 1,
+                        owner_uid: None,
+                        provenance: ResourceProvenance::Api,
+                        deleting: false,
+                        spec: Vec::new(),
+                        metadata: Vec::new(),
+                        created_at: 0,
+                    },
+                ),
+                publisher.as_ref(),
+            )
             .await
             .expect("the row commits");
     }
@@ -716,18 +729,26 @@ async fn the_plane_open_use_source_names_the_committed_reservations() {
     let directory = tempfile::tempdir().expect("a temporary store directory");
     let store = Arc::new(SpecStore::open(directory.path().join("specs.sqlite")).expect("store"));
     let source = PlaneZoneOpenUse { store: Arc::clone(&store), zone: zone() };
+    // No broker in this fixture: the recording publisher fences and accepts
+    // what the store publishes.
+    let publisher = d2b_resource_runtime::test_support::RecordingPublisher::new();
     store
-        .ensure(d2b_resource_runtime::spec_store::StoredDesiredResource {
-            key: key("Volume", "data"),
-            uid: d2b_resource_runtime::manager::deterministic_uid(&key("Volume", "data")),
-            generation: 1,
-            owner_uid: None,
-            provenance: ResourceProvenance::Api,
-            deleting: false,
-            spec: Vec::new(),
-            metadata: Vec::new(),
-            created_at: 0,
-        })
+        .publish(
+            d2b_resource_runtime::DesiredMutation::Ensure(
+                d2b_resource_runtime::spec_store::StoredDesiredResource {
+                    key: key("Volume", "data"),
+                    uid: d2b_resource_runtime::manager::deterministic_uid(&key("Volume", "data")),
+                    generation: 1,
+                    owner_uid: None,
+                    provenance: ResourceProvenance::Api,
+                    deleting: false,
+                    spec: Vec::new(),
+                    metadata: Vec::new(),
+                    created_at: 0,
+                },
+            ),
+            publisher.as_ref(),
+        )
         .await
         .expect("the row commits");
     let census = OpenUseSource::census(&source).await.expect("the census is answerable").expect("a census");

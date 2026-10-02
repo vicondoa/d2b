@@ -2677,7 +2677,6 @@ mod tests {
             "artifactHashes": artifact_hashes,
             "bundleVersion": 1,
             "schemaVersion": "v3",
-            "privilegesPath": "privileges.json",
             "zones": [{
                 "zone": zone_name,
                 "path": format!("zones/{zone_name}/resource-bundle.json")

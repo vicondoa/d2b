@@ -337,7 +337,6 @@ rec {
         mkdir -p "$out"
         printf '%s\n' '{"schemaVersion":"v2","site":{"allowUnsafeEastWest":false},"environments":[],"nftables":{"family":"inet","table":"d2b","chains":[],"tableHashAfterApply":null,"ownershipId":"guest-shell-service"},"networkManager":{"filePath":"/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf","matchCriteria":[],"reloadBehavior":"atomic-reload","ownership":{"owner":"root","group":"root","mode":"0644","driftPolicy":"replace"}},"hostsFile":{"startMarker":"# d2b-managed begin","endMarker":"# d2b-managed end","rule":"replace-managed-block"},"kernelModules":[],"fdOwnership":[],"cloudHypervisorCapabilities":[],"ifNameMappings":[],"ch":null,"firewallCoexistencePolicy":null}' > "$out/host.json"
         printf '%s\n' '{"schemaVersion":"v2","vms":[]}' > "$out/processes.json"
-        printf '%s\n' '{"schemaVersion":"v2","publicOperations":[],"brokerOperations":[]}' > "$out/privileges.json"
         printf '%s\n' '{"_manifest":{"manifestVersion":6},"_observability":{"enabled":false,"signozUrl":"http://127.0.0.1:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318,"obsVsockCid":0,"obsVsockHostSocket":"","vmName":""}}' > "$out/vms.json"
         python3 - "$out/bundle.json" <<'PY'
         import hashlib
@@ -351,7 +350,6 @@ rec {
             "artifactHashes": {},
             "bundleVersion": 1,
             "schemaVersion": "v3",
-            "privilegesPath": "privileges.json",
             "zones": [],
             "generation": {
                 "generatedAt": None,
@@ -425,7 +423,7 @@ rec {
               serviceConfig.Type = "oneshot";
               script = ''
                 install -d -o root -g d2bd -m 0750 /var/lib/d2b/guest-bundle
-                for file in bundle.json host.json processes.json privileges.json; do
+                for file in bundle.json host.json processes.json; do
                   install -o root -g d2bd -m 0640 \
                     ${guestBundle}/"$file" /var/lib/d2b/guest-bundle/"$file"
                 done
@@ -636,7 +634,6 @@ rec {
         {"schemaVersion":"v2","site":{"allowUnsafeEastWest":false},"environments":[],"nftables":{"family":"inet","table":"d2b","chains":[],"tableHashAfterApply":null,"ownershipId":"host-integration"},"networkManager":{"filePath":"/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf","matchCriteria":[],"reloadBehavior":"atomic-reload","ownership":{"owner":"root","group":"root","mode":"0644","driftPolicy":"replace"}},"hostsFile":{"startMarker":"# d2b-managed begin","endMarker":"# d2b-managed end","rule":"replace-managed-block"},"kernelModules":[],"fdOwnership":[],"cloudHypervisorCapabilities":[],"ifNameMappings":[],"ch":null,"firewallCoexistencePolicy":null}
         EOF
         printf '%s\n' '{"schemaVersion":"v2","vms":[]}' > "$out/processes.json"
-        printf '%s\n' '{"schemaVersion":"v2","publicOperations":[],"brokerOperations":[]}' > "$out/privileges.json"
         printf '%s\n' '{"_manifest":{"manifestVersion":6},"_observability":{"enabled":false,"signozUrl":"http://127.0.0.1:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318,"obsVsockCid":0,"obsVsockHostSocket":"","vmName":""}}' > "$out/vms.json"
         python3 - "$out/bundle.json" <<'PY'
         import hashlib
@@ -650,7 +647,6 @@ rec {
             "artifactHashes": {},
             "bundleVersion": 1,
             "schemaVersion": "v3",
-            "privilegesPath": "privileges.json",
             "zones": [],
             "generation": {
                 "generatedAt": None,
@@ -727,7 +723,7 @@ rec {
               serviceConfig.Type = "oneshot";
               script = ''
                 install -d -o root -g d2bd -m 0750 /var/lib/d2b/guest-bundle
-                for file in bundle.json host.json processes.json privileges.json; do
+                for file in bundle.json host.json processes.json; do
                   install -o root -g d2bd -m 0640 \
                     ${guestBundle}/"$file" /var/lib/d2b/guest-bundle/"$file"
                 done
@@ -1636,6 +1632,22 @@ rec {
           # the Process controller, and no guest system artifact is declared, so
           # no VMM is ever launched here. Its name is the VM identity of the
           # Devices it owns (`Device.metadata.ownerRef`).
+          #
+          # `providerRef` names `Provider/volume-virtiofs` because this zone
+          # declares no guest system. The Guest family owns only the four
+          # `runtime-*` guest Providers (`d2b_provider_guest::GUEST_REGISTRATIONS`),
+          # so it refuses this row at Validate with the closed
+          # `guest-spec-invalid` refusal, and `Guest/acceptance-guest` stays
+          # terminally `Failed` for the whole run. That is the daemon and the
+          # Nix module agreeing, not disagreeing: naming a Provider this family
+          # does own makes the row demand `spec.systemArtifactId` resolving to a
+          # nixos-system artifact plus a matching private Guest setup
+          # descriptor, and this fixture declares no guest system on purpose.
+          # Nothing on the paths this check measures reads the Guest row's
+          # phase - `tpm_device_is_admitted` reads the Device row, and both it
+          # and the broker derive the VM identity from `Device.metadata.ownerRef`
+          # - so the refused Guest is inert here. See the changelog fragment
+          # for what would have to change to drop the row.
           acceptance-guest = {
             type = "Guest";
             spec = {
@@ -1787,7 +1799,6 @@ rec {
         {"schemaVersion":"v2","site":{"allowUnsafeEastWest":false},"environments":[],"nftables":{"family":"inet","table":"d2b","chains":[],"tableHashAfterApply":null,"ownershipId":"host-integration"},"networkManager":{"filePath":"/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf","matchCriteria":[],"reloadBehavior":"atomic-reload","ownership":{"owner":"root","group":"root","mode":"0644","driftPolicy":"replace"}},"hostsFile":{"startMarker":"# d2b-managed begin","endMarker":"# d2b-managed end","rule":"replace-managed-block"},"kernelModules":[],"fdOwnership":[],"cloudHypervisorCapabilities":[],"ifNameMappings":[],"ch":null,"firewallCoexistencePolicy":null}
         EOF
         printf '%s\n' '{"schemaVersion":"v2","vms":[]}' > "$out/processes.json"
-        printf '%s\n' '{"schemaVersion":"v2","publicOperations":[],"brokerOperations":[]}' > "$out/privileges.json"
         printf '%s\n' '{"_manifest":{"manifestVersion":6},"_observability":{"enabled":false,"signozUrl":"http://127.0.0.1:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318,"obsVsockCid":0,"obsVsockHostSocket":"","vmName":""}}' > "$out/vms.json"
         python3 - "$out/bundle.json" <<'PY'
         import hashlib
@@ -1801,7 +1812,6 @@ rec {
             "artifactHashes": {},
             "bundleVersion": 1,
             "schemaVersion": "v3",
-            "privilegesPath": "privileges.json",
             "zones": [],
             "generation": {
                 "generatedAt": None,
@@ -1878,7 +1888,7 @@ rec {
               serviceConfig.Type = "oneshot";
               script = ''
                 install -d -o root -g d2bd -m 0750 /var/lib/d2b/guest-bundle
-                for file in bundle.json host.json processes.json privileges.json; do
+                for file in bundle.json host.json processes.json; do
                   install -o root -g d2bd -m 0640 \
                     ${guestBundle}/"$file" /var/lib/d2b/guest-bundle/"$file"
                 done

@@ -5,6 +5,8 @@
 //! effects through a `ResourceDriver` on an explicit Host or Guest target.
 //! Runtime status, watches, retries, and queues are in-memory only.
 
+/// An in-process authority publisher, for composition that has no broker.
+pub mod test_support;
 /// Per-Zone runtime authority for desired specs and resource actors.
 pub mod manager;
 /// One authoritative actor per desired resource; owns logical live state.
@@ -31,6 +33,9 @@ pub mod spec_store;
 /// for staged, prepared, and committed-but-unacknowledged transactions (U5,
 /// KTD5-KTD6).
 pub mod authority_journal;
+/// The broker half of the freeze / commit / publish / acknowledge order: the
+/// seam the manager drives one durable Zone transaction through.
+pub mod authority_publish;
 /// Typed relation indexes derived from accepted desired rows (U6; R2-R4).
 pub mod relations;
 /// Resource identity and ownership-edge types.
@@ -62,8 +67,15 @@ pub use crate::context::{LookupPlane, RowLookup};
 // outstanding publication transaction.
 pub use crate::authority_journal::{
     AcceptedCursor, AcceptedPublication, CommitOutcome, CommittedPublication, DesiredMutation,
-    DesiredRow, OutboxEntry, PublicationState, PublicationTransaction, StagedMutation,
+    DesiredRow, OutboxEntry, ProjectedAudit, ProjectedRow, Projection, RetiredRow,
+    StagedMutation,
     TransactionRecovery, ZoneRecovery,
+};
+// Authority publication (KTD6-KTD7): the two broker-side calls a durable Zone
+// transaction makes, and the owned facts each one carries.
+pub use crate::authority_publish::{
+    AcceptedRevision, AuthorityPublisher, FencedTransaction, MutationKind, PublicationCandidate,
+    PublicationRefusal, PublicationRows, PublishError, PublishOutcome, PublishedRow, publish,
 };
 // Relation index (U6, KTD2-KTD4): the six distinct graph relationship classes
 // derived from committed desired rows, and the per-type projections that read
@@ -76,7 +88,7 @@ pub use crate::relations::{
     RelationResolver, RelationRow, UnresolvedRelation, BINDING_RESOURCE_TYPES,
 };
 pub use crate::identity::TransactionId;
-pub use crate::schema::{AUTHORITY_JOURNAL_USER_VERSION, StoreFormat};
+pub use crate::schema::AUTHORITY_JOURNAL_USER_VERSION;
 
 // Target layer (U13): the Host/Guest directory, the generation-bound guest
 // handle it mints, and the Guest-side target runtime behind the

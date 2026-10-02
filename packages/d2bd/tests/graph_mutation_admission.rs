@@ -297,6 +297,9 @@ async fn spawn_fixture() -> Fixture {
     let args = ResourceManagerArgs {
         zone: ZONE.to_owned(),
         store: store.clone(),
+        // No broker in this fixture: the recording publisher fences and
+        // accepts what the manager publishes.
+        authority: d2b_resource_runtime::test_support::RecordingPublisher::new(),
         providers: providers(),
         hub,
         admission: Arc::new(GraphMutationAdmission::new(
@@ -727,6 +730,9 @@ async fn restart(store: Arc<SpecStore>) -> Fixture {
     let args = ResourceManagerArgs {
         zone: ZONE.to_owned(),
         store,
+        // No broker in this fixture: the recording publisher fences and
+        // accepts what the manager publishes.
+        authority: d2b_resource_runtime::test_support::RecordingPublisher::new(),
         providers: providers(),
         hub,
         admission: Arc::new(GraphMutationAdmission::new(

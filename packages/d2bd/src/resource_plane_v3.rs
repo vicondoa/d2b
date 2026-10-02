@@ -40,7 +40,8 @@ use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, BrokerRequest, BrokerResponse, StoreSyncRequest,
 };
 use d2b_contracts_resource::v3::{
-    ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneRevision,
+    AuthoritySubject, AuthoritySubjectKind, ControllerGeneration, ResourceGeneration, ResourceRef,
+    ResourceUid, ZoneId, ZoneRevision,
     execution_policy::BoundedToken,
     volume::{SourceKind, VolumeSpec},
     volume_binding::VolumeBindingSpec,
@@ -87,6 +88,7 @@ use d2b_provider_volume_local::{
 };
 use d2b_provider_volume_virtiofs::{MAX_SOCKET_PATH_BYTES, SocketIdentity, StoredBinding};
 use d2b_resource_api::manager_backend::nix_bundle_subject;
+use d2b_resource_runtime::AuthorityPublisher;
 use d2b_resource_runtime::context::{ManagerEndpoint, SpecDecoder};
 use d2b_resource_runtime::error::ResourceError;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
@@ -190,6 +192,20 @@ fn interaction_driver_args<T: d2b_provider_wayland_policy::InteractionType>(
 
 /// Preserved reconcile backoff for the plane's resource actors (R13).
 const PLANE_BACKOFF: Duration = d2b_resource_runtime::DEFAULT_REQUEUE_BACKOFF;
+
+/// The whole-exchange budget one authority publication round trip gets. It
+/// matches the coordinator the providers already publish their bootstrap
+/// authority over, so one Zone presents one bound to the broker.
+const AUTHORITY_PUBLICATION_ROUND_TRIP: Duration = Duration::from_secs(20);
+
+/// The identity every authority publication of this daemon runs under.
+///
+/// It is the verified deployment identity this daemon authenticates as, never
+/// the row a candidate mutates: a publisher that presented a candidate's own
+/// identity would be letting a row authorize its own introduction.
+fn authority_publication_subject() -> AuthoritySubject {
+    AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap)
+}
 
 /// The id a `User/<name>` or `Group/<name>` principal resolves to.
 ///
@@ -1990,6 +2006,14 @@ pub user_facets: UserEffectFacets,
     /// binds the set; a test or context-free deployment leaves it unbound
     /// and nothing is published.
     pub trusted_context_publication: Option<TrustedContextPublication>,
+    /// The broker half of this Zone's durable authority mutations, when a
+    /// caller binds one itself.
+    ///
+    /// `None` is the production composition: the plane binds the coordinator
+    /// over its own origination leg and its own store incarnation. A test or
+    /// a context-free deployment binds a publisher directly, because a plane
+    /// with no fence has no way to commit a desired mutation at all.
+    pub authority_publisher: Option<Arc<dyn AuthorityPublisher>>,
     /// The hosting factories the composition root registered for the
     /// services the plane's providers declare (U3, R5), keyed by service
     /// identity. The composition point applies every entry to the provider
@@ -2326,6 +2350,9 @@ Arc::new(DaemonAudioMediatorSource {
                     controller_generation.get(),
                 ),
             ),
+            // Production binds no publisher here: the plane builds the
+            // coordinator over its own origination leg and store incarnation.
+            authority_publisher: None,
             // The registered families' declared effects services are hosted
             // from the families' own implementations over this zone's facet
             // sets, one entry per service the registration table declares.
@@ -3391,12 +3418,52 @@ impl ResourcePlaneV3 {
         // materialized spawn operations, and the operator bindings - before
         // its manager spawns, so every seeded row's actor starts from a
         // committed row (F1). The manager's pre_start loads them.
+        // KTD6: the manager's fence. It is bound from this plane's own store
+        // incarnation and the origination leg, not from the deployment
+        // document's generation: the broker refuses a publication session
+        // whose store generation is not the store the rows live in, and a
+        // document generation would silently fence every candidate this store
+        // ever stages. The publication subject is the verified deployment
+        // identity this daemon authenticates as, never the row being mutated -
+        // a candidate that presented its own identity would be authorizing its
+        // own introduction.
+        let incarnation = store.store_incarnation().await.map_err(PlaneError::from)?;
+        let authority: Arc<dyn AuthorityPublisher> = match &inputs.authority_publisher {
+            Some(bound) => Arc::clone(bound),
+            None => {
+                let broker_socket = inputs
+                    .trusted_context_publication
+                    .as_ref()
+                    .map(|publication| publication.broker_socket().to_path_buf())
+                    .ok_or_else(|| PlaneError::Authority(
+                        "this plane has no origination leg and no bound publisher, so no \
+                         desired mutation has a fence to commit against"
+                            .into(),
+                    ))?;
+                let coordinator = Arc::new(
+                    crate::authority_publication::AuthorityPublicationCoordinator::new(
+                        inputs.zone.as_str(),
+                        incarnation.clone(),
+                        authority_publication_subject(),
+                        Arc::new(crate::authority_publication::OriginationPublicationLink::new(
+                            broker_socket,
+                            AUTHORITY_PUBLICATION_ROUND_TRIP,
+                        )),
+                    ),
+                );
+                crate::authority_publication::CoordinatorPublisher::new(
+                    coordinator,
+                    incarnation,
+                    authority_publication_subject(),
+                )
+            }
+        };
         if let Some(foundation) = &inputs.foundation {
             let seed = crate::foundation_seed::FoundationSeed::new(
                 foundation.declarations.clone(),
                 foundation.allocation.clone(),
             );
-            let report = seed.run(&store, &providers).await?;
+            let report = seed.run(&store, &providers, authority.as_ref()).await?;
             tracing::info!(
                 zone = %inputs.zone.as_str(),
                 committed = report.committed.len(),
@@ -3478,6 +3545,7 @@ impl ResourcePlaneV3 {
         let args = ResourceManagerArgs {
             zone: inputs.zone.as_str().to_owned(),
             store: Arc::clone(&store),
+            authority,
             providers,
             hub: Arc::clone(&hub),
             admission,
@@ -3980,8 +4048,24 @@ use d2b_provider_system_core::MinijailPlatformGate;
 
     /// One committed Volume row the subscription's per-row registration reads.
     async fn commit_volume_row(store: &SpecStore, key: &ResourceKey) {
+        // No broker in these fixtures: the recording publisher fences and
+        // accepts what the store publishes.
+        let publisher = d2b_resource_runtime::test_support::RecordingPublisher::new();
+        commit_volume_row_with(store, key, publisher.as_ref()).await
+    }
+
+    async fn commit_binding_row(store: &SpecStore, key: &ResourceKey) {
+        let publisher = d2b_resource_runtime::test_support::RecordingPublisher::new();
+        commit_binding_row_with(store, key, publisher.as_ref()).await
+    }
+
+    async fn commit_volume_row_with(
+        store: &SpecStore,
+        key: &ResourceKey,
+        publisher: &dyn d2b_resource_runtime::AuthorityPublisher,
+    ) {
         store
-           .ensure(StoredDesiredResource {
+           .publish(d2b_resource_runtime::DesiredMutation::Ensure(StoredDesiredResource {
                 key: key.clone(),
                 uid: d2b_resource_runtime::manager::deterministic_uid(key),
                 generation: 1,
@@ -3992,7 +4076,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
                    .expect("volume spec"),
                 metadata: br#"{"annotations":{},"labels":{},"ownerRef":null}"#.to_vec(),
                 created_at: 0,
-            })
+            }), publisher)
            .await
            .expect("volume row committed");
     }
@@ -4016,14 +4100,18 @@ use d2b_provider_system_core::MinijailPlatformGate;
 
     /// One committed VolumeBinding row, as the Volume driver mints it
     /// (the serving Provider reference rides in the stored envelope).
-    async fn commit_binding_row(store: &SpecStore, key: &ResourceKey) {
+    async fn commit_binding_row_with(
+        store: &SpecStore,
+        key: &ResourceKey,
+        publisher: &dyn d2b_resource_runtime::AuthorityPublisher,
+    ) {
         let mut envelope = binding_spec().as_object().cloned().expect("object");
         envelope.insert(
             "providerRef".to_owned(),
             serde_json::Value::String("Provider/volume-virtiofs".to_owned()),
         );
         store
-           .ensure(StoredDesiredResource {
+           .publish(d2b_resource_runtime::DesiredMutation::Ensure(StoredDesiredResource {
                 key: key.clone(),
                 uid: d2b_resource_runtime::manager::deterministic_uid(key),
                 generation: 1,
@@ -4033,7 +4121,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
                 spec: serde_json::to_vec(&envelope).expect("envelope"),
                 metadata: Vec::new(),
                 created_at: 0,
-            })
+            }), publisher)
            .await
            .expect("binding row committed");
     }
@@ -4278,6 +4366,7 @@ user_facets: user_facets.clone(),
                 guest_facets: guest_facets.clone(),
                 interaction_facets: interaction_facets.clone(),
                 trusted_context_publication: None,
+                authority_publisher: Some(d2b_resource_runtime::test_support::RecordingPublisher::new()),
 // U1/U14/U5/U7: the plane hosts the Process, Network, Host,
                 // Activation, and Volume families' declared effects services
 // U1/U14/U5/U8: the plane hosts the Process, Network, Host,
@@ -5761,9 +5850,12 @@ HOST_EFFECTS_SERVICE.id,
         let uid = [0x42; 16];
         // A row the plane never loaded: exactly the state the manager leaves
         // behind when it ensures a derived child after `open`.
+        // No broker in this fixture: the recording publisher fences and
+        // accepts what the store publishes.
+        let publisher = d2b_resource_runtime::test_support::RecordingPublisher::new();
         plane
            .store()
-           .ensure(StoredDesiredResource {
+           .publish(d2b_resource_runtime::DesiredMutation::Ensure(StoredDesiredResource {
                 key: ResourceKey::new("test", "VolumeBinding", "vol-binding-derived"),
                 uid,
                 generation: 1,
@@ -5773,7 +5865,7 @@ HOST_EFFECTS_SERVICE.id,
                 spec: serde_json::to_vec(&envelope).expect("envelope"),
                 metadata: Vec::new(),
                 created_at: 0,
-            })
+            }), publisher.as_ref())
            .await
            .expect("binding row");
 
@@ -6408,8 +6500,11 @@ HOST_EFFECTS_SERVICE.id,
         let uid = d2b_resource_runtime::manager::deterministic_uid(&key);
         let store =
             SpecStore::open(ResourcePlaneV3::spec_store_path(&inputs.spec_store_dir)).expect("store");
+        // No broker in this fixture: the recording publisher fences and
+        // accepts what the store publishes.
+        let publisher = d2b_resource_runtime::test_support::RecordingPublisher::new();
         store
-           .ensure(StoredDesiredResource {
+           .publish(d2b_resource_runtime::DesiredMutation::Ensure(StoredDesiredResource {
                 uid,
                 key,
                 generation: 1,
@@ -6419,7 +6514,7 @@ HOST_EFFECTS_SERVICE.id,
                 spec: b"{}".to_vec(),
                 metadata: br#"{"annotations":{},"labels":{},"ownerRef":null}"#.to_vec(),
                 created_at: 0,
-            })
+            }), publisher.as_ref())
            .await
            .expect("provider row committed");
         drop(store);
@@ -6921,8 +7016,12 @@ HOST_EFFECTS_SERVICE.id,
            .iter()
            .map(|name| ResourceKey::new("test", "Volume", *name))
            .collect();
+        // One publisher for the whole Zone: a Zone has at most one outstanding
+        // publication transaction, so three publishers would refuse two of
+        // these rows rather than commit them.
+        let publisher = d2b_resource_runtime::test_support::RecordingPublisher::new();
         for key in &keys[..2] {
-            commit_volume_row(&rig.store, key).await;
+            commit_volume_row_with(&rig.store, key, publisher.as_ref()).await;
         }
         let state = Arc::new(AnchorSubscriptionState::default());
         let task = spawn_subscription(&rig, &state, rig.hub.snapshot_revision());
@@ -6957,8 +7056,33 @@ HOST_EFFECTS_SERVICE.id,
                 source: ChangeSource::Desired,
             })
            .await;
-        commit_volume_row(&rig.store, &keys[2]).await;
+        // The Missed that ends this live phase is proved by the recovery
+        // reload that follows it, so the third row is committed after that
+        // reload rather than racing it: a row committed while the reload was
+        // already reading would prove nothing about a row committed between
+        // two streams.
         wait_for(|| state.relists.load(Ordering::Relaxed) >= 1).await;
+        commit_volume_row_with(&rig.store, &keys[2], publisher.as_ref()).await;
+        // Now the row is durable with no notice naming it. Ending the live
+        // phase again is what makes the next recovery reload the only path
+        // that can register it.
+        rig.hub
+           .publish(ChangeNotice {
+                key: keys[0].clone(),
+                kind: ChangeKind::Upsert,
+                source: ChangeSource::Desired,
+            })
+           .await;
+        rig.hub
+           .publish(ChangeNotice {
+                key: keys[1].clone(),
+                kind: ChangeKind::Upsert,
+                source: ChangeSource::Desired,
+            })
+           .await;
+        let third = resource_uid(&d2b_resource_runtime::manager::deterministic_uid(&keys[2]))
+            .expect("uid");
+        wait_for(|| rig.registry.lookup_anchor(&third).is_some()).await;
         for key in &keys {
             let uid = resource_uid(&d2b_resource_runtime::manager::deterministic_uid(key)).expect("uid");
             assert!(rig.registry.lookup_anchor(&uid).is_some(), "the relist rebuild reflects row {key}");

@@ -1,0 +1,351 @@
+//! The broker half of the freeze / commit / publish / acknowledge order
+//! (KTD6-KTD7).
+//!
+//! # Why the manager does not talk to a broker directly
+//!
+//! The store owns the durable transaction; the broker owns the admitted
+//! projection; neither may stand in for the other. This module is the seam
+//! between them: the manager drives the four durable steps and calls an
+//! [`AuthorityPublisher`] for the two that cross the privileged boundary.
+//! The daemon binds the publisher to its own authenticated origination leg;
+//! nothing in this crate depends on the broker's wire types, so the ordering
+//! stays testable without a broker and the store stays below the transport.
+//!
+//! # What each call is allowed to mean
+//!
+//! - [`AuthorityPublisher::prepare`] is the fence. It returns only after the
+//!   broker has durably frozen this Zone's new-effect admission for the exact
+//!   candidate it was given, and it names the prepared transaction identity
+//!   the store then records. A manager that cannot name that identity has no
+//!   fence, so it must not commit.
+//! - [`AuthorityPublisher::commit`] advances the broker's projection to one
+//!   exact committed state and answers with the revision it accepted. It is
+//!   not revocation: a reducing change still owes release evidence, reported
+//!   separately.
+//!
+//! There is no "abandon" call. A candidate the broker has fenced is never
+//! dropped: recovery either replays the exact bytes the fence validated or
+//! leaves the Zone fenced for explicit resynchronization, which is what makes
+//! a held fence evidence rather than a lock this half forgot to unlock.
+//!
+//! Every call takes owned durable facts rather than a store handle, so no
+//! SQLite transaction, store lock, or reservation guard can be alive across
+//! the round trip.
+
+use async_trait::async_trait;
+use d2b_contracts_resource::v3::{
+    DesiredDigest, DesiredRevision, StoreIncarnation, ZoneDesiredSequence,
+};
+
+use crate::authority_journal::{CommittedPublication, Projection};
+use crate::identity::TransactionId;
+
+/// The module declared name.
+pub const MODULE_NAME: &str = "authority_publish";
+
+/// What one staged candidate does to the rows it names.
+///
+/// The broker re-evaluates the candidate against its own accepted graph, so
+/// this is a classification of the change, never permission to make it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MutationKind {
+    /// The mutation creates the row it names.
+    Create,
+    /// The mutation rewrites a row that already exists, including an
+    /// ownership, metadata, or provenance change that leaves the spec bytes
+    /// identical.
+    Update,
+    /// The mutation retires the row, either by marking it deleting or by
+    /// removing it.
+    Delete,
+}
+
+/// One staged candidate, as the broker must validate it.
+///
+/// Every field is a durable fact the store already decided when it staged the
+/// candidate, so nothing here is a handle into the store and nothing here
+/// needs a lock to stay valid across the round trip.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicationCandidate {
+    /// The exact staged transaction identity.
+    pub transaction: TransactionId,
+    /// The Zone the candidate belongs to.
+    pub zone: String,
+    /// The store generation the candidate was staged in.
+    pub incarnation: StoreIncarnation,
+    /// The last revision the broker is known to have accepted for the Zone.
+    pub expected: ZoneDesiredSequence,
+    /// The sequence this candidate commits at.
+    pub committed: ZoneDesiredSequence,
+    /// What the candidate does to the rows it names.
+    pub kind: MutationKind,
+    /// The exact committed state this candidate installs.
+    pub projection: Projection,
+}
+
+/// One row a publication carries to the broker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishedRow {
+    pub key: crate::spec_store::ResourceKey,
+    pub revision: DesiredRevision,
+    /// The digest of the exact committed row bytes.
+    pub digest: DesiredDigest,
+    /// The row's canonical desired bytes, which the broker stores and
+    /// re-evaluates rather than a summary the candidate could shape.
+    pub spec: Vec<u8>,
+}
+
+/// The prepared rows and retired keys one candidate installs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicationRows {
+    pub rows: Vec<PublishedRow>,
+    pub removed: Vec<crate::spec_store::ResourceKey>,
+}
+
+impl PublicationRows {
+    /// The rows and retirements a store projection publishes.
+    pub fn of(projection: &Projection) -> Self {
+        Self {
+            rows: projection
+                .rows
+                .iter()
+                .map(|row| PublishedRow {
+                    key: row.row.row.key.clone(),
+                    revision: row.row.revision,
+                    digest: row.row.digest.clone(),
+                    spec: row.row.row.spec.clone(),
+                })
+                .collect(),
+            removed: projection.removed.iter().map(|row| row.key.clone()).collect(),
+        }
+    }
+}
+
+/// What the broker durably froze for one candidate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FencedTransaction {
+    /// The exact transaction identity both sides now hold.
+    pub transaction: TransactionId,
+    /// The broker's prepared transaction identity for this candidate, which
+    /// the store records before the desired rows commit.
+    pub prepared: String,
+    /// The sequence the candidate will commit at.
+    pub committed: ZoneDesiredSequence,
+}
+
+/// The revision the broker accepted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcceptedRevision {
+    pub transaction: TransactionId,
+    pub sequence: ZoneDesiredSequence,
+    pub candidate: DesiredDigest,
+}
+
+/// Why one publication round trip did not produce a fence or an acceptance.
+///
+/// Nothing here is retried silently: a refusal leaves the Zone fenced, and the
+/// manager reports it rather than committing against a fence that is not
+/// there.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PublicationRefusal {
+    /// The broker, or the transport to it, refused or could not answer.
+    #[error("authority publication refused: {0}")]
+    Refused(String),
+    /// A transaction the broker is not holding.
+    ///
+    /// This is the answer for an unknown or superseded transaction: the
+    /// manager may not publish visibility for facts the broker does not hold.
+    #[error("authority publication names transaction {transaction}, which the broker is not holding")]
+    UnknownTransaction { transaction: TransactionId },
+    /// The broker holds this exact fence already, so the candidate replays
+    /// rather than stacking a second transaction under one fence.
+    #[error("authority publication replayed transaction {transaction} under its held fence")]
+    Replayed { transaction: TransactionId },
+}
+
+/// The broker half of one Zone's authority publication.
+///
+/// Implementations are `Send + Sync` and shared: the manager owns one per
+/// Zone, and the round trips happen on the caller's task with no store or
+/// manager guard held across them.
+#[async_trait]
+pub trait AuthorityPublisher: Send + Sync + std::fmt::Debug {
+    /// Durably freeze this Zone's new-effect admission for one candidate.
+    async fn prepare(
+        &self,
+        candidate: &PublicationCandidate,
+    ) -> Result<FencedTransaction, PublicationRefusal>;
+
+    /// Advance the broker's admitted projection to one exact committed state.
+    async fn commit(
+        &self,
+        publication: &CommittedPublication,
+    ) -> Result<AcceptedRevision, PublicationRefusal>;
+
+    /// The Zone cursor the broker currently holds.
+    ///
+    /// A restarted manager reads this before it publishes anything, so it
+    /// never claims a predecessor the broker does not hold.
+    async fn accepted(&self) -> Result<ZoneDesiredSequence, PublicationRefusal>;
+}
+/// One durable authority mutation's outcome, as the caller reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PublishOutcome {
+    /// The Zone's desired state advanced and the broker accepted the exact
+    /// revision this transaction committed.
+    Committed {
+        publication: crate::authority_journal::CommittedPublication,
+        /// Whether this mutation created the row it wrote. Staging decides it,
+        /// so a rewrite that lands on the same generation is never mistaken
+        /// for the creation that produced it.
+        created: bool,
+    },
+    /// The candidate was byte-identical to the committed desired state, so
+    /// nothing advanced: no revision was reserved for publication and the
+    /// Zone was never fenced.
+    Unchanged(crate::authority_journal::DesiredRow),
+}
+
+impl PublishOutcome {
+    /// The committed row, or `None` when the mutation retired one.
+    pub fn row(&self) -> Option<&crate::authority_journal::DesiredRow> {
+        match self {
+            Self::Committed { publication, .. } => publication.publication.rows.first(),
+            Self::Unchanged(row) => Some(row),
+        }
+    }
+
+    /// The manager's read of a committed ensure.
+    ///
+    /// `None` when the mutation retired a row instead of writing one: an
+    /// ensure always projects exactly one row, so this is the caller asking
+    /// whether it holds the answer it came for rather than a second
+    /// rendering of the same commit.
+    pub fn ensure(self) -> Option<crate::spec_store::EnsureOutcome> {
+        let row = self.row()?.row.clone();
+        Some(match &self {
+            Self::Unchanged(_) => crate::spec_store::EnsureOutcome::Unchanged(row),
+            Self::Committed { created: true, .. } => crate::spec_store::EnsureOutcome::Created(row),
+            Self::Committed { .. } => crate::spec_store::EnsureOutcome::Updated(row),
+        })
+    }
+}
+
+/// Why one durable authority mutation did not commit.
+#[derive(Debug, thiserror::Error)]
+pub enum PublishError {
+    /// The store refused the mutation itself, or its own durable record.
+    #[error(transparent)]
+    Store(#[from] crate::spec_store::SpecStoreError),
+    /// The broker half refused, or could not answer. The Zone is left fenced
+    /// exactly as the refusal says.
+    #[error(transparent)]
+    Refused(#[from] PublicationRefusal),
+    /// The store committed something this publisher cannot name, which is a
+    /// broken protocol rather than a refusal of the mutation.
+    #[error("{0}")]
+    Inconsistent(String),
+}
+
+/// One durable authority mutation, in the only order the protocol permits
+/// (KTD6).
+///
+/// This is the store's only write path: the per-Zone manager and the
+/// foundation seed both drive this exact order, so neither can commit a
+/// desired row the broker never fenced, and neither can commit one the broker
+/// has not accepted.
+///
+/// 1. stage - the candidate and its reserved Zone sequence become durable;
+/// 2. prepare - the broker durably freezes this Zone's new-effect admission
+///    for the exact bytes staging decided, and names its prepared identity;
+/// 3. record the prepared identity, then commit - the desired rows, their
+///    revisions, the audit record, and the outbox entry, in one transaction;
+/// 4. publish - the broker advances its projection to that exact committed
+///    state and answers with the revision it accepted;
+/// 5. acknowledge - the store settles the transaction, drops its outbox
+///    entry, and moves the accepted cursor.
+///
+/// Each store call is its own complete transaction and no caller guard is held
+/// across the broker round trip, so a failure at any step leaves a state the
+/// recovery table can name rather than a half-published authority change.
+pub async fn publish(
+    store: &crate::spec_store::SpecStore,
+    mutation: crate::authority_journal::DesiredMutation,
+    authority: &dyn AuthorityPublisher,
+) -> Result<PublishOutcome, PublishError> {
+    use crate::authority_journal::AcceptedPublication;
+    use crate::authority_journal::CommitOutcome;
+
+    let zone = mutation.zone().to_owned();
+    let expected = store
+        .accepted_cursor(&zone)
+        .await?
+        .map_or(ZoneDesiredSequence::INITIAL, |cursor| cursor.sequence);
+    let staged = store.stage_mutation(mutation).await?;
+    let Some(projection) = staged.projection.clone() else {
+        // The candidate changes nothing: there is no revision to fence and
+        // none to publish, so the transaction settles without ever freezing
+        // the Zone.
+        return match store.commit_mutation(staged.transaction).await? {
+            CommitOutcome::Unchanged { row, .. } => Ok(PublishOutcome::Unchanged(row)),
+            other => Err(PublishError::Inconsistent(format!(
+                "a staged candidate that projected no change committed {other:?}"
+            ))),
+        };
+    };
+    let created =
+        projection.rows.first().is_some_and(|row| row.generation_before.is_none());
+    let fenced = authority
+        .prepare(&PublicationCandidate {
+            transaction: staged.transaction,
+            zone: staged.zone.clone(),
+            incarnation: staged.incarnation.clone(),
+            expected,
+            committed: staged.sequence,
+            kind: mutation_kind(&projection),
+            projection,
+        })
+        .await?;
+    if fenced.transaction != staged.transaction {
+        // A fence the manager cannot name is not a fence for this candidate.
+        return Err(PublishError::Refused(PublicationRefusal::UnknownTransaction {
+            transaction: fenced.transaction,
+        }));
+    }
+    store.record_prepared(staged.transaction, &fenced.prepared).await?;
+    let committed = match store.commit_mutation(staged.transaction).await? {
+        CommitOutcome::Committed(committed) | CommitOutcome::AlreadyCommitted(committed) => {
+            committed
+        }
+        CommitOutcome::Unchanged { .. } => {
+            return Err(PublishError::Inconsistent(
+                "a fenced candidate committed nothing it had projected".to_owned(),
+            ));
+        }
+    };
+    let accepted = authority.commit(&committed).await?;
+    store
+        .acknowledge(AcceptedPublication {
+            transaction: committed.transaction,
+            zone: committed.zone.clone(),
+            incarnation: committed.incarnation.clone(),
+            sequence: committed.sequence,
+            candidate: committed.candidate.clone(),
+        })
+        .await?;
+    if accepted.transaction != committed.transaction || accepted.sequence != committed.sequence {
+        return Err(PublishError::Refused(PublicationRefusal::UnknownTransaction {
+            transaction: accepted.transaction,
+        }));
+    }
+    Ok(PublishOutcome::Committed { publication: committed, created })
+}
+
+/// What a projected mutation does to the rows it names.
+fn mutation_kind(projection: &Projection) -> MutationKind {
+    match (projection.rows.first(), projection.removed.first()) {
+        (_, Some(_)) => MutationKind::Delete,
+        (Some(row), None) if row.generation_before.is_none() => MutationKind::Create,
+        _ => MutationKind::Update,
+    }
+}

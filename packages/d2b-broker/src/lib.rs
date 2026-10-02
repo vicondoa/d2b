@@ -16,8 +16,7 @@
 // and states why that item is still dead: either a resource-holding field
 // whose value must not be dropped, or a completed surface whose committed
 // catalog row puts the wire owner on a family crate, so this crate has no
-// caller for it yet. A `cfg_attr(feature = "layer1-bootstrap", ...)` allow
-// marks a surface the legacy bootstrap dispatcher never routes.
+// caller for it yet.
 #![allow(deprecated)]
 #![allow(clippy::large_enum_variant)]
 #![allow(clippy::result_large_err)]
@@ -26,18 +25,6 @@
 #![allow(clippy::cmp_owned)]
 #![allow(clippy::io_other_error)]
 #![allow(clippy::needless_borrow)]
-
-// The non-bootstrap runtime path is supported and wires against the
-// real opaque-ID `d2b_contracts_broker::broker_wire::BrokerRequest` contract via
-// the `live_handlers` module. The bootstrap path remains available
-// behind the `layer1-bootstrap` feature for the legacy probe-hello /
-// probe-stub / probe-export-audit test harnesses; new code should
-// target the real wire.
-//
-// `tests/broker-default-features-build.sh` was updated to
-// reflect this clean break (default features now empty); the
-// no-default-features gate at `tests/broker-no-default-features.sh`
-// asserts the production binary compiles clean.
 
 pub mod audit;
 // The broker's admitted authority projection (U7, KTD6-KTD7): the serialized
@@ -58,9 +45,7 @@ pub mod forwarding;
 // reconcile-executor calls). Pure-shaped: take their inputs directly so
 // the dispatch layer is the only mixer of wire decoding + bundle
 // resolution + live execution.
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub mod kernel_ops;
-#[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))] // unreachable under the legacy bootstrap dispatcher, see the ops note
 pub mod live_handlers;
 // Broker operation handlers. `ops::mod` declares 31 arms and only the
 // three the crate's own integration tests address by path stay `pub` -
@@ -82,5 +67,3 @@ pub use d2b_contracts_broker::broker_wire::BrokerProfile;
 #[cfg(test)]
 mod seccomp_compile_tests;
 
-#[cfg(feature = "layer1-bootstrap")]
-pub mod bootstrap;

@@ -60,6 +60,7 @@ use d2b_provider_device::{
 };
 use d2b_provider_device_gpu::facets::GpuRuntime;
 use d2b_provider_device_security_key::SecurityKeyComponent;
+use d2b_provider_device_tpm::TpmResourceControllerError;
 use d2b_provider_device_tpm::facets::TpmRuntime;
 use d2b_provider_device_usbip::facets::UsbipRuntime;
 use d2b_provider_device_usbip::UsbipComponent;
@@ -542,6 +543,18 @@ const NETWORK_CONFIG_VOLUME_SCHEMA_VERSION: &str =
 const NETWORK_CONFIG_CONTENT_KIND: &str = d2b_provider_volume_local::NETWORK_CONFIG_CONTENT_KIND;
 const NETWORK_CONFIG_FILE_OWNER: &str = d2b_provider_volume_local::NETWORK_CONFIG_FILE_OWNER;
 const NETWORK_CONFIG_FILE_MODE: &str = d2b_provider_volume_local::NETWORK_CONFIG_FILE_MODE;
+
+/// The closed cause a TPM Device row carries when its admission read refused:
+/// the committed row was unreadable, was not this Device, named another
+/// Provider, or did not target this Guest. The runtime's own error says which;
+/// the row only needs one code that says "admission", not which step, because
+/// the adapter's warn line still carries the concrete error.
+const TPM_ADMISSION_UNAVAILABLE: &str = "device-tpm-admission-unavailable";
+
+/// The closed cause a TPM Device row carries when the controller refused for a
+/// reason that is not one of its effect errors: a controller already finalized,
+/// or one whose retained state never reached reconcile.
+const TPM_CONTROLLER_INVALID_STATE: &str = "device-tpm-controller-invalid-state";
 
 /// The content fence the old effects threaded into every config-Volume
 /// projection (assignment and provenance only: the identity fields were
@@ -1822,12 +1835,23 @@ impl ProductionSharedProviderEffects {
         )
         .await
         .map_err(|error| {
+            // The controller reduces every typed effect refusal to a
+            // `TpmResourceEffectError`, which already carries a closed code.
+            // That code is the whole diagnosis, and it used to stop here: the
+            // row then published `shared-provider-unavailable` and nothing
+            // else for every pass of the retry, so the one warn line above was
+            // the only record and a bounded journal tail need not contain it.
+            let cause = match error {
+                TpmResourceControllerError::Effect(effect) => effect.code(),
+                TpmResourceControllerError::InvalidState => TPM_CONTROLLER_INVALID_STATE,
+            };
             tracing::warn!(
                 error = ?error,
+                cause = cause,
                 device = %device_ref.to_canonical_string(),
                 "TPM device controller reconcile failed",
             );
-            SharedProviderEffectError::Unavailable
+            SharedProviderEffectError::UnavailableWithCause(cause)
         });
         match result {
             Ok(outcome) => {
@@ -2680,7 +2704,7 @@ impl ProductionSharedProviderEffects {
                 None,
             )
             .await
-            .map_err(|_| SharedProviderEffectError::Unavailable)?;
+            .map_err(|_| SharedProviderEffectError::UnavailableWithCause(TPM_ADMISSION_UNAVAILABLE))?;
         let mut controller = {
             let mut controllers = state
                 .tpm_controllers()
@@ -2721,12 +2745,20 @@ impl ProductionSharedProviderEffects {
                         .map_err(|_| SharedProviderEffectError::Unavailable)?;
                     controllers.insert(request.uid.clone(), controller);
                 }
+                // The same closed code the reconcile arm carries, so a
+                // teardown that will not finish names the controller refusal
+                // holding it instead of reporting one flat code.
+                let cause = match error {
+                    TpmResourceControllerError::Effect(effect) => effect.code(),
+                    TpmResourceControllerError::InvalidState => TPM_CONTROLLER_INVALID_STATE,
+                };
                 tracing::warn!(
                     error = ?error,
+                    cause = cause,
                     device = %key_ref(&request.target)?.to_canonical_string(),
                     "TPM device controller finalize failed",
                 );
-                Err(SharedProviderEffectError::Unavailable)
+                Err(SharedProviderEffectError::UnavailableWithCause(cause))
             }
         }
     }
@@ -3492,7 +3524,6 @@ mod tests {
         let mut bundle = json!({
             "bundleVersion": 1,
             "schemaVersion": "v3",
-            "privilegesPath": "privileges.json",
             "zones": [],
             "artifactHashes": {},
             "generation": {
@@ -3731,6 +3762,7 @@ mod tests {
                 guest_facets: guest_facets.clone(),
                 interaction_facets: interaction_facets.clone(),
                 trusted_context_publication: None,
+                authority_publisher: Some(d2b_resource_runtime::test_support::RecordingPublisher::new()),
                 // U1/U14/U5/U7/U8/U6/U10/U12/U15: the plane hosts every converted
                 // family's declared effects services from the same facet
                 // sets their driver factories are built from, exactly as the
@@ -4016,7 +4048,6 @@ mod tests {
             Bundle {
                 bundle_version: 1,
                 schema_version: "v3".to_owned(),
-                privileges_path: "privileges.json".to_owned(),
                 storage_path: None,
                 realm_workloads_launcher_v2_path: None,
                 generation: BundleGeneration {

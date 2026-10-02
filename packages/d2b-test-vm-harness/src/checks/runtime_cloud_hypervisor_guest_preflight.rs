@@ -960,7 +960,15 @@ pub fn assertions(control: &mut GuestControl) -> LegacyResult<()> {
     // legitimately precede the nested boot, so keep this bound aligned with
     // Guest readiness rather than failing before the U7 Runner re-enters.
     control.stage("nested-vmm-api-socket");
-    control.succeed(&[NESTED_VMM_API_SOCKET], None)?;
+    control.diag_run(
+        "nested-vmm-api-socket",
+        NESTED_VMM_API_SOCKET,
+        &[
+            ("live process table", "ps -eo pid=,ppid=,args= --no-headers 2>/dev/null | head -n 80 || true"),
+            ("guest state rows", "find /var/lib/d2b/zones/work/guests -maxdepth 3 2>/dev/null | head -n 60 || true"),
+        ],
+        &[("d2bd.service", ""), ("d2b-broker.service", "")],
+    )?;
     control.diag_wait(
         "guest-console-boot-id",
         GUEST_CONSOLE_BOOT_ID,
