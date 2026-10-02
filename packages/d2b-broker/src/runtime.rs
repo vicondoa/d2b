@@ -7665,6 +7665,29 @@ impl TestKernelBundleResolver {
             previous,
         }
     }
+
+    /// Pin the process-wide slot empty for the current test, holding it
+    /// until the returned guard is dropped.
+    ///
+    /// This is the counterpart to [`Self::install`] for a case whose claim
+    /// is about what the resolver does when no bundle is injected. Without
+    /// it such a case reads the slot unguarded: a concurrent test that has
+    /// installed a bundle is answered from that bundle whatever the
+    /// configured path says, so the case observes a neighbour's fixture
+    /// rather than the absence it is about.
+    pub(crate) fn empty() -> Self {
+        let lock = TEST_KERNEL_BUNDLE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = (*TEST_KERNEL_BUNDLE_RESOLVER
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()))
+        .take();
+        Self {
+            _lock: lock,
+            previous,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -17290,15 +17313,23 @@ mod tests {
     ///
     /// The private execution values are resolved through the production
     /// resolver rather than read from a stored snapshot, so this case also
-    /// observes that resolution: the configured bundle path does not name a
-    /// verified bundle, so resolution refuses and the effect has no table to
-    /// resolve against at all. That refusal is the honest answer and is
-    /// checked separately below.
+    /// observes that resolution, in both directions, and observes the
+    /// installed table in its own right.
+    ///
+    /// Under `cfg(test)` that resolver prefers the process-wide injected
+    /// bundle slot over the configured path, so a case making a claim about
+    /// either has to own the slot rather than read it: this case pins it
+    /// empty for the refusal and installs a real verified bundle for the
+    /// success. Read unguarded, a concurrent test's bundle answers every
+    /// call whatever `bundle_path` says, and the refusal below would be
+    /// observing a neighbour's fixture rather than the absence it is about.
     #[tokio::test]
     async fn the_installed_admitted_effect_table_serves_no_operation() {
         use crate::envelope::{AdmittedEffectAdmission, ProjectionPosture, UNKNOWN_IMPLEMENTATION};
         use d2b_contracts_resource::v3::{
-            AdmissionStage, AuthoritySubject, AuthoritySubjectKind, RefusalReason,
+            AdmissionStage, AuthoritySubject, AuthoritySubjectKind, BindingArbitration, BindingKey,
+            BindingKind, BindingRealizationFacet, BindingRealizationSupport, BindingSlot,
+            RefusalReason, RequestedRights, ResourceRef, ResourceUid, SourceAdmission,
             StoreIncarnation, ZoneId,
         };
 
@@ -17327,17 +17358,118 @@ mod tests {
             "the invocation's expected dependencies all name the accepted Zone",
         );
 
+        // The installed table, in its own right, before anything is
+        // resolved. An empty table is the absence the boundary refuses by
+        // name; a table that served an invented handler would be a second
+        // authority source. The moment a declared implementation is
+        // installed, these two fail.
+        assert!(
+            wiring.table.operations().next().is_none(),
+            "the installed table declares no Operation at all, not merely none for this carrier"
+        );
+        assert!(
+            wiring.table.declared(invocation.operation()).is_none(),
+            "the installed table carries no implementation for the carrier's own Operation"
+        );
+
         // The production resolver, over the same installed wiring and the
-        // same accepted graph. The wiring's configured bundle path names no
-        // verified bundle in this configuration, so the resolver refuses
+        // same accepted graph, with the injected slot pinned empty so
+        // `wiring.bundle_path` is what the resolver reads. That path names
+        // no verified bundle in this configuration, so resolution refuses
         // rather than presenting an empty set of values as a decision, and
         // that refusal is what the accept loop answers. This case therefore
         // asserts the production answer is a refusal at the resolve step
-        // rather than at the implementation table, and the case below asserts
-        // the implementation table is empty in its own right.
+        // rather than at the implementation table, and the case above
+        // asserts the implementation table is empty in its own right.
+        {
+            let _no_verified_bundle = TestKernelBundleResolver::empty();
+            assert!(
+                private_execution_values(wiring, &accepted).is_none(),
+                "an absent verified bundle resolves no private execution values"
+            );
+        }
+
+        // The other direction, over the same call. With a real verified
+        // bundle installed, resolution succeeds and the rows it records are
+        // the ones that bundle and the broker's own runtime root name. The
+        // difference between the two answers is the whole of the contract -
+        // a refusal is a missing answer, a resolution is a table whose every
+        // row is traceable - so pinning only the refusal would leave the
+        // resolved table unobserved.
+        let bundle_root = test_audit_dir("admitted-effect-resolved-values");
+        tokio::fs::create_dir_all(&bundle_root)
+            .await
+            .expect("create the bundle scratch dir");
+        let bundle = build_spawn_kernel_bundle(&bundle_root);
+        let _verified_bundle = install_test_kernel_bundle(&bundle);
+
+        // A committed `Volume` relationship for the same Zone, so the join
+        // has a row to record rather than nothing at all to say.
+        let source_uid = ResourceUid::parse("11111111-1111-4111-8111-111111111111")
+            .expect("the fixture source uid is canonical");
+        let relationship = BindingKey::new(
+            accepted.zone().clone(),
+            BindingKind::Volume,
+            ResourceRef::parse("Volume/data").expect("the fixture volume is canonical"),
+            source_uid.clone(),
+            ResourceRef::parse("Process/shell").expect("the fixture consumer is canonical"),
+            ResourceUid::parse("22222222-2222-4222-8222-222222222222")
+                .expect("the fixture consumer uid is canonical"),
+            BindingSlot::parse("data").expect("the fixture slot is a bounded token"),
+        )
+        .expect("the fixture relationship is well formed");
+        let committed = accepted.clone().with_source(
+            d2b_core::resource_authority::AcceptedSource::new(
+                SourceAdmission::new(
+                    relationship.clone(),
+                    vec![RequestedRights::Observe],
+                    BindingArbitration::Shared,
+                )
+                .expect("the source decision validates"),
+                BindingRealizationSupport::new(vec![BindingRealizationFacet::FilesystemPresentation])
+                    .expect("the realization support validates"),
+            ),
+        );
+
+        let table = private_execution_values(wiring, &committed)
+            .expect("a verified bundle resolves rather than refusing");
+        let destinations = table.destinations(&relationship.address());
+        assert_eq!(
+            destinations.len(),
+            1,
+            "the committed relationship resolves exactly one presentation"
+        );
+        assert_eq!(
+            destinations[0].presentation(),
+            BindingRealizationFacet::FilesystemPresentation,
+            "the presentation is the facet the accepted source itself declared"
+        );
         assert!(
-            private_execution_values(wiring, &accepted).is_none(),
-            "an absent verified bundle resolves no private execution values",
+            destinations[0].read_only(),
+            "the resolved presentation is read-only, as the broker's own mount point is"
+        );
+        assert_eq!(
+            destinations[0].path().as_path(),
+            wiring
+                .runtime_root
+                .join("effects")
+                .join(accepted.zone().as_str())
+                .join("shell")
+                .join("data"),
+            "the mount point is the broker's own tree keyed by the relationship, never one the carrier named"
+        );
+        // A verified bundle is not a licence to record more than it proved.
+        // The broker observes no committed row and the installed table
+        // declares no implementation, so those two joins stay empty even
+        // though the bundle loaded: a load is what lets the join run, not a
+        // row in the answer.
+        assert!(
+            table.source(&source_uid).is_none(),
+            "a source the broker cannot observe at a committed revision and digest is not recorded"
+        );
+        assert!(
+            table.executable(invocation.operation()).is_none(),
+            "no executable resolves while the installed table declares no implementation"
         );
 
         // With the values resolved, the only remaining reason to refuse is the
@@ -17368,6 +17500,7 @@ mod tests {
         assert_eq!(refusal.reason, RefusalReason::UntrustedImplementation);
         assert_eq!(refusal.operation.to_canonical_string(), "Operation/spawn-process");
         let _ = tokio::fs::remove_dir_all(&root).await;
+        let _ = tokio::fs::remove_dir_all(&bundle_root).await;
     }
 
     /// A raw launch posture is refused at the boundary with a named closed
