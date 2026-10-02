@@ -394,21 +394,88 @@ fn named_entry(spec: &str) -> bool {
     parts.len() == 3 && (parts[0] == "u" || parts[0] == "g") && !parts[1].is_empty()
 }
 
+/// The principal spelling `getfacl -cp` renders one uid as.
+///
+/// [`observe_acl`] reads the kernel's ACL without `--numeric`, so every
+/// entry it compares carries its account NAME wherever the uid has a
+/// passwd entry and falls back to the number only where it does not. A
+/// runner principal minted per Guest at launch had no passwd entry and so
+/// rendered numerically, which is why keying the derived set off the
+/// numeric `ps -eo uid=` used to line up. Host account provisioning
+/// (`tests/unit/nix/cases/host-worker-accounts.json`) gave every runner a
+/// named account, so from then on the numeric prefix matched nothing and
+/// each named runner's own traversal grant read as undeclared drift.
+/// Resolve the spelling the reader will see instead of assuming the
+/// numeric one. `id -un` exits non-zero for a uid with no passwd entry, so
+/// the `|| true` keeps that case on the numeric spelling rather than
+/// refusing the level.
+fn acl_principal_spelling(control: &mut GuestControl, uid: &str) -> LegacyResult<String> {
+    let name = control
+        .succeed(
+            &[&format!("id -un {} 2>/dev/null || true", shlex_quote(uid))],
+            None,
+        )?
+        .trim()
+        .to_owned();
+    Ok(if name.is_empty() {
+        uid.to_owned()
+    } else {
+        name
+    })
+}
+
+/// The spawn-preflight entries one runner principal's own grants imply, per
+/// level.
+///
+/// The pure half of [`spawn_preflight_entries`]: `grant_paths` are the levels
+/// where that principal already holds a grant. Every one of them carries
+/// search, and only the principal's own topmost grant (the leaf the
+/// preflight opened to it, which may sit outside the checked levels) carries
+/// the full leaf spelling: a deeper grant below a path is what makes that
+/// path an ancestor, and an ancestor is search-only.
+fn spawn_preflight_grants(
+    principal: &str,
+    grant_paths: &[String],
+) -> BTreeMap<String, BTreeSet<String>> {
+    let prefix = format!("u:{principal}:");
+    let mut allowed: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for path in grant_paths {
+        let prefix_path = format!("{}/", path.trim_end_matches('/'));
+        let deeper = grant_paths
+            .iter()
+            .any(|other| other != path && other.starts_with(&prefix_path));
+        let mut spellings = BTreeSet::new();
+        spellings.insert(format!("{prefix}--x"));
+        if !deeper {
+            spellings.insert(format!("{prefix}rwx"));
+            spellings.insert(format!("{prefix}r-x"));
+        }
+        allowed
+            .entry(path.clone())
+            .or_default()
+            .extend(spellings);
+    }
+    allowed
+}
+
 /// Named entries the spawn preflight is expected to add, per level.
 ///
 /// The broker's spawn preflight opens the ancestor chain above a
-/// runner-owned tree with search (`u:<uid>:--x`) and grants the runner its
-/// own leaf (`rwx` for a private state tree, `r-x` for a read-only served
-/// view root): `runner_tree_acl_targets` in
+/// runner-owned tree with search (`u:<principal>:--x`) and grants the runner
+/// its own leaf (`rwx` for a private state tree, `r-x` for a read-only
+/// served view root): `runner_tree_acl_targets` and
+/// `served_view_root_acl_targets` in
 /// `packages/d2b-broker/src/live_handlers.rs`, reached from
 /// `refresh_spawn_runner_acls` / `grant_serving_worker_launch_acls` /
-/// `grant_device_worker_launch_acls`. The runner principals are uids minted
-/// per Guest at runtime, so the declaration cannot name them; the check
-/// derives them from the live worker processes and then allows an undeclared
-/// entry only in that structural shape - `--x` on a level that has a deeper
-/// grant of the same uid, or the uid's own topmost grant (`--x` when its leaf
-/// is outside the checked levels, else the leaf spelling). A foreign uid, or
-/// a wider grant on a level above the worker's own leaf, still fails.
+/// `grant_device_worker_launch_acls`. Those principals are named per Zone
+/// and per row class, so a host-global declared level cannot name one: the
+/// account name itself carries the Zone. The check derives them from the
+/// live worker processes instead, spelling each the way [`observe_acl`]
+/// read it ([`acl_principal_spelling`]), and allows an undeclared entry
+/// only in that structural shape: `--x` on a level that has a deeper grant
+/// of the same principal, or that principal's own topmost grant. A foreign
+/// principal, an entry on a level that principal holds no grant on, or a
+/// wider grant on a level above its own leaf, still fails.
 fn spawn_preflight_entries(
     control: &mut GuestControl,
     observed: &BTreeMap<String, BTreeSet<String>>,
@@ -425,27 +492,49 @@ fn spawn_preflight_entries(
     }
     let mut allowed: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for uid in worker_uids {
-        let prefix = format!("u:{uid}:");
+        let principal = acl_principal_spelling(control, &uid)?;
+        let prefix = format!("u:{principal}:");
         let grant_paths = observed
             .iter()
             .filter(|(_, entries)| entries.iter().any(|entry| entry.starts_with(&prefix)))
             .map(|(path, _)| path.clone())
             .collect::<Vec<_>>();
-        for path in &grant_paths {
-            let prefix_path = format!("{}/", path.trim_end_matches('/'));
-            let deeper = grant_paths
-                .iter()
-                .any(|other| other != path && other.starts_with(&prefix_path));
-            let mut spellings = BTreeSet::new();
-            spellings.insert(format!("{prefix}--x"));
-            if !deeper {
-                spellings.insert(format!("{prefix}rwx"));
-                spellings.insert(format!("{prefix}r-x"));
-            }
-            allowed.entry(path.clone()).or_default().extend(spellings);
+        for (path, entries) in spawn_preflight_grants(&principal, &grant_paths) {
+            allowed.entry(path).or_default().extend(entries);
         }
     }
     Ok(allowed)
+}
+
+/// The named ACL entries one level's live ACL carries that neither its
+/// declaration nor the derived spawn-preflight grants cover.
+///
+/// An empty answer is the pass. A declaration pins its named entries
+/// completely, so an entry nobody declared is drift rather than a harmless
+/// extra; the only undeclared entries the live host may carry are the
+/// spawn-preflight grants [`spawn_preflight_grants`] derives for a live
+/// runner principal, and the base `u::`/`g::`/`o::`/`m::` rows are pinned
+/// only when the declaration names them.
+fn undeclared_named_entries(
+    observed: &BTreeSet<String>,
+    declared: &[String],
+    spawn_entries: &BTreeMap<String, BTreeSet<String>>,
+    path: &str,
+) -> Vec<String> {
+    let mut expected = declared
+        .iter()
+        .filter(|spec| named_entry(spec))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if let Some(spawned) = spawn_entries.get(path) {
+        expected.extend(spawned.iter().cloned());
+    }
+    observed
+        .iter()
+        .filter(|entry| named_entry(entry))
+        .filter(|entry| !expected.contains(*entry))
+        .cloned()
+        .collect()
 }
 
 /// Run one command as one principal, and whether it succeeded.
@@ -624,8 +713,8 @@ fn check_level(
     // A declaration pins its named entries completely: an entry nobody
     // declared is drift, not a harmless extra. The only undeclared entries
     // the live host may carry are the spawn-preflight traversal grants derived
-    // for the runner uids; the base entries (u::/g::/o::/m::) are pinned only
-    // when the declaration names them.
+    // for the live runner principals; the base entries (u::/g::/o::/m::) are
+    // pinned only when the declaration names them.
     let declared_named = declared_acl
         .iter()
         .filter(|spec| named_entry(spec))
@@ -636,14 +725,7 @@ fn check_level(
         .filter(|entry| named_entry(entry))
         .cloned()
         .collect::<BTreeSet<_>>();
-    let mut expected_named = declared_named.clone();
-    if let Some(spawned) = spawn_entries.get(&path) {
-        expected_named.extend(spawned.iter().cloned());
-    }
-    let undeclared = observed_named
-        .difference(&expected_named)
-        .cloned()
-        .collect::<Vec<_>>();
+    let undeclared = undeclared_named_entries(&observed_named, &declared_acl, spawn_entries, &path);
     if !undeclared.is_empty() {
         return Err(LegacyError::Assertion(format!(
             "undeclared ACL entry at {where_}: {}",
@@ -723,4 +805,212 @@ fn check_level(
 /// One owned row, as the diagnostics rows are passed.
 fn as_row<'a>(pair: &'a (String, String)) -> DiagRow<'a> {
     (pair.0.as_str(), pair.1.as_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The host state root the serving worker's traversal grant lands on.
+    const STATE_ROOT: &str = "/var/lib/d2b";
+    /// The served view root the worker is launched to read.
+    const VIEW_ROOT: &str =
+        "/var/lib/d2b/zones/work/guests/acceptance-guest/store-view/live";
+    /// The Zone serving-worker account host account provisioning creates.
+    const RUNNER: &str = "d2b-work-virtiofsd";
+
+    /// One observed ACL, as `observe_acl` renders it.
+    fn observed(entries: &[&str]) -> BTreeSet<String> {
+        entries.iter().map(|entry| (*entry).to_owned()).collect()
+    }
+
+    /// The spawn-preflight grants every live runner's own grant paths imply,
+    /// exactly as `spawn_preflight_entries` derives them from the observed
+    /// set: the same walk, over the same levels, for `principal`.
+    fn derived(
+        observed: &BTreeMap<String, BTreeSet<String>>,
+        principal: &str,
+    ) -> BTreeMap<String, BTreeSet<String>> {
+        let prefix = format!("u:{principal}:");
+        let grant_paths = observed
+            .iter()
+            .filter(|(_, entries)| entries.iter().any(|entry| entry.starts_with(&prefix)))
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>();
+        spawn_preflight_grants(principal, &grant_paths)
+    }
+
+    /// The live shape host account provisioning produced: the daemon's
+    /// declared traversal entry plus the Zone serving worker holding search
+    /// on the state root and read+traverse on its own view root. Neither
+    /// worker entry is named by any declaration - the account name carries
+    /// the Zone, so no host-global level can - so the derived grants are the
+    /// only thing that can cover them, and they do.
+    #[test]
+    fn a_named_runner_search_grant_on_the_state_root_is_covered() {
+        let live = BTreeMap::from([
+            (
+                STATE_ROOT.to_owned(),
+                observed(&[
+                    "u::rwx",
+                    "u:d2bd:--x",
+                    "u:d2b-work-virtiofsd:--x",
+                    "g::r-x",
+                    "m::r-x",
+                    "o::---",
+                ]),
+            ),
+            (
+                VIEW_ROOT.to_owned(),
+                observed(&[
+                    "u::rwx",
+                    "u:d2b-work-virtiofsd:r-x",
+                    "g::r-x",
+                    "m::r-x",
+                    "o::r-x",
+                ]),
+            ),
+        ]);
+        let spawn = derived(&live, RUNNER);
+        let declared = vec!["u:d2bd:--x".to_owned()];
+        assert!(
+            undeclared_named_entries(&live[STATE_ROOT], &declared, &spawn, STATE_ROOT).is_empty(),
+            "the worker's own search grant above its view root is the derived shape"
+        );
+        assert!(
+            undeclared_named_entries(&live[VIEW_ROOT], &[], &spawn, VIEW_ROOT).is_empty(),
+            "the read-only view root is the worker's own topmost grant"
+        );
+        assert_eq!(
+            spawn[STATE_ROOT],
+            observed(&["u:d2b-work-virtiofsd:--x"]),
+            "an ancestor of the worker's leaf is search-only"
+        );
+    }
+
+    /// The gate must still refuse an entry no declaration and no runner
+    /// covers. This is the assertion the whole comparison exists for, so
+    /// it is pinned here rather than only on the lane.
+    #[test]
+    fn an_entry_for_a_principal_that_is_no_live_runner_is_undeclared() {
+        let live = BTreeMap::from([(
+            STATE_ROOT.to_owned(),
+            observed(&[
+                "u::rwx",
+                "u:d2bd:--x",
+                "u:d2b-work-virtiofsd:--x",
+                "u:d2b-work-virtiofsd-backdoor:--x",
+                "g::r-x",
+                "m::r-x",
+                "o::---",
+            ]),
+        )]);
+        let spawn = derived(&live, RUNNER);
+        let declared = vec!["u:d2bd:--x".to_owned()];
+        assert_eq!(
+            undeclared_named_entries(&live[STATE_ROOT], &declared, &spawn, STATE_ROOT),
+            vec!["u:d2b-work-virtiofsd-backdoor:--x".to_owned()],
+            "a principal no live worker runs as is drift, however narrow the grant"
+        );
+    }
+
+    /// The derived set covers the worker's OWN leaf and search on the
+    /// levels above it. Read on a level above that leaf is a different and
+    /// wider grant than the traversal the preflight makes, so it is refused.
+    #[test]
+    fn a_wider_grant_above_the_runner_own_leaf_is_undeclared() {
+        let live = BTreeMap::from([
+            (
+                STATE_ROOT.to_owned(),
+                observed(&[
+                    "u::rwx",
+                    "u:d2bd:--x",
+                    "u:d2b-work-virtiofsd:r-x",
+                    "g::r-x",
+                    "m::r-x",
+                    "o::---",
+                ]),
+            ),
+            (
+                VIEW_ROOT.to_owned(),
+                observed(&["u::rwx", "u:d2b-work-virtiofsd:rwx", "g::r-x", "m::rwx", "o::---"]),
+            ),
+        ]);
+        let spawn = derived(&live, RUNNER);
+        let declared = vec!["u:d2bd:--x".to_owned()];
+        assert_eq!(
+            undeclared_named_entries(&live[STATE_ROOT], &declared, &spawn, STATE_ROOT),
+            vec!["u:d2b-work-virtiofsd:r-x".to_owned()],
+            "search above the leaf is the grant; read above it is not"
+        );
+    }
+
+    /// The other half of the same rule, on the live host's other shape: the
+    /// shared runtime root is where the serving worker's private socket tree
+    /// begins, so the worker holds a grant there with nothing below it and
+    /// that level is its own topmost grant.
+    #[test]
+    fn a_runner_grant_with_no_deeper_grant_is_the_runner_own_topmost() {
+        const RUNTIME_ROOT: &str = "/run/d2b";
+        let live = BTreeMap::from([
+            (
+                RUNTIME_ROOT.to_owned(),
+                observed(&[
+                    "u::rwx",
+                    "u:d2bd:rwx",
+                    "u:d2b-work-virtiofsd:--x",
+                    "g::r-x",
+                    "m::rwx",
+                    "o::---",
+                ]),
+            ),
+            (
+                STATE_ROOT.to_owned(),
+                observed(&[
+                    "u::rwx",
+                    "u:d2bd:--x",
+                    "u:d2b-work-virtiofsd:--x",
+                    "g::r-x",
+                    "m::r-x",
+                    "o::---",
+                ]),
+            ),
+            (
+                VIEW_ROOT.to_owned(),
+                observed(&[
+                    "u::rwx",
+                    "u:d2b-work-virtiofsd:r-x",
+                    "g::r-x",
+                    "m::r-x",
+                    "o::r-x",
+                ]),
+            ),
+        ]);
+        let spawn = derived(&live, RUNNER);
+        let runtime_declared = vec!["u:d2bd:rwx".to_owned()];
+        assert!(
+            undeclared_named_entries(
+                &live[RUNTIME_ROOT],
+                &runtime_declared,
+                &spawn,
+                RUNTIME_ROOT
+            )
+            .is_empty(),
+            "nothing is granted below the runtime root, so the worker's grant there is its own"
+        );
+        assert!(
+            spawn[RUNTIME_ROOT].contains("u:d2b-work-virtiofsd:rwx"),
+            "the topmost grant carries the leaf spellings, not only search"
+        );
+        let state_declared = vec!["u:d2bd:--x".to_owned()];
+        assert!(
+            undeclared_named_entries(&live[STATE_ROOT], &state_declared, &spawn, STATE_ROOT)
+                .is_empty(),
+            "the state root is an ancestor of the view root, so search only"
+        );
+        assert!(
+            undeclared_named_entries(&live[VIEW_ROOT], &[], &spawn, VIEW_ROOT).is_empty(),
+            "a read-only attachment's leaf is read+traverse"
+        );
+    }
 }
