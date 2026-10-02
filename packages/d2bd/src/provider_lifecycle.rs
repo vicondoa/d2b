@@ -2177,7 +2177,7 @@ mod tests {
     use d2b_contracts_broker::broker_wire::{
         AuthorityCursor, AuthorityProjectionRow, AuthorityPublicationEnvelope,
         AuthorityPublicationOpen, AuthorityPublicationRequest, AuthorityPublicationResponse,
-        AuthoritySnapshot, OpenPublicationSessionResponse, PrepareChangeRequest,
+        AuthoritySnapshot, OpenedPublicationSessionResponse, PrepareChangeRequest,
         PreparedTransaction, PublicationLimits, PublicationMutationKind, PublicationRefusal,
         PublicationSession, PublicationSessionBinding, PublicationTransactionId,
         ZoneAuthorityState, PUBLICATION_CONTROL_NOT_BOUND, PUBLICATION_STALE_PREDECESSOR,
@@ -2231,17 +2231,20 @@ mod tests {
             if let Ok(open) = serde_json::from_slice::<AuthorityPublicationOpen>(body) {
                 self.session_opens += 1;
                 self.store_incarnation = Some(open.request.store_incarnation.clone());
-                let response = OpenPublicationSessionResponse {
-                    session: PublicationSession::parse(PEER_SESSION).expect("a session token"),
-                    binding: PublicationSessionBinding {
-                        zone: open.request.zone.clone(),
-                        store_incarnation: open.request.store_incarnation.clone(),
-                        broker_epoch: 0,
-                        initiating_subject: open.request.initiating_subject.clone(),
-                        accepted: self.accepted.clone(),
+                let response = AuthorityPublicationResponse::Opened(
+                    OpenedPublicationSessionResponse {
+                        session: PublicationSession::parse(PEER_SESSION)
+                            .expect("a session token"),
+                        binding: PublicationSessionBinding {
+                            zone: open.request.zone.clone(),
+                            store_incarnation: open.request.store_incarnation.clone(),
+                            broker_epoch: 0,
+                            initiating_subject: open.request.initiating_subject.clone(),
+                            accepted: self.accepted.clone(),
+                        },
+                        limits: PublicationLimits::default(),
                     },
-                    limits: PublicationLimits::default(),
-                };
+                );
                 return serde_json::to_value(response).expect("the open response serializes");
             }
             let envelope: AuthorityPublicationEnvelope =

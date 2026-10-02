@@ -51,7 +51,7 @@ use d2b_contracts_broker::broker_wire::{
     AuthorityPublicationOpen, AuthorityPublicationRequest, AuthorityPublicationResponse,
     AuthoritySnapshot, BeginSnapshotRequest, CancelTransactionRequest, CommitChangeRequest,
     ControlActionRequest, EffectExitRequest, EndSnapshotRequest,
-    MAX_PUBLICATION_CHUNK_BYTES, OpenPublicationSessionResponse, PrepareChangeRequest,
+    MAX_PUBLICATION_CHUNK_BYTES, PrepareChangeRequest,
     PreparedTransaction, PublicationControlKind, PublicationMutationKind, PublicationSession,
     PublicationTransactionId, ReleaseEffectRequest, ResynchronizeRequest, RevocationConvergence,
     SnapshotChunkRequest, publication_candidate_digest, publication_snapshot_bytes,
@@ -188,11 +188,16 @@ impl PublicationError {
 #[async_trait]
 pub trait AuthorityPublicationLink: Send + Sync + std::fmt::Debug {
     /// Open one Zone publication session.
+    ///
+    /// The answer is the publication family's own response type, so a broker
+    /// that refuses the open is as readable here as a broker that minted one:
+    /// the two are the same message with the same answer vocabulary, and a
+    /// refusal this leg could not express would reach the manager as an
+    /// opaque transport failure instead of the fence it actually is.
     async fn open_session(
         &self,
         open: AuthorityPublicationOpen,
-    ) -> Result<OpenPublicationSessionResponse, String>;
-
+    ) -> Result<AuthorityPublicationResponse, String>;
     /// Serve one publication message.
     async fn serve(
         &self,
@@ -238,7 +243,7 @@ impl AuthorityPublicationLink for OriginationPublicationLink {
     async fn open_session(
         &self,
         open: AuthorityPublicationOpen,
-    ) -> Result<OpenPublicationSessionResponse, String> {
+    ) -> Result<AuthorityPublicationResponse, String> {
         // The blocking socket round trip runs on the coordinator's own bounded
         // worker, not on an executor thread: this is the one place the daemon
         // performs blocking publication I/O and it never happens inline.
@@ -251,7 +256,7 @@ impl AuthorityPublicationLink for OriginationPublicationLink {
                 .map_err(|error| error.to_string())?;
             let body = d2bd_runtime::unix_transport::read_frame(socket)
                 .map_err(|error| error.to_string())?;
-            serde_json::from_slice::<OpenPublicationSessionResponse>(&body)
+            serde_json::from_slice::<AuthorityPublicationResponse>(&body)
                 .map_err(|error| error.to_string())
             },
         )
@@ -605,14 +610,25 @@ impl AuthorityPublicationCoordinator {
             .open_session(open)
             .await
             .map_err(PublicationError::transport)?;
-        if reply.limits.max_chunk_bytes == 0 || reply.limits.max_chunks == 0 {
+        // A refused open is a refusal like any other: it keeps the Zone fenced
+        // and it is the difference between a retry and a dead projection, so it
+        // is propagated with its own code rather than reported as a transport
+        // that never arrived.
+        PublicationError::from_response(&reply)?;
+        let AuthorityPublicationResponse::Opened(opened) = &reply else {
+            // Anything else is an answer to a different message: the broker
+            // claims a step this one never took, so the manager holds no
+            // session rather than a session it cannot justify.
+            return Err(PublicationError::NoSession);
+        };
+        if opened.limits.max_chunk_bytes == 0 || opened.limits.max_chunks == 0 {
             // A broker that declares no bounds is refusing to be bounded, which
             // the plan does not permit: the manager will not stream into it.
             return Err(PublicationError::NoSession);
         }
-        *self.accepted.lock().await = reply.binding.accepted.clone();
-        *self.session.lock().await = Some(reply.session.clone());
-        Ok(reply.session)
+        *self.accepted.lock().await = opened.binding.accepted.clone();
+        *self.session.lock().await = Some(opened.session.clone());
+        Ok(opened.session.clone())
     }
 
     /// Durably freeze the Zone's new-effect admission for one candidate.

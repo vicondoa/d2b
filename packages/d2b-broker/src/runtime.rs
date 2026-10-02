@@ -11874,11 +11874,16 @@ pub(crate) async fn serve_authority_publication(
 /// coordinator vouched for, and the accepted cursor this broker held.
 ///
 /// The accept loop routes it here through [`publication_frame`], beside the
-/// message family's own entry.
+/// message family's own entry, and it answers in the same
+/// [`AuthorityPublicationResponse`](d2b_contracts_broker::broker_wire::AuthorityPublicationResponse)
+/// every other publication message is answered in: the session is one variant
+/// of it and a refusal is the same refusal. A second answer type for this leg
+/// is what made a refused open unreadable to the daemon, because the two types
+/// share no field and the refusal could not be decoded at all.
 pub(crate) async fn serve_authority_publication_open(
     state_dir: &std::path::Path,
     open: &d2b_contracts_broker::broker_wire::AuthorityPublicationOpen,
-) -> Result<d2b_contracts_broker::broker_wire::OpenPublicationSessionResponse, BrokerError> {
+) -> Result<d2b_contracts_broker::broker_wire::AuthorityPublicationResponse, BrokerError> {
     if crate::authority_projection::authority_projection().is_none() {
         crate::authority_projection::init_authority_projection_async(state_dir)
             .await
@@ -13373,6 +13378,11 @@ mod tests {
             )
             .await
             .expect("the broker mints a Zone publication session");
+            let d2b_contracts_broker::broker_wire::AuthorityPublicationResponse::Opened(opened) =
+                opened
+            else {
+                panic!("a session open is answered with a minted session");
+            };
             let snapshot = AuthoritySnapshot {
                 zone: zone.to_owned(),
                 // The generation the Zone holds, not the fixture's: a Zone
@@ -13447,6 +13457,102 @@ mod tests {
         });
     }
 
+    /// The frame `OriginationPublicationLink::open_session` writes, exactly.
+    ///
+    /// Both ends serialise with `serde_json::to_vec` behind the same four-byte
+    /// little-endian length prefix, so sending this value with the broker's own
+    /// `send_json_frame` puts the daemon's real bytes on the socket rather than
+    /// a fixture that only resembles them.
+    fn daemon_publication_open(
+        zone: &str,
+    ) -> d2b_contracts_broker::broker_wire::AuthorityPublicationOpen {
+        use d2b_contracts_broker::broker_wire::{
+            AuthorityCursor, AuthorityPublicationOpen, OpenPublicationSessionRequest,
+        };
+        use d2b_contracts_resource::v3::{
+            AuthoritySubject, AuthoritySubjectKind, StoreIncarnation,
+        };
+        AuthorityPublicationOpen {
+            request: OpenPublicationSessionRequest {
+                zone: zone.to_owned(),
+                store_incarnation: StoreIncarnation::parse("foundation-1")
+                    .expect("a bounded incarnation token"),
+                broker_epoch: 0,
+                initiating_subject: AuthoritySubject::unresourced(
+                    AuthoritySubjectKind::Bootstrap,
+                ),
+                accepted: AuthorityCursor::initial(),
+            },
+        }
+    }
+
+    /// A `Server` over `root` whose per-uid IPC limiter admits
+    /// `max_requests_per_window` daemon publications per window. Zero is a real
+    /// posture, not a stub: the limiter refuses every publication on it, which
+    /// is how the boundary refuses a daemon whose publication traffic is over
+    /// its budget.
+    fn publication_accept_loop_server(root: &Path, max_requests_per_window: u32) -> Server {
+        let config = test_server_config(root, &root.join("unused-bundle.json"));
+        let log = Arc::new(
+            AuditLog::open(
+                &config.audit_dir,
+                Gid::current().as_raw(),
+                true,
+                config.audit_retention_days,
+            )
+            .expect("open audit log"),
+        );
+        Server {
+            config: Arc::new(config),
+            audit_log: log,
+            dispatches: DispatchPool::new(2),
+            nested_dispatches: DispatchPool::new(2),
+            ipc_rate_limiter: Arc::new(tokio::sync::Mutex::new(
+                IpcRateLimiter::new(max_requests_per_window),
+            )),
+        }
+    }
+
+    /// Put one frame on a socketpair, run the real `handle_connection` on the
+    /// other end, and read the broker's single answer back the way the daemon
+    /// reads it.
+    ///
+    /// The read is [`AuthorityPublicationResponse`] on purpose: that is the one
+    /// type `OriginationPublicationLink` decodes on both publication legs, so a
+    /// broker that answered either leg in some other shape fails here rather
+    /// than in a boot.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn drive_publication_frame<T: serde::Serialize>(
+        served: &Server,
+        frame: &T,
+    ) -> d2b_contracts_broker::broker_wire::AuthorityPublicationResponse {
+        use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
+        use std::os::fd::AsRawFd;
+
+        let (client, server) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("socketpair");
+        crate::protocol::send_json_frame(client.as_raw_fd(), frame)
+            .expect("send the publication frame");
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime")
+            .block_on(async {
+                let connection =
+                    AsyncSeqpacket::from_owned(server).expect("register accepted socket");
+                handle_connection(connection, served).await
+            })
+            .expect("the accept loop serves the publication frame");
+        crate::protocol::recv_json_frame(client.as_raw_fd())
+            .expect("the daemon decodes the broker's answer as the family's response")
+            .expect("the answer carries a frame")
+    }
+
     /// The accept loop answers the daemon's own publication open.
     ///
     /// This drives the real `handle_connection` over a socketpair with the
@@ -13458,15 +13564,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn the_accept_loop_answers_the_authority_publication_frame_family() {
-        use d2b_contracts_broker::broker_wire::{
-            AuthorityCursor, AuthorityPublicationOpen, OpenPublicationSessionRequest,
-            OpenPublicationSessionResponse,
-        };
-        use d2b_contracts_resource::v3::{
-            AuthoritySubject, AuthoritySubjectKind, StoreIncarnation,
-        };
-        use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
-        use std::os::fd::AsRawFd;
+        use d2b_contracts_broker::broker_wire::AuthorityPublicationResponse;
 
         // The Zone the foundation seed publishes under, which is not the
         // plane's own Zone.
@@ -13474,68 +13572,71 @@ mod tests {
 
         let root = test_audit_dir("publication-accept-loop");
         fs::create_dir_all(&root).expect("create audit test dir");
-        let config = test_server_config(&root, &root.join("unused-bundle.json"));
-        let log = Arc::new(
-            AuditLog::open(
-                &config.audit_dir,
-                Gid::current().as_raw(),
-                true,
-                config.audit_retention_days,
-            )
-            .expect("open audit log"),
-        );
-        let limiter = Arc::new(tokio::sync::Mutex::new(IpcRateLimiter::new(64)));
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("test runtime");
-        let served = Server {
-            config: Arc::new(config),
-            audit_log: Arc::clone(&log),
-            dispatches: DispatchPool::new(2),
-            nested_dispatches: DispatchPool::new(2),
-            ipc_rate_limiter: Arc::clone(&limiter),
+        let served = publication_accept_loop_server(&root, 64);
+
+        let response = drive_publication_frame(&served, &daemon_publication_open(ZONE));
+        let AuthorityPublicationResponse::Opened(opened) = response else {
+            panic!("the broker answers the daemon's open with a minted session");
         };
-
-        let open = AuthorityPublicationOpen {
-            request: OpenPublicationSessionRequest {
-                zone: ZONE.to_owned(),
-                store_incarnation: StoreIncarnation::parse("foundation-1")
-                    .expect("a bounded incarnation token"),
-                broker_epoch: 0,
-                initiating_subject: AuthoritySubject::unresourced(
-                    AuthoritySubjectKind::Bootstrap,
-                ),
-                accepted: AuthorityCursor::initial(),
-            },
-        };
-
-        let (client, server) = socketpair(
-            AddressFamily::Unix,
-            SockType::SeqPacket,
-            None,
-            SockFlag::SOCK_CLOEXEC,
-        )
-        .expect("socketpair");
-        crate::protocol::send_json_frame(client.as_raw_fd(), &open).expect("send publication open");
-        runtime
-            .block_on(async {
-                let connection =
-                    AsyncSeqpacket::from_owned(server).expect("register accepted socket");
-                handle_connection(connection, &served).await
-            })
-            .expect("the accept loop serves the publication open");
-
-        // The daemon reads exactly this type back off the wire, so a refusal
-        // frame or a closed connection is what this pins against.
-        let response = crate::protocol::recv_json_frame::<OpenPublicationSessionResponse>(
-            client.as_raw_fd(),
-        )
-        .expect("the broker answers the publication open with a session")
-        .expect("the answer carries a frame");
         assert_eq!(
-            response.binding.zone, ZONE,
+            opened.binding.zone, ZONE,
             "the session is bound to the Zone the open named"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A refused publication open is readable on the open leg.
+    ///
+    /// The open is the one publication message whose success is not a fence
+    /// step, so the boundary can refuse it: a peer that is not the daemon, a
+    /// publication over the daemon's per-uid budget, or an open the projection
+    /// itself will not mint. Every one of those answers in the publication
+    /// family's own response type, and the daemon reads exactly that type back
+    /// off this leg. While the open carried a second, unrelated answer type,
+    /// a refusal here could not be decoded at all: it arrived as a frame whose
+    /// `kind` no `{session, binding, limits}` struct admits, and the daemon
+    /// reported a typed refusal as a transport that never arrived - which reads
+    /// as retryable when it is the fence it actually is.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_refused_publication_open_is_readable_on_the_open_leg() {
+        use d2b_contracts_broker::broker_wire::{AuthorityPublicationResponse, PublicationRefusal};
+
+        const ZONE: &str = "system";
+
+        let root = test_audit_dir("publication-accept-loop-refused");
+        fs::create_dir_all(&root).expect("create audit test dir");
+        // A limiter that admits nothing refuses the daemon's own open at the
+        // boundary, which is the refusal this leg has to be able to answer.
+        let served = publication_accept_loop_server(&root, 0);
+
+        let response = drive_publication_frame(&served, &daemon_publication_open(ZONE));
+        let AuthorityPublicationResponse::Refused(PublicationRefusal {
+            code,
+            fenced,
+            state,
+            ..
+        }) = response
+        else {
+            panic!(
+                "a publication open the boundary refuses is answered as the family's own refusal, \
+                 so the daemon reads the fence rather than a frame it cannot decode"
+            );
+        };
+        assert_eq!(
+            code,
+            crate::envelope::UNACCEPTED_PROJECTION,
+            "the refusal names the closed code the daemon's own budget refusal carries"
+        );
+        assert!(
+            fenced,
+            "an unanswered or refused publication is never evidence that the Zone is open"
+        );
+        assert_eq!(
+            state,
+            d2b_contracts_broker::broker_wire::ZoneAuthorityState::Unprovisioned,
+            "the refusal carries the Zone's state, so the manager reconciles from the refusal itself"
         );
 
         let _ = fs::remove_dir_all(&root);

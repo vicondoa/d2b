@@ -4434,10 +4434,19 @@ pub struct OpenPublicationSessionRequest {
     pub accepted: AuthorityCursor,
 }
 
-/// The broker's answer to one session open.
+/// The broker's answer to one accepted publication-session open: the session
+/// it minted, what that session is bound to, and the bounds it is served
+/// under.
+///
+/// This is the body of [`AuthorityPublicationResponse::Opened`], not an answer
+/// type of its own: the session open is one publication message like every
+/// other, so it is answered in the family's own response vocabulary and a
+/// manager reads exactly one answer type off this leg whichever way it went.
+/// An answer that is neither a minted session nor a named refusal is not a
+/// publication answer at all.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct OpenPublicationSessionResponse {
+pub struct OpenedPublicationSessionResponse {
     /// The broker-minted session.
     pub session: PublicationSession,
     /// What the session is bound to.
@@ -4821,6 +4830,12 @@ pub enum AuthorityPublicationResponse {
     /// `RevocationConverged` outcome and is deliberately a different
     /// response from [`Self::Accepted`].
     RevocationConverged(RevocationConvergence),
+    /// The broker minted the publication session a session open asked for.
+    /// This is the answer to the one publication message that cannot carry a
+    /// session, so it belongs to this vocabulary rather than to a second one:
+    /// a manager reads the same response type whichever leg answered, and a
+    /// refused open is this same [`Self::Refused`] any other refusal is.
+    Opened(OpenedPublicationSessionResponse),
 }
 
 /// One refusal, or one state that keeps the Zone fenced.

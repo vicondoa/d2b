@@ -70,7 +70,7 @@ use d2b_contracts_broker::broker_wire::{
     CommitChangeRequest, ControlActionRequest, EffectExitRequest, EndSnapshotRequest,
     MAX_PUBLICATION_CHUNK_BYTES, MAX_PUBLICATION_CHUNKS, MAX_PUBLICATION_CONTROL_QUEUE,
     MAX_PUBLICATION_QUEUE,
-    MAX_PUBLICATION_ROWS, MAX_PUBLICATION_SNAPSHOT_BYTES, OpenPublicationSessionResponse,
+    MAX_PUBLICATION_ROWS, MAX_PUBLICATION_SNAPSHOT_BYTES, OpenedPublicationSessionResponse,
     PrepareChangeRequest, PreparedTransaction, PublicationControlKind, PublicationLimits,
     PublicationMutationKind, PublicationRefusal, PublicationSession, PublicationSessionBinding,
     PublicationTransactionId, ReleaseEffectRequest, ResynchronizeRequest, RevocationConvergence,
@@ -794,7 +794,7 @@ enum ProjectionCommand {
     },
     OpenSession {
         open: AuthorityPublicationOpen,
-        reply: oneshot::Sender<Reply<OpenPublicationSessionResponse>>,
+        reply: oneshot::Sender<Reply<AuthorityPublicationResponse>>,
     },
     /// Every publication message, with the Zone it is about.
     Publication {
@@ -950,7 +950,7 @@ impl AuthorityProjection {
     pub async fn open_session(
         &self,
         open: AuthorityPublicationOpen,
-    ) -> Reply<OpenPublicationSessionResponse> {
+    ) -> Reply<AuthorityPublicationResponse> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.writer
             .commands
@@ -1305,7 +1305,7 @@ fn serve_locked(
 fn open_session_locked(
     state: &mut ProjectionWorkerState,
     open: &AuthorityPublicationOpen,
-) -> Reply<OpenPublicationSessionResponse> {
+) -> Reply<AuthorityPublicationResponse> {
     let request = &open.request;
     let zone = request.zone.as_str();
     if ZoneId::parse(zone).is_err() {
@@ -1346,11 +1346,13 @@ fn open_session_locked(
     }
     let session = state.durable.material.mint_session(&binding);
     commit_durable(state)?;
-    Ok(OpenPublicationSessionResponse {
-        session,
-        binding,
-        limits: PublicationLimits::default(),
-    })
+    Ok(AuthorityPublicationResponse::Opened(
+        OpenedPublicationSessionResponse {
+            session,
+            binding,
+            limits: PublicationLimits::default(),
+        },
+    ))
 }
 
 // ---------------------------------------------------------------------------

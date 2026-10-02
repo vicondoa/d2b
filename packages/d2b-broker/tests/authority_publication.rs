@@ -329,8 +329,11 @@ impl Harness {
             })
             .await
             .expect("the broker mints a session");
-        self.session = response.session;
-        self.binding = response.binding;
+        let AuthorityPublicationResponse::Opened(opened) = response else {
+            panic!("the broker answers a session open with a minted session");
+        };
+        self.session = opened.session;
+        self.binding = opened.binding;
     }
 
     fn envelope(&self, request: AuthorityPublicationRequest) -> AuthorityPublicationEnvelope {

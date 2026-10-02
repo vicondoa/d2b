@@ -30,6 +30,23 @@
   reserved its sequence under the system Zone. A candidate whose Zone the
   publisher was not bound for is now refused by name rather than served under
   another Zone's fence.
+- The publication session open and the publication messages it precedes now
+  answer in one wire vocabulary. The broker's accept-loop arm refuses a session
+  open the way it refuses any other publication message, in the family's own
+  `AuthorityPublicationResponse`, while the daemon read that leg as a second and
+  unrelated `{session, binding, limits}` struct: so every refused open reached
+  the manager as ``unknown field `kind`, expected one of `session`, `binding`,
+  `limits` ``, and a typed refusal with its code and its fence was reported as a
+  transport that never arrived. That is the difference between a retry and a
+  dead projection, and it is why the daemon stopped at the first refused
+  session open instead of naming the refusal. `AuthorityPublicationResponse`
+  gains `Opened(OpenedPublicationSessionResponse)` and the open leg is answered
+  in it, so a minted session and a named refusal are the same answer type on
+  both legs. `AuthorityPublicationCoordinator::open_session` propagates a
+  refused open as the refusal it is and refuses to hold a session the broker
+  answered some other message with. Nothing was loosened to get there: both
+  publication request shapes and the refusal body still deny unknown fields,
+  and the new arm is one named variant rather than a catch-all.
 
 ### Changed
 

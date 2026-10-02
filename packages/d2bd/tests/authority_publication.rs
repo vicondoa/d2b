@@ -27,7 +27,7 @@ use d2b_contracts_broker::broker_wire::{
     AcceptedAuthority, AuthorityCursor, AuthorityProjectionRow, AuthorityPublicationEnvelope,
     AuthorityPublicationOpen, AuthorityPublicationRequest, AuthorityPublicationResponse,
     AuthoritySnapshot, BeginEffectRequest, ControlActionRequest, EffectExitRequest,
-    OpenPublicationSessionResponse, PreparedTransaction,
+    OpenedPublicationSessionResponse, PreparedTransaction,
     PublicationControlKind, PublicationEffectId, PublicationLimits, PublicationMutationKind,
     PublicationRefusal, PublicationSession, PublicationSessionBinding, PublicationTransactionId,
     ReleaseEffectRequest, RevocationConvergence, ZoneAuthorityState,
@@ -280,12 +280,12 @@ impl Broker {
     }
 
     /// The session one open mints, with the accepted cursor the link holds.
-    fn mint(&self, open: AuthorityPublicationOpen) -> OpenPublicationSessionResponse {
+    fn mint(&self, open: AuthorityPublicationOpen) -> AuthorityPublicationResponse {
         self.ops
             .lock()
             .expect("the record lock is not poisoned")
             .push("OpenSession");
-        OpenPublicationSessionResponse {
+        AuthorityPublicationResponse::Opened(OpenedPublicationSessionResponse {
             session: PublicationSession::parse("pub-link-session")
                 .expect("the link's token is canonical"),
             binding: PublicationSessionBinding {
@@ -296,7 +296,7 @@ impl Broker {
                 accepted: self.accepted(),
             },
             limits: PublicationLimits::default(),
-        }
+        })
     }
 
     fn answer(&self, request: &AuthorityPublicationRequest) -> Option<AuthorityPublicationResponse> {
@@ -454,7 +454,7 @@ impl AuthorityPublicationLink for Broker {
     async fn open_session(
         &self,
         open: AuthorityPublicationOpen,
-    ) -> Result<OpenPublicationSessionResponse, String> {
+    ) -> Result<AuthorityPublicationResponse, String> {
         Ok(self.mint(open))
     }
 
@@ -1459,11 +1459,14 @@ async fn a_broker_that_declares_no_bounds_is_not_streamed_to() {
         async fn open_session(
             &self,
             open: AuthorityPublicationOpen,
-        ) -> Result<OpenPublicationSessionResponse, String> {
-            self.0.open_session(open).await.map(|mut reply| {
-                reply.limits.max_chunk_bytes = 0;
-                reply.limits.max_chunks = 0;
-                reply
+        ) -> Result<AuthorityPublicationResponse, String> {
+            self.0.open_session(open).await.map(|reply| {
+                let AuthorityPublicationResponse::Opened(mut opened) = reply else {
+                    return reply;
+                };
+                opened.limits.max_chunk_bytes = 0;
+                opened.limits.max_chunks = 0;
+                AuthorityPublicationResponse::Opened(opened)
             })
         }
 
