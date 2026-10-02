@@ -22,7 +22,7 @@ use d2b_contracts_resource::v3::{
 };
 
 use crate::error::VirtiofsBindingError;
-use crate::socket_path::{SocketPathRefusal, derive_serving_socket_path};
+use crate::socket_path::derive_serving_socket_path;
 
 /// The standard ResourceType name this Provider serves (canonical contract).
 pub use d2b_contracts_resource::v3::volume_binding::VOLUME_BINDING_RESOURCE_TYPE;
@@ -490,7 +490,7 @@ impl StoredBinding {
 
     /// The private socket path this binding's worker binds.
     ///
-    /// The path is derived from [`Self::serving_socket`] and the
+    /// The path is derived from the binding's own relationship under the
     /// broker-owned runtime root the launch composes. No Guest row, no
     /// Device row, and no parsed launch argument reaches it, and a root
     /// that cannot be fenced with a component comparison or cannot hold a
@@ -499,8 +499,15 @@ impl StoredBinding {
         &self,
         zone: &BoundedToken,
         runtime_root: &Path,
-    ) -> Result<PathBuf, SocketPathRefusal> {
-        derive_serving_socket_path(runtime_root, &self.socket_identity(zone))
+    ) -> Result<PathBuf, VirtiofsBindingError> {
+        let volume =
+            BoundedToken::parse(self.binding.volume_ref().name().as_str().to_owned())
+                .map_err(|_| VirtiofsBindingError::InvalidBinding)?;
+        let guest =
+            BoundedToken::parse(self.binding.execution_ref().name().as_str().to_owned())
+                .map_err(|_| VirtiofsBindingError::InvalidBinding)?;
+        derive_serving_socket_path(runtime_root, zone, &volume, &guest)
+            .map_err(|_| VirtiofsBindingError::ServingSocketPathUnresolved)
     }
 }
 

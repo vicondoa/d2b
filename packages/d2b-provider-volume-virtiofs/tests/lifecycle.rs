@@ -502,9 +502,9 @@ fn resource_binding_spec_keeps_one_strict_owner() {
 /// holding, and the post-boot reconcile must observe the mount without
 /// changing anything the pre-boot pass derived. Nothing in either pass
 /// reads a Guest row or a Device row: the fixture binding names a Guest
-/// with no children, and the socket the worker binds is a direct child of
-/// the broker runtime root, not a per-Guest directory whose posture comes
-/// from a Device-shared storage row.
+/// with no children, and the socket the worker binds is derived from the
+/// binding under the per-Guest runtime tree the verified storage contract
+/// declares for every serving target, not from any Device-shared row.
 #[test]
 fn a_device_free_guest_boots_from_a_prepared_export_and_mounts_afterwards() {
     let port = ScriptedPort::serving().consumer_not_running();
@@ -533,9 +533,10 @@ fn a_device_free_guest_boots_from_a_prepared_export_and_mounts_afterwards() {
     let socket = sockets_before[0].clone();
     assert_eq!(
         socket.parent().and_then(std::path::Path::to_str),
-        Some(RUNTIME_ROOT),
+        Some(format!("{RUNTIME_ROOT}/vms/work-vm").as_str()),
         "the socket is derived from the binding under the broker runtime \\
-         root, with no per-Guest directory and no Device-derived posture"
+         root, in the per-Guest tree the verified storage contract \\
+         declares for every serving target, with no Device row read"
     );
 
     // The Guest boots and mounts. The same binding, the same source, and

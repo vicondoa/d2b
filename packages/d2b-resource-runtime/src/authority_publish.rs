@@ -34,10 +34,11 @@
 
 use async_trait::async_trait;
 use d2b_contracts_resource::v3::{
-    DesiredDigest, DesiredRevision, StoreIncarnation, ZoneDesiredSequence,
+    DesiredDigest, DesiredRevision, ResourceUid, StoreIncarnation, ZoneDesiredSequence,
 };
 
-use crate::authority_journal::{CommittedPublication, Projection};
+use crate::authority_journal::{AcceptedCursor, CommittedPublication, Projection};
+
 use crate::identity::TransactionId;
 
 /// The module declared name.
@@ -93,6 +94,73 @@ pub struct PublishedRow {
     /// The row's canonical desired bytes, which the broker stores and
     /// re-evaluates rather than a summary the candidate could shape.
     pub spec: Vec<u8>,
+    /// The committed identity of the source row this binding row names, when
+    /// the store resolved one. A relationship key is over committed identity
+    /// rather than over references, so the identity it folds in cannot be
+    /// derived from the row's own bytes. The store resolves it once against
+    /// the Zone's committed rows and it travels here, so a resynchronization
+    /// restates the same relationship the broker already accepted.
+    pub source_uid: Option<ResourceUid>,
+    /// The committed identity of the consumer row this binding row names, when
+    /// the store resolved one.
+    pub consumer_uid: Option<ResourceUid>,
+}
+
+/// One Zone's durable projection, as the broker must be able to rebuild it.
+///
+/// A resynchronization is the one message that restates authority the broker
+/// already holds, so this projection has to be COMPLETE rather than
+/// illustrative: the cursor the Zone's last acknowledgement reached, every
+/// committed desired row it publishes with the revision and digest it
+/// committed at, the relationship identity each binding row folds in, and the
+/// transaction this store still owes an outcome for. A broker proves the
+/// document it receives against its own accepted rows, so a projection that
+/// restates a row with different bytes, or carries an authority row the broker
+/// never accepted, is refused by name rather than believed.
+///
+/// It is built from the store's committed rows and never from a manager's
+/// in-memory state, so a restarted daemon presents the same projection its
+/// previous boot published.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZoneProjection {
+    /// The Zone this projection describes.
+    pub zone: String,
+    /// The store generation this projection was taken in.
+    pub incarnation: StoreIncarnation,
+    /// The cursor the Zone's last acknowledged publication reached. A Zone that
+    /// has published nothing is at the initial cursor, whose digest is the
+    /// digest of the empty canonical byte string.
+    pub accepted: AcceptedCursor,
+    /// Every committed desired row this Zone publishes, with the relationship
+    /// identity a binding row's key folds in.
+    pub rows: Vec<PublishedRow>,
+    /// The transaction this store still owes an outcome for, when one does.
+    /// It travels with the reconciliation so a broker that durably froze it
+    /// carries the fence forward instead of clearing it.
+    pub outstanding: Option<TransactionId>,
+    /// The identity this reconciliation is carried under.
+    ///
+    /// It is derived from the accepted cursor rather than minted per attempt,
+    /// so a retry after a failed reconciliation re-presents the same identity
+    /// and the broker recognises the replay instead of stacking a second one.
+    pub transaction: TransactionId,
+}
+
+impl ZoneProjection {
+    /// The cursor a Zone that has acknowledged no publication is at.
+    ///
+    /// Sequence zero has no committed bytes behind it, so its digest is the
+    /// digest of the empty canonical byte string - the same value the broker
+    /// derives for its own initial cursor.
+    pub fn initial_cursor(zone: &str, incarnation: StoreIncarnation) -> AcceptedCursor {
+        AcceptedCursor {
+            zone: zone.to_owned(),
+            incarnation,
+            sequence: ZoneDesiredSequence::INITIAL,
+            digest: DesiredDigest::of(&[]),
+            accepted_at: 0,
+        }
+    }
 }
 
 /// The prepared rows and retired keys one candidate installs.
@@ -114,6 +182,12 @@ impl PublicationRows {
                     revision: row.row.revision,
                     digest: row.row.digest.clone(),
                     spec: row.row.row.spec.clone(),
+                    source_uid: row
+                        .source_uid
+                        .and_then(|uid| ResourceUid::from_bytes(uid.as_slice()).ok()),
+                    consumer_uid: row
+                        .consumer_uid
+                        .and_then(|uid| ResourceUid::from_bytes(uid.as_slice()).ok()),
                 })
                 .collect(),
             removed: projection.removed.iter().map(|row| row.key.clone()).collect(),
@@ -187,6 +261,28 @@ pub trait AuthorityPublisher: Send + Sync + std::fmt::Debug {
     /// A restarted manager reads this before it publishes anything, so it
     /// never claims a predecessor the broker does not hold.
     async fn accepted(&self) -> Result<ZoneDesiredSequence, PublicationRefusal>;
+
+    /// Reconcile the broker's projection for one Zone with its accepted state.
+    ///
+    /// This admits nothing: the broker has already durably accepted a
+    /// projection for this Zone and will not serve one it cannot prove against
+    /// that. The implementation declares the intent together with the accepted
+    /// lower bound the broker must not move below, then transfers `projection`
+    /// as one bounded document so the broker can check every row against the
+    /// projection it holds. It returns only once the Zone is serving again; a
+    /// refusal leaves the Zone exactly as fenced as it was.
+    ///
+    /// Both crash directions are safe without any extra protocol. A daemon that
+    /// dies mid-transfer leaves the broker in a transfer-in-progress posture
+    /// that admits no ordinary message, and its next start declares the same
+    /// reconciliation again from the same durable store. A broker that dies
+    /// mid-transfer drops the reassembly buffer and moves every Zone back to
+    /// reconciling on its next start - the state this call begins from anyway
+    /// - so the whole document is simply transferred again.
+    async fn resynchronize(
+        &self,
+        projection: &ZoneProjection,
+    ) -> Result<(), PublicationRefusal>;
 }
 /// One durable authority mutation's outcome, as the caller reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -255,6 +351,9 @@ pub enum PublishError {
 /// desired row the broker never fenced, and neither can commit one the broker
 /// has not accepted.
 ///
+/// 0. recover - whatever an earlier publication for this Zone left outstanding
+///    is resolved by the recovery table, so this candidate never has to queue
+///    behind a transaction nothing else will release;
 /// 1. stage - the candidate and its reserved Zone sequence become durable;
 /// 2. prepare - the broker durably freezes this Zone's new-effect admission
 ///    for the exact bytes staging decided, and names its prepared identity;
@@ -268,6 +367,10 @@ pub enum PublishError {
 /// Each store call is its own complete transaction and no caller guard is held
 /// across the broker round trip, so a failure at any step leaves a state the
 /// recovery table can name rather than a half-published authority change.
+/// Step 0 is what makes that naming reachable while the daemon runs and not
+/// only at its next start: a candidate that reached no fence is released, one
+/// that did is replayed exactly as it committed, and one recovery cannot
+/// resolve keeps the Zone fenced and refuses this mutation with that refusal.
 pub async fn publish(
     store: &crate::spec_store::SpecStore,
     mutation: crate::authority_journal::DesiredMutation,
@@ -277,6 +380,17 @@ pub async fn publish(
     use crate::authority_journal::CommitOutcome;
 
     let zone = mutation.zone().to_owned();
+    // One Zone has at most one outstanding transaction, so a publication that
+    // failed at any step after staging holds the Zone's single slot until
+    // something resolves it. Only a restart did, which turned one failed
+    // publication into a Zone whose every later mutation is refused by the
+    // leaked transaction's identity - the store's one-outstanding rule working
+    // exactly as declared, with no path back. The recovery table already
+    // answers what such a transaction owes, and running it here is the same
+    // resolution a restart runs, over the same durable facts, before this
+    // candidate stages anything. A transaction recovery cannot resolve still
+    // fences the Zone: this propagates that refusal and stages nothing.
+    adopt_outstanding(store, &zone, authority).await?;
     let expected = store
         .accepted_cursor(&zone)
         .await?
@@ -441,4 +555,32 @@ fn mutation_kind(projection: &Projection) -> MutationKind {
         (Some(row), None) if row.generation_before.is_none() => MutationKind::Create,
         _ => MutationKind::Update,
     }
+}
+
+/// Reconcile the broker's projection for `zone` with the state this store
+/// durably holds.
+///
+/// This runs after [`adopt_outstanding`] and before the Zone reads a row. The
+/// order is the point of the sequence: adoption FIRST, because a previous
+/// boot's transaction has to settle before the broker is told what the Zone
+/// holds - a reconciliation carries the Zone's accepted cursor, and a
+/// transaction that still owed a publication would be acknowledging past the
+/// cursor the broker is being asked to accept. Reconciliation SECOND, and
+/// before any row is loaded or any actor spawned, because a manager that acted
+/// on a row before the broker's projection was reconciled would be acting on
+/// authority the broker has not confirmed it still holds.
+///
+/// A refusal here refuses the boot rather than degrading it: the manager cannot
+/// know what the broker serves until the broker has been shown, so it declines
+/// to start on unconfirmed authority.
+pub async fn resynchronize(
+    store: &crate::spec_store::SpecStore,
+    zone: &str,
+    authority: &dyn AuthorityPublisher,
+) -> Result<(), PublishError> {
+    let projection = store.zone_projection(zone).await?;
+    authority
+        .resynchronize(&projection)
+        .await
+        .map_err(PublishError::from)
 }

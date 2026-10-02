@@ -25,7 +25,7 @@ use crate::authority_journal::{CommitOutcome, CommittedPublication};
 use crate::identity::TransactionId;
 use crate::authority_publish::{
     AcceptedRevision, AuthorityPublisher, FencedTransaction, PublicationCandidate,
-    PublicationRefusal,
+    PublicationRefusal, ZoneProjection,
 };
 
 /// The module declared name.
@@ -43,6 +43,18 @@ pub enum Recorded {
     Accepted {
         transaction: TransactionId,
         sequence: ZoneDesiredSequence,
+    },
+    /// One reconciliation this publisher was shown.
+    ///
+    /// A stand-in holds no cached authority of its own to prove, so what it
+    /// records is the projection the manager presented: the Zone it described,
+    /// the accepted cursor it restated, how many committed rows it carried, and
+    /// the transaction it carried forward.
+    Resynchronized {
+        zone: String,
+        sequence: ZoneDesiredSequence,
+        rows: usize,
+        outstanding: Option<TransactionId>,
     },
 }
 
@@ -113,6 +125,17 @@ impl AuthorityPublisher for RecordingPublisher {
     async fn accepted(&self) -> Result<ZoneDesiredSequence, PublicationRefusal> {
         Ok(ZoneDesiredSequence::INITIAL)
     }
+
+    async fn resynchronize(&self, projection: &ZoneProjection) -> Result<(), PublicationRefusal> {
+        self.record(Recorded::Resynchronized {
+            zone: projection.zone.clone(),
+            sequence: projection.accepted.sequence,
+            rows: projection.rows.len(),
+            outstanding: projection.outstanding,
+        })
+        .await;
+        Ok(())
+    }
 }
 
 /// An authority publisher that refuses every fence.
@@ -148,6 +171,10 @@ impl AuthorityPublisher for RefusingPublisher {
     }
 
     async fn accepted(&self) -> Result<ZoneDesiredSequence, PublicationRefusal> {
+        Err(PublicationRefusal::Refused(self.detail.clone()))
+    }
+
+    async fn resynchronize(&self, _projection: &ZoneProjection) -> Result<(), PublicationRefusal> {
         Err(PublicationRefusal::Refused(self.detail.clone()))
     }
 }

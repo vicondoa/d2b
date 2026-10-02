@@ -371,6 +371,21 @@ pub struct ProjectedRow {
     /// this mutation creates it.
     pub generation_before: Option<u64>,
     pub row: DesiredRow,
+    /// The committed identity of the source row this binding row names, when
+    /// this row is a binding relationship whose source the Zone has already
+    /// committed.
+    ///
+    /// A relationship key is over committed identity rather than over
+    /// references, so the broker cannot fold one from the row's own bytes: the
+    /// bytes deliberately do not repeat the uids. They are resolved once here,
+    /// against the Zone's committed rows, and travel with the projection so
+    /// the broker holds the same identity the manager did and a
+    /// resynchronization can restate the row rather than assert a new one.
+    pub source_uid: Option<[u8; 16]>,
+    /// The committed identity of the consumer row this binding row names, when
+    /// this row is a binding relationship whose consumer the Zone has already
+    /// committed. See [`Self::source_uid`].
+    pub consumer_uid: Option<[u8; 16]>,
 }
 
 /// One row a staged candidate will retire.
@@ -1600,11 +1615,76 @@ fn project(
     conn: &Connection,
     candidate: &DesiredMutation,
 ) -> Result<Option<Projection>, SpecStoreError> {
-    match candidate {
-        DesiredMutation::Ensure(row) => project_ensure(conn, row),
-        DesiredMutation::MarkDeleting(key) => project_mark_deleting(conn, key),
-        DesiredMutation::Remove(key) => project_remove(conn, key),
+    let Some(mut projection) = match candidate {
+        DesiredMutation::Ensure(row) => project_ensure(conn, row)?,
+        DesiredMutation::MarkDeleting(key) => project_mark_deleting(conn, key)?,
+        DesiredMutation::Remove(key) => project_remove(conn, key)?,
+    } else {
+        return Ok(None);
+    };
+    // Relationship identity is resolved here, once, over the Zone's committed
+    // rows. The broker stores it beside the row and folds a binding key from
+    // it, so resolving it anywhere else would let the two halves disagree
+    // about which committed rows one relationship joins.
+    let identities = zone_identities(conn, candidate.zone())?;
+    for projected in &mut projection.rows {
+        (projected.source_uid, projected.consumer_uid) =
+            binding_identity(&identities, &projected.row.row);
     }
+    Ok(Some(projection))
+}
+
+/// The committed identity every reference this Zone has, keyed by its exact
+/// canonical rendering.
+///
+/// This is the whole Zone's identity index and nothing else: it is read while
+/// a candidate is staged and again while a Zone's projection is rebuilt, from
+/// the same committed rows, so both derive the same answer for the same rows.
+fn zone_identities(
+    conn: &Connection,
+    zone: &str,
+) -> Result<BTreeMap<String, [u8; 16]>, SpecStoreError> {
+    let mut statement =
+        conn.prepare("SELECT type, name, uid FROM resources WHERE zone = ?1 ORDER BY type, name")?;
+    let mut identities = BTreeMap::new();
+    let mut rows = statement.query(params![zone])?;
+    while let Some(row) = rows.next()? {
+        let type_name: String = row.get(0)?;
+        let name: String = row.get(1)?;
+        let uid: Vec<u8> = row.get(2)?;
+        let Some(uid) = <[u8; 16]>::try_from(uid.as_slice()).ok() else {
+            return Err(SpecStoreError::CorruptJournalPayload {
+                detail: "a committed row identity is not a 16-byte uid",
+            });
+        };
+        identities.insert(format!("{type_name}/{name}"), uid);
+    }
+    Ok(identities)
+}
+
+/// The resolved relationship identity one committed row publishes.
+///
+/// A row outside the canonical binding families declares no relationship and
+/// carries no identity. A binding row whose source or consumer the Zone has
+/// not committed resolves to an absence rather than a guess: the broker then
+/// holds a relationship it cannot name, which refuses there exactly as it
+/// refuses here.
+fn binding_identity(
+    identities: &BTreeMap<String, [u8; 16]>,
+    row: &StoredDesiredResource,
+) -> (Option<[u8; 16]>, Option<[u8; 16]>) {
+    let Some(request) = crate::relations::DecodedBindingRequest::decode(&row.key.type_name, &row.spec)
+    else {
+        return (None, None);
+    };
+    (
+        identities
+            .get(&request.source_ref().to_canonical_string())
+            .copied(),
+        identities
+            .get(&request.consumer_ref().to_canonical_string())
+            .copied(),
+    )
 }
 
 fn project_ensure(
@@ -1805,6 +1885,8 @@ fn encode_projection(projection: &Projection) -> Vec<u8> {
         out.flag(projected.generation_before.is_some());
         out.u64(projected.generation_before.unwrap_or_default());
         out.bytes(&projected.row.canonical_bytes());
+        out.optional_bytes(projected.source_uid.as_ref().map(|uid| uid.as_slice()));
+        out.optional_bytes(projected.consumer_uid.as_ref().map(|uid| uid.as_slice()));
     }
     out.u64(projection.removed.len() as u64);
     for retired in &projection.removed {
@@ -1834,9 +1916,16 @@ fn decode_projection(payload: &[u8]) -> Result<Projection, SpecStoreError> {
         let generation_before = reader.u64()?;
         let generation_before = present.then_some(generation_before);
         let encoded = reader.bytes()?;
+        // The resolved relationship identity travels with the row, so the
+        // replayed commit publishes the same identity the fence validated
+        // rather than resolving it again from whatever the Zone holds now.
+        let source_uid = reader.flag()?.then(|| reader.fixed::<16>()).transpose()?;
+        let consumer_uid = reader.flag()?.then(|| reader.fixed::<16>()).transpose()?;
         rows.push(ProjectedRow {
             generation_before,
             row: decode_row(&mut CanonicalReader::new(encoded))?,
+            source_uid,
+            consumer_uid,
         });
     }
     let removed_count = reader.u64()?;
@@ -1861,6 +1950,73 @@ fn decode_projection(payload: &[u8]) -> Result<Projection, SpecStoreError> {
             generation_before: before_present.then_some(generation_before),
             generation_after: after_present.then_some(generation_after),
         },
+    })
+}
+
+/// One Zone's durable projection, as the broker must be able to rebuild it.
+///
+/// This reads exactly the durable facts a reconciliation restates: the store
+/// generation, the Zone's accepted cursor, every committed desired row with the
+/// revision and digest it committed at and the relationship identity its
+/// binding key folds in, and the one transaction the Zone still owes an
+/// outcome for. Nothing here is read from a manager's in-memory state, so a
+/// restarted daemon presents the same projection its previous boot published.
+pub fn zone_projection(
+    conn: &Connection,
+    zone: &str,
+) -> Result<crate::authority_publish::ZoneProjection, SpecStoreError> {
+    let incarnation = store_incarnation(conn)?;
+    let accepted = accepted_cursor(conn, zone)?.unwrap_or_else(|| {
+        crate::authority_publish::ZoneProjection::initial_cursor(zone, incarnation.clone())
+    });
+    let committed = desired_rows(
+        conn,
+        &SpecSelector {
+            zone: Some(zone.to_owned()),
+            ..SpecSelector::default()
+        },
+    )?;
+    // The identity index is built from the SAME committed rows this projection
+    // publishes, which is what makes the resolved identity here identical to
+    // the identity a staged candidate resolved when it was committed.
+    let identities: BTreeMap<String, [u8; 16]> = committed
+        .iter()
+        .map(|desired| {
+            (
+                format!(
+                    "{}/{}",
+                    desired.row.key.type_name, desired.row.key.name
+                ),
+                desired.row.uid,
+            )
+        })
+        .collect();
+    let rows = committed
+        .iter()
+        .map(|desired| {
+            let (source_uid, consumer_uid) = binding_identity(&identities, &desired.row);
+            crate::authority_publish::PublishedRow {
+                key: desired.row.key.clone(),
+                revision: desired.revision,
+                digest: desired.digest.clone(),
+                spec: desired.row.spec.clone(),
+                source_uid: source_uid.and_then(|uid| ResourceUid::from_bytes(&uid).ok()),
+                consumer_uid: consumer_uid.and_then(|uid| ResourceUid::from_bytes(&uid).ok()),
+            }
+        })
+        .collect();
+    // The identity is derived from the accepted cursor rather than minted per
+    // attempt, so a retry after a failed reconciliation re-presents the same
+    // identity instead of stacking a second one under the same Zone.
+    let transaction =
+        derive_transaction_id(&incarnation, zone, accepted.sequence, &accepted.digest);
+    Ok(crate::authority_publish::ZoneProjection {
+        zone: zone.to_owned(),
+        incarnation,
+        accepted,
+        rows,
+        outstanding: outstanding_transaction(conn, zone)?,
+        transaction,
     })
 }
 

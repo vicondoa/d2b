@@ -3933,6 +3933,16 @@ pub const PUBLICATION_EFFECT_UNPROVEN: &str = "publication-effect-unproven";
 /// A broker restart that has not been reconciled against the manager's
 /// outstanding transactions.
 pub const PUBLICATION_RECONCILIATION_REQUIRED: &str = "publication-reconciliation-required";
+
+/// A resynchronization whose document this broker cannot prove against the
+/// projection it already holds.
+///
+/// A restarted broker keeps its accepted rows and its accepted cursor, so a
+/// reconciliation may only restate them: a document that moves the cursor, or
+/// that carries an authority row this broker never accepted, describes
+/// authority the broker cannot verify from anything it holds, and is refused
+/// by name rather than installed as a claim.
+pub const PUBLICATION_PROJECTION_UNPROVEN: &str = "publication-projection-unproven";
 /// A control action not bound to an existing transaction or effect identity.
 pub const PUBLICATION_CONTROL_NOT_BOUND: &str = "publication-control-not-bound";
 

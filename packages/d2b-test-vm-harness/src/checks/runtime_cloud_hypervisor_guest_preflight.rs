@@ -944,14 +944,22 @@ pub fn assertions(control: &mut GuestControl) -> LegacyResult<()> {
         VOLUME_CONTROLLER_PROCESSES,
         CONTROLLER_BOUND,
         &[row(&controller_rows), row(&summary)],
+        // A controller Process the supervisor refused names the effect error
+        // it projected and the broker backend names the leg under it; the
+        // template name appears in no journal line, so it cannot explain one.
         &[
-            ("d2bd.service", "acceptance-controller"),
-            // A controller Process left Pending is a session that never came
-            // up, and the daemon's own line for that - with the Provider it
-            // was for and the handshake step it failed at - is the only
-            // record of which controller and which step. The token above
-            // names the template and appears in no journal line.
             ("d2bd.service", "external Provider controller"),
+            ("d2bd.service", "supervisor launch effect failed"),
+            ("d2bd.service", "broker refused a process request"),
+            ("d2bd.service", "broker spawn invocation failed"),
+            ("d2bd.service", "broker transport failed for a process request"),
+            ("d2bd.service", "process provider effect failed"),
+            ("d2bd.service", "process launch failed"),
+            ("d2bd.service", "launch request rejected"),
+            // The relay drops a refusal's detail from the response envelope
+            // and logs it here instead, so this is the only line that says
+            // WHY the broker refused a spawn.
+            ("d2bd.service", "forwarded invocation refused with a reason"),
         ],
     )?;
     control.succeed(&[ACCEPTANCE_CONTROLLERS], None)?;

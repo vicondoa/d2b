@@ -2,29 +2,38 @@
 //!
 //! The path is DERIVED from the admitted binding, never parsed out of a
 //! launch argument and never read out of a Guest's device rows. It is a
-//! pure function of two inputs this crate owns: the broker-owned runtime
-//! root the daemon composes into the launch, and the binding's own opaque
-//! [`SocketIdentity`].
+//! pure function of four inputs every side already holds: the broker-owned
+//! runtime root the daemon composes into the launch, and the relationship's
+//! Zone, source Volume, and consumer Guest.
 //!
-//! That is what makes a Guest with no Device children deliver storage
-//! (AE6). A per-Guest runtime directory shared with the Device workers is
-//! postured from a `path:vm-run:<guest>` row that a Device-free Guest
-//! never causes to exist, so deriving the serving socket from it made the
-//! export preparation refuse exactly the Guests that need it least. The
-//! socket therefore lands directly in the runtime root the broker already
-//! owns and has already postured: no per-Guest directory is created, no
-//! directory mode is invented, and no create race with a sibling worker's
-//! grant exists.
+//! The rendering is the frozen worker socket contract (ADR 046):
+//! `<runtime_root>/vms/<guest>/vol-<tag>.vfd.sock`, where the tag is the
+//! first eight hex digits of `sha256(zone 0 volume 0 guest)`. The socket
+//! lives inside the per-Guest runtime tree the broker already owns and
+//! already declares in the verified storage contract as
+//! `path:vm-run:<guest>`, alongside the Device workers' sockets, which is
+//! what lets the broker grant the serving principal a named ACL entry on
+//! one tree instead of on the whole runtime root.
+//!
+//! That placement is a fence, not a preference: the broker's serving-worker
+//! grant opens the socket's parent directory to the worker principal, and
+//! it refuses a parent that IS the runtime root rather than grant `rwx` on
+//! a tree that also holds the broker's own sockets. A socket derived
+//! directly into the runtime root therefore cannot be launched at all, and
+//! one derived outside it is refused for reaching above a tree the broker
+//! does not own.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crate::bindings::SocketIdentity;
+use sha2::{Digest, Sha256};
+
+use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 
 /// Linux's maximum Unix-domain socket path length.
 pub const MAX_SOCKET_PATH_BYTES: usize = 108;
 
-/// How many bytes of the socket identity reach the socket's file name.
+/// How many bytes of the relationship digest reach the socket's file name.
 ///
 /// The name is an opaque tag, not an identity: the full digest stays
 /// private and the tag only has to be collision-free among the bindings
@@ -96,69 +105,114 @@ pub fn is_anchored_runtime_root(root: &Path) -> bool {
 
 /// Derive the private listening socket path for one binding.
 ///
-/// The result is anchored, normalized, strictly a direct child of
-/// `runtime_root`, and within [`MAX_SOCKET_PATH_BYTES`]. It is a pure
-/// function of its two arguments, so re-deriving it after a helper
-/// restart yields byte-identical output: a restarted worker rebinds the
-/// same socket rather than a second one, and two different bindings never
-/// collide on one name.
+/// The result is anchored, normalized, strictly inside `runtime_root`
+/// (the per-Guest runtime tree is a child of it), and within
+/// [`MAX_SOCKET_PATH_BYTES`]. It is a pure function of its arguments, so
+/// re-deriving it after a helper restart yields byte-identical output: a
+/// restarted worker rebinds the same socket rather than a second one, and
+/// two different bindings never collide on one name.
+///
+/// The three relationship tokens are [`BoundedToken`]s, so a name that
+/// could escape the tree is rejected before it reaches the rendering
+/// rather than normalized after it.
 pub fn derive_serving_socket_path(
     runtime_root: &Path,
-    socket: &SocketIdentity,
+    zone: &BoundedToken,
+    volume: &BoundedToken,
+    guest: &BoundedToken,
 ) -> Result<PathBuf, SocketPathRefusal> {
     if !is_anchored_runtime_root(runtime_root) {
         return Err(SocketPathRefusal::RuntimeRootInvalid);
     }
-    let tag = &socket.to_hex()[..SOCKET_TAG_BYTES * 2];
-    let rendered = format!("{}/vfd-{tag}.sock", runtime_root.display());
+    let tag = relationship_tag(zone, volume, guest);
+    let rendered = format!(
+        "{}/vms/{}/vol-{tag}.vfd.sock",
+        runtime_root.display(),
+        guest.as_str(),
+    );
     if rendered.len() > MAX_SOCKET_PATH_BYTES {
         return Err(SocketPathRefusal::PathTooLong);
     }
     Ok(PathBuf::from(rendered))
 }
 
+/// The eight hex digits of `sha256(zone 0 volume 0 guest)` that name one
+/// relationship's socket inside a runtime tree.
+fn relationship_tag(zone: &BoundedToken, volume: &BoundedToken, guest: &BoundedToken) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(zone.as_str().as_bytes());
+    hasher.update([0u8]);
+    hasher.update(volume.as_str().as_bytes());
+    hasher.update([0u8]);
+    hasher.update(guest.as_str().as_bytes());
+    let digest = hasher.finalize();
+    let mut tag = String::with_capacity(SOCKET_TAG_BYTES * 2);
+    for byte in digest.iter().take(SOCKET_TAG_BYTES / 2) {
+        tag.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0'));
+        tag.push(char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('0'));
+    }
+    tag
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
-    use d2b_contracts_resource::v3::ResourceRef;
     use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 
     use super::{MAX_SOCKET_PATH_BYTES, SocketPathRefusal, derive_serving_socket_path};
-    use crate::bindings::SocketIdentity;
 
-    fn identity(tail: u8) -> SocketIdentity {
-        SocketIdentity::derive(
-            &BoundedToken::parse("dev").expect("token"),
-            &ResourceRef::parse("Volume/work-state").expect("valid ref"),
-            &ResourceRef::parse(format!("Guest/work-vm-{tail}").as_str()).expect("valid ref"),
-            &BoundedToken::parse("ro-store").expect("valid view"),
-        )
+    fn token(value: &str) -> BoundedToken {
+        BoundedToken::parse(value.to_owned()).expect("bounded token")
     }
 
-    /// The derivation is total over an anchored root, so the export
-    /// preparation of a Guest that has no device rows is not gated on any
-    /// other resource existing.
+    fn path(guest: &str) -> std::path::PathBuf {
+        derive_serving_socket_path(
+            Path::new("/run/d2b"),
+            &token("work"),
+            &token("state"),
+            &token(guest),
+        )
+        .expect("an anchored root derives a socket")
+    }
+
+    /// The socket lands in the per-Guest runtime tree the broker declares
+    /// as `path:vm-run:<guest>`, which is strictly inside the broker's own
+    /// runtime root - the shape the broker's serving-worker ACL grant
+    /// admits. A socket whose parent IS the runtime root is refused there,
+    /// so this is the placement, not a preference.
     #[test]
-    fn the_socket_is_a_direct_child_of_the_runtime_root() {
-        let path = derive_serving_socket_path(Path::new("/run/d2b"), &identity(0))
-            .expect("an anchored root derives a socket");
-        assert_eq!(path.parent(), Some(Path::new("/run/d2b")));
-        assert!(path.is_absolute());
-        assert!(path.as_os_str().as_encoded_bytes().len() <= MAX_SOCKET_PATH_BYTES);
+    fn the_socket_is_inside_the_per_guest_runtime_tree() {
+        let derived = path("acceptance-guest");
+        assert_eq!(
+            derived.parent(),
+            Some(Path::new("/run/d2b/vms/acceptance-guest"))
+        );
+        assert!(derived.starts_with(Path::new("/run/d2b")));
+        assert!(
+            derived.as_os_str().as_encoded_bytes().len() <= MAX_SOCKET_PATH_BYTES,
+            "the derived address fits a Unix socket"
+        );
+    }
+
+    /// The rendered tag is the frozen worker contract's
+    /// `sha256(zone 0 volume 0 guest)` prefix, which is what the daemon's
+    /// socket probe and the acceptance fixture both assert.
+    #[test]
+    fn the_name_carries_the_frozen_relationship_tag() {
+        assert_eq!(
+            path("acceptance-guest").file_name().and_then(|n| n.to_str()),
+            Some("vol-a424ba7a.vfd.sock")
+        );
     }
 
     /// Re-derivation after a helper restart is byte-identical: the restart
     /// rebinds the same socket instead of exposing a second one.
     #[test]
     fn the_derivation_is_stable_and_distinct_per_binding() {
-        let first = derive_serving_socket_path(Path::new("/run/d2b"), &identity(0))
-            .expect("socket");
-        let restarted =
-            derive_serving_socket_path(Path::new("/run/d2b"), &identity(0))
-                .expect("socket");
-        let other = derive_serving_socket_path(Path::new("/run/d2b"), &identity(1))
-            .expect("socket");
+        let first = path("acceptance-guest");
+        let restarted = path("acceptance-guest");
+        let other = path("work-vm");
         assert_eq!(first, restarted);
         assert_ne!(first, other);
     }
@@ -168,7 +222,6 @@ mod tests {
     /// address is refused rather than truncated.
     #[test]
     fn an_unusable_runtime_root_or_an_over_long_name_is_refused() {
-        let socket = identity(0);
         for root in [
             "/run/d2b/",
             "run/d2b",
@@ -178,14 +231,24 @@ mod tests {
             "/run/d2\\b",
         ] {
             assert_eq!(
-                derive_serving_socket_path(Path::new(root), &socket),
+                derive_serving_socket_path(
+                    Path::new(root),
+                    &token("work"),
+                    &token("state"),
+                    &token("acceptance-guest"),
+                ),
                 Err(SocketPathRefusal::RuntimeRootInvalid),
                 "an unanchored root is refused: {root}"
             );
         }
         let deep = format!("/run/{}", "d".repeat(96));
         assert_eq!(
-            derive_serving_socket_path(Path::new(&deep), &socket),
+            derive_serving_socket_path(
+                Path::new(&deep),
+                &token("work"),
+                &token("state"),
+                &token("acceptance-guest"),
+            ),
             Err(SocketPathRefusal::PathTooLong)
         );
     }

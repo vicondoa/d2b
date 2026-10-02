@@ -70,6 +70,35 @@ const TEARDOWN_SAMPLES: usize = 600;
 /// The interval between two samples, the fixture's own `time.sleep(0.2)`.
 const SAMPLE_INTERVAL: Duration = Duration::from_millis(200);
 
+/// The daemon journal lines that explain a worker Process whose launch effect
+/// never completed.
+///
+/// The daemon's own tail for this stage is dominated by the unrelated layout
+/// retry on the store view, so a reader cannot see the launch refusal in it.
+/// The supervisor names the effect error it projected and the broker backend
+/// names the leg under it, so these tokens are the record of which leg
+/// refused a launch no row states on its own.
+const WORKER_LAUNCH_JOURNAL: &[DiagRow<'_>] = &[
+    ("d2bd.service", "supervisor launch effect failed"),
+    ("d2bd.service", "broker refused a process request"),
+    ("d2bd.service", "broker spawn invocation failed"),
+    ("d2bd.service", "broker transport failed for a process request"),
+    ("d2bd.service", "process provider effect failed"),
+    ("d2bd.service", "process launch failed"),
+    ("d2bd.service", "launch request rejected"),
+    // The relay drops a refusal's detail from the response envelope and logs
+    // it here instead, so this is the only line that says WHY the broker
+    // refused a spawn.
+    ("d2bd.service", "forwarded invocation refused with a reason"),
+    ("d2bd.service", "reply timeout"),
+    // The adoption leg the driver runs before every launch, and the broker's
+    // duplicate-registration guard, are the two lines that say whether a row
+    // relaunched a live child or lost one.
+    ("d2bd.service", "broker observe invocation failed"),
+    ("d2bd.service", "reserve: reclaiming"),
+    ("d2bd.service", "broker pidfd reply carried no result"),
+];
+
 /// The deterministic VolumeBinding identity the frozen v1 derivation pins,
 /// the fixture's own `binding_name`: `vol-binding-` followed by the first
 /// twenty-four hex digits of the sha256 of the NUL-joined
@@ -160,7 +189,15 @@ pub fn assertions(control: &mut GuestControl) -> LegacyResult<()> {
         &endpoint_realized(),
         CHILD_REALIZED,
         &rows,
-        &[("d2bd.service", ""), ("d2b-broker.service", "")],
+        &WORKER_LAUNCH_JOURNAL
+            .iter()
+            .copied()
+            .chain([
+                ("d2bd.service", ""),
+                ("d2bd.service", "virtiofsd"),
+                ("d2b-broker.service", ""),
+            ])
+            .collect::<Vec<_>>(),
     )?;
     control.diag_wait(
         "serving-socket",
@@ -188,7 +225,18 @@ pub fn assertions(control: &mut GuestControl) -> LegacyResult<()> {
         &format!("delete Volume/state --revision {volume_revision}"),
         "/run/d2b-volume-delete.json",
     );
-    control.succeed(&[&delete], None)?;
+    // The delete writes its envelope to a file, so a refusal is reported
+    // with an empty console: the rows and the daemon's own line for the
+    // refused store call are the only record of which refusal it was.
+    control.diag_run(
+        "volume-delete",
+        &delete,
+        &rows,
+        &[
+            ("d2bd.service", "manager-backed store call failed"),
+            ("d2bd.service", "delete"),
+        ],
+    )?;
 
     control.diag_wait(
         "binding-deleting",
@@ -483,6 +531,15 @@ fn chain_row_dumps() -> Vec<(String, String)> {
     dumps.push((
         "vms dir".to_owned(),
         "ls -la /run/d2b/vms/acceptance-guest/ 2>&1 || echo 'no vms dir'".to_owned(),
+    ));
+    dumps.push((
+        "runtime tree".to_owned(),
+        "ls -la /run/d2b/ /run/d2b/vms/ 2>&1 | head -n 40 || true".to_owned(),
+    ));
+    dumps.push((
+        "worker argv".to_owned(),
+        "ps -eo pid=,args= --no-headers 2>/dev/null | grep -F virtiofsd | head -n 10 \
+         || echo 'no virtiofsd process'".to_owned(),
     ));
     dumps
 }

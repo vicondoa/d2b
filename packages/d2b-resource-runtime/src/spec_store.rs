@@ -363,6 +363,12 @@ enum Request {
         zone: String,
         reply: oneshot::Sender<Result<ZoneRecovery, SpecStoreError>>,
     },
+    ZoneProjection {
+        zone: String,
+        reply: oneshot::Sender<
+            Result<crate::authority_publish::ZoneProjection, SpecStoreError>,
+        >,
+    },
     StoreIncarnation {
         reply: oneshot::Sender<Result<StoreIncarnation, SpecStoreError>>,
     },
@@ -412,6 +418,9 @@ fn writer_loop(mut conn: Connection, requests: Receiver<Request>) {
             }
             Request::ZoneRecovery { zone, reply } => {
                 let _ = reply.send(crate::authority_journal::zone_recovery(&conn, &zone));
+            }
+            Request::ZoneProjection { zone, reply } => {
+                let _ = reply.send(crate::authority_journal::zone_projection(&conn, &zone));
             }
             Request::StoreIncarnation { reply } => {
                 let _ = reply.send(crate::authority_journal::store_incarnation(&conn));
@@ -850,6 +859,24 @@ impl SpecStore {
     pub async fn zone_recovery(&self, zone: &str) -> Result<ZoneRecovery, SpecStoreError> {
         let zone = zone.to_owned();
         self.call(|reply| Request::ZoneRecovery { zone, reply }).await
+    }
+
+    /// One Zone's durable projection, as a broker has to be able to rebuild it.
+    ///
+    /// It is the reconciliation counterpart of [`Self::publish`]: the accepted
+    /// cursor, every committed desired row with the revision and digest it
+    /// committed at and the relationship identity each binding row folds in,
+    /// and the transaction this Zone still owes an outcome for. A restarted
+    /// manager reads it after adoption and before it loads a row, so the broker
+    /// is reconciled against committed state rather than against whatever a
+    /// previous process happened to remember.
+    pub async fn zone_projection(
+        &self,
+        zone: &str,
+    ) -> Result<crate::authority_publish::ZoneProjection, SpecStoreError> {
+        let zone = zone.to_owned();
+        self.call(move |reply| Request::ZoneProjection { zone, reply })
+            .await
     }
 
     async fn call<R, F>(&self, make: F) -> Result<R, SpecStoreError>

@@ -89,7 +89,7 @@ use d2b_provider_volume_binding::{
 use d2b_provider_volume_local::{
     AnchoredVolumeEffectAdapter, VolumeLocalController, VolumeLocalProfile,
 };
-use d2b_provider_volume_virtiofs::{MAX_SOCKET_PATH_BYTES, SocketIdentity, StoredBinding};
+use d2b_provider_volume_virtiofs::{SocketIdentity, StoredBinding};
 use d2b_resource_api::manager_backend::nix_bundle_subject;
 use d2b_resource_runtime::AuthorityPublisher;
 use d2b_resource_runtime::context::{ManagerEndpoint, SpecDecoder};
@@ -114,7 +114,6 @@ use d2b_resource_types::DriverDescriptor;
 use d2bd_runtime::resource_runtime_support::NewPlaneReadinessState;
 use d2bd_runtime::target_runtime::DaemonMode;
 use rustix::fs::{Mode, OFlags, ResolveFlags, open, openat2};
-use sha2::{Digest, Sha256};
 
 use d2b_provider_credential::{
     CREDENTIAL_EFFECTS_SERVICE, CredentialDriverArgs, CredentialEffectFacets,
@@ -1055,10 +1054,14 @@ async fn reload_anchor_rows(
 // Production socket effect closures (binding/endpoint legs)
 // ---------------------------------------------------------------------------
 
-/// Mirror of the provider's `PrivateSocketPath::derive` (frozen v1 worker
-/// contract): the private virtiofs socket path for one (volume, guest)
-/// serving pair. The rendered accessor is crate-private in the provider
-/// today; U14 collapses this mirror behind a provider-owned probe.
+/// The private virtiofs socket path for one (volume, guest) serving pair.
+///
+/// The derivation itself belongs to the Provider that owns the frozen v1
+/// worker socket contract, and both sides of one relationship go through
+/// it: the daemon's serving launch composes `--socket-path` from the same
+/// function this probe, presence check, and removal use, so the socket the
+/// worker binds and the socket this surface waits for cannot be two
+/// different paths.
 pub(crate) fn serving_socket_path(
     socket_runtime_dir: &Path,
     zone: &BoundedToken,
@@ -1070,40 +1073,15 @@ pub(crate) fn serving_socket_path(
     {
         return None;
     }
-    let root = socket_runtime_dir.to_string_lossy().into_owned();
-    if !root.starts_with('/')
-        || root.ends_with('/')
-        || root.contains('\0')
-        || root.contains('\\')
-        || root
-           .split('/')
-           .skip(1)
-           .any(|component| component.is_empty() || component == "." || component == "..")
-    {
-        return None;
-    }
-    let mut hasher = Sha256::new();
-    hasher.update(zone.as_str().as_bytes());
-    hasher.update([0u8]);
-    hasher.update(volume_ref.name().as_str().as_bytes());
-    hasher.update([0u8]);
-    hasher.update(execution_ref.name().as_str().as_bytes());
-    let digest = hasher.finalize();
-    let mut tag = String::with_capacity(8);
-    for byte in digest[..4].iter().copied() {
-        tag.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0'));
-        tag.push(char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('0'));
-    }
-    let rendered = format!(
-        "{}/vms/{}/vol-{}.vfd.sock",
-        root,
-        execution_ref.name().as_str(),
-        tag
-    );
-    if rendered.len() > MAX_SOCKET_PATH_BYTES {
-        return None;
-    }
-    Some(PathBuf::from(rendered))
+    let volume = BoundedToken::parse(volume_ref.name().as_str().to_owned()).ok()?;
+    let guest = BoundedToken::parse(execution_ref.name().as_str().to_owned()).ok()?;
+    d2b_provider_volume_virtiofs::derive_serving_socket_path(
+        socket_runtime_dir,
+        zone,
+        &volume,
+        &guest,
+    )
+    .ok()
 }
 
 async fn socket_is_present(path: &Path) -> bool {

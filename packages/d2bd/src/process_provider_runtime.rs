@@ -1237,12 +1237,15 @@ impl ProductionProcessProviders {
             context.device_worker_launch.as_ref(),
         ) {
             (Some(launch), None) => ticket
-                .with_launch_args(serving_worker_launch_args(
-                    &self.bundle,
-                    &self.socket_runtime_dir,
-                    &context.zone,
-                    launch,
-                )?)
+                .with_launch_args(
+                    serving_worker_launch_args(
+                        &self.bundle,
+                        &self.socket_runtime_dir,
+                        &context.zone,
+                        launch,
+                    )
+                    .await?,
+                )
                 .map_err(|_| "provider-ticket:serving-args-invalid".to_owned())?,
             (None, Some(launch)) => ticket
                 .with_launch_args(device_worker_launch_args(
@@ -3396,23 +3399,90 @@ fn validate_resource_execution_target(
     Ok(())
 }
 
-/// The private socket a binding-owned serving worker binds.
+/// The mode the trusted `path:vm-run:<guest>` storage row declares for one
+/// Guest's per-Guest runtime socket directory.
 ///
-/// It is derived from the binding's own opaque socket identity under the
-/// broker-owned runtime root, and it lands directly in that root: no
-/// per-Guest directory is created for it, so no per-Guest directory mode
-/// has to be resolved, and no `path:vm-run:<guest>` row - the row a Device
-/// worker and its siblings share - has to exist first. A Guest with no
-/// Device children therefore derives exactly the socket a Guest with
-/// children derives, which is the whole of AE6 for this launch path.
+/// The daemon stamps the very same directory the broker's Device-worker grant
+/// creates, so the mode comes from the row that declares it rather than from
+/// a default here: the row carries the sticky bit that stops one principal
+/// renaming another's socket in the shared tree, and a default that silently
+/// dropped it would leave that guarantee unenforced on whichever side won the
+/// create. `None` when the contract names no such row for that Guest, when
+/// the row is scoped to another Guest or is not a directory, when the
+/// declared mode cannot be parsed, or when it carries no group bits at all -
+/// which is the very stamp this replaces, and the one that both drops the
+/// sticky bit and zeroes the ACL mask. The caller then refuses instead of
+/// inventing a posture.
+fn declared_vm_run_dir_mode(bundle: &BundleResolver, guest: &str) -> Option<u32> {
+    let spec = bundle.find_storage_path_spec(&format!("path:vm-run:{guest}"))?;
+    if spec.scope.as_str() != format!("vm:{guest}")
+        || spec.kind != d2b_core::storage::StoragePathKind::Directory
+    {
+        return None;
+    }
+    let trimmed = spec.mode.trim_start_matches('0');
+    let normalized = if trimmed.is_empty() { "0" } else { trimmed };
+    let mode = u32::from_str_radix(normalized, 8).ok()?;
+    // The group bits ARE the stamp: POSIX rewrites a directory's ACL mask
+    // from them on every `chmod`, so a mode without them cannot carry this
+    // tree's posture at all - it nullifies the named entry every sibling
+    // worker's grant depends on, and it drops the sticky bit with it. The
+    // same refusal the broker's own side makes on `EEXIST`, made here
+    // before anything is created rather than after a directory exists.
+    (mode & 0o070 != 0).then_some(mode)
+}
+
+/// Realize one serving worker's private socket directory, before the launch
+/// ticket carries it.
 ///
-/// The broker already owns and has already postured its runtime root, so
-/// there is no create race with a sibling worker's grant either.
-fn serving_socket_path(
-    socket_runtime_dir: &std::path::Path,
-    socket: &d2b_provider_volume_virtiofs::SocketIdentity,
-) -> Option<std::path::PathBuf> {
-    d2b_provider_volume_virtiofs::derive_serving_socket_path(socket_runtime_dir, socket).ok()
+/// Only a directory THIS call creates is stamped, and it is stamped with the
+/// mode the trusted `path:vm-run:<guest>` row declares for that Guest. The
+/// directory is shared with the Device workers for the same Guest, and the
+/// broker postures it to that same row's mode and grants every worker
+/// principal a named ACL entry on it; a mode of this daemon's own choosing
+/// would land no group bits, and POSIX rewrites a file's ACL mask from its
+/// group bits on every `chmod`, so that both drops the sticky bit the shared
+/// tree depends on AND nullifies those entries: the Device worker then cannot
+/// bind its own socket there, exits, and is relaunched into the same revoked
+/// state.
+///
+/// A directory that already exists is left exactly as it is, for that same
+/// reason - re-stamping it rewrites its mask - and the broker's own grant
+/// reconciles its mode to the declared posture on the way past.
+async fn realize_serving_socket_dir(
+    parent: &std::path::Path,
+    zone: &ZoneId,
+    declared_mode: u32,
+) -> Result<(), String> {
+    let created = match tokio::fs::create_dir(parent).await {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
+        // The `vms` parent host activation provisions can be missing on a
+        // zone-native host; realize the whole chain, which also proves the
+        // leaf was absent (its parent did not exist a moment ago).
+        Err(_) => {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|_| "provider-ticket:serving-socket-dir-create".to_owned())?;
+            true
+        }
+    };
+    if !created {
+        return Ok(());
+    }
+    use std::os::unix::fs::PermissionsExt as _;
+    if let Err(error) =
+        tokio::fs::set_permissions(parent, std::fs::Permissions::from_mode(declared_mode)).await
+    {
+        tracing::warn!(
+            zone = %zone,
+            socket_dir = %parent.display(),
+            declared_mode = format!("{declared_mode:o}"),
+            error = %error,
+            "failed to enforce the declared mode on the serving worker socket directory"
+        );
+    }
+    Ok(())
 }
 
 /// Compose one binding-owned serving worker's launch arguments.
@@ -3421,7 +3491,7 @@ fn serving_socket_path(
 /// template pins it, and the broker composes `argv[0]` from it. These
 /// arguments carry the per-binding data the binding controller declared
 /// (private socket path, served view root, thread pool, cache, flags).
-fn serving_worker_launch_args(
+async fn serving_worker_launch_args(
     bundle: &BundleResolver,
     socket_runtime_dir: &std::path::Path,
     zone: &ZoneId,
@@ -3429,14 +3499,28 @@ fn serving_worker_launch_args(
 ) -> Result<Vec<String>, String> {
     let zone_token = BoundedToken::parse(zone.as_str().to_owned())
         .map_err(|_| "provider-ticket:serving-zone-invalid".to_owned())?;
-    let socket_identity = d2b_provider_volume_virtiofs::StoredBinding::socket_identity_for(
+    let volume_token = BoundedToken::parse(launch.volume_ref.name().as_str().to_owned())
+        .map_err(|_| "provider-ticket:serving-volume-invalid".to_owned())?;
+    let guest_token = BoundedToken::parse(launch.guest_ref.name().as_str().to_owned())
+        .map_err(|_| "provider-ticket:serving-guest-invalid".to_owned())?;
+    let socket_path = d2b_provider_volume_virtiofs::derive_serving_socket_path(
+        socket_runtime_dir,
         &zone_token,
-        &launch.volume_ref,
-        &launch.guest_ref,
-        &launch.view,
-    );
-    let socket_path = serving_socket_path(socket_runtime_dir, &socket_identity)
-        .ok_or_else(|| "provider-ticket:serving-socket-path-unresolved".to_owned())?;
+        &volume_token,
+        &guest_token,
+    )
+    .map_err(|_| "provider-ticket:serving-socket-path-unresolved".to_owned())?;
+    // The shared per-Guest tree is declared by the `path:vm-run:<guest>` row,
+    // and its mode is read out of that row BEFORE anything is created: a
+    // Guest this daemon cannot resolve a declared posture for is a launch it
+    // refuses, not one it realizes with a mode of its own. The worker binds
+    // its private socket as the in-namespace principal, so the directory is
+    // realized before the launch carries it.
+    let declared_mode = declared_vm_run_dir_mode(bundle, guest_token.as_str())
+        .ok_or_else(|| "provider-ticket:serving-socket-dir-mode-unresolved".to_owned())?;
+    if let Some(parent) = socket_path.parent() {
+        realize_serving_socket_dir(parent, zone, declared_mode).await?;
+    }
     let root = launch
         .root
         .as_ref()

@@ -876,6 +876,22 @@ impl ResourceManagerState {
         .map_err(ResourceError::from)
     }
 
+    /// Reconcile the broker's projection for this Zone with the committed
+    /// state this store holds.
+    ///
+    /// A broker restart moves every known Zone to reconciling and refuses every
+    /// ordinary message until the manager shows it the projection it already
+    /// accepted, so a daemon that never does this is a daemon whose Zone can
+    /// never mutate again. It runs immediately after [`Self::adopt_outstanding`]
+    /// and before any row is loaded, because adoption settles what the
+    /// previous boot owed and the reconciliation then restates the accepted
+    /// cursor that adoption moved.
+    pub(crate) async fn resynchronize(&self) -> Result<(), ResourceError> {
+        crate::authority_publish::resynchronize(&self.store, &self.zone, self.authority.as_ref())
+            .await
+            .map_err(ResourceError::from)
+    }
+
     /// Retire one cleanup-completed row whose owned children are gone: drop
     /// the durable row, retire the index entries, and publish the deletion.
     /// An owner whose own cleanup completed while this row was still alive
@@ -1451,6 +1467,14 @@ impl Actor for ResourceManager {
         // accepted is still outstanding.
         state
             .adopt_outstanding()
+            .await
+            .map_err(|error| ActorProcessingErr::from(error.to_string()))?;
+        // The broker refuses every ordinary message for a Zone it restarted
+        // until the manager restates the projection it already accepted. This
+        // runs after adoption and before any row is read, so the Zone is
+        // serving from confirmed authority before a single actor spawns.
+        state
+            .resynchronize()
             .await
             .map_err(|error| ActorProcessingErr::from(error.to_string()))?;
         // Restart recovery (F2, R15): load durable specs and spawn one actor

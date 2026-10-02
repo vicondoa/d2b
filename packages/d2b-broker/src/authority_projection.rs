@@ -77,10 +77,11 @@ use d2b_contracts_broker::broker_wire::{
     SnapshotChunkRequest, ZoneAuthorityState, publication_candidate_digest,
     PUBLICATION_CONTROL_NOT_BOUND, PUBLICATION_DIGEST_MISMATCH,
     PUBLICATION_DUPLICATE_TRANSACTION, PUBLICATION_EFFECT_UNPROVEN, PUBLICATION_FENCE_HELD,
-    PUBLICATION_RECONCILIATION_REQUIRED, PUBLICATION_SESSION_BOUND_ELSEWHERE,
-    PUBLICATION_SESSION_INVALID, PUBLICATION_SNAPSHOT_INCOMPLETE,
-    PUBLICATION_SNAPSHOT_IN_PROGRESS, PUBLICATION_SNAPSHOT_TOO_LARGE,
-    PUBLICATION_STALE_PREDECESSOR, PUBLICATION_UNKNOWN_TRANSACTION, PUBLICATION_WRONG_ZONE,
+    PUBLICATION_PROJECTION_UNPROVEN, PUBLICATION_RECONCILIATION_REQUIRED,
+    PUBLICATION_SESSION_BOUND_ELSEWHERE, PUBLICATION_SESSION_INVALID,
+    PUBLICATION_SNAPSHOT_INCOMPLETE, PUBLICATION_SNAPSHOT_IN_PROGRESS,
+    PUBLICATION_SNAPSHOT_TOO_LARGE, PUBLICATION_STALE_PREDECESSOR,
+    PUBLICATION_UNKNOWN_TRANSACTION, PUBLICATION_WRONG_ZONE,
 };
 use d2b_contracts_resource::v3::{
     AdmissionDecision, AdmissionStage, AuthoritySubject, AuthoritySubjectKind,
@@ -439,6 +440,14 @@ struct SnapshotTransfer {
     total_chunks: u32,
     received_chunks: u32,
     bytes: Vec<u8>,
+    /// Whether this transfer is the reconciliation of a Zone whose cached
+    /// authority this broker does not serve on its own.
+    ///
+    /// The flag is read off the durable posture the transfer opens from and
+    /// is never persisted: a restart drops the whole reassembly buffer and
+    /// moves every Zone back to reconciling, so a resumed transfer is a new
+    /// transfer that re-derives the same answer from the same posture.
+    resynchronizing: bool,
 }
 
 /// Everything the worker owns. Touched only on the worker thread.
@@ -1393,7 +1402,13 @@ fn begin_snapshot_locked(
             RefusalReason::LimitExceedsCeiling,
         ));
     }
-    {
+    // The posture this transfer opens from is the whole difference between an
+    // ordinary reinstall and a reconciliation. `Reconciling` is the state a
+    // restart writes over every known Zone and the state `Resynchronize`
+    // records: the broker has decided its own cached rows are not authority
+    // until the manager restates them, so the document this transfer carries
+    // is checked against them rather than installed over them.
+    let resynchronizing = {
         let zone_state = state
             .durable
             .zones
@@ -1412,6 +1427,7 @@ fn begin_snapshot_locked(
                 true,
             ));
         }
+        let resynchronizing = matches!(zone_state.posture, PersistedPosture::Reconciling);
         zone_state.transactions.insert(request.transaction.to_string());
         zone_state.posture = PersistedPosture::SnapshotInProgress {
             transaction: request.transaction.clone(),
@@ -1419,7 +1435,8 @@ fn begin_snapshot_locked(
             received_chunks: 0,
             total_chunks: request.total_chunks,
         };
-    }
+        resynchronizing
+    };
     state.transfers.insert(
         zone.clone(),
         SnapshotTransfer {
@@ -1427,6 +1444,7 @@ fn begin_snapshot_locked(
             total_chunks: request.total_chunks,
             received_chunks: 0,
             bytes: Vec::new(),
+            resynchronizing,
         },
     );
     commit_durable(state)?;
@@ -1511,6 +1529,91 @@ fn snapshot_chunk_locked(
     Ok(state.public_state(&zone))
 }
 
+
+/// The reason one resynchronized document is not the projection this broker
+/// holds, or [`None`] when it is.
+///
+/// Every authority row the document carries is checked against the row this
+/// broker durably accepted under the same reference, on all four facts it
+/// stores: the revision, the committed canonical bytes, the desired digest,
+/// and the resolved relationship identity a binding row's key folds in. A row
+/// this broker never accepted is unproven for the same reason a restated row
+/// with different bytes is: nothing the broker holds can confirm it.
+fn unproven_authority(
+    snapshot: &AuthoritySnapshot,
+    held: &BTreeMap<String, AcceptedAuthorityRow>,
+) -> Option<RefusalReason> {
+    authority_rows(&snapshot.rows)
+        .iter()
+        .any(|(reference, declared)| held.get(reference) != Some(declared))
+        .then_some(RefusalReason::UnprovenEffect)
+}
+
+/// Prove one resynchronization against the projection this broker holds.
+///
+/// A restarted broker keeps its accepted rows, its accepted cursor, and its
+/// accepted deployment root, and it will not serve authority it cannot derive
+/// from its own durable state. A resynchronized document is therefore CHECKED
+/// rather than installed: it must restate the cursor the broker already
+/// accepted exactly, carry the root the broker bootstrapped, name no
+/// outstanding transaction the broker never durably saw, and describe every
+/// authority row it carries exactly as that row was accepted.
+///
+/// This is the difference between a reconciliation and a claim. A document
+/// that moves the cursor forward describes revisions no fence this broker
+/// ever validated, and a document that adds an authority row describes a grant
+/// this broker has no fact about; both are refused by name rather than
+/// believed. A document that merely OMITS an accepted row is not a threat -
+/// the install below merges over the held rows rather than replacing them, so
+/// an omitted grant is kept and no reconciliation can silently drop one.
+fn prove_resynchronization(
+    state: &mut ProjectionWorkerState,
+    zone: &str,
+    snapshot: &AuthoritySnapshot,
+) -> Reply<()> {
+    let verdict = {
+        let Some(zone_state) = state.durable.zones.get(zone) else {
+            return Err(fence(
+                state,
+                zone,
+                PUBLICATION_SNAPSHOT_INCOMPLETE,
+                AdmissionStage::Recover,
+                RefusalReason::UnprovenEffect,
+            ));
+        };
+        if snapshot.cursor != zone_state.accepted {
+            // Equality, not a floor: the accepted cursor is the one revision
+            // this broker can prove it reached, and a reconciliation that
+            // claims a later one is asking the broker to accept an
+            // unvalidated history.
+            Some(RefusalReason::StaleAuthority)
+        } else if snapshot.root_subject != zone_state.root_subject {
+            // The deployment root bootstraps the accepted graph rather than
+            // being selected by the document, so a different one describes a
+            // different deployment rather than the same Zone re-proved.
+            Some(RefusalReason::ConflictingDeclaration)
+        } else if snapshot.outstanding.as_ref().is_some_and(|transaction| {
+            !zone_state.transactions.contains(transaction.to_string().as_str())
+        }) {
+            // A document may carry forward a fence this broker durably froze.
+            // One it never saw is a claim about a transaction that does not
+            // exist here, and re-freezing under it would leave the Zone
+            // holding an identity no recovery could ever release.
+            Some(RefusalReason::IdentityNotAuthorized)
+        } else {
+            unproven_authority(snapshot, &zone_state.rows)
+        }
+    };
+    verdict.map_or(Ok(()), |reason| {
+        Err(fence(
+            state,
+            zone,
+            PUBLICATION_PROJECTION_UNPROVEN,
+            AdmissionStage::Recover,
+            reason,
+        ))
+    })
+}
 /// Close a transfer and, only if the whole document arrived and its digest
 /// matches, install it.
 fn end_snapshot_locked(
@@ -1623,6 +1726,16 @@ fn end_snapshot_locked(
             ));
         }
     }
+    if transfer.resynchronizing {
+        // The Zone was reconciling when this transfer opened, so the document
+        // is proved against the accepted projection rather than installed over
+        // it. Every refusal here leaves the Zone reconciling with the transfer
+        // dropped, which is the same answer as any other integrity failure:
+        // the broker has not accepted what the document claims, so it does not
+        // serve it.
+        drop_transfer(state, &zone);
+        prove_resynchronization(state, &zone, &snapshot)?;
+    }
     // The prepared identity the broker already froze travels with the
     // resynchronization, so reconciling cannot silently clear a fence the
     // manager still has outstanding.
@@ -1648,7 +1761,16 @@ fn end_snapshot_locked(
         };
         zone_state.accepted = snapshot.cursor.clone();
         zone_state.root_subject = snapshot.root_subject.clone();
-        zone_state.rows = authority_rows(&snapshot.rows);
+        if transfer.resynchronizing {
+            // A proven resynchronization may only restate rows the broker
+            // already accepted, so it merges over them and an accepted grant
+            // the document did not carry is kept rather than dropped. An
+            // ordinary reinstall still replaces the set, because that is the
+            // path a Zone's whole projection is installed through.
+            zone_state.rows.extend(authority_rows(&snapshot.rows));
+        } else {
+            zone_state.rows = authority_rows(&snapshot.rows);
+        }
         zone_state.posture = match &outstanding {
             Some(transaction) => {
                 zone_state.transactions.insert(transaction.to_string());
