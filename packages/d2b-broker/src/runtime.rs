@@ -11819,6 +11819,77 @@ pub(crate) async fn cleanup_spawned_runner_after_failure(
 // Authority publication dispatch (U7, KTD6-KTD7)
 // ---------------------------------------------------------------------------
 
+/// Why the publication boundary could not answer one frame.
+///
+/// A refusal the projection already decided travels as that refusal. The
+/// boundary authors no publication code of its own beyond the peer and budget
+/// screens it runs before the projection is consulted, and a refusal it
+/// replaced with one of those would tell the manager "this broker holds no
+/// accepted projection for the Zone" about a decision that was about
+/// something else - a wrong Zone label, a moved store generation, a session
+/// bound to a cursor the manager has left behind. The manager already decodes
+/// `PublicationRefusal`, so it reads the projection's own reason.
+///
+/// A projection that could not open, persist, or be read is not a refusal at
+/// all: the broker never reached a decision, and it says so with the
+/// boundary's own fail-closed code rather than inventing a reason for one.
+#[derive(Debug)]
+pub(crate) enum PublicationBoundaryError {
+    /// The projection decided, and the manager reads that decision.
+    Refused(d2b_contracts_broker::broker_wire::PublicationRefusal),
+    /// The projection could not be opened, persisted, or read.
+    Unavailable(String),
+}
+
+impl std::fmt::Display for PublicationBoundaryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Refused(refusal) => write!(
+                f,
+                "authority publication refused: {} at {:?} ({:?}), fenced={}",
+                refusal.code, refusal.stage, refusal.reason, refusal.fenced
+            ),
+            Self::Unavailable(detail) => f.write_str(detail),
+        }
+    }
+}
+/// Open the process projection the publication family is served through.
+///
+/// This is the one lazy init both publication entries share, so the first
+/// arrival on either leg opens exactly one projection for the process.
+async fn open_projection(state_dir: &std::path::Path) -> Result<(), PublicationBoundaryError> {
+    if crate::authority_projection::authority_projection().is_some() {
+        return Ok(());
+    }
+    crate::authority_projection::init_authority_projection_async(state_dir)
+        .await
+        .map_err(|error| {
+            PublicationBoundaryError::Unavailable(format!(
+                "authority projection unavailable: {error}"
+            ))
+        })
+}
+
+/// Split one projection failure into the decision it reached and the failure
+/// it could not reach a decision past.
+///
+/// A refusal carries the Zone's own state beside its code, which is what the
+/// manager reconciles from, so it travels unchanged. A store that could not
+/// open, persist, or be read reached no decision at all, so it keeps the
+/// boundary's own unavailability rather than borrowing a refusal code.
+fn classify_projection_error(
+    error: crate::authority_projection::AuthorityProjectionError,
+) -> PublicationBoundaryError {
+    match error {
+        crate::authority_projection::AuthorityProjectionError::Refused(refusal) => {
+            PublicationBoundaryError::Refused(*refusal)
+        }
+        unavailable => PublicationBoundaryError::Unavailable(format!(
+            "authority projection unavailable: {unavailable}"
+        )),
+    }
+}
+
 /// Serve one authority publication message on the established origination leg.
 ///
 /// The four messages KTD6-KTD7 need - a bounded snapshot, a change, a fence, and
@@ -11844,25 +11915,16 @@ pub(crate) async fn cleanup_spawned_runner_after_failure(
 pub(crate) async fn serve_authority_publication(
     state_dir: &std::path::Path,
     envelope: &d2b_contracts_broker::broker_wire::AuthorityPublicationEnvelope,
-) -> Result<d2b_contracts_broker::broker_wire::AuthorityPublicationResponse, BrokerError> {
-    if crate::authority_projection::authority_projection().is_none() {
-        crate::authority_projection::init_authority_projection_async(state_dir)
-            .await
-            .map_err(|error| {
-                BrokerError::LiveHandler(format!("authority projection unavailable: {error}"))
-            })?;
-    }
+) -> Result<
+    d2b_contracts_broker::broker_wire::AuthorityPublicationResponse,
+    PublicationBoundaryError,
+> {
+    open_projection(state_dir).await?;
     crate::authority_projection::authority_projection()
         .expect("the lazy init above just opened the projection")
         .serve(envelope)
         .await
-        .map_err(|error| match error.refusal() {
-            Some(refusal) => BrokerError::LiveHandler(format!(
-                "authority publication refused: {} at {:?} ({:?}), fenced={}",
-                refusal.code, refusal.stage, refusal.reason, refusal.fenced
-            )),
-            None => BrokerError::LiveHandler(format!("authority publication failed: {error}")),
-        })
+        .map_err(classify_projection_error)
 }
 
 /// Serve one Zone publication-session open on the established origination leg.
@@ -11883,25 +11945,16 @@ pub(crate) async fn serve_authority_publication(
 pub(crate) async fn serve_authority_publication_open(
     state_dir: &std::path::Path,
     open: &d2b_contracts_broker::broker_wire::AuthorityPublicationOpen,
-) -> Result<d2b_contracts_broker::broker_wire::AuthorityPublicationResponse, BrokerError> {
-    if crate::authority_projection::authority_projection().is_none() {
-        crate::authority_projection::init_authority_projection_async(state_dir)
-            .await
-            .map_err(|error| {
-                BrokerError::LiveHandler(format!("authority projection unavailable: {error}"))
-            })?;
-    }
+) -> Result<
+    d2b_contracts_broker::broker_wire::AuthorityPublicationResponse,
+    PublicationBoundaryError,
+> {
+    open_projection(state_dir).await?;
     crate::authority_projection::authority_projection()
         .expect("the lazy init above just opened the projection")
         .open_session(open.clone())
         .await
-        .map_err(|error| match error.refusal() {
-            Some(refusal) => BrokerError::LiveHandler(format!(
-                "authority publication session refused: {} ({:?})",
-                refusal.code, refusal.reason
-            )),
-            None => BrokerError::LiveHandler(format!("authority publication session failed: {error}")),
-        })
+        .map_err(classify_projection_error)
 }
 
 /// The authority-publication frame family, as one decoded frame names it.
@@ -12050,16 +12103,30 @@ async fn answer_authority_publication_frame(
             "refused",
         );
     };
+    // The projection's own decision is answered as itself: it carries the
+    // closed code, the stage, the reason, and the state the Zone was left in,
+    // and the manager reconciles from exactly those. Replacing it with the
+    // boundary's own unaccepted-projection would erase a decision that was
+    // about something else and report it as the loss of an accepted graph.
+    // Only a projection that never reached a decision falls back to that code,
+    // because there is nothing more specific to say.
+    let answer = |error: PublicationBoundaryError| match error {
+        PublicationBoundaryError::Refused(refusal) => {
+            AuthorityPublicationResponse::Refused(refusal)
+        }
+        unavailable => {
+            tracing::error!(error = %unavailable, zone = %zone, "authority projection could not answer");
+            refuse(crate::envelope::UNACCEPTED_PROJECTION)
+        }
+    };
     match frame {
         PublicationFrame::Open(open) => {
             match serve_authority_publication_open(&state_dir, &open).await {
                 Ok(reply) => connection.send_json_frame(&reply).await,
                 Err(error) => {
-                    tracing::error!(error = ?error, zone = %zone, "authority publication session open failed");
+                    tracing::error!(error = %error, zone = %zone, "authority publication session open failed");
                     failed(&audit_log, "publication-open-failed");
-                    connection
-                        .send_json_frame(&refuse(crate::envelope::UNACCEPTED_PROJECTION))
-                        .await
+                    connection.send_json_frame(&answer(error)).await
                 }
             }
         }
@@ -12067,11 +12134,9 @@ async fn answer_authority_publication_frame(
             match serve_authority_publication(&state_dir, &envelope).await {
                 Ok(reply) => connection.send_json_frame(&reply).await,
                 Err(error) => {
-                    tracing::error!(error = ?error, zone = %zone, "authority publication failed");
+                    tracing::error!(error = %error, zone = %zone, "authority publication failed");
                     failed(&audit_log, "publication-failed");
-                    connection
-                        .send_json_frame(&refuse(crate::envelope::UNACCEPTED_PROJECTION))
-                        .await
+                    connection.send_json_frame(&answer(error)).await
                 }
             }
         }
@@ -13638,6 +13703,226 @@ mod tests {
             d2b_contracts_broker::broker_wire::ZoneAuthorityState::Unprovisioned,
             "the refusal carries the Zone's state, so the manager reconciles from the refusal itself"
         );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Fence `zone` under `store`, through the production publication entries.
+    ///
+    /// This is the state a Zone a previous boot left behind is in: the broker
+    /// holds its generation, one candidate is durably prepared against it, and
+    /// the transaction identity stays in the Zone's durable set. It is built
+    /// through [`serve_authority_publication_open`] and
+    /// [`serve_authority_publication`] rather than by writing state, so the
+    /// record the test then reads is the record the protocol produces.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn fence_zone_for_recovery(zone: &str, store: &str, transaction: &str) {
+        use d2b_contracts_broker::broker_wire::{
+            AuthorityPublicationEnvelope, AuthorityPublicationOpen, AuthorityPublicationRequest,
+            OpenPublicationSessionRequest, PrepareChangeRequest, PublicationTransactionId,
+        };
+        use d2b_contracts_resource::v3::{
+            AuthoritySubject, AuthoritySubjectKind, DesiredDigest, StoreIncarnation,
+            ZoneDesiredSequence,
+        };
+
+        let state_dir = authority_projection_state_dir();
+        envelope_call_runtime().block_on(async {
+            // The process projection is opened once, under the same lock the
+            // other publication cases open it under: two workers bootstrapping
+            // the same durable file would race on its rename.
+            if crate::authority_projection::authority_projection().is_none() {
+                let _opening = zone_provisioning_lock().await;
+                if crate::authority_projection::authority_projection().is_none() {
+                    crate::authority_projection::init_authority_projection_async(&state_dir)
+                        .await
+                        .expect("the authority projection opens under the broker state root");
+                }
+            }
+            let projection =
+                crate::authority_projection::authority_projection().expect("the projection");
+            let store = StoreIncarnation::parse(store).expect("a bounded store generation");
+            let opened = serve_authority_publication_open(
+                &state_dir,
+                &AuthorityPublicationOpen {
+                    request: OpenPublicationSessionRequest {
+                        zone: zone.to_owned(),
+                        store_incarnation: store.clone(),
+                        broker_epoch: 0,
+                        initiating_subject: AuthoritySubject::unresourced(
+                            AuthoritySubjectKind::Bootstrap,
+                        ),
+                        accepted: d2b_contracts_broker::broker_wire::AuthorityCursor::initial(),
+                    },
+                },
+            )
+            .await
+            .expect("the broker mints the Zone's first session");
+            let d2b_contracts_broker::broker_wire::AuthorityPublicationResponse::Opened(opened) =
+                opened
+            else {
+                panic!("a session open is answered with a minted session");
+            };
+            let committed = d2b_contracts_broker::broker_wire::AuthorityCursor {
+                sequence: ZoneDesiredSequence::INITIAL
+                    .try_next()
+                    .expect("the accepted sequence has room"),
+                digest: DesiredDigest::of(format!("fenced-{zone}").as_bytes()),
+            };
+            let request = PrepareChangeRequest {
+                transaction: PublicationTransactionId::parse(transaction)
+                    .expect("a bounded transaction identity"),
+                store_incarnation: store,
+                expected: d2b_contracts_broker::broker_wire::AuthorityCursor::initial(),
+                committed: committed.clone(),
+                digest: d2b_contracts_broker::broker_wire::publication_candidate_digest(&[], &[]),
+                subject: AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap),
+                kind: d2b_contracts_broker::broker_wire::PublicationMutationKind::Create,
+                candidate: Vec::new(),
+                removed: Vec::new(),
+            };
+            let envelope = |request| AuthorityPublicationEnvelope {
+                zone: zone.to_owned(),
+                session: opened.session.clone(),
+                request,
+            };
+            let _ = serve_authority_publication(
+                &state_dir,
+                &envelope(AuthorityPublicationRequest::PrepareChange(request)),
+            )
+            .await
+            .expect("the candidate is durably prepared, which is the fence");
+            // The candidate is never committed and never cancelled, so the Zone
+            // is left exactly as a boot that died between prepare and commit
+            // leaves it: fenced on one prepared identity, with that identity
+            // still in the Zone's durable transaction set.
+            assert!(
+                projection.status(zone).await.is_fenced(),
+                "the Zone is left fenced, which is the state a boot recovers from"
+            );
+        });
+    }
+
+    /// A Zone the broker already holds can be reopened over the real wire.
+    ///
+    /// This is the whole production entry: the daemon's own serialised open
+    /// goes onto a real seqpacket pair, the real `handle_connection` reads it,
+    /// screens it, and answers. The broker already holds the Zone under a
+    /// different store generation and one durably prepared transaction, which
+    /// is the state a boot finds after the previous one died mid-publication.
+    ///
+    /// The open is refused by name today, and that refusal is the cycle: an
+    /// open installs no authority, so refusing it refuses the Zone at the one
+    /// message it needed in order to recover at all. The session it mints is
+    /// bound to the generation THIS broker holds, never to the one the caller
+    /// asked for, so re-opening is not a way to move a Zone onto a caller's
+    /// store.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_zone_the_broker_holds_can_reopen_its_publication_session() {
+        use d2b_contracts_broker::broker_wire::AuthorityPublicationResponse;
+
+        const ZONE: &str = "recovery";
+
+        let root = test_audit_dir("publication-reopen-held-zone");
+        fs::create_dir_all(&root).expect("create audit test dir");
+        let served = publication_accept_loop_server(&root, 64);
+        fence_zone_for_recovery(ZONE, "store-generation-one", "feedface");
+
+        let response = drive_publication_frame(&served, &daemon_publication_open(ZONE));
+        let AuthorityPublicationResponse::Opened(opened) = response else {
+            panic!(
+                "a Zone the broker already holds can be reopened: the session is what every \
+                 recovery message is presented under"
+            );
+        };
+        assert_eq!(
+            opened.binding.zone, ZONE,
+            "the session is bound to the Zone the open named"
+        );
+        assert_eq!(
+            opened.binding.store_incarnation.as_str(),
+            "store-generation-one",
+            "the session carries the generation this broker holds for the Zone, never the \
+             caller's, so an open cannot install a store generation"
+        );
+        assert!(
+            opened.limits.max_chunk_bytes > 0 && opened.limits.max_chunks > 0,
+            "the manager will not stream into a broker that declares no bounds"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A Zone that is genuinely fenced is still refused on its next message.
+    ///
+    /// This is the other half of the reopen, and it is the half that keeps the
+    /// reopen honest. A session carries no authority, so minting one is not a
+    /// thaw: the Zone stays fenced, and the very next publication it sends is
+    /// refused by name rather than served under a fence it did not earn.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_reopened_fenced_zone_is_still_refused_its_next_publication() {
+        use d2b_contracts_broker::broker_wire::{
+            AuthorityPublicationEnvelope, AuthorityPublicationRequest, AuthorityPublicationResponse,
+            PrepareChangeRequest, PublicationTransactionId,
+        };
+        use d2b_contracts_resource::v3::{
+            AuthoritySubject, AuthoritySubjectKind, StoreIncarnation, ZoneDesiredSequence,
+        };
+
+        const ZONE: &str = "recovery-refused";
+        const HELD: &str = "store-generation-one";
+
+        let root = test_audit_dir("publication-reopen-fenced-zone");
+        fs::create_dir_all(&root).expect("create audit test dir");
+        let served = publication_accept_loop_server(&root, 64);
+        fence_zone_for_recovery(ZONE, HELD, "feedface");
+
+        let opened = match drive_publication_frame(
+            &served,
+            &daemon_publication_open(ZONE),
+        ) {
+            AuthorityPublicationResponse::Opened(opened) => opened,
+            other => panic!("the Zone reopens its session: {other:?}"),
+        };
+
+        let committed = d2b_contracts_broker::broker_wire::AuthorityCursor {
+            sequence: ZoneDesiredSequence::INITIAL
+                .try_next()
+                .expect("the accepted sequence has room"),
+            digest: d2b_contracts_resource::v3::DesiredDigest::of(b"a-second-candidate"),
+        };
+        let refused = drive_publication_frame(
+            &served,
+            &AuthorityPublicationEnvelope {
+                zone: ZONE.to_owned(),
+                session: opened.session.clone(),
+                request: AuthorityPublicationRequest::PrepareChange(PrepareChangeRequest {
+                    transaction: PublicationTransactionId::parse("c0ffee11")
+                        .expect("a bounded transaction identity"),
+                    store_incarnation: StoreIncarnation::parse(HELD)
+                        .expect("a bounded store generation"),
+                    expected: d2b_contracts_broker::broker_wire::AuthorityCursor::initial(),
+                    committed: committed.clone(),
+                    digest: d2b_contracts_broker::broker_wire::publication_candidate_digest(
+                        &[], &[],
+                    ),
+                    subject: AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap),
+                    kind: d2b_contracts_broker::broker_wire::PublicationMutationKind::Create,
+                    candidate: Vec::new(),
+                    removed: Vec::new(),
+                }),
+            },
+        );
+        match refused {
+            AuthorityPublicationResponse::Refused(refusal) => assert!(
+                refusal.fenced,
+                "a Zone that is fenced by a prepared candidate stays fenced: the reopen minted \
+                 a session, not authority"
+            ),
+            other => panic!("a fenced Zone is refused its next publication: {other:?}"),
+        }
 
         let _ = fs::remove_dir_all(&root);
     }

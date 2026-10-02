@@ -50,6 +50,7 @@ use d2b_contracts_broker::broker_wire::{
     AuthorityCursor, AuthorityProjectionRow, AuthorityPublicationEnvelope,
     AuthorityPublicationOpen, AuthorityPublicationRequest, AuthorityPublicationResponse,
     AuthoritySnapshot, BeginSnapshotRequest, CancelTransactionRequest, CommitChangeRequest,
+    ZoneAuthorityState,
     ControlActionRequest, EffectExitRequest, EndSnapshotRequest,
     MAX_PUBLICATION_CHUNK_BYTES, PrepareChangeRequest,
     PreparedTransaction, PublicationControlKind, PublicationMutationKind, PublicationSession,
@@ -88,6 +89,15 @@ pub enum PublicationError {
         reason: RefusalReason,
         /// Whether the Zone is fenced after this refusal.
         fenced: bool,
+        /// The Zone's own state the broker answered with.
+        ///
+        /// The broker decides every refusal against the Zone it durably
+        /// holds, so this is the only statement of that Zone's posture the
+        /// manager ever sees. Dropping it left the manager unable to tell a
+        /// Zone that owes an outstanding transaction from one that simply
+        /// holds a different store generation, and both read as the same
+        /// closed code with nothing to reconcile against.
+        state: ZoneAuthorityState,
     },
     /// A control action gave up on its budget.
     ///
@@ -125,9 +135,11 @@ impl std::fmt::Display for PublicationError {
                 stage,
                 reason,
                 fenced,
+                state,
             } => write!(
                 f,
-                "authority publication refused: {code} at {stage:?} ({reason:?}), fenced={fenced}"
+                "authority publication refused: {code} at {stage:?} ({reason:?}), \
+                 fenced={fenced}, zone-state={state:?}"
             ),
             Self::ControlTimedOut { transaction } => {
                 write!(f, "control action timed out for {transaction}; the fence is kept")
@@ -171,6 +183,7 @@ impl PublicationError {
                 stage: refusal.stage,
                 reason: refusal.reason,
                 fenced: refusal.fenced,
+                state: refusal.state.clone(),
             }),
             _ => Ok(()),
         }
@@ -614,7 +627,19 @@ impl AuthorityPublicationCoordinator {
         // and it is the difference between a retry and a dead projection, so it
         // is propagated with its own code rather than reported as a transport
         // that never arrived.
-        PublicationError::from_response(&reply)?;
+        if let Err(error) = PublicationError::from_response(&reply) {
+            // The broker's own view of the Zone and the generation this manager
+            // asked for are the two halves of a store-generation refusal, and
+            // only one of them was ever readable. Both are named here so the
+            // refusal is diagnosable from the daemon's own log.
+            tracing::error!(
+                zone = %self.zone,
+                requested_store_incarnation = %self.incarnation.as_str(),
+                %error,
+                "the broker refused a Zone publication session"
+            );
+            return Err(error);
+        }
         let AuthorityPublicationResponse::Opened(opened) = &reply else {
             // Anything else is an answer to a different message: the broker
             // claims a step this one never took, so the manager holds no
@@ -867,6 +892,11 @@ impl AuthorityPublicationCoordinator {
                 stage: action.kind.stage(),
                 reason: RefusalReason::UntrustedImplementation,
                 fenced: true,
+                // This half refused before it reached the transport, so it has
+                // no broker answer to carry: the Zone is reported as the
+                // unprovisioned state this half can still name, which is the
+                // fail-closed reading rather than a claim about the broker.
+                state: ZoneAuthorityState::Unprovisioned,
             });
         }
         let request = AuthorityPublicationRequest::ControlAction(action.clone());
@@ -1001,6 +1031,10 @@ impl AuthorityPublicationCoordinator {
                 stage: AdmissionStage::Authorize,
                 reason: RefusalReason::LimitExceedsCeiling,
                 fenced: true,
+                // The queue is this manager's own bound and it never reached
+                // the transport, so the broker has not been asked and has
+                // nothing to report.
+                state: ZoneAuthorityState::Unprovisioned,
             });
         }
         queue.push_back(transaction.clone());
@@ -1265,11 +1299,15 @@ impl CoordinatorPublisher {
 /// that never arrived.
 fn transport(error: PublicationError) -> d2b_resource_runtime::PublicationRefusal {
     match error {
-        PublicationError::Refused { code, stage, reason, fenced } => {
-            d2b_resource_runtime::PublicationRefusal::Refused(format!(
-                "{code} at {stage:?} ({reason:?}, fenced: {fenced})"
-            ))
-        }
+        PublicationError::Refused {
+            code,
+            stage,
+            reason,
+            fenced,
+            state,
+        } => d2b_resource_runtime::PublicationRefusal::Refused(format!(
+            "{code} at {stage:?} ({reason:?}, fenced: {fenced}, zone-state: {state:?})"
+        )),
         other => d2b_resource_runtime::PublicationRefusal::Refused(other.to_string()),
     }
 }

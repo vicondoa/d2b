@@ -24,13 +24,40 @@
 //!
 //! ## Durability posture
 //!
-//! WAL mode, `busy_timeout` 5s, `synchronous=NORMAL`, and **IMMEDIATE
-//! transactions**: every durable mutation (ensure / mark-deleting / remove)
-//! and its audit-log record commit inside one `BEGIN IMMEDIATE` transaction,
-//! and the async call returns only after that commit (commit-before-return,
-//! R7/R10, AE1). File posture: the store creates its file with mode 0600
-//! (directory 0700 when it creates the directory); the database's
-//! `<name>-wal` and `<name>-shm` side files are tightened to 0600 as well.
+//! `busy_timeout` 5s, `synchronous=FULL`, a **rollback journal**, and
+//! **IMMEDIATE transactions**: every durable mutation (ensure /
+//! mark-deleting / remove) and its audit-log record commit inside one
+//! `BEGIN IMMEDIATE` transaction, and the async call returns only after that
+//! commit (commit-before-return, R7/R10, AE1). File posture: the store
+//! creates its file with mode 0600 (directory 0700 when it creates the
+//! directory); the database's `<name>-journal` side file is tightened to
+//! 0600 as well.
+//!
+//! # Why a rollback journal and not a write-ahead log
+//!
+//! The store's `store_incarnation` is an identity: it is what every broker
+//! authority projection for this store's Zones is bound to, and a projection
+//! that names an incarnation the store no longer carries can never be
+//! republished against - the Zone refuses every publication until the
+//! ownership-bounded reset clears both halves. An identity that lives only in
+//! a write-ahead log is not one.
+//!
+//! In WAL mode the committed rows sit in `<name>-wal` and the main database
+//! file stays a single page until a checkpoint runs, so a store whose
+//! process is killed without one - a power cut, a `system_reset`, a snapshot
+//! taken and restored while the daemon is running - reopens as an EMPTY
+//! database. `apply_authority_journal` cannot tell that from a first boot:
+//! both present a page count of one and an empty schema. It then mints a
+//! fresh incarnation, and the split is permanent and silent.
+//!
+//! A rollback journal puts the committed state in the database file itself
+//! and leaves the in-flight transaction in the side file, so an abrupt end
+//! rolls back to the last commit and the store reopens on exactly the
+//! incarnation it committed. `synchronous=FULL` is the matching setting: with
+//! it every commit is fsynced through the journal, so the state this mode
+//! keeps is state that survived. The store is the durable authority for
+//! every Zone it holds and its writes are per desired-row mutation, not per
+//! read, so the fsync is the cost of an identity that means something.
 //!
 //! ## One format, and one write path
 //!
@@ -391,8 +418,10 @@ fn writer_loop(mut conn: Connection, requests: Receiver<Request>) {
             }
         }
     }
-    // Channel closed: the last handle dropped. Checkpoint and close cleanly.
-    let _ = conn.pragma_update(None, "wal_checkpoint(TRUNCATE)", 0);
+    // Channel closed: the last handle dropped. A rollback journal leaves
+    // nothing to fold in - closing the connection rolls an in-flight
+    // transaction back and removes the journal - so the close is the whole
+    // of it, and the database file is already the last commit.
 }
 
 // ---------------------------------------------------------------------------
@@ -405,13 +434,15 @@ fn writer_loop(mut conn: Connection, requests: Receiver<Request>) {
 /// chmods are best-effort and bounded.
 #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 fn tighten_file_modes(path: &Path) {
-    // Best-effort posture enforcement: the store file and its WAL/SHM side
-    // files carry the daemon's private-data mode (0600). SQLite names the
-    // side files by appending `-wal`/`-shm` to the *database file name*, so
-    // the suffix is appended here too - `with_extension` would rewrite the
-    // real suffix (`spec-store.sqlite3` -> `spec-store.db-wal`) and leave
-    // the files SQLite actually created at their creation mode. Side files
-    // only exist while a connection holds the database open in WAL mode.
+    // Best-effort posture enforcement: the store file and its side files
+    // carry the daemon's private-data mode (0600). SQLite names a side file
+    // by appending its suffix to the *database file name*, so the suffix is
+    // appended here too - `with_extension` would rewrite the real suffix
+    // (`spec-store.sqlite3` -> `spec-store.db-journal`) and leave the file
+    // SQLite actually created at its creation mode. `-journal` is this
+    // store's journal; `-wal` and `-shm` are tightened as well because a
+    // database an earlier release left in write-ahead-log mode still has
+    // them, and opening it converts it.
     let tighten = |p: &Path| {
         if let Ok(file) = std::fs::File::open(p) {
             let _ = file.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o600));
@@ -425,11 +456,10 @@ fn tighten_file_modes(path: &Path) {
         })
     };
     tighten(path);
-    if let Some(wal) = side_file("-wal") {
-        tighten(&wal);
-    }
-    if let Some(shm) = side_file("-shm") {
-        tighten(&shm);
+    for suffix in ["-journal", "-wal", "-shm"] {
+        if let Some(side) = side_file(suffix) {
+            tighten(&side);
+        }
     }
 }
 
@@ -448,8 +478,13 @@ fn open_connection(path: &Path) -> Result<Connection, SpecStoreError> {
     }
     let conn = Connection::open(path)?;
     conn.busy_timeout(BUSY_TIMEOUT)?;
-    conn.pragma_update(None, "journal_mode", "WAL")?;
-    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    // The durability posture the module header states, and the reason for it:
+    // the store's incarnation has to live in the database file rather than in
+    // a write-ahead log, or a store whose writer is killed without a
+    // checkpoint reopens as a different, brand-new store and orphans every
+    // broker projection bound to the one it used to carry.
+    conn.pragma_update(None, "journal_mode", "DELETE")?;
+    conn.pragma_update(None, "synchronous", "FULL")?;
     Ok(conn)
 }
 
@@ -1158,7 +1193,7 @@ mod tests {
         }
     }
 
-    /// File posture (0600 store / WAL / SHM, 0700 dir) asserted after writes.
+    /// File posture (0600 store / side files, 0700 dir) asserted after writes.
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn file_mode_private() {
@@ -1174,15 +1209,21 @@ mod tests {
                 .unwrap_or(u32::MAX)
         };
         assert_eq!(mode(path.clone()).await, 0o600, "store file mode");
-        assert_eq!(mode(path.with_extension("db-wal")).await, 0o600, "wal mode");
-        assert_eq!(mode(path.with_extension("db-shm")).await, 0o600, "shm mode");
+        // A rollback journal only exists while a transaction is open, so the
+        // side file's posture is asserted on one this store actually names:
+        // it is put there world-readable and the store is reopened, which is
+        // what runs the posture enforcement over it.
+        tokio::fs::write(path.with_extension("db-journal"), b"").await.expect("side file");
+        let reopened = SpecStore::open(&path).expect("reopen runs the posture enforcement");
+        drop(reopened);
+        assert_eq!(mode(path.with_extension("db-journal")).await, 0o600, "journal mode");
         assert_eq!(mode(path.parent().unwrap().to_path_buf()).await, 0o700, "store dir mode");
     }
 
     /// The side files of the *actual* database path are the ones tightened
     /// (issue: `with_extension` rewrote the suffix for
     /// `*.<suffix-db>` names, so a `.sqlite3` store kept SQLite's creation
-    /// mode on its real WAL/SHM while the module claimed 0600).
+    /// mode on its real side file while the module claimed 0600).
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn side_files_of_a_suffixed_database_are_tightened() {
@@ -1196,21 +1237,95 @@ mod tests {
             let file = tokio::fs::File::open(&p).await.unwrap_or_else(|error| panic!("{p:?}: {error}"));
             file.set_permissions(PermissionsExt::from_mode(mode)).await.unwrap();
         };
-        // The connection created these side files; force a world-readable
-        // mode so the assertions prove the store tightened them, not that
-        // the process umask happened to.
-        chmod(side("-wal"), 0o644).await;
-        chmod(side("-shm"), 0o644).await;
-        // A second open on the same file re-runs `tighten_file_modes` while
-        // the first connection keeps the side files alive.
+        // SQLite only holds its journal open while a transaction runs, so
+        // each side file this store names is put there directly and forced
+        // world-readable: the assertions then prove the store tightened
+        // them, not that the process umask happened to.
+        for suffix in ["-journal", "-wal", "-shm"] {
+            tokio::fs::write(side(suffix), b"").await.expect("side file");
+            chmod(side(suffix), 0o644).await;
+        }
+        // A second open on the same file re-runs `tighten_file_modes`.
         let reopened = SpecStore::open(&path).expect("reopen");
         let mode = |p: PathBuf| async move {
             tokio::fs::metadata(&p).await.unwrap().permissions().mode() & 0o777
         };
-        assert_eq!(mode(side("-wal")).await, 0o600, "the real wal is tightened");
-        assert_eq!(mode(side("-shm")).await, 0o600, "the real shm is tightened");
+        for suffix in ["-journal", "-wal", "-shm"] {
+            assert_eq!(
+                mode(side(suffix)).await,
+                0o600,
+                "the real {suffix} side file is tightened"
+            );
+        }
         drop(reopened);
         drop(store);
+    }
+
+    /// The committed state lives in the database file, not only beside it.
+    ///
+    /// This is the property the store's incarnation depends on. A store whose
+    /// committed rows sit only in a write-ahead log reopens as an EMPTY
+    /// database when its process ends without closing the connection - a
+    /// power cut, a `system_reset`, a snapshot taken and restored while the
+    /// daemon is running - because closing is what makes SQLite fold and drop
+    /// the log, and an abrupt end never closes.
+    /// `apply_authority_journal` cannot tell that from a first boot: both
+    /// present one page and an empty schema. It then mints a fresh
+    /// incarnation, and every broker projection bound to the previous one is
+    /// orphaned with nothing left to recover through.
+    ///
+    /// The end is modelled by leaking the connection rather than closing it,
+    /// which is what an abrupt end leaves behind, and the proof is the
+    /// database file alone: with every side file removed, the state must
+    /// still be there.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn the_committed_state_survives_an_abrupt_end_without_any_side_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("spec-store.sqlite3");
+        {
+            let mut conn = open_connection(&path).expect("open");
+            let applied = crate::schema::apply_authority_journal(&mut conn)
+                .expect("the store's own journal is applied");
+            assert_eq!(applied, crate::schema::SchemaOutcome::Created);
+            conn.execute_batch(
+                "INSERT INTO zone_desired_sequence (zone, sequence) VALUES ('system', 7);",
+            )
+            .expect("a committed row");
+            // The abrupt end: the connection is never closed, so nothing
+            // folds a write-ahead log into the database file.
+            std::mem::forget(conn);
+        }
+        for suffix in ["-journal", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(path.with_file_name(format!("spec-store.sqlite3{suffix}")));
+        }
+        let conn = rusqlite::Connection::open(&path).expect("reopen on the database file alone");
+        let sequence: Option<i64> = conn
+            .query_row(
+                "SELECT sequence FROM zone_desired_sequence WHERE zone = 'system'",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+        let incarnation: Option<String> = conn
+            .query_row(
+                "SELECT value FROM store_meta WHERE key = 'store_incarnation'",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+        assert_eq!(
+            sequence,
+            Some(7),
+            "a committed row is carried by the database file itself, so a store whose writer ended \
+             abruptly is still the store it committed"
+        );
+        assert!(
+            incarnation.is_some(),
+            "the incarnation is carried by the database file itself: an identity that lives only \
+             in a write-ahead log is not one, because a host that loses it mints a fresh store and \
+             orphans every broker projection bound to the one it used to carry"
+        );
     }
 
     /// List honors selector filters (zone / type / owner).

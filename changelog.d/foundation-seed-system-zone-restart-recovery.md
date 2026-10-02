@@ -48,6 +48,58 @@
   publication request shapes and the refusal body still deny unknown fields,
   and the new arm is one named variant rather than a catch-all.
 
+- The broker's authority-publication accept loop now answers with the refusal the
+  projection reached, rather than replacing every failure with its own
+  `unaccepted-projection`. A refusal carries the closed code, the stage, the
+  reason, and the state the Zone was left in; a boundary that discards them
+  reports "this broker holds no accepted projection for the Zone" about a
+  decision that was about something else entirely, which is how a
+  store-generation refusal was read as a lost graph. A projection that could
+  not open, persist, or be read reaches no decision at all, and that case keeps
+  the boundary's own fail-closed code.
+- `PublicationError::Refused` now carries the `ZoneAuthorityState` the broker
+  answered with. The broker decides every refusal against the Zone it durably
+  holds, so that state is the only statement of the Zone's posture the manager
+  ever receives; dropping it left a manager unable to tell a Zone that owes an
+  outstanding transaction from one that simply holds a different store
+  generation, and both read as the same code with nothing to reconcile against.
+- A Zone the broker already holds can reopen its publication session. A session
+  open installs no authority: it does not move the accepted cursor, accept a
+  row, prepare or release a fence, or unfence anything. It mints the token every
+  later message must present, bound to the Zone, to the store generation THIS
+  broker already holds for it, to its own epoch, to the authenticated initiating
+  subject, and to the accepted cursor it already holds - so a caller still
+  cannot move a Zone onto a caller's store generation by opening a session
+  against it. Refusing the open was a refusal cycle: it was the one message a
+  Zone could not recover with, because every message that could recover it
+  needed the session the refusal withheld, so a Zone whose store generation had
+  moved or that held a fence a manager had abandoned was left with no protocol
+  path back and the operator's ownership-bounded reset as its only exit - which
+  no boot may run. The Zone's posture is not read by the open and does not have
+  to be: a fenced, reconciling, or mid-snapshot Zone is refused by name on the
+  very next message it sends, and the store-generation rule stays exactly where
+  it was, on every acceptance, resynchronization, and cancellation message.
+
+- The daemon's spec store keeps its committed state in the database file
+  instead of in a write-ahead log. The store's `store_incarnation` is an
+  identity: every broker authority projection for the store's Zones is bound
+  to it, and a projection naming an incarnation the store no longer carries can
+  never be republished against - the Zone refuses every publication until the
+  ownership-bounded reset clears both halves. In WAL mode the committed rows sit
+  in `<name>-wal` and the database file stays a single page until a checkpoint
+  runs, so a store whose writer is killed without one - a power cut, a
+  `system_reset`, a snapshot taken and restored while the daemon is running -
+  reopens as an EMPTY database. `apply_authority_journal` cannot tell that from a
+  first boot: both present one page and an empty schema, so it mints a fresh
+  incarnation, and the split between the store and the broker's projection is
+  permanent and silent. The store now opens with a rollback journal and
+  `synchronous=FULL`, so an abrupt end rolls back to the last commit and the
+  store reopens on exactly the incarnation it committed. The matching fsync per
+  commit is the price of an identity that means something; the store writes per
+  desired-row mutation, not per read. The side-file posture enforcement now
+  covers `-journal` and still covers `-wal`/`-shm`, because a database an
+  earlier release left in WAL mode still has them and opening it converts it.
+
 ### Changed
 
 - A Zone now runs ordinary effects only once it has published authority and been

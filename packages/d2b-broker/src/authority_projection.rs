@@ -1294,14 +1294,34 @@ fn serve_locked(
 
 /// Open one Zone publication session on the single writer.
 ///
-/// The session is bound to the Zone, the store generation the broker holds, the
-/// epoch it is minting under, the authenticated initiating subject the trusted
-/// daemon admission coordinator vouched for, and the accepted cursor this
-/// broker held. A Zone this broker has never published for establishes its
-/// store generation here, because there is no prior incarnation for a
-/// different one to contradict; a Zone it has published for is refused rather
-/// than moved onto a generation only the explicit ownership-bounded reset can
-/// install.
+/// # The open is the one message that establishes no authority
+///
+/// A session open installs nothing about the Zone: it does not move the
+/// accepted cursor, it accepts no row, it does not prepare or release a fence,
+/// and it does not unfence anything. It mints the token every later message
+/// must present, bound to the Zone, to the store generation THIS broker
+/// already holds for that Zone, to the epoch it is minting under, to the
+/// authenticated initiating subject the trusted daemon admission coordinator
+/// vouched for, and to the accepted cursor this broker already holds.
+///
+/// That is why it cannot carry the store-generation rule the acceptance
+/// messages carry. `moved_generation` - a Zone holding transactions from a
+/// generation other than the one a message names - is what `admit_message`
+/// refuses, and every acceptance, resynchronization, and cancellation message
+/// runs it. A Zone this broker has never seen establishes its generation here,
+/// because there is no prior incarnation for a different one to contradict; a
+/// Zone it does hold keeps the generation it holds, so a caller cannot move a
+/// Zone onto its own generation by opening a session against it.
+///
+/// Refusing the open instead was the cycle: a session open was the one message
+/// a Zone could not recover with, because every message that could recover it
+/// needed the session this refusal withheld. A Zone whose generation moved,
+/// or that holds a fence a manager has abandoned, was therefore refused at the
+/// one message that carries no authority and left with no protocol path back -
+/// the only exit left was the operator's ownership-bounded reset, which no
+/// boot may run. The Zone's posture is not read here and does not have to be:
+/// a fenced, reconciling, or mid-snapshot Zone is still refused by name on
+/// the very next message it sends, which is where that decision belongs.
 fn open_session_locked(
     state: &mut ProjectionWorkerState,
     open: &AuthorityPublicationOpen,
@@ -1310,18 +1330,6 @@ fn open_session_locked(
     let zone = request.zone.as_str();
     if ZoneId::parse(zone).is_err() {
         return Err(refuse_session(state, zone, PUBLICATION_WRONG_ZONE));
-    }
-    let moved_generation = state.durable.zones.get(zone).is_some_and(|held| {
-        !held.transactions.is_empty() && held.store_incarnation != request.store_incarnation
-    });
-    if moved_generation {
-        return Err(fence(
-            state,
-            zone,
-            PUBLICATION_STALE_PREDECESSOR,
-            AdmissionStage::Authorize,
-            RefusalReason::StoreIncarnationMismatch,
-        ));
     }
     {
         let zone_state = state.zone_mut(zone);
