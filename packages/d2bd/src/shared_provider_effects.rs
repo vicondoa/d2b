@@ -1793,7 +1793,7 @@ impl ProductionSharedProviderEffects {
                     error = %error,
                     "TPM device admission refused",
                 );
-                SharedProviderEffectError::Unavailable
+                SharedProviderEffectError::UnavailableWithCause(TPM_ADMISSION_UNAVAILABLE)
             })?;
         let mut controller = {
             let mut controllers = state

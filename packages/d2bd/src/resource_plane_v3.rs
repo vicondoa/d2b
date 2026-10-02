@@ -72,9 +72,12 @@ use d2b_provider_process::{
 use d2b_provider_telemetry_binding::telemetry_binding_descriptor;
 use d2b_provider_telemetry_service::telemetry_service_descriptor;
 // The registered provider families and their declared services, generated
-// from the per-crate `registrations.json` declarations (the composition
-// root composes the table instead of naming families).
-include!("generated/provider_registrations.rs");
+// from the per-crate `registrations.json` declarations and staged under the
+// repository's `generated/new-graph/` closure - the one byte the daemon's
+// composition root compiles (it composes the table instead of naming
+// families). `cargo xtask gen-new-graph` renders it and drift-gates it byte
+// for byte; `cargo xtask check-provider-crate-layout --fix` installs it.
+include!("../../../generated/new-graph/provider_registrations.rs");
 use d2b_provider_volume::{
     VOLUME_EFFECTS_SERVICE, VolumeDriverArgs, VolumeEffectFacets, VolumeEffectsServiceFactory,
     VolumeRuntime, volume_descriptor,
@@ -5756,6 +5759,62 @@ HOST_EFFECTS_SERVICE.id,
             }
             other => panic!("wrong failure: {other}"),
         }
+    }
+
+    /// Every service the generated registration closure declares is hosted by
+    /// the production composition, and it hosts nothing else.
+    ///
+    /// The table is the committed `generated/new-graph/` byte the daemon
+    /// compiles, and the factories come from `ConstructionInputs::production`,
+    /// the same construction a real Zone's plane takes. A declaration that
+    /// adds a service makes this fail before any Zone starts, because the
+    /// hosting side would otherwise refuse the service by name at startup and
+    /// the composition would have drifted from the generated closure.
+    #[test]
+    fn every_service_the_generated_closure_declares_is_hosted_by_the_composition() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let declared: BTreeSet<(&'static str, &'static str)> = PROVIDER_REGISTRATIONS
+            .iter()
+            .flat_map(|registration| {
+                registration
+                    .services
+                    .iter()
+                    .map(move |service| (registration.provider_ref, *service))
+            })
+            .collect();
+        let declared_services: BTreeSet<&'static str> =
+            declared.iter().map(|(_, service)| *service).collect();
+
+        let unhosted: Vec<&str> = declared_services
+            .iter()
+            .filter(|service| !inputs.effect_service_factories.contains_key(*service))
+            .copied()
+            .collect();
+        assert!(
+            unhosted.is_empty(),
+            "the generated closure declares services the composition does not host: {unhosted:?}",
+        );
+
+        let undeclared: Vec<&str> = inputs
+            .effect_service_factories
+            .keys()
+            .filter(|service| !declared_services.contains(*service))
+            .copied()
+            .collect();
+        assert!(
+            undeclared.is_empty(),
+            "the composition hosts services the generated closure does not declare: {undeclared:?}",
+        );
+
+        let families: BTreeSet<&str> = PROVIDER_REGISTRATIONS
+            .iter()
+            .map(|registration| registration.provider_ref)
+            .collect();
+        assert_eq!(
+            families.len(),
+            PROVIDER_REGISTRATIONS.len(),
+            "a generated registration row names a family identity twice",
+        );
     }
 
     /// KTD7: the committed Provider identities the composition resolves are

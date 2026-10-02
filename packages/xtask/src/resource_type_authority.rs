@@ -5,7 +5,9 @@
 //!
 //! - aggregates those declarations into the `V3_CONVERTED_RESOURCE_TYPES`
 //!   authority const the v3 resource plane consumes (`include!`d from
-//!   `packages/d2b-contracts/src/identity.rs`), keeping the committed entry
+//!   `packages/d2b-contracts/src/identity.rs` straight out of the staged
+//!   `generated/new-graph/` closure, so there is one committed byte and not
+//!   a generated copy beside the compiled one), keeping the committed entry
 //!   order the plane's closed-form fence has consumed since that const
 //!   landed; a declared type absent from the committed order is appended
 //!   after it in sorted order, so a new type needs no edit here;
@@ -67,10 +69,11 @@ use serde::Deserialize;
 /// The directory-glob root the per-crate declarations live under.
 const PACKAGES_DIR: &str = "packages";
 
-/// The repository-relative generated artifact path (relative to the source
-/// file that `include!`s it, so `include!("generated/...")` resolves it).
+/// The repository-relative generated artifact path: the staged closure copy
+/// the resource contracts `include!`s, so the declaration render and the
+/// compiled production bytes are the same file rather than two.
 pub(crate) const GENERATED_ARTIFACT: &str =
-    "packages/d2b-contracts/src/generated/v3_converted_resource_types.rs";
+    "generated/new-graph/v3_converted_resource_types.rs";
 
 /// The repository-relative generated Nix standard type registry.
 pub(crate) const NIX_RESOURCE_TYPES_OUT: &str = "nixos-modules/generated/resource-types.nix";

@@ -4912,8 +4912,7 @@ fn module_family_signals(
     let text = fs::read_to_string(&path)
         .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
     let lines: Vec<&str> = text.lines().collect();
-    let server_state_module =
-        module.starts_with("packages/d2bd/") && !module.starts_with("packages/d2bd/src/generated/");
+    let server_state_module = module.starts_with("packages/d2bd/");
     let mut server_state_line = None;
     let mut server_state_count = 0;
 

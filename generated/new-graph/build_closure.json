@@ -35,25 +35,25 @@
   "artifacts": [
     {
       "staged": "generated/new-graph/provider_registrations.rs",
-      "replaces": "packages/d2bd/src/generated/provider_registrations.rs",
+      "installedInto": "packages/d2bd/src/resource_plane_v3.rs",
       "declaration": "packages/d2b-provider-*/registrations.json",
       "digest": "sha256:bd2ff0b24ea2bd75436bd2c631e1bcdaf66895e4ef5b2f95593f1e7ae18c3f9f"
     },
     {
       "staged": "generated/new-graph/service_provider_catalog.rs",
-      "replaces": "packages/d2b-contracts-zone-session/src/generated/service_provider_catalog.rs",
+      "installedInto": "packages/d2b-contracts-zone-session/src/v3/mod.rs",
       "declaration": "packages/d2b-provider-*/service-catalog.json",
       "digest": "sha256:a3cb4a2f6136c279ebedd79d5ccbf15e2443da5413fdc7b9795afe25ba2cf327"
     },
     {
       "staged": "generated/new-graph/v3_converted_resource_types.rs",
-      "replaces": "packages/d2b-contracts/src/generated/v3_converted_resource_types.rs",
+      "installedInto": "packages/d2b-contracts/src/identity.rs",
       "declaration": "packages/d2b-provider-*/resource-types.json",
       "digest": "sha256:31387bb9ee94870a12cbab30c311f2ece74878dcd3487b480dd0db25ecf62fd9"
     },
     {
       "staged": "generated/new-graph/operations.json",
-      "replaces": "docs/reference/policy/broker-operations.json",
+      "installedInto": "docs/reference/policy/broker-operations.json",
       "declaration": "packages/d2b-provider-*/operations.json",
       "digest": "sha256:8498cfc74e7089d149d4d8ccf47da434fc5b1bdb59d192d5c6f330200b987948"
     }

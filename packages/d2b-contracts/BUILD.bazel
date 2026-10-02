@@ -31,6 +31,7 @@ d2b_rust_library(
     name = "d2b_contracts",
     srcs = d2b_contracts_srcs,
     compile_data = [
+        "//:generated_new_graph",  # keep: include! of the staged converted-type authority
         "Cargo.toml",
         "tests/fixtures/workload-execution-posture-v1.json",
     ],

@@ -104,18 +104,29 @@ A crate that declares no services carries an empty `services` list:
 The declarations drive everything the runtime and the Nix tree need to know
 about the resource model:
 
-- `packages/d2b-contracts/src/generated/v3_converted_resource_types.rs` -
-  the committed resource-type authority the contracts layer serves.
+- `generated/new-graph/v3_converted_resource_types.rs` - the committed
+  resource-type authority the contracts layer serves (`include!`d by
+  `packages/d2b-contracts/src/identity.rs`).
 
-- `packages/d2bd/src/generated/provider_registrations.rs` - the committed
+- `generated/new-graph/provider_registrations.rs` - the committed
   provider/service registration table the daemon composition root composes
-  (`include!`d from `packages/d2bd/src/resource_plane_v3.rs`): one row per
+  (`include!`d by `packages/d2bd/src/resource_plane_v3.rs`): one row per
   declaring family, carrying the provider identity and the declared
   effect-service ids. The registration authority's parity gate refuses a
   declared provider that is not the crate's own family, a declared service
   the crate's sources do not spell, a service the crate spells or registers
   that the declaration omits, and a service or provider declared by two
   crates.
+
+- `generated/new-graph/service_provider_catalog.rs` - the committed
+  service-to-provider catalog the zone-plane session contract serves
+  (`include!`d by `packages/d2b-contracts-zone-session/src/v3/mod.rs`), so the
+  bus resolves a service to its provider without naming a family.
+
+The three Rust tables above are staged by `gen-new-graph` under the closure's
+one committed location and compiled from there. There is no per-crate copy
+beside the compiled one; `generated/new-graph/build_closure.json` records the
+production source file each staged artifact is included by.
 
 - `nixos-modules/generated/resource-types.nix` - the Nix type registry.
 

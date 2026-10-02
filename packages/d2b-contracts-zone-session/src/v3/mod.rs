@@ -54,8 +54,9 @@ pub use zone_routing::*;
 pub use zone_session::*;
 
 // The service-to-provider catalog is generated from the per-crate
-// `service-catalog.json` declarations;the layout check's parity and drift
-// gates own it (`cargo xtask check-provider-crate-layout`),and `--fix`
-// regenerates it.
+// `service-catalog.json` declarations and staged under the repository's
+// `generated/new-graph/` closure, the one byte the bus and this crate
+// compile. `cargo xtask gen-new-graph` renders it and drift-gates it byte
+// for byte; `cargo xtask check-provider-crate-layout --fix` installs it.
 
-include!("../generated/service_provider_catalog.rs");
+include!("../../../../generated/new-graph/service_provider_catalog.rs");

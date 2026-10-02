@@ -7,7 +7,9 @@
 //!
 //! - aggregates those declarations into the `PROVIDER_REGISTRATIONS` table
 //!   the daemon composition root composes (`include!`d from
-//!   `packages/d2bd/src/resource_plane_v3.rs`), so a new family is
+//!   `packages/d2bd/src/resource_plane_v3.rs` straight out of the staged
+//!   `generated/new-graph/` closure, so the declaration render and the
+//!   compiled production bytes are one committed file), so a new family is
 //!   registered without the daemon naming it - a lane that declares its
 //!   family in the crate needs no daemon edit and no layout-ratchet row;
 //! - runs the declaration-to-source parity gate: a declared provider must
@@ -41,10 +43,11 @@ const PACKAGES_DIR: &str = "packages";
 /// The directory-name prefix that marks a package as a provider crate.
 const PROVIDER_PREFIX: &str = "d2b-provider-";
 
-/// The repository-relative generated artifact path (relative to the source
-/// file that `include!`s it, so `include!("generated/...")` resolves it).
+/// The repository-relative generated artifact path: the staged closure copy
+/// the daemon's composition root `include!`s, so the declaration render and
+/// the compiled production bytes are the same file rather than two.
 pub(crate) const GENERATED_ARTIFACT: &str =
-    "packages/d2bd/src/generated/provider_registrations.rs";
+    "generated/new-graph/provider_registrations.rs";
 
 /// One provider crate's registration declaration.
 ///

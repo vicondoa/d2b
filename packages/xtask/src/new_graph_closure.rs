@@ -5,15 +5,18 @@
 //! service identities it registers, and the semantic services it publishes.
 //! Four committed generated artifacts are derived from them, one per source,
 //! plus the canonical graph policy the configuration layer reads and the
-//! closure manifest that says what each staged byte replaces.
+//! closure manifest that says which production file compiles each byte.
 //!
 //! `gen-new-graph` is one step of the `make generate` aggregate, so these
 //! projections are production generation outputs: they are committed under
 //! [`OUTPUT_DIR`], they are byte-for-byte drift checked like every other
-//! committed artifact, and nothing renders them from a test-only path. What
-//! is still staged is the cutover, not the generation: no production
-//! composition reads these files yet, and the manifest travels with them so
-//! installing a byte is a copy rather than a re-derivation.
+//! committed artifact, and nothing renders them from a test-only path. Three
+//! of the four are compiled by the production entry points themselves - the
+//! daemon's composition root, the zone-session contract and the resource
+//! contracts `include!` the staged file directly, so there is no second copy
+//! to fall out of step. The fourth, the operation catalog, is the merge input
+//! the retired broker-operations generator still writes; it stays staged
+//! until that merge is deleted.
 //!
 //! # What this generator does not read
 //!
@@ -40,7 +43,7 @@
 //! It is not a second spelling of the production entry points: each staged
 //! artifact is the render the authority module already owns, reached through
 //! its declaration-only entry point. It introduces no inventory, ledger, or
-//! scheduler; the replacement mapping travels in one closure manifest.
+//! scheduler; the consumer mapping travels in one closure manifest.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -99,17 +102,18 @@ pub(crate) fn contract_version() -> &'static str {
     GRAPH_PROJECTION_CONTRACT_VERSION
 }
 
-/// One staged replacement: the artifact this module renders, the production
-/// path the cutover installs it at, and the declaration that produces it.
+/// One staged artifact: the file this module renders, the production file
+/// it is installed into, and the declaration that produces it.
 ///
 /// `staged` is the artifact's file name inside the closure directory, so its
-/// committed path is [`staged`] and `replaces` is where that exact byte is
-/// copied. The mapping travels with the bytes rather than in a separate
-/// ledger, so the cutover is a copy of files that already say what they
-/// replace and where they came from.
+/// committed path is [`staged`]. `installed_into` is the production source
+/// file that compiles the byte: the crate source that `include!`s it. The
+/// mapping travels with the bytes rather than in a separate ledger, so a
+/// consumer is a fact the manifest states and a gate resolves rather than a
+/// convention.
 struct Replacement {
     staged: &'static str,
-    replaces: &'static str,
+    installed_into: &'static str,
     declaration: &'static str,
 }
 
@@ -118,22 +122,22 @@ struct Replacement {
 const REPLACEMENTS: &[Replacement] = &[
     Replacement {
         staged: "provider_registrations.rs",
-        replaces: "packages/d2bd/src/generated/provider_registrations.rs",
+        installed_into: "packages/d2bd/src/resource_plane_v3.rs",
         declaration: "packages/d2b-provider-*/registrations.json",
     },
     Replacement {
         staged: "service_provider_catalog.rs",
-        replaces: "packages/d2b-contracts-zone-session/src/generated/service_provider_catalog.rs",
+        installed_into: "packages/d2b-contracts-zone-session/src/v3/mod.rs",
         declaration: "packages/d2b-provider-*/service-catalog.json",
     },
     Replacement {
         staged: "v3_converted_resource_types.rs",
-        replaces: "packages/d2b-contracts/src/generated/v3_converted_resource_types.rs",
+        installed_into: "packages/d2b-contracts/src/identity.rs",
         declaration: "packages/d2b-provider-*/resource-types.json",
     },
     Replacement {
         staged: "operations.json",
-        replaces: "docs/reference/policy/broker-operations.json",
+        installed_into: "docs/reference/policy/broker-operations.json",
         declaration: "packages/d2b-provider-*/operations.json",
     },
 ];
@@ -184,8 +188,9 @@ struct GraphPolicyMethod {
     profiles: Vec<String>,
 }
 
-/// The closure manifest: what the composition is, what it read, what it
-/// replaces, and the contract crate identities it was rendered against.
+/// The closure manifest: what the composition is, what it read, which
+/// production file compiles each byte, and the contract crate identities it
+/// was rendered against.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ClosureManifest {
@@ -210,12 +215,12 @@ struct ContractCrate {
     version: String,
 }
 
-/// One staged artifact and the committed production path it replaces.
+/// One staged artifact and the production file that compiles it.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ClosureArtifact {
     staged: String,
-    replaces: String,
+    installed_into: String,
     declaration: &'static str,
     digest: String,
 }
@@ -336,7 +341,7 @@ fn render_manifest(artifacts: &[(String, String)]) -> Result<String, String> {
             .ok_or_else(|| format!("new-graph composition is missing its {path} artifact"))?;
         rows.push(ClosureArtifact {
             staged: path,
-            replaces: replacement.replaces.to_owned(),
+            installed_into: replacement.installed_into.to_owned(),
             declaration: replacement.declaration,
             digest: digest_of(contents.as_bytes()),
         });
@@ -987,6 +992,44 @@ fn artifact<'a>(artifacts: &'a [(String, String)], path: &str) -> Result<&'a str
         .ok_or_else(|| format!("the new-graph composition is missing {path}"))
 }
 
+/// Every `include!` target one Rust source names, as written.
+#[cfg(test)]
+fn include_targets(text: &str) -> Vec<&str> {
+    let mut targets = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("include!(") {
+        rest = &rest[at + "include!(".len()..];
+        let Some(quote) = rest.find('"') else {
+            break;
+        };
+        rest = &rest[quote + 1..];
+        let Some(stop) = rest.find('"') else {
+            break;
+        };
+        targets.push(&rest[..stop]);
+        rest = &rest[stop + 1..];
+    }
+    targets
+}
+
+/// The repository-relative path one `include!` target resolves to from the
+/// source file that names it.
+#[cfg(test)]
+fn resolved_include(consumer: &str, target: &str) -> String {
+    let mut resolved = PathBuf::from(consumer);
+    resolved.pop();
+    for part in target.split('/') {
+        match part {
+            ".." => {
+                resolved.pop();
+            }
+            "." => {}
+            part => resolved.push(part),
+        }
+    }
+    resolved.to_string_lossy().replace('\\', "/")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1390,37 +1433,49 @@ mod tests {
         );
     }
 
-    /// The staged bytes for the three generated artifacts the declarations
-    /// already project today are the committed bytes, so U34's copy for those
-    /// is a byte-identical install rather than a re-derivation.
+    /// Every staged Rust artifact is compiled by the production file the
+    /// manifest names: the consumer `include!`s the staged path itself, so
+    /// the byte the generator renders is the byte the daemon links. The test
+    /// fails the moment consumption moves off the closure - a restored
+    /// per-crate copy, a repointed `include!`, or a dropped manifest row.
     #[test]
-    fn staged_replacements_match_the_committed_generated_artifacts() {
+    fn every_staged_rust_artifact_is_included_by_its_production_consumer() {
         let root = repo_root();
-        let artifacts = render_composition(&root).expect("the composition renders");
-        for (name, committed) in [
-            (
-                "provider_registrations.rs",
-                "packages/d2bd/src/generated/provider_registrations.rs",
-            ),
-            (
-                "service_provider_catalog.rs",
-                "packages/d2b-contracts-zone-session/src/generated/service_provider_catalog.rs",
-            ),
-            (
-                "v3_converted_resource_types.rs",
-                "packages/d2b-contracts/src/generated/v3_converted_resource_types.rs",
-            ),
-        ] {
-            let staged = artifact(&artifacts, &staged(name)).expect("staged artifact");
-            let committed_path = root.join(committed);
+        for replacement in REPLACEMENTS {
+            if !replacement.staged.ends_with(".rs") {
+                continue;
+            }
+            let consumer_path = root.join(replacement.installed_into);
+            let consumer = fs::read_to_string(&consumer_path).unwrap_or_else(|error| {
+                panic!("{} must exist: {error}", replacement.installed_into)
+            });
+            let included: Vec<String> = include_targets(&consumer)
+                .into_iter()
+                .map(|target| resolved_include(replacement.installed_into, target))
+                .collect();
+            let expected = staged(replacement.staged);
             assert!(
-                committed_path.is_file(),
-                "{committed} exists to be replaced"
+                included.contains(&expected),
+                "{} must include {expected}, but it includes {included:?}",
+                replacement.installed_into,
             );
-            let committed = fs::read_to_string(&committed_path).expect("the committed artifact reads");
-            assert_eq!(
-                staged, committed,
-                "the staged {name} is the committed {committed} byte for byte"
+        }
+    }
+
+    /// The per-crate copies the staged bytes replaced are gone: a second file
+    /// carrying the same table is a second source, and a rebuild would link
+    /// whichever copy the `include!` names.
+    #[test]
+    fn the_replaced_per_crate_copies_are_gone() {
+        let root = repo_root();
+        for removed in [
+            "packages/d2bd/src/generated/provider_registrations.rs",
+            "packages/d2b-contracts-zone-session/src/generated/service_provider_catalog.rs",
+            "packages/d2b-contracts/src/generated/v3_converted_resource_types.rs",
+        ] {
+            assert!(
+                !root.join(removed).exists(),
+                "{removed} was replaced by the staged closure byte and must not come back",
             );
         }
     }

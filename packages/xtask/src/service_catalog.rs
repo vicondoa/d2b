@@ -1,4 +1,11 @@
 //! The per-crate service-to-provider catalog and the generated bus consumer.
+//!
+//! Every `packages/d2b-provider-*/service-catalog.json` declares the service
+//! packages a provider publishes. This module aggregates them into the
+//! catalog the zone-plane session contract compiles (`include!`d by
+//! `packages/d2b-contracts-zone-session/src/v3/mod.rs` straight out of the
+//! staged `generated/new-graph/` closure), runs the declaration sanity gate,
+//! and owns the drift and idempotence gates over the committed byte.
 
 use std::{
     collections::BTreeMap,
@@ -12,9 +19,11 @@ use crate::authority_common::{declaration_paths, Declaration};
 use d2b_contracts_provider::v3::projection::PrivatePlanProjection;
 use serde::Deserialize;
 
-/// The repository-relative generated artifact path.
+/// The repository-relative generated artifact path: the staged closure copy
+/// the zone-session contract `include!`s, so the declaration render and the
+/// compiled production bytes are the same file rather than two.
 pub(crate) const GENERATED_ARTIFACT: &str =
-    "packages/d2b-contracts-zone-session/src/generated/service_provider_catalog.rs";
+    "generated/new-graph/service_provider_catalog.rs";
 
 /// The directory-name prefix that marks a package as a provider crate.
 const PROVIDER_PREFIX: &str = "d2b-provider-";

@@ -696,7 +696,7 @@ closing unit left, not from this record's own audit runs.
   JSON is the type authority the generators re-derive every Nix registry and
   inventory from.
 - **Generated authority shrank.** The generated type authority
-  (`packages/d2b-contracts/src/generated/v3_converted_resource_types.rs`),
+  (`generated/new-graph/v3_converted_resource_types.rs`),
 the Nix type registry and inventories, the provider projections, the
   zone and zone-link shapes, the client-layer catalogs, and the host
   user allocation rows now derive from the declarations instead of from the
