@@ -75,7 +75,8 @@ pub use crate::authority_journal::{
 // transaction makes, and the owned facts each one carries.
 pub use crate::authority_publish::{
     AcceptedRevision, AuthorityPublisher, FencedTransaction, MutationKind, PublicationCandidate,
-    PublicationRefusal, PublicationRows, PublishError, PublishOutcome, PublishedRow, publish,
+    PublicationRefusal, PublicationRows, PublishError, PublishOutcome, PublishedRow,
+    adopt_outstanding, publish,
 };
 // Relation index (U6, KTD2-KTD4): the six distinct graph relationship classes
 // derived from committed desired rows, and the per-type projections that read

@@ -57,15 +57,14 @@ use std::time::Duration;
 
 use ractor::{Actor, ActorCell, ActorProcessingErr, ActorRef};
 use tokio::sync::oneshot;
-use crate::authority_journal::{CommitOutcome, CommittedPublication, DesiredMutation, TransactionRecovery};
-use crate::authority_publish::{AuthorityPublisher, PublicationRefusal, PublishError};
+use crate::authority_journal::DesiredMutation;
+use crate::authority_publish::{AuthorityPublisher, PublishError};
 use crate::context::{
     ChildEnsure, ManagerEndpoint, SpecDecoder, WatchId,
     WatchRegistration as InternalWatchRegistration,
 };
 use crate::spec_store::EnsureOutcome;
 use crate::error::ResourceError;
-use crate::authority_journal::AcceptedPublication;
 use crate::identity::{ResourceKey, ResourceProvenance, ResourceTypeName, StoredDesiredResource};
 use crate::provider::ProviderDirectory;
 use crate::resource::{ResourceActor, ResourceActorArgs, ResourceMsg, ResourceStatus};
@@ -860,107 +859,21 @@ impl ResourceManagerState {
     }
 
     /// Adopt, or explicitly refuse, every transaction this Zone still owes
-    /// an outcome for (R41, AE18).
+    /// an outcome for.
     ///
     /// This runs before any row is loaded and before any actor spawns, so a
     /// restart never cleans up against authority the broker has not
-    /// accepted: a staged or prepared candidate that committed nothing is
-    /// released on both sides, and a committed candidate whose
-    /// acknowledgment was lost is republished exactly as it committed.
+    /// accepted. The recovery itself is the Zone-level function the
+    /// foundation plane's pre-publish step shares, so a manager and a seed
+    /// can never recover one Zone two different ways.
     pub(crate) async fn adopt_outstanding(&self) -> Result<(), ResourceError> {
-        let recovery = self
-            .store
-            .zone_recovery(&self.zone)
-            .await
-            .map_err(ResourceError::from)?;
-        for (_, decision) in recovery.transactions {
-            match decision {
-                TransactionRecovery::ResumeOrDiscard { transaction } => {
-                    self.store
-                        .cancel_transaction(transaction.transaction)
-                        .await
-                        .map_err(ResourceError::from)?;
-                }
-                TransactionRecovery::ReplayOrCancel { transaction } => {
-                    // The broker holds a fence for a candidate that committed
-                    // nothing. The store still holds the exact projection that
-                    // fence was validated against, so recovery replays it
-                    // rather than releasing the fence: an abandoned fence
-                    // would be a lock this half could forget to unlock.
-                    let replayed =
-                        self.store
-                            .commit_mutation(transaction.transaction)
-                            .await
-                            .map_err(ResourceError::from)?;
-                    let committed = match replayed {
-                        CommitOutcome::Committed(committed)
-                        | CommitOutcome::AlreadyCommitted(committed) => committed,
-                        CommitOutcome::Unchanged { .. } => {
-                            return Err(ResourceError::ManagerRejected {
-                                reason: format!(
-                                    "publication transaction {} replayed a candidate that \
-                                     commits nothing",
-                                    transaction.transaction
-                                ),
-                            });
-                        }
-                    };
-                    let CommittedPublication {
-                        transaction,
-                        zone,
-                        incarnation,
-                        sequence,
-                        candidate,
-                        ..
-                    } = &committed;
-                    let accepted =
-                        self.authority.commit(&committed).await.map_err(ResourceError::Publication)?;
-                    self.store
-                        .acknowledge(AcceptedPublication {
-                            transaction: *transaction,
-                            zone: zone.clone(),
-                            incarnation: incarnation.clone(),
-                            sequence: *sequence,
-                            candidate: candidate.clone(),
-                        })
-                        .await
-                        .map_err(ResourceError::from)?;
-                    if accepted.sequence != *sequence {
-                        return Err(ResourceError::Publication(
-                            PublicationRefusal::UnknownTransaction { transaction: accepted.transaction },
-                        ));
-                    }
-                }
-                TransactionRecovery::ReplayCommit { transaction, publication } => {
-                    let committed = CommittedPublication {
-                        transaction: transaction.transaction,
-                        zone: transaction.zone.clone(),
-                        incarnation: transaction.incarnation.clone(),
-                        sequence: transaction.sequence,
-                        candidate: transaction.candidate.clone(),
-                        publication,
-                    };
-                    let accepted =
-                        self.authority.commit(&committed).await.map_err(ResourceError::Publication)?;
-                    self.store
-                        .acknowledge(crate::authority_journal::AcceptedPublication {
-                            transaction: committed.transaction,
-                            zone: committed.zone.clone(),
-                            incarnation: committed.incarnation.clone(),
-                            sequence: committed.sequence,
-                            candidate: committed.candidate.clone(),
-                        })
-                        .await
-                        .map_err(ResourceError::from)?;
-                    if accepted.sequence != committed.sequence {
-                        return Err(ResourceError::Publication(
-                            PublicationRefusal::UnknownTransaction { transaction: accepted.transaction },
-                        ));
-                    }
-                }
-            }
-        }
-        Ok(())
+        crate::authority_publish::adopt_outstanding(
+            &self.store,
+            &self.zone,
+            self.authority.as_ref(),
+        )
+        .await
+        .map_err(ResourceError::from)
     }
 
     /// Retire one cleanup-completed row whose owned children are gone: drop

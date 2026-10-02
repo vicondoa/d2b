@@ -341,6 +341,99 @@ pub async fn publish(
     Ok(PublishOutcome::Committed { publication: committed, created })
 }
 
+/// Adopt, or explicitly refuse, every transaction `zone` still owes an
+/// outcome for.
+///
+/// This is the one recovery path for a Zone, and it is a function of the
+/// Zone rather than of a writer: the manager calls it for the Zone it
+/// manages, and a plane calls it for the Zone it is about to write before
+/// that write stages anything. A restart therefore never stages a candidate
+/// while the previous boot's transaction is still outstanding, which is what
+/// the one-outstanding-transaction-per-Zone rule would otherwise turn into a
+/// permanent refusal.
+///
+/// Nothing here cleans up against authority the broker has not accepted: a
+/// staged candidate that committed nothing is released, and a committed
+/// candidate whose acknowledgment was lost is republished exactly as it
+/// committed. An outstanding transaction that cannot be resolved keeps the
+/// Zone fenced and refuses the start.
+pub async fn adopt_outstanding(
+    store: &crate::spec_store::SpecStore,
+    zone: &str,
+    authority: &dyn AuthorityPublisher,
+) -> Result<(), PublishError> {
+    use crate::authority_journal::{CommitOutcome, TransactionRecovery};
+
+    let recovery = store.zone_recovery(zone).await?;
+    for (_, decision) in recovery.transactions {
+        match decision {
+            TransactionRecovery::ResumeOrDiscard { transaction } => {
+                store.cancel_transaction(transaction.transaction).await?;
+            }
+            TransactionRecovery::ReplayOrCancel { transaction } => {
+                // The broker holds a fence for a candidate that committed
+                // nothing. The store still holds the exact projection that
+                // fence was validated against, so recovery replays it rather
+                // than releasing the fence: an abandoned fence would be a
+                // lock this half could forget to unlock.
+                let replayed = store.commit_mutation(transaction.transaction).await?;
+                let committed = match replayed {
+                    CommitOutcome::Committed(committed)
+                    | CommitOutcome::AlreadyCommitted(committed) => committed,
+                    CommitOutcome::Unchanged { .. } => {
+                        return Err(PublishError::Inconsistent(format!(
+                            "publication transaction {} replayed a candidate that commits \
+                             nothing",
+                            transaction.transaction
+                        )));
+                    }
+                };
+                let accepted = authority.commit(&committed).await?;
+                store
+                    .acknowledge(crate::authority_journal::AcceptedPublication {
+                        transaction: committed.transaction,
+                        zone: committed.zone.clone(),
+                        incarnation: committed.incarnation.clone(),
+                        sequence: committed.sequence,
+                        candidate: committed.candidate.clone(),
+                    })
+                    .await?;
+                if accepted.sequence != committed.sequence {
+                    return Err(PublishError::Refused(PublicationRefusal::UnknownTransaction {
+                        transaction: accepted.transaction,
+                    }));
+                }
+            }
+            TransactionRecovery::ReplayCommit { transaction, publication } => {
+                let committed = CommittedPublication {
+                    transaction: transaction.transaction,
+                    zone: transaction.zone.clone(),
+                    incarnation: transaction.incarnation.clone(),
+                    sequence: transaction.sequence,
+                    candidate: transaction.candidate.clone(),
+                    publication,
+                };
+                let accepted = authority.commit(&committed).await?;
+                store
+                    .acknowledge(crate::authority_journal::AcceptedPublication {
+                        transaction: committed.transaction,
+                        zone: committed.zone.clone(),
+                        incarnation: committed.incarnation.clone(),
+                        sequence: committed.sequence,
+                        candidate: committed.candidate.clone(),
+                    })
+                    .await?;
+                if accepted.sequence != committed.sequence {
+                    return Err(PublishError::Refused(PublicationRefusal::UnknownTransaction {
+                        transaction: accepted.transaction,
+                    }));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// What a projected mutation does to the rows it names.
 fn mutation_kind(projection: &Projection) -> MutationKind {
     match (projection.rows.first(), projection.removed.first()) {

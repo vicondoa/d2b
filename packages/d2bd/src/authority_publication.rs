@@ -1167,7 +1167,15 @@ mod stall_regression_tests {
 /// wire shape the broker validates and reports what the broker answered.
 #[derive(Debug, Clone)]
 pub struct CoordinatorPublisher {
-    coordinator: Arc<AuthorityPublicationCoordinator>,
+    /// One coordinator per Zone this plane publishes for, keyed by the Zone.
+    ///
+    /// The coordinator carries the Zone its session is bound to and the
+    /// accepted cursor that Zone's candidates must name, so it cannot serve
+    /// two Zones: a candidate routed to the wrong coordinator would publish a
+    /// Zone's rows under another Zone's fence. A plane publishes for its own
+    /// Zone and, when it carries the foundation seed, for the system Zone
+    /// whose rows that seed homes, so the table is keyed rather than singular.
+    coordinators: std::collections::BTreeMap<String, Arc<AuthorityPublicationCoordinator>>,
     incarnation: StoreIncarnation,
     subject: AuthoritySubject,
 }
@@ -1184,18 +1192,52 @@ impl CoordinatorPublisher {
         incarnation: StoreIncarnation,
         subject: AuthoritySubject,
     ) -> Arc<Self> {
-        Arc::new(Self { coordinator, incarnation, subject })
+        let coordinators = std::iter::once((coordinator.zone().to_owned(), coordinator))
+            .collect();
+        Arc::new(Self { coordinators, incarnation, subject })
     }
 
-    /// The Zone's publication session, opened (or reused) on this leg.
-    async fn session(&self) -> Result<PublicationSession, d2b_resource_runtime::PublicationRefusal> {
-        self.coordinator.open_session().await.map_err(transport)
+    /// Bind a publisher to a second Zone's coordinator.
+    ///
+    /// The foundation plane publishes for its own Zone and for the system Zone
+    /// the seed homes its rows in, and each Zone has its own fence and its own
+    /// accepted cursor, so each needs its own coordinator.
+    pub fn with_zone(
+        self: &Arc<Self>,
+        coordinator: Arc<AuthorityPublicationCoordinator>,
+    ) -> Arc<Self> {
+        let mut coordinators = self.coordinators.clone();
+        coordinators.insert(coordinator.zone().to_owned(), coordinator);
+        Arc::new(Self {
+            coordinators,
+            incarnation: self.incarnation.clone(),
+            subject: self.subject.clone(),
+        })
     }
 
-    /// The cursor the broker holds, which every candidate must name as its
-    /// exact predecessor.
-    async fn expected(&self) -> Result<AuthorityCursor, d2b_resource_runtime::PublicationRefusal> {
-        Ok(self.coordinator.accepted().await)
+    /// The coordinator that speaks for `zone`.
+    ///
+    /// A candidate whose Zone this publisher was not bound for is refused by
+    /// name rather than served under another Zone's fence.
+    fn coordinator(
+        &self,
+        zone: &str,
+    ) -> Result<&Arc<AuthorityPublicationCoordinator>, d2b_resource_runtime::PublicationRefusal> {
+        self.coordinators.get(zone).ok_or_else(|| {
+            d2b_resource_runtime::PublicationRefusal::Refused(format!(
+                "this plane publishes for Zones {:?}, not for {zone}",
+                self.coordinators.keys().collect::<Vec<_>>()
+            ))
+        })
+    }
+
+    /// The cursor the broker holds for `zone`, which every candidate for that
+    /// Zone must name as its exact predecessor.
+    async fn expected(
+        &self,
+        zone: &str,
+    ) -> Result<AuthorityCursor, d2b_resource_runtime::PublicationRefusal> {
+        Ok(self.coordinator(zone)?.accepted().await)
     }
 }
 
@@ -1311,8 +1353,12 @@ impl d2b_resource_runtime::AuthorityPublisher for CoordinatorPublisher {
         &self,
         candidate: &d2b_resource_runtime::PublicationCandidate,
     ) -> Result<d2b_resource_runtime::FencedTransaction, d2b_resource_runtime::PublicationRefusal> {
-        self.session().await?;
-        let expected = self.expected().await?;
+        // The candidate's own Zone selects the coordinator, so a row staged
+        // under the system Zone is fenced by the system Zone's coordinator
+        // and never under the plane's own.
+        let coordinator = self.coordinator(candidate.zone.as_str())?;
+        coordinator.open_session().await.map_err(transport)?;
+        let expected = self.expected(candidate.zone.as_str()).await?;
         if expected.sequence != candidate.expected {
             // The store reserved its candidate against a predecessor the
             // broker does not hold. Committing it would publish visibility
@@ -1339,7 +1385,7 @@ impl d2b_resource_runtime::AuthorityPublisher for CoordinatorPublisher {
             candidate: rows,
             removed,
         };
-        let prepared = self.coordinator.prepare(&request).await.map_err(transport)?;
+        let prepared = coordinator.prepare(&request).await.map_err(transport)?;
         Ok(d2b_resource_runtime::FencedTransaction {
             transaction: candidate.transaction,
             prepared: prepared.transaction.to_string(),
@@ -1355,8 +1401,11 @@ impl d2b_resource_runtime::AuthorityPublisher for CoordinatorPublisher {
         &self,
         publication: &d2b_resource_runtime::CommittedPublication,
     ) -> Result<d2b_resource_runtime::AcceptedRevision, d2b_resource_runtime::PublicationRefusal> {
-        self.session().await?;
-        let expected = self.expected().await?;
+        // The committed publication's own Zone selects the coordinator, for
+        // the same reason the fence did.
+        let coordinator = self.coordinator(publication.zone.as_str())?;
+        coordinator.open_session().await.map_err(transport)?;
+        let expected = self.expected(publication.zone.as_str()).await?;
         let (rows, removed) =
             publication_rows(&publication.publication.rows, &publication.publication.removed)?;
         let digest = publication_candidate_digest(&rows, &removed);
@@ -1368,7 +1417,7 @@ impl d2b_resource_runtime::AuthorityPublisher for CoordinatorPublisher {
             rows,
             removed,
         };
-        let accepted = self.coordinator.commit(&commit).await.map_err(transport)?;
+        let accepted = coordinator.commit(&commit).await.map_err(transport)?;
         Ok(d2b_resource_runtime::AcceptedRevision {
             transaction: publication.transaction,
             sequence: accepted.sequence,
@@ -1377,6 +1426,22 @@ impl d2b_resource_runtime::AuthorityPublisher for CoordinatorPublisher {
     }
 
     async fn accepted(&self) -> Result<ZoneDesiredSequence, d2b_resource_runtime::PublicationRefusal> {
-        Ok(self.expected().await?.sequence)
+        // The Zone a restarted manager reads before publishing is the Zone it
+        // was bound to; with more than one Zone on this publisher it is
+        // whichever coordinator holds the furthest-advanced accepted cursor,
+        // because a manager resuming its own Zone must name that Zone's
+        // predecessor and no other Zone's cursor is a substitute.
+        let mut held: Option<AuthorityCursor> = None;
+        for coordinator in self.coordinators.values() {
+            let cursor = coordinator.accepted().await;
+            if held.as_ref().is_none_or(|best| cursor.sequence > best.sequence) {
+                held = Some(cursor);
+            }
+        }
+        held.map(|cursor| cursor.sequence).ok_or_else(|| {
+            d2b_resource_runtime::PublicationRefusal::Refused(
+                "this publisher is bound to no Zone".to_owned(),
+            )
+        })
     }
 }

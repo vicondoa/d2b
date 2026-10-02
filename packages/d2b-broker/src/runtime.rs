@@ -1932,6 +1932,19 @@ async fn handle_connection(connection: AsyncSeqpacket, server: &Server) -> io::R
             )
             .await;
         }
+        // The authority-publication gate, in front of the typed decode for the
+        // same reason the admitted-effect gate is: `RequestEnvelope` denies
+        // unknown fields and carries neither a publication session nor a
+        // publication request, so a publication frame cannot decode as one.
+        // Without this gate every durable desired-row commit the daemon
+        // makes is dropped here as malformed wire and the connection is
+        // closed, which the daemon reads as a transport failure.
+        if let Some(frame) = publication_frame(&envelope_value) {
+            return answer_authority_publication_frame(
+                connection, server, frame, peer_uid, peer_gid,
+            )
+            .await;
+        }
         // The harness-only peer-uid override is unwrapped here, in front of
         // the typed decode: the wire contract's envelope carries no such
         // member, so only a broker that was started with `--test-mode` ever
@@ -11822,15 +11835,12 @@ pub(crate) async fn cleanup_spawned_runner_after_failure(
 /// process bumps the persisted epoch and fences every known Zone before it
 /// serves anything.
 ///
-/// U34 wires this into the accept loop next to the typed `BrokerRequest` arms
-/// and moves the publication message family onto the committed operation
-/// catalog; until then the unchanged production entry point does not call it,
-/// and the projection store is absent, so the envelope admits exactly as it
-/// did before this unit.
-// Not yet called: the accept-loop arm that carries the publication message
-// family is a separate, still-open step. Until it lands the projection
-// store is never opened, so this entry point has no production caller.
-#[allow(dead_code, reason = "accept-loop wiring is a separate open step")]
+/// The accept loop routes this family here through [`publication_frame`],
+/// which screens a frame before the typed decode for the same reason the
+/// admitted-effect gate does. Serving it opens the process projection on the
+/// first arrival, which is the cutover: from then on a Zone runs ordinary
+/// effects only once it has published authority and been accepted, because an
+/// unprovisioned Zone is fenced.
 pub(crate) async fn serve_authority_publication(
     state_dir: &std::path::Path,
     envelope: &d2b_contracts_broker::broker_wire::AuthorityPublicationEnvelope,
@@ -11862,10 +11872,9 @@ pub(crate) async fn serve_authority_publication(
 /// Zone, the store generation the broker holds, the epoch it is minting under,
 /// the authenticated initiating subject the trusted daemon admission
 /// coordinator vouched for, and the accepted cursor this broker held.
-// Not yet called: the accept-loop arm that carries the publication message
-// family is a separate, still-open step. Until it lands the projection
-// store is never opened, so this entry point has no production caller.
-#[allow(dead_code, reason = "accept-loop wiring is a separate open step")]
+///
+/// The accept loop routes it here through [`publication_frame`], beside the
+/// message family's own entry.
 pub(crate) async fn serve_authority_publication_open(
     state_dir: &std::path::Path,
     open: &d2b_contracts_broker::broker_wire::AuthorityPublicationOpen,
@@ -11888,6 +11897,180 @@ pub(crate) async fn serve_authority_publication_open(
             )),
             None => BrokerError::LiveHandler(format!("authority publication session failed: {error}")),
         })
+}
+
+/// The authority-publication frame family, as one decoded frame names it.
+#[derive(Debug)]
+enum PublicationFrame {
+    /// A session open: the one message that cannot carry a session.
+    Open(d2b_contracts_broker::broker_wire::AuthorityPublicationOpen),
+    /// One publication message under a session this broker minted.
+    Envelope(d2b_contracts_broker::broker_wire::AuthorityPublicationEnvelope),
+}
+
+/// The audit operation name a session open is recorded under.
+const PUBLICATION_OPEN_FRAME_KIND: &str = "AuthorityPublicationOpen";
+
+/// Whether one decoded-as-JSON frame is a publication frame, and which.
+///
+/// The classification is exact rather than heuristic, and it is exact because
+/// of what each shape denies. Both shapes are `deny_unknown_fields`, and a
+/// typed `RequestEnvelope` can be neither: its `request` is an internally
+/// tagged enum, so a typed frame's `request` always carries a `kind` member,
+/// while the session open's request is a plain object that carries `zone`,
+/// `storeIncarnation`, `brokerEpoch`, `initiatingSubject`, and `accepted` and
+/// no `kind`. The envelope is distinguished by the `session` it carries
+/// beside its request, which the typed envelope's own field set (`request`,
+/// `callerRole`, `auditJoin`) never admits. So a typed frame can decode as
+/// neither publication shape, and a frame that decodes as neither is left
+/// untouched for the typed decode: this gate diverts no other request kind.
+fn publication_frame(frame: &Value) -> Option<PublicationFrame> {
+    use d2b_contracts_broker::broker_wire::{
+        AuthorityPublicationEnvelope, AuthorityPublicationOpen,
+    };
+
+    if frame.get("session").is_some() {
+        return serde_json::from_value::<AuthorityPublicationEnvelope>(frame.clone())
+            .ok()
+            .map(PublicationFrame::Envelope);
+    }
+    serde_json::from_value::<AuthorityPublicationOpen>(frame.clone())
+        .ok()
+        .map(PublicationFrame::Open)
+}
+
+/// Serve one authority-publication frame on the origination leg.
+///
+/// The order is this boundary's own, and every refusal happens before any Zone
+/// is touched:
+///
+/// 1. The authenticated peer. A publication speaks for a Zone's whole
+///    admitted authority, so only the daemon may drive it; any other peer is
+///    refused by name.
+/// 2. The per-uid IPC limiter, exactly as the typed path applies it, so this
+///    gate is not a way around the broker's own admission bound.
+/// 3. The projection itself, which decides the Zone.
+///
+/// Every answer is the publication family's own response type, because the
+/// daemon reads exactly that back off the wire. A refusal keeps the Zone
+/// fenced: an unanswered or refused publication is never evidence that the
+/// Zone is open.
+async fn answer_authority_publication_frame(
+    connection: AsyncSeqpacket,
+    server: &Server,
+    frame: PublicationFrame,
+    peer_uid: u32,
+    peer_gid: u32,
+) -> io::Result<()> {
+    use d2b_contracts_broker::broker_wire::{AuthorityPublicationResponse, PublicationRefusal};
+    use d2b_contracts_resource::v3::{AdmissionStage, RefusalReason};
+
+    let audit_log = Arc::clone(&server.audit_log);
+    let (operation, zone) = match &frame {
+        PublicationFrame::Open(open) => (PUBLICATION_OPEN_FRAME_KIND, open.request.zone.clone()),
+        PublicationFrame::Envelope(envelope) => {
+            (envelope.request.op_name(), envelope.zone.clone())
+        }
+    };
+    let refuse = |code: &str| {
+        AuthorityPublicationResponse::Refused(PublicationRefusal {
+            code: code.to_owned(),
+            stage: AdmissionStage::Authorize,
+            reason: RefusalReason::IdentityNotAuthorized,
+            fenced: true,
+            state: d2b_contracts_broker::broker_wire::ZoneAuthorityState::Unprovisioned,
+        })
+    };
+    if peer_uid != server.config.d2bd_uid {
+        let _ = write_refusal_audit_bounded(
+            &audit_log,
+            AuditWriteClass::Unprivileged,
+            operation,
+            peer_uid,
+            peer_gid,
+            "peer-refused",
+            "authority-publication",
+            "closed",
+        );
+        return connection
+            .send_json_frame(&refuse(crate::envelope::UNGRANTED_CALLER))
+            .await;
+    }
+    // The limiter runs on the synchronous dispatch workers, which must never
+    // block, so it spins on `try_lock` for the short bounded `check` critical
+    // section, exactly as the admitted-effect gate does.
+    let rate_allowed = {
+        let mut limiter = loop {
+            match server.ipc_rate_limiter.try_lock() {
+                Ok(guard) => break guard,
+                Err(_) => std::hint::spin_loop(),
+            }
+        };
+        limiter.check(
+            IpcRatePool::Daemon,
+            peer_uid,
+            CallerRole::AdminUid { uid: peer_uid }.for_display(),
+            operation,
+        )
+    };
+    if !rate_allowed {
+        let _ = write_refusal_audit_bounded(
+            &audit_log,
+            AuditWriteClass::Privileged,
+            operation,
+            peer_uid,
+            peer_gid,
+            "ipc-rate-limited",
+            "authority-publication",
+            "closed",
+        );
+        return connection
+            .send_json_frame(&refuse(crate::envelope::UNACCEPTED_PROJECTION))
+            .await;
+    }
+    let state_dir = server.config.state_dir.clone();
+    // A refusal here is recorded and answered with the family's own refusal
+    // rather than a closed connection: the daemon can then tell "the broker
+    // could not answer" apart from "the broker refused", which is the
+    // difference between a retry and a fence.
+    let failed = |audit_log: &AuditLog, disposition: &str| {
+        let _ = write_refusal_audit_bounded(
+            audit_log,
+            AuditWriteClass::Privileged,
+            operation,
+            peer_uid,
+            peer_gid,
+            disposition,
+            &zone,
+            "refused",
+        );
+    };
+    match frame {
+        PublicationFrame::Open(open) => {
+            match serve_authority_publication_open(&state_dir, &open).await {
+                Ok(reply) => connection.send_json_frame(&reply).await,
+                Err(error) => {
+                    tracing::error!(error = ?error, zone = %zone, "authority publication session open failed");
+                    failed(&audit_log, "publication-open-failed");
+                    connection
+                        .send_json_frame(&refuse(crate::envelope::UNACCEPTED_PROJECTION))
+                        .await
+                }
+            }
+        }
+        PublicationFrame::Envelope(envelope) => {
+            match serve_authority_publication(&state_dir, &envelope).await {
+                Ok(reply) => connection.send_json_frame(&reply).await,
+                Err(error) => {
+                    tracing::error!(error = ?error, zone = %zone, "authority publication failed");
+                    failed(&audit_log, "publication-failed");
+                    connection
+                        .send_json_frame(&refuse(crate::envelope::UNACCEPTED_PROJECTION))
+                        .await
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -13063,6 +13246,299 @@ mod tests {
             test_mode: true,
             retired_wire_variants: RETIRED_WIRE_VARIANTS,
         }
+    }
+
+    /// The store generation a fixture publication is minted under.
+    ///
+    /// A Zone holds exactly one generation: its first session open
+    /// establishes it and every later message must name the same one, so a
+    /// fixture that provisions the same Zone twice names the generation the
+    /// projection already holds. The helper reads it off the session it just
+    /// opened, which is that held generation.
+    const TEST_STORE_INCARNATION: &str = "store-generation-1";
+
+    /// The durable state root the process projection is opened under.
+    ///
+    /// The projection is one process-lifetime `OnceLock`, so the first case
+    /// that provisions a Zone opens it and every later case provisions that
+    /// same one. Its root is therefore a stable scratch directory rather
+    /// than the calling test's own root: a per-test root is deleted by the
+    /// test that owns it, and the next test's publication would then fail to
+    /// persist into a state directory that is gone.
+    fn authority_projection_state_dir() -> PathBuf {
+        d2b_core::test_support::scratch_root("runtime-authority-projection").join("state")
+    }
+
+    /// Serialize provisioning across the whole test binary.
+    ///
+    /// A Zone holds exactly one publication session at a time, so two
+    /// threads publishing the same Zone at once would invalidate each
+    /// other's session mid-transfer. One lock around a whole provision
+    /// makes the second caller find the accepted Zone instead.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn zone_provisioning_lock() -> tokio::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+            std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+        LOCK.lock().await
+    }
+
+    /// Provision `zone` to the accepted, unfenced posture an ordinary effect
+    /// is admitted under, through the production publication entries.
+    ///
+    /// The envelope asks the authority projection before every ordinary
+    /// dispatch, and a Zone the broker has never published for is
+    /// `Unprovisioned`, which reads as fenced: an unprovisioned Zone is
+    /// refused with `authority-fenced`. So a case that dispatches under a
+    /// Zone drives the publication and acceptance the manager drives first,
+    /// through [`serve_authority_publication_open`] and
+    /// [`serve_authority_publication`] themselves: open the Zone's session,
+    /// then install one whole snapshot at the next accepted sequence. An
+    /// accepted snapshot with nothing outstanding leaves the Zone `Unfenced`
+    /// under its accepted cursor, which is the posture ordinary effects run
+    /// under.
+    ///
+    /// The snapshot carries no rows: what authorizes these dispatches is the
+    /// committed catalog the case's envelope is built from, and the
+    /// publication is what moves the Zone off `Unprovisioned` onto an
+    /// accepted cursor.
+    ///
+    /// Idempotent, because the projection outlives every single test: a Zone
+    /// already `Unfenced` is left exactly as it stands.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn provision_zone_for_ordinary_effects(zone: &str) {
+        use d2b_contracts_broker::broker_wire::{
+            AuthorityCursor, AuthorityPublicationEnvelope, AuthorityPublicationOpen,
+            AuthorityPublicationRequest, AuthoritySnapshot, BeginSnapshotRequest,
+            EndSnapshotRequest, OpenPublicationSessionRequest, PublicationTransactionId,
+            SnapshotChunkRequest, MAX_PUBLICATION_CHUNK_BYTES, publication_snapshot_bytes,
+            publication_snapshot_digest,
+        };
+        use d2b_contracts_resource::v3::{
+            AuthoritySubject, AuthoritySubjectKind, DesiredDigest, StoreIncarnation,
+        };
+
+        let state_dir = authority_projection_state_dir();
+        envelope_call_runtime().block_on(async {
+            // The accept loop opens the projection lazily on the first
+            // publication arrival; open it the same way, so the process holds
+            // the projection the envelope consults. The open is under the
+            // same lock the publication itself takes, because two concurrent
+            // opens bootstrap the same durable file.
+            let projection = match crate::authority_projection::authority_projection() {
+                Some(projection) => projection,
+                None => {
+                    let _opening = zone_provisioning_lock().await;
+                    if crate::authority_projection::authority_projection().is_none() {
+                        crate::authority_projection::init_authority_projection_async(&state_dir)
+                            .await
+                            .expect("the authority projection opens under the broker state root");
+                    }
+                    crate::authority_projection::authority_projection()
+                        .expect("the lazy init above just opened the projection")
+                }
+            };
+            // The Zone outlives every single test, so the accepted posture is
+            // normally already there and this costs one status round trip
+            // rather than a publication.
+            if !projection.status(zone).await.is_fenced() {
+                return;
+            }
+            // Still fenced: this is the first publication for the Zone in
+            // this process, and a Zone holds exactly one session at a time,
+            // so the transfers are serialized against each other.
+            let _provisioning = zone_provisioning_lock().await;
+            if !projection.status(zone).await.is_fenced() {
+                return;
+            }
+            let accepted = projection
+                .status(zone)
+                .await
+                .accepted()
+                .cloned()
+                .unwrap_or_else(AuthorityCursor::initial);
+            let opened = serve_authority_publication_open(
+                &state_dir,
+                &AuthorityPublicationOpen {
+                    request: OpenPublicationSessionRequest {
+                        zone: zone.to_owned(),
+                        store_incarnation: StoreIncarnation::parse(TEST_STORE_INCARNATION)
+                            .expect("the fixture store generation is a bounded token"),
+                        broker_epoch: 0,
+                        initiating_subject: AuthoritySubject::unresourced(
+                            AuthoritySubjectKind::Bootstrap,
+                        ),
+                        accepted: accepted.clone(),
+                    },
+                },
+            )
+            .await
+            .expect("the broker mints a Zone publication session");
+            let snapshot = AuthoritySnapshot {
+                zone: zone.to_owned(),
+                // The generation the Zone holds, not the fixture's: a Zone
+                // provisioned earlier already established it.
+                store_incarnation: opened.binding.store_incarnation.clone(),
+                cursor: AuthorityCursor {
+                    sequence: accepted
+                        .sequence
+                        .try_next()
+                        .expect("the accepted desired sequence has room"),
+                    digest: DesiredDigest::of(format!("provisioned-{zone}").as_bytes()),
+                },
+                root_subject: AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap),
+                rows: Vec::new(),
+                outstanding: None,
+            };
+            let bytes = publication_snapshot_bytes(&snapshot);
+            let digest = publication_snapshot_digest(&snapshot);
+            let total_chunks = bytes.len().div_ceil(MAX_PUBLICATION_CHUNK_BYTES).max(1) as u32;
+            let transaction = PublicationTransactionId::parse("a1")
+                .expect("the fixture transaction identity is a bounded token");
+            let envelope = |request: AuthorityPublicationRequest| AuthorityPublicationEnvelope {
+                zone: zone.to_owned(),
+                session: opened.session.clone(),
+                request,
+            };
+            serve_authority_publication(
+                &state_dir,
+                &envelope(AuthorityPublicationRequest::BeginSnapshot(
+                    BeginSnapshotRequest {
+                        transaction: transaction.clone(),
+                        store_incarnation: snapshot.store_incarnation.clone(),
+                        cursor: snapshot.cursor.clone(),
+                        total_chunks,
+                        total_bytes: bytes.len() as u64,
+                    },
+                )),
+            )
+            .await
+            .expect("the Zone's snapshot transfer opens");
+            for ordinal in 0..total_chunks {
+                let start = ordinal as usize * MAX_PUBLICATION_CHUNK_BYTES;
+                let end = bytes.len().min(start + MAX_PUBLICATION_CHUNK_BYTES);
+                serve_authority_publication(
+                    &state_dir,
+                    &envelope(AuthorityPublicationRequest::SnapshotChunk(
+                        SnapshotChunkRequest {
+                            transaction: transaction.clone(),
+                            ordinal,
+                            total_chunks,
+                            payload: bytes[start..end].to_vec(),
+                        },
+                    )),
+                )
+                .await
+                .expect("the snapshot chunk is accepted");
+            }
+            serve_authority_publication(
+                &state_dir,
+                &envelope(AuthorityPublicationRequest::EndSnapshot(EndSnapshotRequest {
+                    transaction,
+                    total_chunks,
+                    digest,
+                })),
+            )
+            .await
+            .expect("the accepted snapshot installs");
+            assert!(
+                !projection.status(zone).await.is_fenced(),
+                "the accepted snapshot leaves the Zone unfenced"
+            );
+        });
+    }
+
+    /// The accept loop answers the daemon's own publication open.
+    ///
+    /// This drives the real `handle_connection` over a socketpair with the
+    /// frame `OriginationPublicationLink::open_session` writes, so it proves
+    /// the production accept loop answers the family rather than that some
+    /// helper can decode it. Without the arm the frame is dropped as malformed
+    /// wire and the connection is closed, which the daemon reads as a
+    /// transport failure.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn the_accept_loop_answers_the_authority_publication_frame_family() {
+        use d2b_contracts_broker::broker_wire::{
+            AuthorityCursor, AuthorityPublicationOpen, OpenPublicationSessionRequest,
+            OpenPublicationSessionResponse,
+        };
+        use d2b_contracts_resource::v3::{
+            AuthoritySubject, AuthoritySubjectKind, StoreIncarnation,
+        };
+        use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
+        use std::os::fd::AsRawFd;
+
+        // The Zone the foundation seed publishes under, which is not the
+        // plane's own Zone.
+        const ZONE: &str = "system";
+
+        let root = test_audit_dir("publication-accept-loop");
+        fs::create_dir_all(&root).expect("create audit test dir");
+        let config = test_server_config(&root, &root.join("unused-bundle.json"));
+        let log = Arc::new(
+            AuditLog::open(
+                &config.audit_dir,
+                Gid::current().as_raw(),
+                true,
+                config.audit_retention_days,
+            )
+            .expect("open audit log"),
+        );
+        let limiter = Arc::new(tokio::sync::Mutex::new(IpcRateLimiter::new(64)));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let served = Server {
+            config: Arc::new(config),
+            audit_log: Arc::clone(&log),
+            dispatches: DispatchPool::new(2),
+            nested_dispatches: DispatchPool::new(2),
+            ipc_rate_limiter: Arc::clone(&limiter),
+        };
+
+        let open = AuthorityPublicationOpen {
+            request: OpenPublicationSessionRequest {
+                zone: ZONE.to_owned(),
+                store_incarnation: StoreIncarnation::parse("foundation-1")
+                    .expect("a bounded incarnation token"),
+                broker_epoch: 0,
+                initiating_subject: AuthoritySubject::unresourced(
+                    AuthoritySubjectKind::Bootstrap,
+                ),
+                accepted: AuthorityCursor::initial(),
+            },
+        };
+
+        let (client, server) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("socketpair");
+        crate::protocol::send_json_frame(client.as_raw_fd(), &open).expect("send publication open");
+        runtime
+            .block_on(async {
+                let connection =
+                    AsyncSeqpacket::from_owned(server).expect("register accepted socket");
+                handle_connection(connection, &served).await
+            })
+            .expect("the accept loop serves the publication open");
+
+        // The daemon reads exactly this type back off the wire, so a refusal
+        // frame or a closed connection is what this pins against.
+        let response = crate::protocol::recv_json_frame::<OpenPublicationSessionResponse>(
+            client.as_raw_fd(),
+        )
+        .expect("the broker answers the publication open with a session")
+        .expect("the answer carries a frame");
+        assert_eq!(
+            response.binding.zone, ZONE,
+            "the session is bound to the Zone the open named"
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -14518,6 +14994,11 @@ mod tests {
         let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
         let caller_gid = Gid::current().as_raw();
 
+        // Every dispatch below runs an ordinary effect under this Zone, which
+        // the envelope admits only once the broker holds accepted authority
+        // for it.
+        provision_zone_for_ordinary_effects("work");
+
         let invoke = |operation: &str,
                       payload: serde_json::Value,
                       request_fds: Vec<OwnedFd>,
@@ -14829,6 +15310,11 @@ mod tests {
         };
         let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
         let caller_gid = Gid::current().as_raw();
+
+        // Every dispatch below runs an ordinary effect under this Zone, which
+        // the envelope admits only once the broker holds accepted authority
+        // for it.
+        provision_zone_for_ordinary_effects("work");
 
         let invoke = |operation: &str,
                       payload: serde_json::Value,
@@ -15304,6 +15790,11 @@ mod tests {
     fn consume_cell_and_complete_cell_dispatch_through_the_envelope() {
         let root = test_audit_dir("cell-kernels-envelope");
         fs::create_dir_all(&root).expect("create test root");
+        // Every dispatch below runs an ordinary effect under this Zone, which
+        // the envelope admits only once the broker holds accepted authority
+        // for it.
+        provision_zone_for_ordinary_effects("work");
+
         let harness = CellKernelHarness::new(
             &root,
             d2b_contracts_broker::broker_wire::BrokerCallerRole::AdminUid { uid: 1000 },
@@ -15400,6 +15891,11 @@ mod tests {
         // and every other is refused with a documented cell code.
         let root = test_audit_dir("cell-kernels-concurrent");
         fs::create_dir_all(&root).expect("create test root");
+        // Every dispatch below runs an ordinary effect under this Zone, which
+        // the envelope admits only once the broker holds accepted authority
+        // for it.
+        provision_zone_for_ordinary_effects("work");
+
         let harness = Arc::new(CellKernelHarness::new(
             &root,
             d2b_contracts_broker::broker_wire::BrokerCallerRole::AdminUid { uid: 1000 },
@@ -15528,6 +16024,12 @@ mod tests {
     // restored on the spawn-process kernel path.
     // ------------------------------------------------------------------
 
+    /// The Zone every spawn-process kernel case dispatches under.
+    ///
+    /// It is the Zone the envelope reads the fence for, so a case that
+    /// provisions its Zone provisions exactly this one.
+    const SPAWN_KERNEL_ZONE: &str = "work";
+
     /// The envelope + dispatch harness one spawn-process kernel test
     /// drives.
     struct SpawnKernelHarness {
@@ -15593,7 +16095,7 @@ mod tests {
 
             let request = BrokerRequest::EnvelopeInvoke(EnvelopeInvokeRequest {
                 operation: operation.to_owned(),
-                zone: "work".to_owned(),
+                zone: SPAWN_KERNEL_ZONE.to_owned(),
                 payload,
                 chain_root_invocation_id: None,
                 chain_identities: None,
@@ -16210,6 +16712,10 @@ mod tests {
         )
         .expect("seed the busid lock");
 
+        // The dispatch below runs an ordinary effect, which the envelope
+        // admits only for a Zone the broker holds accepted authority for.
+        provision_zone_for_ordinary_effects(SPAWN_KERNEL_ZONE);
+
         let harness = SpawnKernelHarness::new(&root, &bundle.bundle_path, &root.join("runtime"));
         let response = envelope_response(
             harness
@@ -16305,6 +16811,10 @@ mod tests {
             "deviceBinds": [],
         });
 
+        // The dispatch below runs an ordinary effect, which the envelope
+        // admits only for a Zone the broker holds accepted authority for.
+        provision_zone_for_ordinary_effects(SPAWN_KERNEL_ZONE);
+
         let harness = SpawnKernelHarness::new(&root, &bundle.bundle_path, &root.join("runtime"));
         let response = envelope_response(
             harness
@@ -16357,6 +16867,10 @@ mod tests {
         let shared = bundle.store_root.join("view");
         fs::create_dir_all(&shared).expect("create view root");
         fs::set_permissions(&shared, fs::Permissions::from_mode(0o750)).expect("chmod view root");
+
+        // The dispatch below runs an ordinary effect, which the envelope
+        // admits only for a Zone the broker holds accepted authority for.
+        provision_zone_for_ordinary_effects(SPAWN_KERNEL_ZONE);
 
         let harness = SpawnKernelHarness::new(&root, &bundle.bundle_path, &runtime_root);
         let response = envelope_response(
@@ -16425,6 +16939,10 @@ mod tests {
             "the dropped listener leaves a stale socket file"
         );
 
+        // The dispatch below runs an ordinary effect, which the envelope
+        // admits only for a Zone the broker holds accepted authority for.
+        provision_zone_for_ordinary_effects(SPAWN_KERNEL_ZONE);
+
         let harness = SpawnKernelHarness::new(
             &root,
             &root.join("unused-bundle.json"),
@@ -16478,6 +16996,10 @@ mod tests {
         let _registry_guard = RegistryTestGuard::new();
         let root = test_audit_dir("spawn-kernel-duplicate-guard");
         fs::create_dir_all(&root).expect("create test root");
+        // Both dispatches below run ordinary effects, which the envelope
+        // admits only for a Zone the broker holds accepted authority for.
+        provision_zone_for_ordinary_effects(SPAWN_KERNEL_ZONE);
+
         let harness = SpawnKernelHarness::new(
             &root,
             &root.join("unused-bundle.json"),
@@ -16770,8 +17292,13 @@ mod tests {
             ..FakeDispatchBackend::default()
         };
         let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
+        let vm_id = VmId::new("vm-1");
+        // The preflight runs an ordinary effect, which the envelope admits
+        // only for a Zone the broker holds accepted authority for, and this
+        // call's Zone is the vm id (the wire's own audit-join axis).
+        provision_zone_for_ordinary_effects(vm_id.as_str());
         let request = BrokerRequest::OwnershipMatrixCheck(OwnershipMatrixCheckRequest {
-            vm_id: VmId::new("vm-1"),
+            vm_id,
             tracing_span_id: None,
         });
         let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
@@ -16833,8 +17360,14 @@ mod tests {
             ..FakeDispatchBackend::default()
         };
         let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
+        let vm_id = VmId::new("vm-1");
+        // The preflight reaches the dispatch step - which is where the
+        // missing peer is refused - only for a Zone the broker holds
+        // accepted authority for, and this call's Zone is the vm id (the
+        // wire's own audit-join axis).
+        provision_zone_for_ordinary_effects(vm_id.as_str());
         let request = BrokerRequest::OwnershipMatrixCheck(OwnershipMatrixCheckRequest {
-            vm_id: VmId::new("vm-1"),
+            vm_id,
             tracing_span_id: None,
         });
         let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
@@ -16938,6 +17471,11 @@ mod tests {
             ..FakeDispatchBackend::default()
         };
         let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
+        // The call below runs an ordinary effect under this Zone, which the
+        // envelope admits only once the broker holds accepted authority for
+        // it.
+        provision_zone_for_ordinary_effects("test");
+
         let request = BrokerRequest::EnvelopeInvoke(EnvelopeInvokeRequest {
             operation: "inspect-process-family".to_owned(),
             zone: "test".to_owned(),
@@ -17017,6 +17555,11 @@ mod tests {
             ..FakeDispatchBackend::default()
         };
         let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
+        // The call below reaches the dispatch step - which is where the
+        // missing peer is refused - only for a Zone the broker holds
+        // accepted authority for.
+        provision_zone_for_ordinary_effects("test");
+
         let request = BrokerRequest::EnvelopeInvoke(EnvelopeInvokeRequest {
             operation: "inspect-process-family".to_owned(),
             zone: "test".to_owned(),
@@ -18105,6 +18648,11 @@ mod tests {
         )
         .expect("kill child");
         child.wait().expect("child reaped");
+
+        // The call below runs an ordinary effect under this Zone, which the
+        // envelope admits only once the broker holds accepted authority for
+        // it.
+        provision_zone_for_ordinary_effects("work");
 
         let request = BrokerRequest::EnvelopeInvoke(EnvelopeInvokeRequest {
             operation: "signal-pidfd".to_owned(),

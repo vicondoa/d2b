@@ -2949,6 +2949,12 @@ pub enum PlaneError {
     ManagerSpawn(#[from] ractor::SpawnErr),
     #[error("manager rpc failed: {0}")]
     ManagerRpc(#[from] ResourceError),
+    /// The Zone still owed an outcome for a transaction a previous boot left
+    /// outstanding, and recovery could not resolve it. The Zone stays fenced
+    /// and the start is refused; nothing is released against authority the
+    /// broker has not accepted.
+    #[error("zone recovery refused: {0}")]
+    ZoneRecovery(String),
     #[error("zone authority inputs invalid: {0}")]
     Authority(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("target layer refused: {0}")]
@@ -3449,18 +3455,57 @@ impl ResourcePlaneV3 {
                         incarnation.clone(),
                         authority_publication_subject(),
                         Arc::new(crate::authority_publication::OriginationPublicationLink::new(
-                            broker_socket,
+                            broker_socket.clone(),
                             AUTHORITY_PUBLICATION_ROUND_TRIP,
                         )),
                     ),
                 );
-                crate::authority_publication::CoordinatorPublisher::new(
+                let publisher = crate::authority_publication::CoordinatorPublisher::new(
                     coordinator,
-                    incarnation,
+                    incarnation.clone(),
                     authority_publication_subject(),
-                )
+                );
+                // The seed homes its rows in the system Zone, so that Zone
+                // needs its own coordinator: a coordinator carries the Zone
+                // its session is bound to and that Zone's accepted cursor, and
+                // a seeded row fenced under the plane's own Zone would leave
+                // the store's per-Zone sequence and the broker's per-Zone
+                // projection describing different authorities.
+                if inputs.foundation.is_some() {
+                    publisher.with_zone(Arc::new(
+                        crate::authority_publication::AuthorityPublicationCoordinator::new(
+                            crate::foundation_seed::SYSTEM_ZONE,
+                            incarnation,
+                            authority_publication_subject(),
+                            Arc::new(crate::authority_publication::OriginationPublicationLink::new(
+                                broker_socket,
+                                AUTHORITY_PUBLICATION_ROUND_TRIP,
+                            )),
+                        ),
+                    ))
+                } else {
+                    publisher
+                }
             }
         };
+        if inputs.foundation.is_some() {
+            // The seed homes its rows in the system Zone, which is not this
+            // plane's own Zone, so the manager's own restart adoption never
+            // covers it. A previous boot that died between staging a seeded
+            // row and settling it would otherwise leave that Zone owing an
+            // outcome forever, and every boot after it would be refused by
+            // the one-outstanding-transaction rule before the seed wrote
+            // anything. Adopt first, through the same recovery the manager
+            // uses, so the Zone is settled or explicitly refused here rather
+            // than wedged at the seed's first publish.
+            d2b_resource_runtime::authority_publish::adopt_outstanding(
+                &store,
+                crate::foundation_seed::SYSTEM_ZONE,
+                authority.as_ref(),
+            )
+            .await
+            .map_err(|error| PlaneError::ZoneRecovery(error.to_string()))?;
+        }
         if let Some(foundation) = &inputs.foundation {
             let seed = crate::foundation_seed::FoundationSeed::new(
                 foundation.declarations.clone(),
@@ -6546,6 +6591,71 @@ HOST_EFFECTS_SERVICE.id,
            .apply(api_subject("User/alice"), operation_desired("system", "worker"))
            .await
            .expect("the foundation plane admits the write");
+    }
+
+    /// A publication transaction the system Zone still owes an outcome for is
+    /// resolved before the foundation seed publishes.
+    ///
+    /// The seed homes its rows in the system Zone, which is not this plane's
+    /// own Zone, so the manager's own restart adoption does not cover it. A
+    /// previous boot that died between staging a seeded row and settling it
+    /// therefore has to be adopted here: without it the seed's first publish
+    /// is refused by the one-outstanding-transaction rule and the plane never
+    /// opens, which is a permanent wedge rather than a retryable refusal.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_foundation_plane_adopts_the_system_zone_before_it_seeds() {
+        let (_dir, mut inputs, _readiness) = test_inputs();
+        inputs.foundation = Some(FoundationInputs {
+            declarations: crate::foundation_seed::core_declarations(),
+            allocation: crate::principal_allocation::PrincipalAllocation::committed()
+               .expect("committed allocation"),
+        });
+        let store_path = ResourcePlaneV3::spec_store_path(&inputs.spec_store_dir);
+        {
+            let previous_boot = SpecStore::open(&store_path).expect("the store the previous boot opened");
+            previous_boot
+                .stage_mutation(d2b_resource_runtime::DesiredMutation::Ensure(
+                    StoredDesiredResource {
+                        key: ResourceKey::new(
+                            crate::foundation_seed::SYSTEM_ZONE,
+                            "SeccompProfile",
+                            "left-outstanding",
+                        ),
+                        uid: d2b_resource_runtime::manager::deterministic_uid(&ResourceKey::new(
+                            crate::foundation_seed::SYSTEM_ZONE,
+                            "SeccompProfile",
+                            "left-outstanding",
+                        )),
+                        generation: 0,
+                        owner_uid: None,
+                        provenance: d2b_resource_runtime::spec_store::ResourceProvenance::Nix,
+                        deleting: false,
+                        spec: b"{}".to_vec(),
+                        metadata: b"{}".to_vec(),
+                        created_at: 0,
+                    },
+                ))
+                .await
+                .expect("the previous boot stages its seeded candidate");
+            // The boot dies here: the candidate is durable, nothing settled it,
+            // and the store above went out of scope with its writer thread.
+        }
+
+        // The production open path is the restart. It must recover the system
+        // Zone and go on to seed, not refuse the start.
+        let plane = ResourcePlaneV3::open(inputs)
+            .await
+            .expect("the plane recovers the outstanding system-Zone transaction and opens");
+        let recovery = plane
+            .store()
+            .zone_recovery(crate::foundation_seed::SYSTEM_ZONE)
+            .await
+            .expect("the system Zone answers what it owes");
+        assert!(
+            !recovery.has_outstanding(),
+            "the Zone owes nothing once the seed has published: {recovery:?}"
+        );
     }
 
     /// The `Provider` row the seeded self-binding's subject resolves through.
