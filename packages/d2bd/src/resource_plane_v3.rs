@@ -3483,6 +3483,18 @@ impl ResourcePlaneV3 {
             )
             .await
             .map_err(|error| PlaneError::ZoneRecovery(error.to_string()))?;
+            // The seed's Zone is reconciled the same way the manager reconciles
+            // its own, and for the same reason: a broker restart moves it to
+            // reconciling too, and the plane rather than any manager is what
+            // publishes for it. Adoption first, then the reconciliation, and
+            // only then does the seed write anything.
+            d2b_resource_runtime::authority_publish::resynchronize(
+                &store,
+                crate::foundation_seed::SYSTEM_ZONE,
+                authority.as_ref(),
+            )
+            .await
+            .map_err(|error| PlaneError::ZoneRecovery(error.to_string()))?;
         }
         if let Some(foundation) = &inputs.foundation {
             let seed = crate::foundation_seed::FoundationSeed::new(

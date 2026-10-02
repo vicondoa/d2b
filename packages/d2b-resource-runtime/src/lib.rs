@@ -67,16 +67,15 @@ pub use crate::context::{LookupPlane, RowLookup};
 // outstanding publication transaction.
 pub use crate::authority_journal::{
     AcceptedCursor, AcceptedPublication, CommitOutcome, CommittedPublication, DesiredMutation,
-    DesiredRow, OutboxEntry, ProjectedAudit, ProjectedRow, Projection, RetiredRow,
-    StagedMutation,
-    TransactionRecovery, ZoneRecovery,
+    DesiredRow, OutboxEntry, ProjectedAudit, ProjectedRow, Projection, PublishedRow, RetiredRow,
+    StagedMutation, TransactionRecovery, ZoneRecovery,
 };
 // Authority publication (KTD6-KTD7): the two broker-side calls a durable Zone
 // transaction makes, and the owned facts each one carries.
 pub use crate::authority_publish::{
     AcceptedRevision, AuthorityPublisher, FencedTransaction, MutationKind, PublicationCandidate,
-    PublicationRefusal, PublicationRows, PublishError, PublishOutcome, PublishedRow,
-    ZoneProjection, adopt_outstanding, publish, resynchronize,
+    PublicationRefusal, PublicationRows, PublishError, PublishOutcome, ZoneProjection,
+    adopt_outstanding, publish, resynchronize,
 };
 // Relation index (U6, KTD2-KTD4): the six distinct graph relationship classes
 // derived from committed desired rows, and the per-type projections that read

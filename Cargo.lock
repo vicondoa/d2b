@@ -2219,6 +2219,7 @@ dependencies = [
  "async-trait",
  "clap",
  "d2b-audit",
+ "d2b-broker",
  "d2b-bus",
  "d2b-contracts",
  "d2b-contracts-broker",

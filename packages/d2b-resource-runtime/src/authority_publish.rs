@@ -33,11 +33,10 @@
 //! the round trip.
 
 use async_trait::async_trait;
-use d2b_contracts_resource::v3::{
-    DesiredDigest, DesiredRevision, ResourceUid, StoreIncarnation, ZoneDesiredSequence,
-};
+use d2b_contracts_resource::v3::{DesiredDigest, StoreIncarnation, ZoneDesiredSequence};
 
-use crate::authority_journal::{AcceptedCursor, CommittedPublication, Projection};
+use crate::authority_journal::{AcceptedCursor, CommittedPublication, Projection, PublishedRow};
+
 
 use crate::identity::TransactionId;
 
@@ -84,26 +83,21 @@ pub struct PublicationCandidate {
     pub projection: Projection,
 }
 
-/// One row a publication carries to the broker.
+/// The prepared rows and retired keys one candidate installs.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PublishedRow {
-    pub key: crate::spec_store::ResourceKey,
-    pub revision: DesiredRevision,
-    /// The digest of the exact committed row bytes.
-    pub digest: DesiredDigest,
-    /// The row's canonical desired bytes, which the broker stores and
-    /// re-evaluates rather than a summary the candidate could shape.
-    pub spec: Vec<u8>,
-    /// The committed identity of the source row this binding row names, when
-    /// the store resolved one. A relationship key is over committed identity
-    /// rather than over references, so the identity it folds in cannot be
-    /// derived from the row's own bytes. The store resolves it once against
-    /// the Zone's committed rows and it travels here, so a resynchronization
-    /// restates the same relationship the broker already accepted.
-    pub source_uid: Option<ResourceUid>,
-    /// The committed identity of the consumer row this binding row names, when
-    /// the store resolved one.
-    pub consumer_uid: Option<ResourceUid>,
+pub struct PublicationRows {
+    pub rows: Vec<PublishedRow>,
+    pub removed: Vec<crate::spec_store::ResourceKey>,
+}
+
+impl PublicationRows {
+    /// The rows and retirements a store projection publishes.
+    pub fn of(projection: &Projection) -> Self {
+        Self {
+            rows: projection.rows.iter().map(PublishedRow::of).collect(),
+            removed: projection.removed.iter().map(|row| row.key.clone()).collect(),
+        }
+    }
 }
 
 /// One Zone's durable projection, as the broker must be able to rebuild it.
@@ -159,38 +153,6 @@ impl ZoneProjection {
             sequence: ZoneDesiredSequence::INITIAL,
             digest: DesiredDigest::of(&[]),
             accepted_at: 0,
-        }
-    }
-}
-
-/// The prepared rows and retired keys one candidate installs.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PublicationRows {
-    pub rows: Vec<PublishedRow>,
-    pub removed: Vec<crate::spec_store::ResourceKey>,
-}
-
-impl PublicationRows {
-    /// The rows and retirements a store projection publishes.
-    pub fn of(projection: &Projection) -> Self {
-        Self {
-            rows: projection
-                .rows
-                .iter()
-                .map(|row| PublishedRow {
-                    key: row.row.row.key.clone(),
-                    revision: row.row.revision,
-                    digest: row.row.digest.clone(),
-                    spec: row.row.row.spec.clone(),
-                    source_uid: row
-                        .source_uid
-                        .and_then(|uid| ResourceUid::from_bytes(uid.as_slice()).ok()),
-                    consumer_uid: row
-                        .consumer_uid
-                        .and_then(|uid| ResourceUid::from_bytes(uid.as_slice()).ok()),
-                })
-                .collect(),
-            removed: projection.removed.iter().map(|row| row.key.clone()).collect(),
         }
     }
 }
@@ -304,10 +266,12 @@ pub enum PublishOutcome {
 
 impl PublishOutcome {
     /// The committed row, or `None` when the mutation retired one.
-    pub fn row(&self) -> Option<&crate::authority_journal::DesiredRow> {
+    pub fn row(&self) -> Option<&crate::spec_store::StoredDesiredResource> {
         match self {
-            Self::Committed { publication, .. } => publication.publication.rows.first(),
-            Self::Unchanged(row) => Some(row),
+            Self::Committed { publication, .. } => {
+                publication.publication.rows.first().map(|row| &row.row)
+            }
+            Self::Unchanged(row) => Some(&row.row),
         }
     }
 
@@ -318,7 +282,7 @@ impl PublishOutcome {
     /// whether it holds the answer it came for rather than a second
     /// rendering of the same commit.
     pub fn ensure(self) -> Option<crate::spec_store::EnsureOutcome> {
-        let row = self.row()?.row.clone();
+        let row = self.row()?.clone();
         Some(match &self {
             Self::Unchanged(_) => crate::spec_store::EnsureOutcome::Unchanged(row),
             Self::Committed { created: true, .. } => crate::spec_store::EnsureOutcome::Created(row),

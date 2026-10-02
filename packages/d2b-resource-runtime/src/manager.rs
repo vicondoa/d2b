@@ -1125,7 +1125,7 @@ impl ResourceManagerState {
             Ok(outcome) => {
                 let row = outcome
                     .row()
-                    .map(|row| row.row.clone())
+                    .cloned()
                     .ok_or(ResourceError::ManagerRejected {
                         reason: "the deleting mark committed no desired row".to_owned(),
                     })?;

@@ -113,6 +113,9 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "
 ttrpc = { workspace = true, features = ["async"] }
 
 [dev-dependencies]
+# The real broker projection, so a reconciliation test drives the real
+# publication protocol rather than a stand-in for it.
+d2b-broker = { path = "../d2b-broker", version = "0.0.0-bootstrap" }
 d2b-process-conformance = { path = "../d2b-process-conformance", version = "0.0.0-bootstrap", features = ["test-support"] }
 # U100: wired over the binary/service contract in tests/cloud_composition.rs only
 d2b-provider-guest-azure-container-apps = { path = "../d2b-provider-guest-azure-container-apps", version = "0.0.0-bootstrap" }

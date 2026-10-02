@@ -181,7 +181,9 @@ impl AuthorityPublisher for RefusingPublisher {
 
 /// The committed rows one outcome installed, for a test asserting what a
 /// publication carried.
-pub fn committed_rows(outcome: &CommitOutcome) -> &[crate::authority_journal::DesiredRow] {
+pub fn committed_rows(
+    outcome: &CommitOutcome,
+) -> &[crate::authority_journal::PublishedRow] {
     match outcome {
         CommitOutcome::Committed(committed) | CommitOutcome::AlreadyCommitted(committed) => {
             &committed.publication.rows

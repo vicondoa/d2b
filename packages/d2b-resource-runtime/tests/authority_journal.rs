@@ -27,7 +27,7 @@ use d2b_resource_runtime::spec_store::{
     ResourceKey, ResourceProvenance, SpecSelector, SpecStore, SpecStoreError, StoredDesiredResource,
 };
 use d2b_resource_runtime::{
-    AcceptedPublication, DesiredRow, TransactionId, TransactionRecovery,
+    AcceptedPublication, DesiredRow, PublishedRow, TransactionId, TransactionRecovery,
 };
 use tempfile::TempDir;
 
@@ -105,6 +105,11 @@ fn revision_of(row: &DesiredRow) -> u64 {
     row.revision.get()
 }
 
+/// The revision a committed publication row committed at.
+fn published_revision(row: &PublishedRow) -> u64 {
+    row.revision.get()
+}
+
 // ---------------------------------------------------------------------------
 // Scenario 1: what advances the desired revision
 // ---------------------------------------------------------------------------
@@ -124,7 +129,7 @@ async fn spec_owner_metadata_and_deletion_advance_the_revision_but_an_identical_
     match publish(&store, DesiredMutation::Ensure(row("data", b"spec-v1"))).await {
         CommitOutcome::Committed(committed) => {
             assert_eq!(committed.sequence.get(), 1);
-            assert_eq!(revision_of(&committed.publication.rows[0]), 1);
+            assert_eq!(published_revision(&committed.publication.rows[0]), 1);
             assert_eq!(committed.publication.rows[0].row.generation, 1);
         }
         other => panic!("a first ensure commits: {other:?}"),
@@ -144,7 +149,7 @@ async fn spec_owner_metadata_and_deletion_advance_the_revision_but_an_identical_
     match publish(&store, DesiredMutation::Ensure(row("data", b"spec-v2"))).await {
         CommitOutcome::Committed(committed) => {
             let committed_row = &committed.publication.rows[0];
-            assert_eq!(revision_of(committed_row), 2);
+            assert_eq!(published_revision(committed_row), 2);
             assert_eq!(committed_row.row.generation, 2);
         }
         other => panic!("a spec change commits: {other:?}"),
@@ -158,7 +163,7 @@ async fn spec_owner_metadata_and_deletion_advance_the_revision_but_an_identical_
     match publish(&store, DesiredMutation::Ensure(annotated)).await {
         CommitOutcome::Committed(committed) => {
             let committed_row = &committed.publication.rows[0];
-            assert_eq!(revision_of(committed_row), 3, "a metadata change advances the revision");
+            assert_eq!(published_revision(committed_row), 3, "a metadata change advances the revision");
             assert_eq!(
                 committed_row.row.generation, 2,
                 "identity and generation remain the spec's contract"
@@ -175,7 +180,7 @@ async fn spec_owner_metadata_and_deletion_advance_the_revision_but_an_identical_
     match publish(&store, DesiredMutation::Ensure(owned)).await {
         CommitOutcome::Committed(committed) => {
             let committed_row = &committed.publication.rows[0];
-            assert_eq!(revision_of(committed_row), 4, "an owner change advances the revision");
+            assert_eq!(published_revision(committed_row), 4, "an owner change advances the revision");
             assert_eq!(committed_row.row.generation, 2);
             assert_eq!(committed_row.row.owner_uid, Some(uid_for("owner")));
         }
@@ -187,7 +192,7 @@ async fn spec_owner_metadata_and_deletion_advance_the_revision_but_an_identical_
         CommitOutcome::Committed(committed) => {
             let committed_row = &committed.publication.rows[0];
             assert!(committed_row.row.deleting);
-            assert_eq!(revision_of(committed_row), 5, "a deletion mark advances the revision");
+            assert_eq!(published_revision(committed_row), 5, "a deletion mark advances the revision");
         }
         other => panic!("a deletion mark commits: {other:?}"),
     }
@@ -322,7 +327,7 @@ async fn desired_row_and_outbox_commit_atomically_under_injected_write_failures(
         // The identical candidate commits exactly once when the failure is gone.
         match store.commit_mutation(staged.transaction).await.unwrap() {
             CommitOutcome::Committed(committed) => {
-                assert_eq!(revision_of(&committed.publication.rows[0]), 2);
+                assert_eq!(published_revision(&committed.publication.rows[0]), 2);
                 assert_eq!(committed.publication.rows[0].row.spec, b"spec-v2");
             }
             other => panic!("{table} {operation}: the replay must commit: {other:?}"),
@@ -430,7 +435,7 @@ async fn staged_prepared_and_committed_transactions_recover_after_restart_withou
     assert_eq!(transaction.transaction, committed_id);
     assert_eq!(publication.sequence.get(), 1);
     assert_eq!(publication.rows[0].row.key, keyed("committed-zone", "third"));
-    assert_eq!(revision_of(&publication.rows[0]), 1);
+    assert_eq!(published_revision(&publication.rows[0]), 1);
     assert!(store.accepted_cursor("committed-zone").await.unwrap().is_none());
 
     match store.commit_mutation(committed_id).await.unwrap() {

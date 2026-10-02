@@ -59,8 +59,8 @@ use d2b_contracts_broker::broker_wire::{
     publication_snapshot_digest,
 };
 use d2b_contracts_resource::v3::{
-    AdmissionStage, AuthoritySubject, CanonicalJsonObject, DesiredDigest, RefusalReason,
-    ResourceRef, StoreIncarnation, ZoneDesiredSequence,
+    AdmissionStage, AuthoritySubject, AuthoritySubjectKind, CanonicalJsonObject, DesiredDigest,
+    RefusalReason, ResourceRef, StoreIncarnation, ZoneDesiredSequence,
 };
 use tokio::sync::{Mutex, mpsc, oneshot};
 
@@ -1333,7 +1333,7 @@ fn transaction_token(transaction: d2b_resource_runtime::TransactionId) -> Result
 /// policy against them, so a projection this side shaped would be a second
 /// authority.
 fn publication_rows(
-    rows: &[d2b_resource_runtime::DesiredRow],
+    rows: &[d2b_resource_runtime::PublishedRow],
     removed: &[d2b_resource_runtime::spec_store::ResourceKey],
 ) -> Result<(Vec<AuthorityProjectionRow>, Vec<ResourceRef>), d2b_resource_runtime::PublicationRefusal>
 {
@@ -1356,13 +1356,30 @@ fn publication_rows(
             desired_revision: desired.revision,
             desired_digest: desired.digest.clone(),
             admitted,
-            // Relationship identity is resolved by the graph that owns the
-            // relationship, not restated here. A row published without it
-            // carries no accepted source, so the broker refuses that
-            // relationship rather than accepting one it cannot name - which is
-            // the correct answer for an absence and not for a committed one.
-            source_uid: None,
-            consumer_uid: None,
+            // A binding relationship's key is over committed identity rather
+            // than over references, and the store resolved that identity once
+            // against the Zone's committed rows. Publishing it is what lets the
+            // broker fold the same key the manager did, and what lets a
+            // resynchronization restate the relationship the broker already
+            // accepted instead of presenting an unresolved one it must refuse.
+            source_uid: desired
+                .source_uid
+                .map(|uid| crate::resource_plane_v3::resource_uid(&uid))
+                .transpose()
+                .map_err(|()| {
+                    d2b_resource_runtime::PublicationRefusal::Refused(format!(
+                        "{key} resolved a source identity that is not a canonical uid"
+                    ))
+                })?,
+            consumer_uid: desired
+                .consumer_uid
+                .map(|uid| crate::resource_plane_v3::resource_uid(&uid))
+                .transpose()
+                .map_err(|()| {
+                    d2b_resource_runtime::PublicationRefusal::Refused(format!(
+                        "{key} resolved a consumer identity that is not a canonical uid"
+                    ))
+                })?,
         });
     }
     let mut retired = Vec::with_capacity(removed.len());
@@ -1385,11 +1402,43 @@ fn staged_rows(
     projection: &d2b_resource_runtime::Projection,
 ) -> Result<(Vec<AuthorityProjectionRow>, Vec<ResourceRef>), d2b_resource_runtime::PublicationRefusal>
 {
-    let rows: Vec<d2b_resource_runtime::DesiredRow> =
-        projection.rows.iter().map(|row| row.row.clone()).collect();
+    let rows: Vec<d2b_resource_runtime::PublishedRow> = d2b_resource_runtime::PublicationRows::of(projection).rows;
     let removed: Vec<d2b_resource_runtime::spec_store::ResourceKey> =
         projection.removed.iter().map(|row| row.key.clone()).collect();
     publication_rows(&rows, &removed)
+}
+
+/// The bounded document one Zone's resynchronization transfers.
+///
+/// It carries the Zone's own committed rows and the relationship identity the
+/// store resolved for each binding row, under the same deployment root the
+/// Zone was bootstrapped with, at the cursor the BROKER reports it holds. That
+/// cursor is a fact the broker has and the store does not: the digest at a
+/// sequence is the broker's own publication digest, which is a different value
+/// from the store's desired-row digest over the same mutation, so the document
+/// restates what the broker accepted and the daemon separately checks that the
+/// store reached that sequence.
+///
+/// A broker proves this document against the projection it already accepted,
+/// so it is the store's committed state and nothing shaped here: it names no
+/// retirement, because a retirement is a commit and a commit goes through the
+/// fence.
+fn resynchronization_document(
+    projection: &d2b_resource_runtime::ZoneProjection,
+    held: AuthorityCursor,
+) -> Result<AuthoritySnapshot, d2b_resource_runtime::PublicationRefusal> {
+    let (rows, _) = publication_rows(&projection.rows, &[])?;
+    Ok(AuthoritySnapshot {
+        zone: projection.zone.clone(),
+        store_incarnation: projection.incarnation.clone(),
+        cursor: held,
+        root_subject: AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap),
+        rows,
+        outstanding: projection
+            .outstanding
+            .map(transaction_token)
+            .transpose()?,
+    })
 }
 
 /// The mutation class the broker re-evaluates.
@@ -1497,5 +1546,48 @@ impl d2b_resource_runtime::AuthorityPublisher for CoordinatorPublisher {
                 "this publisher is bound to no Zone".to_owned(),
             )
         })
+    }
+
+    async fn resynchronize(
+        &self,
+        projection: &d2b_resource_runtime::ZoneProjection,
+    ) -> Result<(), d2b_resource_runtime::PublicationRefusal> {
+        // A resynchronization runs under this plane's own authenticated
+        // origination leg, exactly as a publication does: the document restates
+        // authority, and authority is never restated under an identity the
+        // broker cannot attribute to the plane that owns it.
+        let coordinator = self.coordinator(projection.zone.as_str())?;
+        coordinator.open_session().await.map_err(transport)?;
+        let transaction = transaction_token(projection.transaction)?;
+        // The cursor the broker reports it holds is the fact the whole
+        // reconciliation is proved against, and the store's own acknowledged
+        // sequence is the claim about reaching it. The two disagreeing means
+        // this store accepted a publication the broker never did, which no
+        // document can reconcile: it is refused here, by name, rather than sent
+        // as a projection the broker would have to prove.
+        let held = coordinator.accepted().await;
+        if held.sequence != projection.accepted.sequence {
+            return Err(d2b_resource_runtime::PublicationRefusal::Refused(format!(
+                "zone {} acknowledged sequence {} while the broker holds {}",
+                projection.zone,
+                projection.accepted.sequence.get(),
+                held.sequence.get()
+            )));
+        }
+        // The floor is the cursor the broker already accepted, which it must
+        // not move below. The document then restates that same cursor with the
+        // store's committed rows, and the broker checks every row of it
+        // against the projection it already holds rather than installing the
+        // claim.
+        let document = resynchronization_document(projection, held.clone())?;
+        coordinator
+            .resynchronize(&transaction, held.clone(), held)
+            .await
+            .map_err(transport)?;
+        coordinator
+            .publish_snapshot(&transaction, &document)
+            .await
+            .map_err(transport)?;
+        Ok(())
     }
 }

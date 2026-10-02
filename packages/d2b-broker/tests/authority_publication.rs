@@ -32,7 +32,8 @@ use d2b_contracts_broker::broker_wire::{
     MAX_PUBLICATION_QUEUE, MAX_PUBLICATION_ROWS, MAX_PUBLICATION_SNAPSHOT_BYTES,
     PUBLICATION_CONTROL_NOT_BOUND,
     PUBLICATION_DIGEST_MISMATCH, PUBLICATION_DUPLICATE_TRANSACTION, PUBLICATION_EFFECT_UNPROVEN,
-    PUBLICATION_FENCE_HELD, PUBLICATION_RECONCILIATION_REQUIRED,
+    PUBLICATION_FENCE_HELD, PUBLICATION_PROJECTION_UNPROVEN,
+    PUBLICATION_RECONCILIATION_REQUIRED,
     PUBLICATION_SESSION_BOUND_ELSEWHERE, PUBLICATION_SESSION_INVALID, PUBLICATION_SNAPSHOT_INCOMPLETE,
     PUBLICATION_SNAPSHOT_IN_PROGRESS, PUBLICATION_SNAPSHOT_TOO_LARGE, PUBLICATION_STALE_PREDECESSOR,
     PUBLICATION_UNKNOWN_TRANSACTION, PUBLICATION_WRONG_ZONE, publication_candidate_digest,
@@ -2826,5 +2827,179 @@ async fn a_committed_projection_keeps_every_accepted_authority_row() {
         error.reason,
         RefusalReason::IdentityNotAuthorized,
         "an unbound subject is refused"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A resynchronization is proved against the accepted projection
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_resynchronization_the_broker_cannot_prove_is_refused() {
+    let mut harness = Harness::start().await;
+    harness.install_reader_grant().await;
+    harness.restart().await;
+    assert_eq!(posture(&harness.status().await), "reconciling");
+    let accepted = harness.status().await.accepted().cloned().expect("an accepted cursor");
+
+    // A reconciliation may only restate what the broker already accepted. A
+    // document that moves the cursor forward describes revisions no fence here
+    // ever validated, and this broker holds no fact it could check them against.
+    let mut ahead = harness.snapshot(cursor(2), vec![reader_role()], None);
+    ahead.cursor = cursor(3);
+    let bytes = publication_snapshot_bytes(&ahead);
+    harness
+        .begin_snapshot(TX_TWO, ahead.cursor.clone(), 1, bytes.len() as u64)
+        .await
+        .expect("the transfer opens");
+    harness.chunk(TX_TWO, 0, 1, bytes).await.expect("the chunk is accepted");
+    let error = harness
+        .end_snapshot(TX_TWO, 1, publication_snapshot_digest(&ahead))
+        .await
+        .expect_err("a document ahead of the accepted cursor is refused");
+    assert_refused(
+        &refusal(error),
+        PUBLICATION_PROJECTION_UNPROVEN,
+        AdmissionStage::Recover,
+        RefusalReason::StaleAuthority,
+        true,
+    );
+    assert_eq!(posture(&harness.status().await), "reconciling");
+    assert_eq!(
+        harness.status().await.accepted().cloned(),
+        Some(accepted.clone()),
+        "the unprovable document moved nothing"
+    );
+
+    // The same holds for a document that restates an accepted grant with
+    // different bytes: the broker holds the exact bytes it accepted, and a
+    // claim about different ones is a conflict rather than a reconciliation.
+    let mut rewritten = harness.snapshot(accepted.clone(), vec![reader_role()], None);
+    rewritten.rows[0].admitted = canonical(&serde_json::json!({ "declared": "not-the-grant" }));
+    let bytes = publication_snapshot_bytes(&rewritten);
+    harness
+        .begin_snapshot(TX_TWO, accepted.clone(), 1, bytes.len() as u64)
+        .await
+        .expect("the transfer opens");
+    harness.chunk(TX_TWO, 0, 1, bytes).await.expect("the chunk is accepted");
+    let error = harness
+        .end_snapshot(TX_TWO, 1, publication_snapshot_digest(&rewritten))
+        .await
+        .expect_err("a restated grant with different bytes is refused");
+    assert_refused(
+        &refusal(error),
+        PUBLICATION_PROJECTION_UNPROVEN,
+        AdmissionStage::Recover,
+        RefusalReason::UnprovenEffect,
+        true,
+    );
+    assert_eq!(posture(&harness.status().await), "reconciling");
+
+    // An authority grant the broker never accepted is refused the same way: the
+    // broker cannot verify a row no fence of its ever validated.
+    let invented = harness.snapshot(accepted.clone(), vec![reader_role(), second_role()], None);
+    let bytes = publication_snapshot_bytes(&invented);
+    harness
+        .begin_snapshot(TX_TWO, accepted.clone(), 1, bytes.len() as u64)
+        .await
+        .expect("the transfer opens");
+    harness.chunk(TX_TWO, 0, 1, bytes).await.expect("the chunk is accepted");
+    let error = harness
+        .end_snapshot(TX_TWO, 1, publication_snapshot_digest(&invented))
+        .await
+        .expect_err("an invented authority grant is refused");
+    assert_refused(
+        &refusal(error),
+        PUBLICATION_PROJECTION_UNPROVEN,
+        AdmissionStage::Recover,
+        RefusalReason::UnprovenEffect,
+        true,
+    );
+
+    // And the document that IS the accepted projection reconciles the Zone,
+    // carrying the resolved relationship identity with it.
+    harness
+        .publish_snapshot(
+            TX_TWO,
+            accepted.clone(),
+            vec![reader_role(), shell_binding()],
+            None,
+        )
+        .await
+        .expect("the accepted projection reconciles the Zone");
+    assert_eq!(posture(&harness.status().await), "unfenced");
+}
+
+/// A grant over a `Role`, so a document can carry authority the broker never
+/// accepted.
+fn second_role() -> AuthorityProjectionRow {
+    let rule = RoleRule::new(
+        vec![ResourceTypeName::parse("Role").expect("Role is a standard type")],
+        vec![RoleResourceVerb::List],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    )
+    .expect("the auditor rule is bounded");
+    let role = AuthorizedRole::new(vec![rule], Vec::new()).expect("the auditor role is bounded");
+    projection_row("Role/auditor", &canonical(&role))
+}
+
+/// A reconciliation that OMITS an accepted grant is not a threat: the install
+/// merges over the accepted rows rather than replacing them, so no
+/// reconciliation can silently drop a grant this broker already accepted.
+#[tokio::test]
+async fn a_reconciliation_cannot_drop_an_accepted_grant() {
+    let mut harness = Harness::start().await;
+    harness.install_reader_grant().await;
+    harness.restart().await;
+    assert_eq!(posture(&harness.status().await), "reconciling");
+    let accepted = harness
+        .status()
+        .await
+        .accepted()
+        .cloned()
+        .expect("an accepted cursor");
+
+    // The document carries the binding but not the role it draws on.
+    harness
+        .publish_snapshot(TX_TWO, accepted, vec![shell_binding()], None)
+        .await
+        .expect("a partial document is admitted");
+    assert_eq!(posture(&harness.status().await), "unfenced");
+
+    // The omitted grant is still authority, and it is read as the SAME
+    // authority: `Process/shell` is authorized by `Role/reader` only, so this
+    // candidate fences. A reconciliation that had dropped the role would leave
+    // the binding pointing at nothing, and the candidate would be refused as an
+    // unauthorized subject instead.
+    let held = harness
+        .prepare(harness.prepare_request(
+            TX_THREE,
+            cursor(1),
+            cursor(2),
+            PublicationMutationKind::UpdateMetadata,
+            vec![process_row("worker")],
+            Vec::new(),
+            shell(),
+        ))
+        .await;
+    harness
+        .serve(AuthorityPublicationRequest::CancelTransaction(
+            CancelTransactionRequest {
+                transaction: tx_id(TX_THREE),
+                store_incarnation: incarnation(STORE),
+                digest: held.digest,
+            },
+        ))
+        .await
+        .expect("the exact fence is released");
+    assert_eq!(
+        posture(&harness.status().await),
+        "unfenced",
+        "a second reconciliation that DOES carry the role is admitted exactly \
+         like the first, which is only true if the broker still holds it"
     );
 }

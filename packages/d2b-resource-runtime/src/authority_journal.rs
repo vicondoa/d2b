@@ -51,6 +51,7 @@
 //! is a bearer credential, and the store never hands the broker authority -
 //! it hands it the exact committed projection to validate.
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use d2b_contracts_resource::v3::authority::{
@@ -259,6 +260,50 @@ impl DesiredRow {
     }
 }
 
+
+/// One committed row as a publication carries it.
+///
+/// This is both the outbox entry's row and a Zone projection's row: the
+/// committed row itself, the revision and digest it committed at, and the
+/// resolved relationship identity a binding row's key folds in. The identity
+/// is resolved once against the Zone's committed rows and travels with the
+/// row, so the broker stores the same relationship the fence validated and a
+/// resynchronization restates it instead of asserting a different one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishedRow {
+    /// The committed row. Its canonical `spec` bytes are what the broker stores
+    /// and re-evaluates, rather than a summary the candidate could shape.
+    pub row: StoredDesiredResource,
+    /// The revision the row committed at.
+    pub revision: DesiredRevision,
+    /// The digest of the exact committed row bytes.
+    pub digest: DesiredDigest,
+    /// The committed identity of the source row this binding row names, when
+    /// the Zone has committed it.
+    ///
+    /// A relationship key is over committed identity rather than over
+    /// references, so the identity a binding key folds in cannot be derived
+    /// from the row's own bytes. An unresolved row carries none, and the broker
+    /// then holds a relationship it cannot name - an absence, which refuses.
+    pub source_uid: Option<[u8; 16]>,
+    /// The committed identity of the consumer row this binding row names, when
+    /// the Zone has committed it. See [`Self::source_uid`].
+    pub consumer_uid: Option<[u8; 16]>,
+}
+
+impl PublishedRow {
+    /// One projected row as a publication carries it.
+    pub fn of(projected: &ProjectedRow) -> Self {
+        Self {
+            row: projected.row.row.clone(),
+            revision: projected.row.revision,
+            digest: projected.row.digest.clone(),
+            source_uid: projected.source_uid,
+            consumer_uid: projected.consumer_uid,
+        }
+    }
+}
+
 /// The canonical bytes naming one committed row at one revision.
 ///
 /// Free-standing so the digest can be recomputed from a decoded row without
@@ -413,7 +458,7 @@ pub struct OutboxEntry {
     pub sequence: ZoneDesiredSequence,
     pub candidate: DesiredDigest,
     /// Rows the mutation committed or rewrote, at their committed revisions.
-    pub rows: Vec<DesiredRow>,
+    pub rows: Vec<PublishedRow>,
     /// Rows the mutation retired.
     pub removed: Vec<ResourceKey>,
 }
@@ -956,16 +1001,26 @@ fn load_outbox_entry(
 /// The committed rows and retired keys one outbox payload carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CommittedPayload {
-    rows: Vec<DesiredRow>,
+    rows: Vec<PublishedRow>,
     removed: Vec<ResourceKey>,
 }
 
-fn encode_payload(rows: &[DesiredRow], removed: &[ResourceKey]) -> Vec<u8> {
+fn encode_payload(rows: &[PublishedRow], removed: &[ResourceKey]) -> Vec<u8> {
     let mut out = Canonical::new();
     out.u64(rows.len() as u64);
     for row in rows {
-        let bytes = row.canonical_bytes();
+        let bytes = DesiredRow {
+            row: row.row.clone(),
+            revision: row.revision,
+            digest: row.digest.clone(),
+        }
+        .canonical_bytes();
         out.bytes(&bytes);
+        // The resolved relationship identity travels with the row, so the
+        // replayed commit publishes the identity the fence validated rather
+        // than resolving it again from whatever the Zone holds now.
+        out.optional_bytes(row.source_uid.as_ref().map(|uid| uid.as_slice()));
+        out.optional_bytes(row.consumer_uid.as_ref().map(|uid| uid.as_slice()));
     }
     out.u64(removed.len() as u64);
     for key in removed {
@@ -982,7 +1037,16 @@ fn decode_payload(payload: &[u8]) -> Result<CommittedPayload, SpecStoreError> {
     let mut rows = Vec::with_capacity(usize::try_from(row_count).unwrap_or(0));
     for _ in 0..row_count {
         let encoded = reader.bytes()?;
-        rows.push(decode_row(&mut CanonicalReader::new(encoded))?);
+        let desired = decode_row(&mut CanonicalReader::new(encoded))?;
+        let source_uid = reader.flag()?.then(|| reader.fixed::<16>()).transpose()?;
+        let consumer_uid = reader.flag()?.then(|| reader.fixed::<16>()).transpose()?;
+        rows.push(PublishedRow {
+            row: desired.row,
+            revision: desired.revision,
+            digest: desired.digest,
+            source_uid,
+            consumer_uid,
+        });
     }
     let removed_count = reader.u64()?;
     let mut removed = Vec::with_capacity(usize::try_from(removed_count).unwrap_or(0));
@@ -1252,7 +1316,7 @@ pub fn commit_mutation(
         projection.audit.generation_before,
         projection.audit.generation_after,
     );
-    let rows: Vec<DesiredRow> = projection.rows.iter().map(|row| row.row.clone()).collect();
+    let rows: Vec<PublishedRow> = projection.rows.iter().map(PublishedRow::of).collect();
     let removed: Vec<ResourceKey> =
         projection.removed.iter().map(|row| row.key.clone()).collect();
     let payload = encode_payload(&rows, &removed);
@@ -1615,11 +1679,11 @@ fn project(
     conn: &Connection,
     candidate: &DesiredMutation,
 ) -> Result<Option<Projection>, SpecStoreError> {
-    let Some(mut projection) = match candidate {
+    let Some(mut projection) = (match candidate {
         DesiredMutation::Ensure(row) => project_ensure(conn, row)?,
         DesiredMutation::MarkDeleting(key) => project_mark_deleting(conn, key)?,
         DesiredMutation::Remove(key) => project_remove(conn, key)?,
-    } else {
+    }) else {
         return Ok(None);
     };
     // Relationship identity is resolved here, once, over the Zone's committed
@@ -1708,6 +1772,10 @@ fn project_ensure(
             rows: vec![ProjectedRow {
                 generation_before: None,
                 row: projected_row(created, revision),
+                // Relationship identity is filled in by [`project`] once the
+                // Zone's committed rows are indexed, never here.
+                source_uid: None,
+                consumer_uid: None,
             }],
             removed: Vec::new(),
             audit: ProjectedAudit { provenance: row.provenance, generation_before: None, generation_after: Some(1) },
@@ -1758,6 +1826,8 @@ fn project_ensure(
         rows: vec![ProjectedRow {
             generation_before: Some(existing.row.generation),
             row: projected_row(projected, revision),
+            source_uid: None,
+            consumer_uid: None,
         }],
         removed: Vec::new(),
         audit: ProjectedAudit {
@@ -1792,6 +1862,8 @@ fn project_mark_deleting(
         rows: vec![ProjectedRow {
             generation_before: Some(generation),
             row: projected_row(marked, revision),
+            source_uid: None,
+            consumer_uid: None,
         }],
         removed: Vec::new(),
         audit: ProjectedAudit {
@@ -1995,13 +2067,12 @@ pub fn zone_projection(
         .iter()
         .map(|desired| {
             let (source_uid, consumer_uid) = binding_identity(&identities, &desired.row);
-            crate::authority_publish::PublishedRow {
-                key: desired.row.key.clone(),
+            PublishedRow {
+                row: desired.row.clone(),
                 revision: desired.revision,
                 digest: desired.digest.clone(),
-                spec: desired.row.spec.clone(),
-                source_uid: source_uid.and_then(|uid| ResourceUid::from_bytes(&uid).ok()),
-                consumer_uid: consumer_uid.and_then(|uid| ResourceUid::from_bytes(&uid).ok()),
+                source_uid,
+                consumer_uid,
             }
         })
         .collect();
