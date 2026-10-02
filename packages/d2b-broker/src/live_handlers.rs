@@ -3697,6 +3697,28 @@ pub(crate) fn audit_device_worker_runtime_dir(op: &str, result: &str, target: &s
     );
 }
 
+/// Emit the audit event for one spawn-process plan the broker's own verified
+/// bundle refused or narrowed at the trust boundary - the executable, the
+/// host uid/gid, the capability list, the user-namespace mapping, the
+/// `bindsRuntimeSocket` flag - and for the one mount-policy drop the
+/// user-namespace path records rather than refuses.
+///
+/// Closed-vocabulary labels only: `result` is `failed-closed` for a refusal
+/// and `dropped` for a record of what the user-namespace path loses, and
+/// `target` is a stable slug or a `+`-joined list of
+/// [`crate::ops::spawn_runner::DroppedMountProtection`] slugs - never a path,
+/// a uid, a binary name or a raw error message.
+pub(crate) fn audit_spawn_plan_intent_fence(op: &str, result: &str, target: &str) {
+    tracing::info!(
+        kind = "critical",
+        subsystem = "spawn-plan-trust-boundary",
+        op = op,
+        result = result,
+        target = target,
+        "spawn plan against the bundle-resolved runner intent",
+    );
+}
+
 /// Emit a hash-only audit event for a component-session vsock ACL mutation.
 /// Closed-enum labels only; no raw paths, uids-by-value, or content.
 fn audit_component_session_vsock_acl(op: &str, target_class: &str, dev: u64, ino: u64) {

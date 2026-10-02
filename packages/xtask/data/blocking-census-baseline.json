@@ -189,7 +189,7 @@
       "std::sync::Condvar::wait_while": 0,
       "std::sync::Mutex::lock": 1,
       "std::sync::RwLock::read": 1,
-      "std::sync::RwLock::write": 2,
+      "std::sync::RwLock::write": 3,
       "std::sync::mpsc::Receiver::iter": 0,
       "std::sync::mpsc::Receiver::recv": 0,
       "std::sync::mpsc::Receiver::recv_timeout": 0,

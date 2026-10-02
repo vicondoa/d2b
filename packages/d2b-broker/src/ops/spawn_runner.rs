@@ -637,6 +637,264 @@ pub fn fence_presentation_argv(
     Ok(())
 }
 
+// -- The trust boundary: the launch payload against the bundle's own row --
+
+/// The closed set of reasons one launch plan is refused because it disagrees
+/// with - or is absent from - the bundle-resolved runner intent it names.
+///
+/// Every variant renders as a path-free, value-free slug: the field that
+/// disagreed is the whole of the report, and the payload's value for it is
+/// recorded nowhere. A refusal is a correct outcome of this fence, not a
+/// failure to launch: where the trusted declaration is absent, the plan is
+/// refused rather than completed with a synthesized default, and a plan that
+/// matches is the only thing that spawns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanIntentMismatch {
+    /// `binaryPath` - the executable the broker `execve`s - is not the one
+    /// the verified bundle declares. No other fence can catch this one: the
+    /// argv fence reads what the worker *opens*, and the binary is what the
+    /// worker *is*.
+    BinaryPath,
+    /// The host uid the plan runs as is not the intent's.
+    Uid,
+    /// The host gid the plan runs as is not the intent's.
+    Gid,
+    /// The supplementary group set the broker `setgroups`es to.
+    SupplementaryGroups,
+    /// The capability list `apply_capabilities` raises on the child.
+    Capabilities,
+    /// The namespace classes the broker clones.
+    Namespaces,
+    /// The seccomp policy class. This is load-bearing beyond the filter
+    /// itself: `w1-swtpm` is the marker the swtpm argv fence and the state
+    /// directory grant key off, so a plan that renamed it would drop both.
+    SeccompPolicy,
+    /// The mount policy - the read-only enforcement, the device mask, the
+    /// private `/proc` and the secret masks.
+    MountPolicy,
+    /// The file-creation mask installed before `execve`.
+    Umask,
+    /// The ADR 0003 root carve-out, which is what `preflight`'s uid-0 refusal
+    /// is keyed on. Asserting it the bundle row does not declare is how a
+    /// payload would run as host root outside a user namespace.
+    RootCarveOut,
+    /// The plan pre-establishes a user namespace the trusted intent declares
+    /// no mapping for.
+    UserNamespaceUndeclared,
+    /// The trusted intent declares a user-namespace mapping the plan drops.
+    UserNamespaceWithheld,
+    /// Both declare a mapping and the two mappings are not the same one.
+    UserNamespaceMapping,
+    /// The mapping sends in-namespace root (`0`) to host root (`0`) with no
+    /// ADR 0003 carve-out in the bundle row, so the broker would write
+    /// `0 0 1` into the child's `uid_map` and in-namespace root would carry
+    /// host-root DAC - with the payload's own capability list raised on top.
+    HostUidForZeroIsHostRoot,
+    /// The same for the group side of the mapping.
+    HostGidForZeroIsHostRoot,
+    /// A broker-pre-NS launch whose plan asks for the root secret masks
+    /// (`/etc`, `/var`, `/root`, `/run`, ...) that the user-namespace path
+    /// drops without a word - see [`DroppedMountProtection`].
+    UserNamespaceDropsRootSecretMasks,
+}
+
+impl std::fmt::Display for PlanIntentMismatch {
+    /// The stable static-code spelling the launch-failure envelope surfaces
+    /// and the audit record carries.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::BinaryPath => "spawn-plan-binary-path-mismatch",
+            Self::Uid => "spawn-plan-uid-mismatch",
+            Self::Gid => "spawn-plan-gid-mismatch",
+            Self::SupplementaryGroups => "spawn-plan-supplementary-groups-mismatch",
+            Self::Capabilities => "spawn-plan-capabilities-mismatch",
+            Self::Namespaces => "spawn-plan-namespaces-mismatch",
+            Self::SeccompPolicy => "spawn-plan-seccomp-policy-mismatch",
+            Self::MountPolicy => "spawn-plan-mount-policy-mismatch",
+            Self::Umask => "spawn-plan-umask-mismatch",
+            Self::RootCarveOut => "spawn-plan-root-carve-out-mismatch",
+            Self::UserNamespaceUndeclared => "spawn-plan-user-namespace-undeclared",
+            Self::UserNamespaceWithheld => "spawn-plan-user-namespace-withheld",
+            Self::UserNamespaceMapping => "spawn-plan-user-namespace-mapping-mismatch",
+            Self::HostUidForZeroIsHostRoot => "spawn-plan-host-uid-for-zero-is-host-root",
+            Self::HostGidForZeroIsHostRoot => "spawn-plan-host-gid-for-zero-is-host-root",
+            Self::UserNamespaceDropsRootSecretMasks => {
+                "spawn-plan-user-namespace-drops-root-secret-masks"
+            }
+        })
+    }
+}
+
+/// Cross-check one launch plan against the bundle-resolved runner intent it
+/// names, and refuse anything the verified bundle does not itself declare.
+///
+/// The spawn payload reaches the broker as a resolved plan: binary, uid, gid,
+/// groups, capabilities, namespaces, seccomp class, mount policy, umask and
+/// the user-namespace mapping are all the daemon's word, and every one of
+/// them becomes a host credential. The bundle is the broker's own verified
+/// copy of the same row, so it - not the payload - decides. Each field is
+/// compared to the intent's and a disagreement is refused by name, in the
+/// shape [`crate::ops::device_worker::state_volume_leaf_for_launch`] already
+/// uses for the state-directory presence policy.
+///
+/// The user-namespace mapping gets two checks. Equality with the trusted
+/// mapping, because the payload chooses which host identity in-namespace
+/// root lands on; and a refusal of a host-root mapping on its own, because
+/// `0 -> 0` makes in-namespace root host root and there is no `input.uid`
+/// check that sees it - a user-namespace launch forces the in-namespace
+/// credential to `0` regardless. A bundle row that genuinely wants host root
+/// says so with the same ADR 0003 `adrCarveOut` the uid-0 refusal is keyed
+/// on, and the plan may not claim that carve-out itself.
+///
+/// `argv`, `env` and the cgroup subtree are deliberately not compared: the
+/// daemon composes all three per launch (bounded controller-supplied launch
+/// arguments, the audio runtime properties, the private cgroup placement), so
+/// an exact match would refuse every well-formed launch. The arguments
+/// themselves are fenced where they matter -
+/// `swtpm_identity::verify_argv_names_only_trusted_paths` for the Device
+/// worker that opens its state by pathname, the per-family preflights for the
+/// rest.
+pub fn verify_plan_against_intent(
+    plan_input: &SpawnRunnerPlanInput,
+    intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+) -> Result<(), PlanIntentMismatch> {
+    if plan_input.binary_path != intent.binary_path {
+        return Err(PlanIntentMismatch::BinaryPath);
+    }
+    if plan_input.uid != intent.uid {
+        return Err(PlanIntentMismatch::Uid);
+    }
+    if plan_input.gid != intent.gid {
+        return Err(PlanIntentMismatch::Gid);
+    }
+    if plan_input.supplementary_groups != intent.supplementary_groups {
+        return Err(PlanIntentMismatch::SupplementaryGroups);
+    }
+    if plan_input.capabilities != intent.capabilities {
+        return Err(PlanIntentMismatch::Capabilities);
+    }
+    if plan_input.namespaces != intent.namespaces {
+        return Err(PlanIntentMismatch::Namespaces);
+    }
+    if plan_input.seccomp_policy_ref != intent.seccomp_policy_ref {
+        return Err(PlanIntentMismatch::SeccompPolicy);
+    }
+    if plan_input.mount_policy != intent.mount_policy {
+        return Err(PlanIntentMismatch::MountPolicy);
+    }
+    if plan_input.umask != intent.umask {
+        return Err(PlanIntentMismatch::Umask);
+    }
+    if plan_input.root_carve_out != intent.root_carve_out {
+        return Err(PlanIntentMismatch::RootCarveOut);
+    }
+    match (plan_input.user_namespace, intent.user_namespace) {
+        (None, None) => {}
+        (Some(_), None) => return Err(PlanIntentMismatch::UserNamespaceUndeclared),
+        (None, Some(_)) => return Err(PlanIntentMismatch::UserNamespaceWithheld),
+        (Some(claimed), Some(declared)) => {
+            if claimed.host_uid_for_zero != declared.host_uid_for_zero
+                || claimed.host_gid_for_zero != declared.host_gid_for_zero
+            {
+                return Err(PlanIntentMismatch::UserNamespaceMapping);
+            }
+            if claimed.host_uid_for_zero == 0 && !intent.root_carve_out {
+                return Err(PlanIntentMismatch::HostUidForZeroIsHostRoot);
+            }
+            if claimed.host_gid_for_zero == 0 && !intent.root_carve_out {
+                return Err(PlanIntentMismatch::HostGidForZeroIsHostRoot);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The protections a launch's mount block applies, and the broker-pre-NS
+/// (ADR 0021 user-namespace) path drops.
+///
+/// `sys::pidfd_sys` gates the whole block - `apply_mount_actions`,
+/// `apply_root_secret_masks`, `apply_device_mask_and_binds` and
+/// `apply_private_procfs` - on `!in_ns_credentials`, because a path that
+/// belongs to a mount inherited from the parent namespace cannot be
+/// bind-mounted inside a user namespace. That is a real kernel constraint,
+/// but it is not only a set of *grants* going missing: the block also carries
+/// every *protection* the plan asked for, and a plan preflighted as if they
+/// applied would run without them and say nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DroppedMountProtection {
+    /// `apply_mount_actions`: the read-only paths the profile declares
+    /// (`readOnlyPaths`, and `/nix/store` under `nixStoreReadOnly`). The
+    /// namespace clones the broker's mount tree, so a plan that asked for a
+    /// path read-only gets it read-write.
+    ReadOnlyPaths,
+    /// The `writablePaths`, `deviceBinds` and `bindMounts` the broker would
+    /// have materialized. They silently never appear; the worker fails later
+    /// on a path that is not there.
+    MountGrants,
+    /// `apply_device_mask_and_binds` plus `apply_private_procfs`: the `/dev`
+    /// mask and the private `/proc` a `hideDeviceNodesByDefault` profile with
+    /// a private pid namespace asks for. The device nodes stay visible and
+    /// the `/proc` stays the broker's.
+    DeviceMasking,
+    /// `apply_root_secret_masks`: `/etc`, `/var`, `/home`, `/root`, `/run`,
+    /// `/tmp`, `/boot`, `/mnt`, `/media`, `/srv` and `/opt` for a profile
+    /// that runs as host root with the device mask on. These are the masks
+    /// that keep a root runner from reading host state through a path its
+    /// profile never mentioned.
+    RootSecretMasks,
+}
+
+impl std::fmt::Display for DroppedMountProtection {
+    /// The stable static-code spelling the audit record carries.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::ReadOnlyPaths => "read-only-paths",
+            Self::MountGrants => "mount-grants",
+            Self::DeviceMasking => "device-masking",
+            Self::RootSecretMasks => "root-secret-masks",
+        })
+    }
+}
+
+/// Decide what a broker-pre-NS launch silently loses to its mount policy.
+///
+/// Returns [`PlanIntentMismatch::UserNamespaceDropsRootSecretMasks`] for the
+/// one drop that must not be a drop at all: a plan that runs as host root
+/// with the device mask on, inside a user namespace where the masks are
+/// skipped. That is the combination where the dropped masks are the only
+/// thing between the runner and `/etc`, `/root` and `/var` on the host, and
+/// no trusted role declares it - so it is refused rather than recorded.
+/// Everything else the launch drops is returned for the caller to record,
+/// because the trusted ADR 0021 roles (the Device workers, virtiofsd) are
+/// *designed* for the user-namespace path: their render node arrives as a
+/// pre-opened descriptor instead of a bind mount, and refusing them would
+/// take away the isolation they exist for.
+pub fn verify_user_namespace_mount_posture(
+    plan_input: &SpawnRunnerPlanInput,
+) -> Result<Vec<DroppedMountProtection>, PlanIntentMismatch> {
+    if plan_input.user_namespace.is_none() {
+        return Ok(Vec::new());
+    }
+    let policy = &plan_input.mount_policy;
+    let mut dropped = Vec::new();
+    if !policy.read_only_paths.is_empty() || policy.nix_store_read_only {
+        dropped.push(DroppedMountProtection::ReadOnlyPaths);
+    }
+    if !policy.writable_paths.is_empty()
+        || !policy.device_binds.is_empty()
+        || !policy.bind_mounts.is_empty()
+    {
+        dropped.push(DroppedMountProtection::MountGrants);
+    }
+    if policy.hide_device_nodes_by_default && plan_input.namespaces.pid {
+        dropped.push(DroppedMountProtection::DeviceMasking);
+    }
+    if policy.hide_device_nodes_by_default && plan_input.uid == 0 {
+        return Err(PlanIntentMismatch::UserNamespaceDropsRootSecretMasks);
+    }
+    Ok(dropped)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -858,13 +1116,284 @@ mod tests {
         }
     }
 
+    /// A TPM worker's trusted row, as the bundle resolves it: the swtpm
+    /// executable, the worker's own principal, the `w1-swtpm` seccomp class
+    /// and the ADR 0021 user-namespace mapping onto that same principal.
+    fn swtpm_intent() -> d2b_core::bundle_resolver::ResolvedRunnerIntent {
+        use d2b_core::bundle_resolver::UserNamespaceSpec;
+        d2b_core::test_support::ResolvedRunnerIntentBuilder::new()
+            .with_intent_id("runner:vm:host-system:role:swtpm-tpm")
+            .with_vm_name("host-system")
+            .with_role_id("swtpm-tpm")
+            .with_role(d2b_core::processes::ProcessRole::Swtpm)
+            .with_binary_path(PathBuf::from(
+                "/nix/store/swtpm/bin/swtpm",
+            ))
+            .with_uid(60100)
+            .with_gid(60100)
+            .with_seccomp_policy_ref(Some("w1-swtpm"))
+            .with_mount_policy(test_mount_policy())
+            .with_namespaces(NamespaceSet {
+                user: true,
+                ..test_namespaces()
+            })
+            .with_user_namespace(Some(UserNamespaceSpec {
+                host_uid_for_zero: 60100,
+                host_gid_for_zero: 60100,
+            }))
+            .with_umask(Some(0o007))
+            .build()
+    }
+
+    /// The plan the daemon's launch arm sends for [`swtpm_intent`]: the same
+    /// executable, principal, seccomp class and mapping, plus the trusted
+    /// state path in `argv` that the swtpm argv fence reads.
+    fn swtpm_plan_input() -> SpawnRunnerPlanInput {
+        SpawnRunnerPlanInput {
+            binary_path: PathBuf::from("/nix/store/swtpm/bin/swtpm"),
+            argv: vec![
+                "swtpm".to_owned(),
+                "--tpmstate".to_owned(),
+                "dir=/var/lib/d2b/tpm/device-tpm0-tpm-state".to_owned(),
+            ],
+            uid: 60100,
+            gid: 60100,
+            supplementary_groups: Vec::new(),
+            env: vec!["D2B_VM=host-system".to_owned()],
+            capabilities: Vec::new(),
+            namespaces: NamespaceSet {
+                user: true,
+                ..test_namespaces()
+            },
+            seccomp_policy_ref: Some("w1-swtpm".to_owned()),
+            mount_policy: test_mount_policy(),
+            cgroup_placement: test_cgroup_placement(),
+            root_carve_out: false,
+            skip_binary_exists_check: true,
+            user_namespace: Some(UserNamespaceSpec {
+                host_uid_for_zero: 60100,
+                host_gid_for_zero: 60100,
+            }),
+            umask: Some(0o007),
+            presentation: PresentationRealization::FilesystemPresentation,
+            // The daemon's legacy payload arm carries no resolved
+            // `ExecutionPlan` behind it, so the private mount tree holds
+            // this row's own policy and nothing is bound into it here.
+            admitted_presentation: AdmittedPresentation {
+                private_execution_root: PathBuf::new(),
+                binds: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn plan_matching_the_bundle_intent_is_admitted() {
+        let mut plan = swtpm_plan_input();
+        let intent = swtpm_intent();
+        plan.umask = intent.umask;
+        assert_eq!(verify_plan_against_intent(&plan, &intent), Ok(()));
+    }
+
+    /// The exploit from #619: the arguments name a trusted state path, so
+    /// the argv fence is satisfied, while `binaryPath` - which becomes
+    /// `argv[0]` and is what the worker actually *is* - names a different
+    /// executable. The fence that catches it is the plan cross-check, and it
+    /// refuses before any child exists.
+    #[test]
+    fn a_binary_path_that_is_not_the_intent_binary_is_refused() {
+        let mut plan = swtpm_plan_input();
+        let intent = swtpm_intent();
+        plan.umask = intent.umask;
+        plan.binary_path = PathBuf::from("/bin/cat");
+        plan.argv[0] = "/bin/cat".to_owned();
+        assert_eq!(
+            verify_plan_against_intent(&plan, &intent),
+            Err(PlanIntentMismatch::BinaryPath)
+        );
+    }
+
+    #[test]
+    fn a_uid_gid_and_capability_list_the_intent_does_not_declare_are_refused() {
+        let mut plan = swtpm_plan_input();
+        let intent = swtpm_intent();
+        plan.uid = 0;
+        assert_eq!(
+            verify_plan_against_intent(&plan, &intent),
+            Err(PlanIntentMismatch::Uid)
+        );
+        plan.uid = intent.uid;
+        plan.gid = 0;
+        assert_eq!(
+            verify_plan_against_intent(&plan, &intent),
+            Err(PlanIntentMismatch::Gid)
+        );
+        plan.gid = intent.gid;
+        plan.capabilities = vec!["CAP_SYS_ADMIN".to_owned()];
+        assert_eq!(
+            verify_plan_against_intent(&plan, &intent),
+            Err(PlanIntentMismatch::Capabilities)
+        );
+    }
+
+    /// A payload that renames the seccomp class would drop the swtpm argv
+    /// fence and the state-directory grant along with the filter, so the
+    /// class is a plan field the bundle decides.
+    #[test]
+    fn a_renamed_seccomp_class_is_refused() {
+        let mut plan = swtpm_plan_input();
+        let intent = swtpm_intent();
+        plan.seccomp_policy_ref = Some("w1-wayland-proxy".to_owned());
+        assert_eq!(
+            verify_plan_against_intent(&plan, &intent),
+            Err(PlanIntentMismatch::SeccompPolicy)
+        );
+    }
+
+    /// The payload cannot assert the ADR 0003 root carve-out for itself: it
+    /// is exactly the switch `preflight`'s uid-0 refusal is keyed on.
+    #[test]
+    fn a_self_asserted_root_carve_out_is_refused() {
+        let mut plan = swtpm_plan_input();
+        let intent = swtpm_intent();
+        // The principal is the bundle's; only the carve-out is the payload's,
+        // so the disagreement reported is the one under test.
+        plan.root_carve_out = true;
+        assert_eq!(
+            verify_plan_against_intent(&plan, &intent),
+            Err(PlanIntentMismatch::RootCarveOut)
+        );
+    }
+
+    #[test]
+    fn a_user_namespace_the_intent_does_not_declare_is_refused() {
+        let mut plan = good_input();
+        plan.user_namespace = Some(UserNamespaceSpec {
+            host_uid_for_zero: 0,
+            host_gid_for_zero: 0,
+        });
+        let intent = d2b_core::test_support::ResolvedRunnerIntentBuilder::new()
+            .with_binary_path(plan.binary_path.clone())
+            .with_uid(plan.uid)
+            .with_gid(plan.gid)
+            .with_supplementary_groups(plan.supplementary_groups.clone())
+            .with_capabilities(plan.capabilities.clone())
+            .with_namespaces(plan.namespaces.clone())
+            .with_seccomp_policy_ref(plan.seccomp_policy_ref.clone())
+            .with_mount_policy(plan.mount_policy.clone())
+            .build();
+        assert_eq!(
+            verify_plan_against_intent(&plan, &intent),
+            Err(PlanIntentMismatch::UserNamespaceUndeclared)
+        );
+    }
+
+    /// Even a bundle row that itself declared a `0 -> 0` mapping does not
+    /// get one for free: in-namespace root would be host root, so the
+    /// refusal is keyed on the trusted `adrCarveOut`, not on the payload.
+    #[test]
+    fn a_user_namespace_mapping_root_onto_host_root_is_refused_without_a_carve_out() {
+        let mut plan = swtpm_plan_input();
+        let mut intent = swtpm_intent();
+        let host_root = UserNamespaceSpec {
+            host_uid_for_zero: 0,
+            host_gid_for_zero: 0,
+        };
+        plan.user_namespace = Some(host_root);
+        intent.user_namespace = Some(d2b_core::bundle_resolver::UserNamespaceSpec {
+            host_uid_for_zero: 0,
+            host_gid_for_zero: 0,
+        });
+        assert_eq!(
+            verify_plan_against_intent(&plan, &intent),
+            Err(PlanIntentMismatch::HostUidForZeroIsHostRoot)
+        );
+        intent.root_carve_out = true;
+        plan.root_carve_out = true;
+        assert_eq!(verify_plan_against_intent(&plan, &intent), Ok(()));
+    }
+
+    #[test]
+    fn a_user_namespace_mapping_that_disagrees_with_the_intent_is_refused() {
+        let mut plan = swtpm_plan_input();
+        let intent = swtpm_intent();
+        plan.user_namespace = Some(UserNamespaceSpec {
+            host_uid_for_zero: 60101,
+            host_gid_for_zero: 60100,
+        });
+        assert_eq!(
+            verify_plan_against_intent(&plan, &intent),
+            Err(PlanIntentMismatch::UserNamespaceMapping)
+        );
+    }
+
+    #[test]
+    fn a_user_namespace_launch_the_bundle_did_not_declare_is_refused() {
+        let mut plan = good_input();
+        plan.user_namespace = Some(UserNamespaceSpec {
+            host_uid_for_zero: 1100,
+            host_gid_for_zero: 1100,
+        });
+        let intent = d2b_core::test_support::ResolvedRunnerIntentBuilder::new()
+            .with_binary_path(plan.binary_path.clone())
+            .with_uid(plan.uid)
+            .with_gid(plan.gid)
+            .with_supplementary_groups(plan.supplementary_groups.clone())
+            .with_capabilities(plan.capabilities.clone())
+            .with_namespaces(plan.namespaces.clone())
+            .with_seccomp_policy_ref(plan.seccomp_policy_ref.clone())
+            .with_mount_policy(plan.mount_policy.clone())
+            .build();
+        assert_eq!(
+            verify_plan_against_intent(&plan, &intent),
+            Err(PlanIntentMismatch::UserNamespaceUndeclared)
+        );
+    }
+
+    /// The mount block's masks are protections, not just grants, and the
+    /// user-namespace path skips all of them. A plan that asks for the root
+    /// secret masks is refused; the read-only and device drops the trusted
+    /// ADR 0021 roles accept are reported so the caller records them.
+    #[test]
+    fn a_user_namespace_launch_that_drops_the_root_secret_masks_is_refused() {
+        let mut plan = swtpm_plan_input();
+        plan.uid = 0;
+        plan.mount_policy.hide_device_nodes_by_default = true;
+        assert_eq!(
+            verify_user_namespace_mount_posture(&plan),
+            Err(PlanIntentMismatch::UserNamespaceDropsRootSecretMasks)
+        );
+    }
+
+    #[test]
+    fn a_user_namespace_launch_reports_the_protections_the_mount_block_drops() {
+        let mut plan = swtpm_plan_input();
+        plan.namespaces.pid = true;
+        plan.mount_policy.device_binds = vec!["/dev/kvm".to_owned()];
+        assert_eq!(
+            verify_user_namespace_mount_posture(&plan),
+            Ok(vec![
+                DroppedMountProtection::ReadOnlyPaths,
+                DroppedMountProtection::MountGrants,
+                DroppedMountProtection::DeviceMasking,
+            ])
+        );
+    }
+
+    #[test]
+    fn a_launch_without_a_user_namespace_drops_nothing() {
+        let mut plan = swtpm_plan_input();
+        plan.user_namespace = None;
+        plan.namespaces.pid = true;
+        assert_eq!(verify_user_namespace_mount_posture(&plan), Ok(Vec::new()));
+    }
+
     #[test]
     fn user_namespace_with_zero_uid_is_allowed_in_plan_layer() {
-        // The preflight does NOT validate the host UID - the
-        // broker dispatch is responsible for refusing UID 0
-        // mappings when adr_carve_out is absent (separately
-        // enforced in runtime.rs). This test pins the plan
-        // layer's pass-through semantics.
+        // The preflight itself does not decide the host mapping: the plan
+        // layer passes it through, and
+        // `verify_plan_against_intent` is what refuses a `0 -> 0` mapping
+        // the bundle row did not carve out. This test pins the plan layer's
+        // pass-through semantics so the two layers are not confused.
         let mut input = good_input();
         input.user_namespace = Some(UserNamespaceSpec {
             host_uid_for_zero: 0,

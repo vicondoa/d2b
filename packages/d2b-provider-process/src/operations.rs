@@ -519,14 +519,11 @@ fn runner_role_for_process_role(role: &ProcessRole) -> Option<RunnerRole> {
 
 /// The wire `role_id` one trusted runner intent fences against.
 ///
-/// The cloud-hypervisor runner keeps its daemon-side `ch-runner` alias; every
-/// other intent uses its own `role_id` (the retired broker arms' single
-/// evaluation point for the alias).
+/// The alias rule itself lives on [`ResolvedRunnerIntent::wire_role_id`] so
+/// the broker's spawn-identity fence evaluates it from the same place rather
+/// than keeping a second convention that can drift from this one.
 fn wire_role_id_for_intent(intent: &ResolvedRunnerIntent) -> &str {
-    match intent.role {
-        ProcessRole::CloudHypervisorRunner => "ch-runner",
-        _ => intent.role_id.as_str(),
-    }
+    intent.wire_role_id()
 }
 
 // ---------------------------------------------------------------------------

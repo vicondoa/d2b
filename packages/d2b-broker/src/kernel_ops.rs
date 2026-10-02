@@ -977,6 +977,65 @@ fn initiating_principal(invocation: &DirectInvocation<'_>) -> String {
     invocation.ctx.chain.initiating_identity().to_owned()
 }
 
+/// Bind the launch identity a spawn payload asserts to the bundle row it
+/// names, so a plan that matches one verified row cannot be launched under
+/// another row's name.
+///
+/// Four things have to agree: the `bundleRunnerIntentRef` the payload carries
+/// (the lookup key, so it reproduces the row by construction), the VM and
+/// role id its `runnerIdentity` claims, and the wire role it dispatches as.
+/// The wire role is compared through the same
+/// [`crate::runtime::runner_role_for_process_role`] table the daemon uses to
+/// mint it, so a well-formed launch is unaffected.
+///
+/// The cgroup subtree is bound the same way. The broker creates the subtree
+/// the plan names and enables controllers on its ancestors, so it must be
+/// the one the daemon derived from the intent: either the bundle's own
+/// placement (a launch the bundle scopes by VM) or the private placement
+/// [`crate::runtime::private_cgroup_placement`] derives from it (a typed
+/// Process row, whose subtree the daemon rewrites under the runtime scope).
+/// A subtree naming any other VM is refused.
+fn verify_spawn_identity_against_intent(
+    identity: &RunnerIdentity,
+    role: &d2b_contracts_broker::broker_wire::RunnerRole,
+    plan_input: &SpawnRunnerPlanInput,
+    intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+) -> Result<(), &'static str> {
+    if identity.bundle_runner_intent_ref != intent.intent_id {
+        return Err("spawn-launch-intent-ref-mismatch");
+    }
+    if identity.vm_id != intent.vm_name {
+        return Err("spawn-launch-vm-mismatch");
+    }
+    // The wire `roleId` is the intent's, except where the role travels
+    // under a daemon-side alias. Comparing against `intent.role_id`
+    // directly refused the cloud-hypervisor runner, the one role whose
+    // wire id is not its intent id. The alias is evaluated by the same
+    // accessor the launch client derives its value from, so the fence
+    // and the client cannot disagree about a legitimate launch.
+    if identity.role_id != intent.wire_role_id() {
+        return Err("spawn-launch-role-id-mismatch");
+    }
+    if crate::runtime::runner_role_for_process_role(&intent.role).as_ref() != Some(role) {
+        return Err("spawn-launch-role-mismatch");
+    }
+    let declared = plan_input.cgroup_placement.subtree.as_str();
+    if declared == intent.cgroup_placement.subtree {
+        return Ok(());
+    }
+    let private = crate::runtime::private_cgroup_placement(
+        &intent.cgroup_placement,
+        &intent.vm_name,
+        identity.runtime_scope,
+        true,
+    )
+    .map_err(|_| "spawn-launch-cgroup-subtree-mismatch")?;
+    if declared == private.subtree {
+        return Ok(());
+    }
+    Err("spawn-launch-cgroup-subtree-mismatch")
+}
+
 /// The spawn kernel: the privileged spawn of one fully-resolved runner
 /// plan. The daemon-side family handler validates the typed request
 /// against its resolver and carries the resolved plan (plus the
@@ -985,6 +1044,29 @@ fn initiating_principal(invocation: &DirectInvocation<'_>) -> String {
 /// retired `SpawnRunner` arm ran, registers the spawned pidfd under the
 /// invocation id so the broker's SIGCHLD reaper owns the child, and
 /// returns the pidfd and any extra descriptors over the fd leg.
+///
+/// The plan in that payload is the daemon's word until the broker's own
+/// verified bundle says otherwise, and every host credential it names -
+/// the executable, the uid/gid the broker `setuid`s and `setgid`s to, the
+/// capability list, the user-namespace mapping that decides which host
+/// identity in-namespace root lands on - is applied by the broker to the
+/// daemon's instruction. So the resolver is loaded once, up front, and
+/// three fences run against it before any of that instruction is acted on
+/// and before any ACL is touched:
+///
+/// 1. [`crate::ops::spawn_runner::verify_plan_against_intent`] - the plan
+///    against the `bundleRunnerIntentRef` the payload names, field by field.
+///    A bundle that declares no such intent refuses the launch.
+/// 2. [`crate::ops::spawn_runner::verify_user_namespace_mount_posture`] -
+///    what the user-namespace path drops from the mount block, and the one
+///    drop that is refused rather than recorded.
+/// 3. [`crate::ops::device_worker::runtime_socket_binding_for_launch`] and
+///    the unscoped equivalent - the payload's `bindsRuntimeSocket` against
+///    the closed table the bundle's own Device-worker rows are minted from.
+///
+/// The same reload feeds the two derivations that already needed it (the
+/// USBIP backend device binds and the Device-worker scope pin), so this
+/// costs one bundle verification per spawn rather than a second one.
 async fn spawn_process(
     config: &KernelConfig,
     invocation: &DirectInvocation<'_>,
@@ -999,6 +1081,82 @@ async fn spawn_process(
     let activation_input: Option<d2b_contracts_resource::v3::ActivationRunnerInput> =
         optional_parse_field(invocation.payload, "activationInput")?;
     let mut device_worker = parse_device_worker(invocation.payload)?;
+    // The trust boundary: one reload of the captured bundle path (the same
+    // per-request reload authority the answer path uses) feeds every fence
+    // below and both of the derivations further down. An unavailable or
+    // tampered bundle refuses the spawn outright: with no trusted row to
+    // compare the plan against, there is nothing left to authorize it with.
+    let resolver = match crate::runtime::load_kernel_resolver(&config.bundle_path) {
+        crate::runtime::BundleSlot::Loaded(resolver) => resolver,
+        crate::runtime::BundleSlot::Unavailable => {
+            return Err(refused("spawn-process: bundle resolver unavailable"));
+        }
+        crate::runtime::BundleSlot::Tampered { .. } => {
+            return Err(refused("spawn-process: bundle tampered"));
+        }
+    };
+    let Some(intent) = resolver.find_runner_intent(identity.bundle_runner_intent_ref.as_str())
+    else {
+        return Err(refused("spawn-process: bundle runner intent unresolved"));
+    };
+    // The plan fence below proves the launch matches SOME row of the verified
+    // bundle. That is not yet enough: the row is chosen by the payload, so a
+    // launch that matches row B while calling itself row A would obtain row
+    // B's uid, capabilities and grants under row A's name. The row the
+    // payload names, the row it claims to be launching, and the wire role all
+    // have to be the same row, in the same shape the retired
+    // `validate_spawn_runner_request_matches_intent` bound them.
+    if let Err(slug) =
+        verify_spawn_identity_against_intent(&identity, &role, &plan_input, intent)
+    {
+        crate::live_handlers::audit_spawn_plan_intent_fence(
+            "launch-identity",
+            "failed-closed",
+            slug,
+        );
+        return Err(refused(format!("spawn-process: launch identity: {slug}")));
+    }
+    if let Err(mismatch) =
+        crate::ops::spawn_runner::verify_plan_against_intent(&plan_input, intent)
+    {
+        crate::live_handlers::audit_spawn_plan_intent_fence(
+            "plan-intent",
+            "failed-closed",
+            &mismatch.to_string(),
+        );
+        return Err(refused(format!(
+            "spawn-process: plan intent mismatch: {mismatch}"
+        )));
+    }
+    match crate::ops::spawn_runner::verify_user_namespace_mount_posture(&plan_input) {
+        Err(mismatch) => {
+            crate::live_handlers::audit_spawn_plan_intent_fence(
+                "user-ns-mount-posture",
+                "failed-closed",
+                &mismatch.to_string(),
+            );
+            return Err(refused(format!(
+                "spawn-process: user namespace mount posture: {mismatch}"
+            )));
+        }
+        Ok(dropped) if dropped.is_empty() => {}
+        // The user-namespace path skips the whole mount block, so a launch
+        // that asks for a read-only path, a bind mount, a device mask or a
+        // private `/proc` runs without it. That is the trusted ADR 0021
+        // design for the roles that use the path, and it is recorded here at
+        // `critical` so the drop is never silent and never unclaimed.
+        Ok(dropped) => {
+            crate::live_handlers::audit_spawn_plan_intent_fence(
+                "user-ns-mount-posture",
+                "dropped",
+                &dropped
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("+"),
+            );
+        }
+    }
     let mut request_fds = invocation
         .fds
         .iter()
@@ -1035,24 +1193,15 @@ async fn spawn_process(
         None
     };
     // The USBIP backend device binds (the retired arm's
-    // `extend_usbip_backend_device_binds`): the kernel loads the bundle
-    // resolver from the captured bundle path - the same per-request
-    // reload authority the broker's answer path uses - and extends the
-    // parsed plan's mount policy with the live locked busid device nodes
-    // before the sandbox plan builds, so the kernel produces the same
-    // mountPolicy the retired arm did.
+    // `extend_usbip_backend_device_binds`): the resolver loaded for the
+    // trust-boundary fences above - the same per-request reload authority
+    // the broker's answer path uses - extends the parsed plan's mount policy
+    // with the live locked busid device nodes before the sandbox plan builds,
+    // so the kernel produces the same mountPolicy the retired arm did. It
+    // runs after the plan fence, so the extension is the broker's own
+    // addition to an already bundle-matching plan and never widens what the
+    // payload was allowed to ask for.
     if matches!(role, d2b_contracts_broker::broker_wire::RunnerRole::Usbip) {
-        let resolver = match crate::runtime::load_kernel_resolver(&config.bundle_path) {
-            crate::runtime::BundleSlot::Loaded(resolver) => resolver,
-            crate::runtime::BundleSlot::Unavailable => {
-                return Err(refused(
-                    "spawn-process: usbip backend bundle resolver unavailable",
-                ));
-            }
-            crate::runtime::BundleSlot::Tampered { .. } => {
-                return Err(refused("spawn-process: usbip backend bundle tampered"));
-            }
-        };
         crate::runtime::extend_usbip_backend_device_binds(
             &resolver,
             &identity.vm_id,
@@ -1093,31 +1242,46 @@ async fn spawn_process(
     // of being handed those directories, and the launch that continues is
     // the pin itself, never the payload's copy. Refusals are typed,
     // path-free slugs, audited and surfaced in the launch-failure envelope.
-    let (swtpm_identity, guest_runtime_posture, state_volume_leaf) =
+    // Whether this launch binds a socket under the broker runtime root's
+    // per-Guest directory is the payload's flag, and it is the switch for
+    // creating and posturing `<runtime_root>/vms/<guest>` and setting
+    // `u:<plan.uid>:rwx` on it - a grant that would let the claiming
+    // principal unlink a sibling worker's socket. It is checked here against
+    // the closed [`crate::ops::device_worker::binds_runtime_socket`] table:
+    // for a pinned row the launched row's own declared (Provider, template)
+    // pair decides, and for a launch that names no row there is nothing to
+    // grant, so only the bundle-resolved role's own table entry does. A
+    // disagreement is refused by name, and what continues is the trusted
+    // value rather than the payload's copy.
+    let (swtpm_identity, guest_runtime_posture, state_volume_leaf, binds_runtime_socket) =
         match device_worker.scope.as_ref() {
-            None => (
-                None,
-                None,
-                crate::ops::device_worker::StateVolumeLeaf::MustExist,
-            ),
+            None => {
+                let expected = crate::ops::device_worker::binds_runtime_socket(&intent.role);
+                if device_worker.binds_runtime_socket != expected {
+                    let mismatch = crate::ops::device_worker::SOCKET_BINDING_ROW_MISMATCH;
+                    crate::live_handlers::audit_device_worker_runtime_dir(
+                        "socket-binding",
+                        "failed-closed",
+                        mismatch,
+                    );
+                    return Err(refused(format!(
+                        "spawn-process: device worker socket binding: {mismatch}"
+                    )));
+                }
+                (
+                    None,
+                    None,
+                    crate::ops::device_worker::StateVolumeLeaf::MustExist,
+                    expected,
+                )
+            }
             Some(claimed) => {
-                let resolver = match crate::runtime::load_kernel_resolver(&config.bundle_path) {
-                    crate::runtime::BundleSlot::Loaded(resolver) => resolver,
-                    crate::runtime::BundleSlot::Unavailable => {
-                        return Err(refused(
-                            "spawn-process: device worker bundle resolver unavailable",
-                        ));
-                    }
-                    crate::runtime::BundleSlot::Tampered { .. } => {
-                        return Err(refused("spawn-process: device worker bundle tampered"));
-                    }
-                };
+                use crate::ops::device_worker as dw;
                 // A launch that names no launched row carries no row for the
                 // bundle to pin, which is the same unresolved-row refusal the
                 // pin itself issues - never a silent "grants nothing", which
                 // would launch the same worker with the scope it was never
                 // granted.
-                use crate::ops::device_worker as dw;
                 let (resource_ref, zone_uid) =
                     match (identity.resource_ref.as_ref(), identity.zone_uid.as_ref()) {
                         (Some(resource_ref), Some(zone_uid)) => (resource_ref, zone_uid),
@@ -1170,6 +1334,24 @@ async fn spawn_process(
                     );
                     refused(format!("spawn-process: device worker state leaf: {slug}"))
                 })?;
+                // The socket binding is the launched row's own fact on the
+                // same terms as its state-directory presence policy: the
+                // closed table turns the row the pin resolved into the
+                // worker role, and the wire flag is only a check.
+                let binds = dw::runtime_socket_binding_for_launch(
+                    &resolver,
+                    &pinned,
+                    resource_ref,
+                    device_worker.binds_runtime_socket,
+                )
+                .map_err(|slug| {
+                    crate::live_handlers::audit_device_worker_runtime_dir(
+                        "socket-binding",
+                        "failed-closed",
+                        slug,
+                    );
+                    refused(format!("spawn-process: device worker socket binding: {slug}"))
+                })?;
                 let swtpm_identity = if matches!(
                     role,
                     d2b_contracts_broker::broker_wire::RunnerRole::Swtpm
@@ -1179,15 +1361,19 @@ async fn spawn_process(
                 } else {
                     None
                 };
-                let posture = if device_worker.binds_runtime_socket {
+                let posture = if binds {
                     crate::ops::device_worker::guest_runtime_dir_posture(&resolver, pinned.guest())
                 } else {
                     None
                 };
-                (swtpm_identity, posture, leaf)
+                (swtpm_identity, posture, leaf, binds)
             }
         };
+    // The launch that continues runs on the trusted values, never the
+    // payload's copies: the presence policy the pin derived and the socket
+    // binding the closed table (or the pinned row) derived.
     device_worker.state_volume_leaf = state_volume_leaf;
+    device_worker.binds_runtime_socket = binds_runtime_socket;
     // The stale-socket preflight cleanups (the retired arm's three
     // `cleanup_*_stale_socket` calls). The guest runtime Provider declares
     // its socket-carrying argv paths; the kernel unlinks provably-stale
@@ -1222,15 +1408,16 @@ async fn spawn_process(
     // (`--shared-dir=`, `XDG_RUNTIME_DIR`), so each is bounded by a
     // TRUSTED DECLARATION read out of the broker's verified bundle here,
     // the same per-request reload authority the USBIP and Device-worker
-    // arms above use. One reload feeds both, and only for a launch that
-    // actually asks for one of the two grants, so every other spawn stays
-    // bundle-free. An unbound declaration (a bundle or site that declares
-    // none) refuses the launch in the handler; it is never a default.
+    // arms above use. That is the resolver this function already loaded
+    // once, up front, for the spawn fences and both Device derivations, so
+    // the two bounds cost no further bundle verification. An unbound
+    // declaration (a bundle or site that declares none) refuses the launch
+    // in the handler; it is never a default.
     use crate::ops::launch_acl_bounds as bounds;
     let acl_bounds = if serving_worker
         || crate::live_handlers::plan_reads_host_session_runtime_dir(&plan_input)
     {
-        Some(kernel_resolver(config, "spawn-process")?)
+        Some(Arc::clone(&resolver))
     } else {
         None
     };
@@ -2269,8 +2456,10 @@ fn parse_plan(payload: &CanonicalJsonObject) -> Result<SpawnRunnerPlanInput, Dis
         mount_policy,
         cgroup_placement: parse_field(payload, "cgroupPlacement")?,
         root_carve_out: optional_field_bool(payload, "rootCarveOut")?.unwrap_or(false),
-        skip_binary_exists_check: optional_field_bool(payload, "skipBinaryExistsCheck")?
-            .unwrap_or(false),
+        // The binary-exists refusal is a guard against a bundle row whose
+        // executable is not on this host, so the broker is the one that
+        // decides whether to apply it: a payload cannot switch it off.
+        skip_binary_exists_check: false,
         user_namespace: optional_user_namespace(payload)?,
         umask: optional_umask(payload)?,
         presentation,
