@@ -2460,22 +2460,35 @@ mod tests {
         }
     }
 
+    /// Serve the publication socket on a thread of its own and share the
+    /// state the test reads.
+    ///
+    /// The bind and listen happen HERE, on the caller's thread, before the
+    /// accept loop is spawned. A caller that connects the instant this
+    /// returns must not race the bind: binding inside the spawned closure
+    /// leaves the socket path absent until that thread is scheduled, so a
+    /// `connect` issued immediately after the spawn fails with ENOENT and
+    /// surfaces as "could not reach the privileged broker socket". That
+    /// window widens with load - it passed in isolation and failed twice in
+    /// five runs of the full binary - and no test can close it from its own
+    /// side, because the peer is the other end. Binding before the spawn
+    /// makes the listener's existence a precondition of the return, which is
+    /// what every caller already assumes.
     fn serve_broker_peer(path: &Path) -> Arc<std::sync::Mutex<BrokerPeer>> {
         let shared = Arc::new(std::sync::Mutex::new(BrokerPeer::new()));
         let owned = Arc::clone(&shared);
-        let socket_path = path.to_path_buf();
+        let socket = socket2::Socket::new(
+            socket2::Domain::UNIX,
+            socket2::Type::from(libc::SOCK_SEQPACKET),
+            None,
+        )
+        .expect("a seqpacket socket");
+        socket
+            .bind(&socket2::SockAddr::unix(path).expect("a unix address"))
+            .expect("the publication socket binds");
+        socket.listen(64).expect("the publication socket listens");
+        let listener = std::os::unix::net::UnixListener::from(std::os::fd::OwnedFd::from(socket));
         std::thread::spawn(move || {
-            let socket = socket2::Socket::new(
-                socket2::Domain::UNIX,
-                socket2::Type::from(libc::SOCK_SEQPACKET),
-                None,
-            )
-            .expect("a seqpacket socket");
-            socket
-                .bind(&socket2::SockAddr::unix(&socket_path).expect("a unix address"))
-                .expect("the publication socket binds");
-            socket.listen(64).expect("the publication socket listens");
-            let listener = std::os::unix::net::UnixListener::from(std::os::fd::OwnedFd::from(socket));
             for connection in listener.incoming() {
                 let stream = connection.expect("the publication socket accepts");
                 while let Ok(body) = d2bd_runtime::unix_transport::read_frame(&stream) {

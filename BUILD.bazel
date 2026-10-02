@@ -355,6 +355,13 @@ filegroup(
         "//packages/d2b-provider-user:cargo_workspace_sources",
         "//packages/d2b-provider-test-controller:cargo_workspace_sources",
         "//packages/d2b-test-vm-harness:cargo_workspace_sources",
+        # The suite-membership guard reads every packages/*/BUILD.bazel to
+        # decide which packages declare an all-tests aggregate. This filegroup
+        # was the guard's entire view of the tree, and it listed this
+        # package's `cargo_workspace_sources` but not its BUILD.bazel, so the
+        # staged tree was missing one package out of 94 and the guard failed
+        # intermittently with a DIFFERENT package named each run.
+        "//packages/d2b-test-vm-harness:BUILD.bazel",
         "//packages/d2b-resource-runtime:cargo_workspace_sources",
         "//packages/d2b-audit:BUILD.bazel",
         "//packages/d2b-broker-composition:BUILD.bazel",

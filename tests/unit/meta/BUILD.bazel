@@ -34,6 +34,13 @@ sh_test(
 sh_test(
     name = "rust_main_packages_suite_guard",
     srcs = ["rust-main-packages-suite-guard.sh"],
+    # This filegroup is the guard's entire view of the tree, so it must
+    # contain every packages/*/BUILD.bazel: the guard's question is which
+    # packages declare an all-tests aggregate. A BUILD.bazel missing from it
+    # is a package the staged tree cannot describe, and the guard then fails
+    # intermittently naming a DIFFERENT package each run - the signature of
+    # an incomplete tree, not of a membership gap. One was missing
+    # (d2b-test-vm-harness); see the note on //:packages_workspace_sources.
     data = [
         "//:packages_workspace_sources",
         "//bazel/checks:BUILD.bazel",
