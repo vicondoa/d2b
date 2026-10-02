@@ -23,11 +23,13 @@
     component, so the row name is not a boundary to separate on; one Provider
     is one signed artifact published under one key, and that is the trust
     boundary the account follows.
-  - `d2b-<zone>-virtiofsd` and `d2b-<zone>-mi-agent`: the binding-owned
-    serving worker and the managed-identity agent each get their own account
-    rather than their Provider's controller account, because each holds
-    authority a controller does not - two path trees opened to the serving
-    worker's principal, credential material in the agent's hands.
+  - `d2b-<zone>-virtiofsd`: the binding-owned serving worker gets its own
+    account rather than its Provider's controller account, because two path
+    trees are opened to its principal. The credential agent a `Credential`
+    controller adopts is deliberately not here: the shared crate may not name
+    it under the Provider family-knowledge rule, so an account only the Nix
+    side held would resolve nothing, and those rows stay refused.
+</input>
 
   The numeric identity is the name-derived id every other named principal in
   the module tree uses, so an account keeps its ids for as long as it keeps its
@@ -51,3 +53,41 @@
   `template-principal-unprovisioned` for each of those rows and minted no
   launch intent for them, so the controllers, the serving worker, and the GPU
   workers of a Zone never ran. Those rows now resolve a provisioned account.
+
+- Two of those accounts could not be provisioned at all, so the guest failed
+  to evaluate rather than refusing the rows it names. A Provider controller
+  account composes to `d2b-<zone>-controller-<provider>`, which for the
+  Providers a host declares (`volume-local`, `volume-virtiofs`,
+  `runtime-cloud-hypervisor`) is past the 31 bytes the host account database
+  carries - NixOS's own user and group options refuse 32 or more - and the
+  guest aborted with `Group name 'd2b-work-controller-volume-local' is longer
+  than 31 characters which is not allowed!`. Every derived name is bounded now:
+  one that fits is used exactly as composed, and one that does not keeps a
+  readable prefix of its row-class token and carries eight hex digits of the
+  SHA-256 over the whole name, so two row classes that overflow together stay
+  two accounts. A Zone name long enough that no prefix fits has no account on
+  either side and is refused.
+
+  `packages/d2b-provider-device-tpm` composed the same two TPM worker
+  accounts a third time, in its state Volume's granted principals and in its
+  worker's own process principal, with no bound at all - so a Device name
+  long enough to overflow the account would have been named for an account
+  only that crate held while the host provisioned the bounded one. Both
+  compose through `d2b-core`'s `bounded_account_name` now, which is the same
+  composition `nixos-modules/lib.nix` and `template_account` use.
+
+  `template_account` also ended the composition on the Device families. A
+  controller row owned by a Device Provider - which signs a controller
+  artifact as well as its worker artifact - matched that arm, found a row name
+  outside the worker vocabulary, and returned nothing, leaving the Provider
+  controller rule below it unreachable for exactly the Providers that reach
+  it. A row name no Device family claims now falls through to the remaining
+  classes instead.
+
+  The row classes and the account each composes to are one committed table
+  (`tests/unit/nix/cases/host-worker-accounts.json`) that both sides read: the
+  `host-worker-accounts` Nix case evaluates the module over it, and
+  `every_provisioned_row_class_composes_its_host_account_name` in
+  `packages/d2b-core` runs `template_account` over it. Neither side carries its
+  own copy of the names, so the two cannot agree by accident of two careful
+  ones, and cannot drift apart without one of them failing.

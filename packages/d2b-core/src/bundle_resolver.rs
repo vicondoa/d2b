@@ -5215,9 +5215,10 @@ const VIDEO_WORKER_ROW_PREFIX: &str = "video-";
 const GPU_WORKER_OWNER_SUFFIX: &str = "-gpu";
 const VIDEO_WORKER_OWNER_SUFFIX: &str = "-video";
 
-/// The principal-account suffix the binding-owned virtiofsd serving worker
-/// carries (`d2b-<zone>-virtiofsd`).
-const SERVING_WORKER_OWNER_SUFFIX: &str = "-virtiofsd";
+/// The row-class token the binding-owned virtiofsd serving worker's account
+/// carries, which `bounded_account_name` prefixes with the Zone to compose
+/// `d2b-<zone>-virtiofsd`.
+const SERVING_WORKER_BODY: &str = "virtiofsd";
 /// The static Provider controller template prefix
 /// (`static_controller_template_name`, `packages/d2b-resource-compiler`):
 /// every controller row the compiler projects declares a template under it,
@@ -5229,12 +5230,19 @@ const CONTROLLER_ACCOUNT_SEGMENT: &str = "controller";
 /// The ResourceType prefix every Provider-owned template binding carries as
 /// its owner reference.
 const PROVIDER_OWNER_PREFIX: &str = "Provider/";
-/// The longest account name the host account database carries, mirroring the
-/// daemon's own principal-name grammar (`valid_principal_name`,
-/// `packages/d2bd/src/principal_allocation.rs`). A Zone or Provider name long
-/// enough to push a composed name past it has no account to resolve through,
-/// so the row is refused rather than truncated into a different identity.
-const MAX_ACCOUNT_NAME_BYTES: usize = 63;
+/// The longest account name the host account database carries.
+///
+/// NixOS's own user and group options refuse a name of 32 bytes or more
+/// (`nixos/modules/config/users-groups.nix`), and that is the POSIX bound on
+/// a group name rather than a NixOS choice: a name past it is not an account
+/// the host holds at all, so a host configured from
+/// [`bounded_account_name`]'s output is readable at any length this bound
+/// admits.
+pub const ACCOUNT_NAME_LIMIT: usize = 31;
+
+/// The hex digits of the digest a shortened account name carries, mirroring
+/// `accountNameHashHex` in `nixos-modules/lib.nix`.
+const ACCOUNT_NAME_HASH_HEX: usize = 8;
 
 /// The closed reason one template-bound row's principal cannot be resolved to
 /// a real host account.
@@ -5311,10 +5319,16 @@ impl fmt::Display for TemplatePrincipalError {
 /// family this crate may not name is provisioned by the family crate and
 /// refused here until it is.
 ///
+/// Each of those names is bounded to what the host account database carries
+/// ([`bounded_account_name`]), so a Provider name long enough to push a row
+/// class past that bound is still an account the host holds rather than a
+/// refusal.
+///
 /// `nixos-modules/lib.nix` (`templateWorkerAccounts`) derives the same names
-/// from the same Zone rows and `host-users.nix` materializes them, so a
-/// composed name the host cannot carry is a refusal on both sides rather than
-/// a truncated identity.
+/// from the same Zone rows and `host-users.nix` materializes them, and one
+/// committed table of row classes is read through both
+/// (`tests/unit/nix/cases/host-worker-accounts.json`), so the two sides cannot
+/// name a row's account differently without one of them failing.
 fn template_account(
     zone: &str,
     binding: &ProcessTemplateBinding,
@@ -5327,7 +5341,14 @@ fn template_account(
     let template = binding.template().as_str();
     let row_name = row.name().as_str();
     let row_type = row.resource_type().as_str();
-    let account = match (owner.as_str(), row_type) {
+    // The Device families are tried first because they are the ones whose
+    // account carries the claiming Device's name, and a row name that is not
+    // one of their own vocabulary falls through to the classes below rather
+    // than ending the composition: a Device Provider also signs a controller
+    // artifact, so its controller rows are named by the Provider rule and not
+    // by the worker rule, and an arm that returned `None` for a row name it
+    // did not recognize would refuse a row the host has an account for.
+    let device_account = match (owner.as_str(), row_type) {
         (DEVICE_TPM_PROVIDER_REF, "Process") => device_worker_account(
             zone,
             row_name,
@@ -5354,8 +5375,11 @@ fn template_account(
                 VIDEO_WORKER_OWNER_SUFFIX,
             )
         }),
+        _ => None,
+    };
+    let account = device_account.or_else(|| match (owner.as_str(), row_type) {
         (SERVING_WORKER_PROVIDER_REF, "Process") if template == SERVING_WORKER_TEMPLATE => {
-            Some(format!("d2b-{zone}{SERVING_WORKER_OWNER_SUFFIX}"))
+            bounded_account_name(zone, SERVING_WORKER_BODY)
         }
         _ if row_type == PROCESS_RESOURCE_TYPE_NAME
             && template.starts_with(CONTROLLER_TEMPLATE_PREFIX) =>
@@ -5363,17 +5387,54 @@ fn template_account(
             owner
                 .strip_prefix(PROVIDER_OWNER_PREFIX)
                 .filter(|provider| !provider.is_empty())
-                .map(|provider| {
-                    format!("d2b-{zone}-{CONTROLLER_ACCOUNT_SEGMENT}-{provider}")
+                .and_then(|provider| {
+                    bounded_account_name(zone, &format!("{CONTROLLER_ACCOUNT_SEGMENT}-{provider}"))
                 })
         }
         _ => None,
-    };
+    });
     let account = account.ok_or_else(unprovisioned)?;
-    if account.is_empty() || account.len() > MAX_ACCOUNT_NAME_BYTES {
-        return Err(unprovisioned());
-    }
     Ok(account)
+}
+
+/// The account one row class runs as, bounded to what the host account
+/// database carries, or `None` when no name of that length is available.
+///
+/// A name that fits [`ACCOUNT_NAME_LIMIT`] is used exactly as composed, so
+/// every ordinary row class reads as the row it belongs to. One that does not
+/// keeps a readable prefix of the row-class token and carries the first
+/// [`ACCOUNT_NAME_HASH_HEX`] hex digits of the SHA-256 over the whole composed
+/// name: two row classes that overflow together stay two accounts rather than
+/// collapsing into one. A Zone name long enough that no prefix fits is a Zone
+/// this scheme cannot name, and yields no account at all.
+///
+/// `nixos-modules/lib.nix` (`boundedAccountName`) is this same composition
+/// over the same inputs, and `host-users.nix` materializes what it returns,
+/// so a row this resolves is a row a host built from those Zone rows holds.
+/// The Device TPM Provider names the same two accounts for its state Volume's
+/// granted principals and for its worker's own process principal
+/// (`packages/d2b-provider-device-tpm/src/resources.rs`), and composes them
+/// through here too, so there is one composition rather than three that agree.
+pub fn bounded_account_name(zone: &str, body: &str) -> Option<String> {
+    let prefix = format!("d2b-{zone}-");
+    let full = format!("{prefix}{body}");
+    if full.len() <= ACCOUNT_NAME_LIMIT {
+        return Some(full);
+    }
+    let keep = ACCOUNT_NAME_LIMIT
+        .checked_sub(prefix.len() + 1 + ACCOUNT_NAME_HASH_HEX)?;
+    if keep == 0 {
+        return None;
+    }
+    let head: String = body.chars().take(keep).collect();
+    if head.is_empty() {
+        return None;
+    }
+    let digest = sha256_hex(full.as_bytes());
+    let hash = digest
+        .strip_prefix("sha256:")
+        .and_then(|hex| hex.get(..ACCOUNT_NAME_HASH_HEX))?;
+    Some(format!("{prefix}{head}-{hash}"))
 }
 
 /// `d2b-<zone>-<device><suffix>`, or `None` when the declared row name is not
@@ -5388,7 +5449,7 @@ fn device_worker_account(
     if device.is_empty() {
         return None;
     }
-    Some(format!("d2b-{zone}-{device}{suffix}"))
+    bounded_account_name(zone, &format!("{device}{suffix}"))
 }
 
 /// Why the host account database could not answer for one account.
@@ -7156,7 +7217,7 @@ mod tests {
         assert_eq!(
             mint_template_intent("dev", &binding, TemplateIntentShape::of(&binding)).err(),
             Some(TemplatePrincipalError::AccountAbsent {
-                account: "d2b-dev-controller-runtime-cloud-hypervisor".to_owned(),
+                account: "d2b-dev-controller-run-af0d3fce".to_owned(),
                 row: "Process/controller-test".to_owned(),
             }),
             "a controller row the host has not provisioned is refused by the \
@@ -7525,74 +7586,69 @@ mod tests {
     /// account name, and the name is a function of facts both sides of the
     /// boundary already hold.
     ///
-    /// These are the same strings `nixos-modules/lib.nix`
-    /// (`templateWorkerPrincipals`) derives from the same Zone rows, so a host
-    /// that materializes them resolves these rows and a host that does not is
-    /// refused by the account it would need. The four Device families are per
-    /// Device and per family; the Provider controller rows are per owning
-    /// Provider, because one Provider is one signed artifact and the hashed
-    /// per-component row name is not a boundary; the two families with a
-    /// single row per Zone carry their own account rather than their Provider's
-    /// controller account.
+    /// The row classes and their accounts are read from
+    /// `tests/unit/nix/cases/host-worker-accounts.json`, the one committed
+    /// table `nixos-modules/lib.nix` (`templateWorkerAccounts`) is evaluated
+    /// against over the same Zone rows, so this test and that eval case cannot
+    /// agree by accident of two careful copies: a name composed differently on
+    /// either side fails the side that composed it. The four Device families
+    /// are per Device and per family; the Provider controller rows are per
+    /// owning Provider, because one Provider is one signed artifact and the
+    /// hashed per-component row name is not a boundary; the two families with
+    /// a single row per Zone carry their own account rather than their
+    /// Provider's controller account.
     #[test]
     fn every_provisioned_row_class_composes_its_host_account_name() {
-        let zone = "work";
-        for (row, owner, template, account) in [
-            (
-                "Process/swtpm-tpm0",
-                DEVICE_TPM_PROVIDER_REF,
-                "swtpm-socket",
-                "d2b-work-tpm0-swtpm",
-            ),
-            (
-                "EphemeralProcess/swtpm-flush-tpm0",
-                DEVICE_TPM_PROVIDER_REF,
-                "swtpm-init-flush",
-                "d2b-work-tpm0-swtpm-flush",
-            ),
-            (
-                "Process/gpu-gpu0",
-                DEVICE_GPU_PROVIDER_REF,
-                "gpu-worker",
-                "d2b-work-gpu0-gpu",
-            ),
-            (
-                "Process/gpu-gpu1",
-                DEVICE_GPU_PROVIDER_REF,
-                "gpu-render-node",
-                "d2b-work-gpu1-gpu",
-            ),
-            (
-                "Process/video-gpu0",
-                DEVICE_GPU_PROVIDER_REF,
-                "video-worker",
-                "d2b-work-gpu0-video",
-            ),
-            (
-                "Process/controller-1e72453ef8a8321aa56602fcf7beb107",
-                "Provider/runtime-cloud-hypervisor",
-                "controller-runtime-cloud-hypervisor-cloud-hypervisor-controller",
-                "d2b-work-controller-runtime-cloud-hypervisor",
-            ),
-            (
-                "Process/controller-0f5c9d0a1b2c3d4e",
-                "Provider/volume-local",
-                "controller-volume-acceptance-provider-volume-controller",
-                "d2b-work-controller-volume-local",
-            ),
-            (
-                "Process/virtiofsd-worker-template-9c568763b46745cfe2fdab47",
-                SERVING_WORKER_PROVIDER_REF,
-                SERVING_WORKER_TEMPLATE,
-                "d2b-work-virtiofsd",
-            ),
-        ] {
-            let binding = declared_binding(row, owner, template);
-            assert_eq!(
-                template_account(zone, &binding),
-                Ok(account.to_owned()),
-                "{row}: the account the host provisions for this row class"
-            );
+        // The table is a runfile rather than a compiled-in copy, so the Nix
+        // eval case over the same file and this test cannot drift apart
+        // without one of them reading the other's version.
+        let path = std::env::var("D2B_HOST_WORKER_ACCOUNTS")
+            .expect("the row-class table is a declared runfile of this test");
+        let table: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&path).expect("the row-class table is readable"),
+        )
+        .expect("the row-class table parses");
+        let zone = table["zone"]
+            .as_str()
+            .expect("the table names the Zone it binds");
+        let rows = table["rows"]
+            .as_array()
+            .expect("the table lists the rows the compiler projects");
+        assert!(!rows.is_empty(), "the row-class table is not empty");
+
+        let mut composed = std::collections::BTreeSet::new();
+        for row in rows {
+            let reference = row["row"].as_str().expect("a row reference");
+            let owner = row["owner"].as_str().expect("a binding owner reference");
+            let template = row["template"].as_str().expect("a binding template");
+            let account = row["account"].as_str();
+            let binding = declared_binding(reference, owner, template);
+            match account {
+                Some(account) => {
+                    assert_eq!(
+                        template_account(zone, &binding),
+                        Ok(account.to_owned()),
+                        "{reference}: the account the host provisions for this row class"
+                    );
+                    assert!(
+                        account.len() <= ACCOUNT_NAME_LIMIT,
+                        "{reference}: every provisioned account fits the bound the \
+                         host account database carries"
+                    );
+                    assert!(
+                        composed.insert(account.to_owned()),
+                        "{reference}: two row classes never compose one account"
+                    );
+                }
+                None => assert_eq!(
+                    template_account(zone, &binding),
+                    Err(TemplatePrincipalError::Unprovisioned {
+                        row: reference.to_owned()
+                    }),
+                    "{reference}: a row class outside the provisioned vocabulary has \
+                     no account to resolve through"
+                ),
+            }
         }
 
         // The GPU authority admission refuses a video principal equal to the
@@ -7607,33 +7663,50 @@ mod tests {
             template_account(zone, &video),
             "the GPU worker and its video sidecar are separated accounts"
         );
+    }
 
-        for row in ["Process/gpu-", "Process/video-"] {
-            let binding = declared_binding(row, DEVICE_GPU_PROVIDER_REF, "gpu-worker");
+    /// A row class whose composed name is past the host account database's
+    /// bound is bounded to one it holds, and a Zone name long enough that
+    /// nothing fits is refused rather than truncated into another identity.
+    #[test]
+    fn a_composed_name_past_the_account_bound_is_bounded_or_refused() {
+        // Bounded: the readable prefix of the row-class token survives, the
+        // digest of the whole name keeps it distinct from the row class beside
+        // it, and the result is a name the host can hold.
+        assert_eq!(
+            bounded_account_name("work", "controller-runtime-cloud-hypervisor"),
+            Some("d2b-work-controller-ru-f0691444".to_owned()),
+            "a Provider name that overflows the bound is shortened, not refused"
+        );
+        assert_ne!(
+            bounded_account_name("work", "controller-volume-local"),
+            bounded_account_name("work", "controller-volume-virtiofs"),
+            "two row classes that overflow together stay two accounts"
+        );
+        for (zone, body) in [
+            ("work", "controller-device-tpm"),
+            ("work", "tpm0-swtpm-flush"),
+            ("work", "virtiofsd"),
+        ] {
             assert_eq!(
-                template_account(zone, &binding),
-                Err(TemplatePrincipalError::Unprovisioned {
-                    row: row.to_owned()
-                }),
-                "{row}: an empty Device is not the family's vocabulary, so it has \
-                 no provisioned account"
+                bounded_account_name(zone, body),
+                Some(format!("d2b-{zone}-{body}")),
+                "a name that fits is used exactly as composed"
             );
         }
 
-        // A composed name the host account database could not carry has no
-        // account to resolve through. It refuses instead of being truncated
-        // into a different identity than the one the host would hold.
+        // Refused: no prefix of any row-class token fits under a Zone name
+        // this long, so no account exists to resolve through.
         let long_zone = "workzone-with-a-deliberately-long-name";
         let row = "Process/controller-0f5c9d0a1b2c3d4e";
-        let binding = declared_binding(row, "Provider/provider-with-a-long-name", CONTROLLER_TEMPLATE_PREFIX);
-        let account = format!("d2b-{long_zone}-controller-provider-with-a-long-name");
-        assert!(account.len() > MAX_ACCOUNT_NAME_BYTES);
+        let binding =
+            declared_binding(row, "Provider/provider-with-a-long-name", CONTROLLER_TEMPLATE_PREFIX);
         assert_eq!(
             template_account(long_zone, &binding),
             Err(TemplatePrincipalError::Unprovisioned {
                 row: row.to_owned()
             }),
-            "a name past the account-database bound has no provisioned account"
+            "a Zone whose accounts cannot be named is refused rather than truncated"
         );
     }
 

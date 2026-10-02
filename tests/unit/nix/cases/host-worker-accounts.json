@@ -1,0 +1,197 @@
+{
+  "_comment": [
+    "The host accounts a template-bound Process row class runs as, one table",
+    "read through both sides of the boundary rather than one list kept per side.",
+    "",
+    "`resources` is the Zone the resource compiler binds, in the shape",
+    "`nixos-modules/lib.nix` reads it. `rows` is what that compiler projects from",
+    "it: the binding's own owner reference, declared row name and template, and",
+    "the account each of those must resolve to.",
+    "",
+    "`tests/unit/nix/cases/host-worker-accounts.nix` evaluates the Zone and",
+    "asserts the module provisions exactly the accounts this table names, so a",
+    "Nix side that composes a different name fails there. The",
+    "`every_provisioned_row_class_composes_its_host_account_name` test in",
+    "`packages/d2b-core/src/bundle_resolver.rs` runs `template_account` over the",
+    "same rows and asserts the same names, so a Rust side that composes a",
+    "different name fails there. Neither list is written out twice, so the two",
+    "sides cannot agree by accident of two careful copies."
+  ],
+
+  "zone": "work",
+
+  "resources": {
+    "host-system": { "type": "Host" },
+    "acceptance-guest": { "type": "Guest" },
+
+    "volume-local": {
+      "type": "Provider",
+      "spec": {
+        "artifactId": "fixture-provider",
+        "config": { "controllerExecutionRef": "Host/host-system" }
+      }
+    },
+    "volume-virtiofs": {
+      "type": "Provider",
+      "spec": {
+        "artifactId": "fixture-provider",
+        "config": { "controllerExecutionRef": "Host/host-system" }
+      }
+    },
+    "runtime-cloud-hypervisor": {
+      "type": "Provider",
+      "spec": {
+        "artifactId": "fixture-provider",
+        "config": { "controllerExecutionRef": "Host/host-system" }
+      }
+    },
+    "device-tpm": {
+      "type": "Provider",
+      "spec": {
+        "artifactId": "fixture-provider",
+        "config": { "controllerExecutionRef": "Host/host-system" }
+      }
+    },
+    "device-gpu": {
+      "type": "Provider",
+      "spec": {
+        "artifactId": "fixture-provider",
+        "config": { "controllerExecutionRef": "Host/host-system" }
+      }
+    },
+    "unattached-provider": {
+      "type": "Provider",
+      "spec": { "artifactId": "fixture-provider" }
+    },
+
+    "tpm0": {
+      "type": "Device",
+      "metadata": { "ownerRef": "Guest/acceptance-guest" },
+      "spec": {
+        "providerRef": "Provider/device-tpm",
+        "deviceClass": "emulated",
+        "inventory": { "selector": {} },
+        "provider": { "settings": {} }
+      }
+    },
+    "gpu0": {
+      "type": "Device",
+      "metadata": { "ownerRef": "Guest/acceptance-guest" },
+      "spec": {
+        "providerRef": "Provider/device-gpu",
+        "deviceClass": "physical",
+        "inventory": { "selector": { "busClass": "drm", "label": "fixture-gpu0" } },
+        "provider": { "settings": { "videoSidecar": true } }
+      }
+    },
+    "gpu1": {
+      "type": "Device",
+      "metadata": { "ownerRef": "Guest/acceptance-guest" },
+      "spec": {
+        "providerRef": "Provider/device-gpu",
+        "deviceClass": "physical",
+        "inventory": { "selector": { "busClass": "drm", "label": "fixture-gpu1" } },
+        "provider": { "settings": { "renderNodeOnly": true } }
+      }
+    }
+  },
+
+  "rows": [
+    {
+      "row": "Process/swtpm-tpm0",
+      "owner": "Provider/device-tpm",
+      "template": "swtpm-socket",
+      "account": "d2b-work-tpm0-swtpm"
+    },
+    {
+      "row": "EphemeralProcess/swtpm-flush-tpm0",
+      "owner": "Provider/device-tpm",
+      "template": "swtpm-init-flush",
+      "account": "d2b-work-tpm0-swtpm-flush"
+    },
+    {
+      "row": "Process/gpu-gpu0",
+      "owner": "Provider/device-gpu",
+      "template": "gpu-worker",
+      "account": "d2b-work-gpu0-gpu"
+    },
+    {
+      "row": "Process/video-gpu0",
+      "owner": "Provider/device-gpu",
+      "template": "video-worker",
+      "account": "d2b-work-gpu0-video"
+    },
+    {
+      "row": "Process/gpu-gpu1",
+      "owner": "Provider/device-gpu",
+      "template": "gpu-render-node",
+      "account": "d2b-work-gpu1-gpu"
+    },
+
+    {
+      "_comment": "A Provider whose name does not fit with its row class is shortened with a digest of the whole name, so it is still an account the host holds and still distinct from the row class beside it.",
+      "row": "Process/controller-9b1c40f2f6a1a1d4e0dd8b6a5b0f7c22",
+      "owner": "Provider/volume-local",
+      "template": "controller-fixture-provider-volume-controller",
+      "account": "d2b-work-controller-vo-632196ce"
+    },
+    {
+      "row": "Process/controller-4f0d2c9a1e7b4d8f9a3c5e2b7d01634",
+      "owner": "Provider/volume-virtiofs",
+      "template": "controller-fixture-provider-volume-controller",
+      "account": "d2b-work-controller-vo-4d448bd4"
+    },
+    {
+      "row": "Process/controller-77c1e0a5b93d24f68e1a7c05d3b2e891",
+      "owner": "Provider/runtime-cloud-hypervisor",
+      "template": "controller-fixture-provider-cloud-hypervisor-controller",
+      "account": "d2b-work-controller-ru-f0691444"
+    },
+    {
+      "row": "Process/controller-2a6d5b90c1e34f7d8b0a2c6e5f419837",
+      "owner": "Provider/device-tpm",
+      "template": "controller-fixture-provider-device-controller",
+      "account": "d2b-work-controller-device-tpm"
+    },
+    {
+      "row": "Process/controller-5e3c8a71d0b24f96a8e1c7039d4b2f56",
+      "owner": "Provider/device-gpu",
+      "template": "controller-fixture-provider-device-controller",
+      "account": "d2b-work-controller-device-gpu"
+    },
+
+    {
+      "row": "Process/virtiofsd-worker-template-9c568763b46745cfe2fdab47",
+      "owner": "Provider/volume-virtiofs",
+      "template": "virtiofsd-worker",
+      "account": "d2b-work-virtiofsd"
+    },
+
+    {
+      "_comment": "A row class neither side names: the shared crate may not name the credential agent under the Provider family-knowledge rule, so it has no account on either side and is refused rather than resolved to a name only one of them holds.",
+      "row": "Process/d2b-mi-agent-template-guest-acceptance-guest",
+      "owner": "Provider/credential-managed-identity",
+      "template": "d2b-managed-identity-agent",
+      "account": null
+    },
+    {
+      "_comment": "An empty Device is not the family's own vocabulary, so no account is composed for it.",
+      "row": "Process/gpu-",
+      "owner": "Provider/device-gpu",
+      "template": "gpu-worker",
+      "account": null
+    },
+    {
+      "row": "EphemeralProcess/swtpm-tpm0",
+      "owner": "Provider/device-tpm",
+      "template": "swtpm-socket",
+      "account": null
+    },
+    {
+      "row": "Process/console",
+      "owner": "Provider/runtime-cloud-hypervisor",
+      "template": "controller",
+      "account": null
+    }
+  ]
+}

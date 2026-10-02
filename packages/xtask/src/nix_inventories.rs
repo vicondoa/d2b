@@ -682,14 +682,21 @@ fn host_users_module(
          \x20       independent derivations, so rename the Zone, Device or Provider they\n\
          \x20       are derived from.\";\n\
          \x20   }\n\
+         \x20   # The host account database carries a name of at most\n\
+         \x20   # `d2bLib.accountNameLimit` bytes, and the derived per-Zone accounts\n\
+         \x20   # are already bounded to it by `d2bLib.boundedAccountName`. This is\n\
+         \x20   # where the allocated principals are proved to fit the same bound,\n\
+         \x20   # rather than aborting the host's own evaluation at a length the\n\
+         \x20   # account database cannot hold.\n\
          \x20   {\n\
          \x20     assertion = builtins.all\n\
-         \x20       (row: builtins.stringLength row.name <= 63)\n\
+         \x20       (row: builtins.stringLength row.name <= d2bLib.accountNameLimit)\n\
          \x20       rows;\n\
-         \x20     message = \"d2b host accounts: a provisioned account name is longer than\n\
-         \x20       the 63 bytes the host account database carries. Shorten the Zone,\n\
-         \x20       Device or Provider it is derived from; a name the host cannot hold is\n\
-         \x20       refused by the resolver rather than truncated into another identity.\";\n\
+         \x20     message = \"d2b host accounts: a provisioned account name is longer\n\
+         \x20       than the bytes the host account database carries. NixOS's own user\n\
+         \x20       and group options refuse 32 bytes or more, so rename the principal\n\
+         \x20       the allocation names; a name the host cannot hold is refused by\n\
+         \x20       the resolver rather than truncated into another identity.\";\n\
          \x20   }\n\
          \x20 ];\n\n\
          \x20 users.groups = {\n\

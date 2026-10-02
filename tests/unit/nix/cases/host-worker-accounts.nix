@@ -9,6 +9,13 @@
 # binds, so a host that declares a Zone's Providers and Devices resolves those
 # rows and one that drifts from the vocabulary does not.
 #
+# The Zone and the row classes are read from `host-worker-accounts.json`, the
+# one committed table both sides are read through: the crate's
+# `every_provisioned_row_class_composes_its_host_account_name` test runs
+# `template_account` over the same rows and asserts the same names. Neither
+# list is written out twice, so the two sides cannot agree by accident of two
+# careful copies - a name composed differently on one side fails there.
+#
 # The module is called as the plain function it is rather than through
 # `mkEval`: it depends on `config.d2b` and nothing else in the NixOS module
 # system, and a case that reached through a full module evaluation would drag
@@ -21,57 +28,15 @@
 { lib, d2bLib, ... }:
 
 let
-  provider = controllerExecutionRef: {
-    type = "Provider";
-    spec = {
-      artifactId = "fixture-provider";
-      config = { inherit controllerExecutionRef; };
-    };
-  };
-
-  gpuDevice = label: settings: {
-    type = "Device";
-    metadata.ownerRef = "Guest/acceptance-guest";
-    spec = {
-      providerRef = "Provider/device-gpu";
-      deviceClass = "physical";
-      inventory.selector = { busClass = "drm"; inherit label; };
-      provider.settings = settings;
-    };
-  };
+  table = builtins.fromJSON (builtins.readFile ./host-worker-accounts.json);
+  zoneName = table.zone;
 
   cfg = {
     site = {
       adminUsers = [ ];
       launcherUsers = [ ];
     };
-    zones.work.resources = {
-      host-system = { type = "Host"; };
-      acceptance-guest = { type = "Guest"; };
-      volume-local = provider "Host/host-system";
-      volume-virtiofs = provider "Host/host-system";
-      runtime-cloud-hypervisor = provider "Host/host-system";
-      device-tpm = provider "Host/host-system";
-      device-gpu = provider "Host/host-system";
-      # A Provider that declares no controller execution reference: the
-      # compiler projects no controller row for it, so no account is derived.
-      unattached-provider = {
-        type = "Provider";
-        spec.artifactId = "fixture-provider";
-      };
-      tpm0 = {
-        type = "Device";
-        metadata.ownerRef = "Guest/acceptance-guest";
-        spec = {
-          providerRef = "Provider/device-tpm";
-          deviceClass = "emulated";
-          inventory.selector = { };
-          provider.settings = { };
-        };
-      };
-      gpu0 = gpuDevice "fixture-gpu0" { videoSidecar = true; };
-      gpu1 = gpuDevice "fixture-gpu1" { renderNodeOnly = true; };
-    };
+    zones.${zoneName}.resources = table.resources;
   };
 
   module = import ../../../../nixos-modules/host-users.nix {
@@ -88,25 +53,10 @@ let
   groups = module.users.groups;
   account = name: users.${name} or null;
 
-  # Every account this Zone's rows run as. `d2b-work-<provider>-controller` is
-  # per Provider because one Provider is one signed artifact published under
-  # one key; `d2b-work-<device>-{gpu,video}` is per Device and per family
-  # because the GPU authority admission refuses a video principal equal to the
-  # GPU principal; the serving worker and the managed-identity agent carry
-  # their own account rather than their Provider's controller account.
-  derivedNames = [
-    "d2b-work-tpm0-swtpm"
-    "d2b-work-tpm0-swtpm-flush"
-    "d2b-work-gpu0-gpu"
-    "d2b-work-gpu0-video"
-    "d2b-work-gpu1-gpu"
-    "d2b-work-controller-device-gpu"
-    "d2b-work-controller-device-tpm"
-    "d2b-work-controller-runtime-cloud-hypervisor"
-    "d2b-work-controller-volume-local"
-    "d2b-work-controller-volume-virtiofs"
-    "d2b-work-virtiofsd"
-  ];
+  # Every account the table's rows run as, in the order the table lists them.
+  # A row class either side refuses carries no name here at all, so an account
+  # provisioned for one would be an account no row resolves through.
+  derivedNames = map (row: row.account) (builtins.filter (row: row.account != null) table.rows);
 
   # The Zone resource-store owner comes from the committed principal
   # allocation rather than from these Zone rows, and is provisioned
@@ -133,6 +83,24 @@ in
 
   "host-worker-accounts/no-video-account-without-a-configured-sidecar" = {
     expr = account "d2b-work-gpu1-video" == null;
+    expected = true;
+  };
+
+  # The host account database carries a name of at most 31 bytes - NixOS's own
+  # user and group options refuse 32 or more - and a row class whose composed
+  # name would be longer is bounded to one that fits rather than left to fail
+  # the guest's evaluation. The readable prefix of the row-class token
+  # survives, and the digest of the whole name keeps two row classes that
+  # overflow together two accounts.
+  "host-worker-accounts/every-derived-account-fits-the-account-database-bound" = {
+    expr = builtins.all (name: builtins.stringLength name <= d2bLib.accountNameLimit) expectedProvisioned;
+    expected = true;
+  };
+
+  "host-worker-accounts/a-row-class-past-the-bound-is-shortened-not-refused" = {
+    expr = builtins.elem "d2b-work-controller-vo-632196ce" provisioned
+      && builtins.elem "d2b-work-controller-vo-4d448bd4" provisioned
+      && builtins.elem "d2b-work-controller-ru-f0691444" provisioned;
     expected = true;
   };
 

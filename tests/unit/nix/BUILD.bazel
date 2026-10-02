@@ -16,6 +16,7 @@ exports_files([
     "cases/guest-qemu-media-spec.nix",
     "cases/host-contract-digest.nix",
     "cases/host-tools-source.nix",
+    "cases/host-worker-accounts.json",
     "cases/host-worker-accounts.nix",
     "cases/net-vm-network.nix",
     "cases/interaction-providers.nix",

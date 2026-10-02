@@ -66,14 +66,21 @@ in
         independent derivations, so rename the Zone, Device or Provider they
         are derived from.";
     }
+    # The host account database carries a name of at most
+    # `d2bLib.accountNameLimit` bytes, and the derived per-Zone accounts
+    # are already bounded to it by `d2bLib.boundedAccountName`. This is
+    # where the allocated principals are proved to fit the same bound,
+    # rather than aborting the host's own evaluation at a length the
+    # account database cannot hold.
     {
       assertion = builtins.all
-        (row: builtins.stringLength row.name <= 63)
+        (row: builtins.stringLength row.name <= d2bLib.accountNameLimit)
         rows;
-      message = "d2b host accounts: a provisioned account name is longer than
-        the 63 bytes the host account database carries. Shorten the Zone,
-        Device or Provider it is derived from; a name the host cannot hold is
-        refused by the resolver rather than truncated into another identity.";
+      message = "d2b host accounts: a provisioned account name is longer
+        than the bytes the host account database carries. NixOS's own user
+        and group options refuse 32 bytes or more, so rename the principal
+        the allocation names; a name the host cannot hold is refused by
+        the resolver rather than truncated into another identity.";
     }
   ];
 

@@ -4,6 +4,12 @@ package(default_visibility = ["//visibility:public"])
 
 _SURFACES = {
     "daemon": {
+        # The row-class table the `host-worker-accounts` case and
+        # `packages/d2b-core`'s own test are read through, declared here
+        # because `tests/unit/nix` is a separate Bazel package and this
+        # surface reads the table by its own path.
+        "files": ["tests/unit/nix/cases/host-worker-accounts.json"],
+        "package": "tests/unit/nix",
         "cases": ["host-worker-accounts"],
         "modules": [
             "nixos-modules/host-broker.nix",

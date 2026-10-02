@@ -581,8 +581,52 @@ rec {
               (lib.attrNames resources)))
       (zoneNames cfg);
 
+  # The longest account name the host account database carries.
+  #
+  # NixOS's own user and group options refuse a name of 32 bytes or more
+  # (`nixos/modules/config/users-groups.nix`), and that is the POSIX bound on a
+  # group name rather than a NixOS choice, so a composed name past it is not a
+  # name the host holds at all.
+  accountNameLimit = 31;
+
+  # The hex digits of the digest a shortened name carries.
+  accountNameHashHex = 8;
+
+  # The account one row class runs as, bounded to what the host holds.
+  #
+  # A name that fits is used exactly as composed, so every ordinary row class
+  # reads as the row it belongs to. One that does not keeps a readable prefix
+  # of the row-class token and carries the first eight hex digits of the
+  # SHA-256 over the whole composed name: two row classes that overflow
+  # together stay two accounts rather than collapsing into one, and the name
+  # still says which Zone and which family it belongs to. A Zone name long
+  # enough that no prefix fits is a Zone this scheme cannot name either, and
+  # yields no account at all - the row is then refused by the resolver, which
+  # is the answer the resource compiler's own refusal gives, rather than a
+  # guest that fails to evaluate.
+  #
+  # `d2b-core`'s `bounded_account_name` (`bundle_resolver.rs`) is this same
+  # composition over the same inputs, and one table of row classes is read
+  # through both (`tests/unit/nix/cases/host-worker-accounts.json`, by that
+  # case and by the crate's own test), so a host that materializes these names
+  # resolves the rows that carry them.
+  boundedAccountName = zoneName: body:
+    let
+      prefix = "d2b-${zoneName}-";
+      full = "${prefix}${body}";
+      keep = accountNameLimit - builtins.stringLength prefix - 1 - accountNameHashHex;
+    in
+    if builtins.stringLength full <= accountNameLimit then
+      full
+    else if keep < 1 then
+      null
+    else
+      "${prefix}${builtins.substring 0 keep body}-${builtins.substring 0 accountNameHashHex (builtins.hashString "sha256" full)}";
+
   # One host account row for a template-bound row class: the account name, the
-  # ids it holds, and the operator-visible description.
+  # ids it holds, and the operator-visible description - or `null` for a row
+  # class whose name the host cannot carry, which every caller filters rather
+  # than provisioning under a name it does not hold.
   #
   # The numeric identity is the name-derived id every other named principal in
   # this tree uses (`stablePrincipalId`), so an account keeps its ids for as
@@ -590,11 +634,17 @@ rec {
   # a live principal. Two schemes coexist - the Device TPM family below keeps
   # the binding-triple ids its accounts already hold - and `host-users.nix`
   # proves the two do not collide rather than assuming it.
-  templateAccount = name: description: {
-    inherit name description;
-    uid = stablePrincipalId name;
-    gid = stablePrincipalId name;
-  };
+  templateAccount = zoneName: body: description:
+    let
+      name = boundedAccountName zoneName body;
+    in
+    if name == null then
+      null
+    else {
+      inherit name description;
+      uid = stablePrincipalId name;
+      gid = stablePrincipalId name;
+    };
 
   # The host principals one zone-native Device with a TPM needs, derived from
   # the same artifacts the runtime derives them from:
@@ -615,20 +665,27 @@ rec {
     lib.concatMap
       (site:
         let
-          account = "d2b-${site.zoneName}-${site.device}-swtpm";
-          flushAccount = "d2b-${site.zoneName}-${site.device}-swtpm-flush";
+          account = boundedAccountName site.zoneName "${site.device}-swtpm";
+          flushAccount = boundedAccountName site.zoneName "${site.device}-swtpm-flush";
           ownerRef = "Provider/device-tpm";
         in
-        [
-          {
-            inherit (site) zoneName device;
-            inherit account flushAccount;
-            ownerUid = deviceWorkerPrincipalId ownerRef
-              "Process/swtpm-${site.device}" site.executionRef;
-            flushUid = deviceWorkerPrincipalId ownerRef
-              "EphemeralProcess/swtpm-flush-${site.device}" site.executionRef;
-          }
-        ])
+        # A Device whose name leaves the account past what the host can hold
+        # contributes no principal at all, so the state Volume it would have
+        # shared grants nothing and its worker rows are refused rather than
+        # launched under a name the host does not hold.
+        if account == null || flushAccount == null then
+          [ ]
+        else
+          [
+            {
+              inherit (site) zoneName device;
+              inherit account flushAccount;
+              ownerUid = deviceWorkerPrincipalId ownerRef
+                "Process/swtpm-${site.device}" site.executionRef;
+              flushUid = deviceWorkerPrincipalId ownerRef
+                "EphemeralProcess/swtpm-flush-${site.device}" site.executionRef;
+            }
+          ])
       (deviceWorkerSites cfg "device-tpm");
 
   # The Device TPM family's account rows, carrying the ids those accounts
@@ -666,13 +723,13 @@ rec {
   deviceGpuAccounts = cfg:
     lib.concatMap
       (site:
-        [
-          (templateAccount "d2b-${site.zoneName}-${site.device}-gpu"
+        lib.filter (row: row != null) ([
+          (templateAccount site.zoneName "${site.device}-gpu"
             "d2b Device GPU worker")
         ]
         ++ lib.optional (site.settings.videoSidecar or false)
-        (templateAccount "d2b-${site.zoneName}-${site.device}-video"
-          "d2b Device video decode sidecar"))
+        (templateAccount site.zoneName "${site.device}-video"
+          "d2b Device video decode sidecar")))
       (deviceWorkerSites cfg "device-gpu");
 
   # The account one Provider's controller rows run as.
@@ -692,16 +749,16 @@ rec {
         let
           resources = zoneResources cfg zoneName;
         in
-        map
+        lib.filter (row: row != null) (map
           (providerName:
-            templateAccount "d2b-${zoneName}-controller-${providerName}"
+            templateAccount zoneName "controller-${providerName}"
               "d2b Provider controller")
           (lib.filter
             (name:
               (resources.${name}.type or null) == "Provider"
               && resolvesZoneTarget resources
                 (providerTargetParts resources name))
-            (lib.attrNames resources)))
+            (lib.attrNames resources))))
       (zoneNames cfg);
 
   # The account the binding-owned virtiofsd serving worker runs as.
@@ -717,8 +774,8 @@ rec {
           resources = zoneResources cfg zoneName;
           declares = providerName: (resources.${providerName}.type or null) == "Provider";
         in
-        lib.optional (declares "volume-virtiofs")
-          (templateAccount "d2b-${zoneName}-virtiofsd" "d2b Zone serving worker"))
+        lib.filter (row: row != null) (lib.optional (declares "volume-virtiofs")
+          (templateAccount zoneName "virtiofsd" "d2b Zone serving worker")))
       (zoneNames cfg);
 
   # Every host account a template-bound row class runs as, derived per Zone
@@ -739,6 +796,14 @@ rec {
   # | its video decode sidecar | `d2b-<zone>-<device>-video` |
   # | a Provider's controller rows | `d2b-<zone>-controller-<provider>` |
   # | the binding-owned serving worker | `d2b-<zone>-virtiofsd` |
+
+  # Each of those names is the `d2b-<zone>-<row-class token>` `boundedAccountName`
+  # composes, so a row class whose composed name is longer than the 31 bytes
+  # the host account database carries keeps a readable prefix of that token
+  # and carries eight hex digits of the SHA-256 over the whole name instead.
+  # The two sides shorten the same way over the same input, so the row still
+  # resolves; a Zone name long enough that nothing fits is refused by the
+  # resolver rather than provisioned under a name the host does not hold.
   #
   # A row class neither side names has no account: the credential agent a
   # `Credential` controller adopts is one the shared crate may not name under

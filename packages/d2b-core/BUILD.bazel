@@ -263,6 +263,11 @@ d2b_rust_test(
     name = "d2b_core_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_core",
+    # The row-class table the Nix eval case over `nixos-modules/lib.nix` is
+    # evaluated against, read by the same test that composes the accounts on
+    # this side of the boundary.
+    data = ["//tests/unit/nix:cases/host-worker-accounts.json"],
+    env = {"D2B_HOST_WORKER_ACCOUNTS": "$(rootpath //tests/unit/nix:cases/host-worker-accounts.json)"},
     deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

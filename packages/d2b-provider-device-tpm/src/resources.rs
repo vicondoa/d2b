@@ -29,6 +29,7 @@ use d2b_contracts_resource::v3::{
 use serde_json::{Value, json};
 
 use crate::resource_effect::TpmResourceEffectError;
+use crate::vocabulary::{TPM_FLUSH_ACCOUNT_SUFFIX, TPM_STATE_OWNER_SUFFIX};
 
 /// The Device's own TPM state Volume role. The framework composes the
 /// concrete name from this role and the owning Device's durable uid
@@ -242,11 +243,16 @@ const STATE_VOLUME_OWNER: &str = "User/d2bd";
 /// through NSS, and an account name derived from the Device's 32-hex uid
 /// exceeds the host's account-name bound. The Device's uid still keys the
 /// Volume name (`device-<32hex>-tpm-state`) and every runtime path
-/// derivation.
+/// derivation. The names are composed by `d2b-core`'s
+/// `bounded_account_name`, the one composition the host module tree uses, so
+/// a Device name long enough to push the account past what the account
+/// database carries is bounded here to the same account the host provisions
+/// rather than refused on one side and named on the other.
 /// # Errors
 ///
 /// Returns [`TpmResourceEffectError::InvalidDevice`] when the reference does
-/// not name a Device or the Device name or Zone is empty.
+/// not name a Device, the Device name or Zone is empty, or the Zone name is
+/// long enough that no account name fits under it.
 pub fn build_tpm_state_volume_spec(
     device_ref: &ResourceRef,
     zone: &str,
@@ -259,9 +265,19 @@ pub fn build_tpm_state_volume_spec(
     if name.is_empty() || zone.is_empty() {
         return Err(TpmResourceEffectError::InvalidDevice);
     }
+    let worker = d2b_core::bundle_resolver::bounded_account_name(
+        zone,
+        &format!("{name}{TPM_STATE_OWNER_SUFFIX}"),
+    )
+    .ok_or(TpmResourceEffectError::InvalidDevice)?;
+    let flush = d2b_core::bundle_resolver::bounded_account_name(
+        zone,
+        &format!("{name}{TPM_STATE_OWNER_SUFFIX}{TPM_FLUSH_ACCOUNT_SUFFIX}"),
+    )
+    .ok_or(TpmResourceEffectError::InvalidDevice)?;
     build_tpm_state_volume_spec_with_principals(
-        &format!("User/d2b-{zone}-{name}-swtpm"),
-        &format!("User/d2b-{zone}-{name}-swtpm-flush"),
+        &format!("User/{worker}"),
+        &format!("User/{flush}"),
         execution_ref,
     )
 }
@@ -519,12 +535,21 @@ fn swtpm_execution(
 ) -> Result<ExecutionSpec, TpmResourceEffectError> {
     // The Device's principal, named after its declared identity exactly like
     // the state Volume's layout owner: the process-spec principal and the
-    // directory the worker writes must be the same account.
-    let principal = ResourceRef::parse(&format!(
-        "User/d2b-{zone}-{}-swtpm",
-        device_ref.name().as_str()
-    ))
-    .map_err(|_| TpmResourceEffectError::InvalidDevice)?;
+    // directory the worker writes must be the same account. Both are composed
+    // by the one function the host module tree and `d2b-core` compose them
+    // with, so a Device whose name pushes the account past what the host
+    // account database carries resolves the same account here as everywhere
+    // else rather than naming one only this crate holds.
+    let account = d2b_core::bundle_resolver::bounded_account_name(
+        zone,
+        &format!(
+            "{}{TPM_STATE_OWNER_SUFFIX}",
+            device_ref.name().as_str()
+        ),
+    )
+    .ok_or(TpmResourceEffectError::InvalidDevice)?;
+    let principal = ResourceRef::parse(&format!("User/{account}"))
+        .map_err(|_| TpmResourceEffectError::InvalidDevice)?;
     // The declared template posture (the closed `device_worker_posture` table
     // the resource compiler and the broker both fence against): the
     // long-lived swtpm worker runs in its own user namespace with the

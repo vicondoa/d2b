@@ -37,6 +37,11 @@ pub const TPM_STATE_DIR_NAME: &str = "swtpm";
 /// (`d2b-<zone>-<device>-swtpm` and its `-flush` sibling).
 pub const TPM_STATE_OWNER_SUFFIX: &str = "-swtpm";
 
+/// What the one-shot pre-start flush sibling adds to
+/// [`TPM_STATE_OWNER_SUFFIX`], so the two worker principals of one Device
+/// differ only in the token a reader can attribute them by.
+pub const TPM_FLUSH_ACCOUNT_SUFFIX: &str = "-flush";
+
 /// The trusted storage-row prefix the zone-native TPM state root is
 /// resolved under (`path:swtpm-state:<guest>`).
 pub const TPM_STATE_STORAGE_ROW_PREFIX: &str = "path:swtpm-state:";
