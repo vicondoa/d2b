@@ -1,12 +1,22 @@
-# Zone resource projection for Provider/observability-otel.
+# Zone resource facts for Provider/observability-otel.
 #
-# Telemetry payloads remain ComponentSession data. Nix contributes only
-# target-local edge Process intents and private Endpoint identities.
+# This module validates the Provider's declared configuration and projects
+# nothing. Telemetry payloads remain ComponentSession data, and the collector
+# and forwarder a TelemetryBinding owns are its runtime children's own
+# declarations (`otel-collector` and `otel-vsock-forwarder`), which that
+# family's controller composes at reconcile time.
+#
+# It previously also projected one target-local `Process` row per
+# Guest-scoped TelemetryBinding (`otel-collector-edge`). That row declared a
+# worker template no signed Provider artifact pinned, so it never received a
+# trusted launch intent and the daemon refused its launch terminally with
+# `provider-ticket:template-not-found`. Nothing in production read the row or
+# its phase, so the declaration was a capability the tree could not install
+# and did not need. It is gone rather than left to refuse.
 { config, lib, ... }:
 
 let
   cfg = config.d2b;
-  providerRef = "Provider/observability-otel";
   zones = cfg.zones or { };
   resourcesFor = zoneName: zones.${zoneName}.resources or { };
 
@@ -36,73 +46,8 @@ let
         message = "d2b.zones.${zoneName}.resources.observability-otel.spec.config.selfMetrics.enable must be boolean.";
       }
     ];
-
-  bindingRows = zoneName:
-    if providerFor zoneName == null
-    then [ ]
-    else lib.mapAttrsToList
-      (bindingName: binding: {
-        inherit zoneName bindingName binding;
-        spec = binding.spec or { };
-      })
-      (lib.filterAttrs
-        (_: resource:
-          resource.type == "telemetry.d2bus.org.TelemetryBinding"
-          && (resource.spec.providerRef or null) == providerRef)
-        (resourcesFor zoneName));
-
-  processFor = row:
-    let producerRef = row.spec.producerRef or null;
-    in lib.optionalAttrs (
-      builtins.isString producerRef && lib.hasPrefix "Guest/" producerRef
-    ) {
-      type = "Process";
-      metadata = {
-        name = "otel-binding-${row.bindingName}";
-        zone = row.zoneName;
-        ownerRef = "telemetry.d2bus.org.TelemetryBinding/${row.bindingName}";
-      };
-      spec = {
-        providerRef = "Provider/system-systemd";
-        executionRef = producerRef;
-        domain = "system";
-        processClass = "worker";
-        template = "otel-collector-edge";
-        desiredLifecycle = "running";
-        deviceUsage = [ ];
-        networkUsage = null;
-      };
-    };
-
-  processesForZone = zoneName:
-    lib.listToAttrs (lib.filter
-      (entry: entry.value != { })
-      (map
-        (row: lib.nameValuePair "otel-binding-${row.bindingName}"
-          (processFor row))
-        (bindingRows zoneName)));
-
 in
 {
-  config = {
-    assertions = lib.concatLists
-      (map providerAssertions (lib.attrNames zones));
-    d2b._resourceCompiler.providerProjectionObservabilityOtel = {
-      enabled = lib.any
-        (zoneName: processesForZone zoneName != { })
-        (lib.attrNames zones);
-      processesByZone = lib.genAttrs (lib.attrNames zones) processesForZone;
-      resourcesByZone = { };
-      guestPatchesByZone = { };
-      privateArtifact = {
-        schemaVersion = 1;
-        providerRef = providerRef;
-        processRefs = lib.concatMap
-          (zoneName: map
-            (resource: "Process/${resource.metadata.name}")
-            (lib.attrValues (processesForZone zoneName)))
-          (lib.attrNames zones);
-      };
-    };
-  };
+  config.assertions = lib.concatLists
+    (map providerAssertions (lib.attrNames zones));
 }

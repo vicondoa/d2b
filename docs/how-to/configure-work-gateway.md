@@ -26,8 +26,11 @@ share a Gateway Guest or L2 bridge.
         type = "ZoneLink";
         spec = {
           childZoneName = "work";
-          transportProviderRef = "Provider/transport-unix";
-          transportSettings = { };
+          transportProviderRef = "Provider/transport-azure-relay";
+          transportSettings = {
+            relayNamespaceId = "relns-d2b-prod";
+            relayEntityId = "hc-d2b-work";
+          };
           transportCredentials = [ ];
         };
       };
@@ -39,6 +42,12 @@ share a Gateway Guest or L2 bridge.
 Supply the matching evaluator through
 `d2b.guestSystems.work.gateway`. The Guest controller creates and reconciles
 its direct child Resources; the ZoneLink controller owns transport effects.
+
+The Gateway Guest composition accepts only the Azure Relay transport. Point
+`spec.transportCredentials` at exactly one same-Zone `azure-relay-listen` and
+one `azure-relay-send` Credential, each whose `spec.scope.executionRef` is the
+Relay Provider's `spec.executionRef`; a link that names any other transport is
+skipped rather than partially served.
 
 ## Credential custody
 

@@ -13,6 +13,13 @@
   before flattening it; a journal tail bounded to the last few hundred lines
   does not have to contain that line, so the row - which is what an operator
   and the lane both read - named nothing at all.
+- That cause now reaches the operator. `d2b debug` read a failure's code,
+  operation, stage, outcome and retryable flag but dropped `note`, so the
+  closed cause a Driver row carried never appeared in either report it
+  renders. `FailureSummary` gains `note`, and the human report prints a
+  `driver cause:` line alongside the failure while the JSON report carries
+  `failure.note`. Without this half the cause was on the row and still
+  invisible to the person debugging it.
 
 ### Known issues
 
