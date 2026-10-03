@@ -17,7 +17,7 @@ use std::{
 
 use tokio::sync::Mutex;
 
-use d2b_contracts_broker::broker_wire::{BrokerCallerRole, DEFAULT_CONTEXT_DEADLINE_MS};
+use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_contracts_resource::v3::{
     ControllerGeneration, ResourceGeneration, ResourceRef, ResourceSpec, ResourceUid,
@@ -863,12 +863,13 @@ impl std::fmt::Debug for ProductionProcessProviders {
 /// It is the Process family's own declared per-call deadline: every
 /// Process-family row (`SpawnRunner`, and the `spawn_process` kernel it
 /// forwards to) declares `DeadlineTier::Standard`, the carrier mints that
-/// budget for the call, and both execution legs serve it as their handler
-/// deadline. A client poll shorter than the budget it wraps abandons a call
-/// the broker is still entitled to serve, and an abandoned spawn is not
-/// inert: the broker has already created the child and holds its runner
-/// registration, so `reserve_runner_id_for_spawn` refuses every relaunch as
-/// a duplicate and the Process wedges with no recovery.
+/// budget for the call. SpawnRunner and its nested spawn-process kernel both
+/// use the Extended tier, so the client waits through the shared context
+/// ceiling. A shorter poll abandons a call the broker is still entitled to
+/// serve, and an abandoned spawn is not inert: the
+/// broker has already created the child and holds its runner registration, so
+/// `reserve_runner_id_for_spawn` refuses every relaunch as a duplicate and
+/// the Process wedges with no recovery.
 ///
 /// Measured 2026-09-25 (`runtime-cloud-hypervisor-guest-preflight`, gate
 /// head `dc995602c`): a flat 10s poll abandoned one volume-local controller
@@ -879,7 +880,8 @@ impl std::fmt::Debug for ProductionProcessProviders {
 /// zero `handler-refused` lines and establishes all three controller
 /// sessions by t=10s; its `reply timeout`s are all on `observe` legs, which
 /// register no runner and are simply re-probed.
-const BROKER_IO_TIMEOUT: Duration = Duration::from_millis(DEFAULT_CONTEXT_DEADLINE_MS);
+const BROKER_IO_TIMEOUT: Duration =
+    Duration::from_millis(d2b_contracts_broker::broker_wire::MAX_CONTEXT_DEADLINE_MS);
 
 impl ProductionProcessProviders {
     /// Construct both fixed process Providers over the authenticated broker.
@@ -2127,27 +2129,26 @@ impl ProductionProcessProviders {
     /// Pending state, so the next reconcile pass retries with the same
     /// pre-armed socket. The controller retries its send for as long as
     /// it lives; without this, one failed receive orphans it forever.
-    pub(crate) fn rearm_controller_bootstrap(
+    pub(crate) async fn rearm_controller_bootstrap(
         &self,
         endpoint: ControllerBootstrapEndpoint,
-    ) -> bool {
-        let Ok(mut markers) = self.controller_bootstrap.try_lock() else {
-            return false;
-        };
+    ) -> Result<(), String> {
+        let zone = endpoint.context().zone().clone();
         let key = (
-            endpoint.context().zone().clone(),
+            zone.clone(),
             endpoint.context().process_ref().clone(),
         );
-        if matches!(
+        let mut markers = self.controller_bootstrap.lock().await;
+        if !matches!(
             markers.get(&key),
             Some(ControllerBootstrapMarker::Establishing(current))
                 if *current == *endpoint.context()
         ) {
-            markers.insert(key, ControllerBootstrapMarker::Pending(endpoint));
-            true
-        } else {
-            false
+            return Err("provider-controller-bootstrap-state-changed".to_owned());
         }
+        markers.insert(key, ControllerBootstrapMarker::Pending(endpoint));
+        drop(markers);
+        self.wake_controller_session_reconcile(&zone)
     }
 
     pub(crate) fn fail_controller_bootstrap(&self, context: &ControllerBootstrapContext) -> bool {
@@ -4634,6 +4635,17 @@ mod tests {
         bundle::{Bundle, BundleGeneration},
         processes::ProcessesJson,
     };
+
+    #[test]
+    fn broker_io_timeout_covers_the_nested_extended_execution_path() {
+        assert_eq!(
+            BROKER_IO_TIMEOUT,
+            Duration::from_millis(
+                d2b_contracts_broker::broker_wire::MAX_CONTEXT_DEADLINE_MS,
+            ),
+            "client polling must use the nested path's Extended ceiling"
+        );
+    }
 
     /// The daemon's own minijail `PlatformGate` converts into the Host
     /// family's gate type field for field, including the negative posture:

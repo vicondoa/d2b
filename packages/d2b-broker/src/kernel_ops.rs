@@ -516,26 +516,20 @@ async fn observe_process(invocation: &DirectInvocation<'_>) -> Result<DispatchOu
         .await
         .ok()
         .map(|path| path.display().to_string());
-    let registered_binary =
-        optional_parse_identity_fields(invocation.payload).and_then(|identity| {
-            // Non-blocking try-lock (plan U8): a Busy collision reports no
-            // registered binary, exactly like the old poisoned path.
-            crate::runtime::runner_metadata_registry()
-                .try_lock()
-                .ok()
-                .and_then(|registry| {
-                    registry
-                        .get(&crate::runtime::runner_registry_key(
-                            &identity.vm_id,
-                            &identity.role_id,
-                            identity.resource_ref.as_ref(),
-                            identity.resource_uid.as_ref(),
-                            identity.zone_uid.as_ref(),
-                            identity.runtime_scope,
-                        ))
-                        .map(|registration| registration.binary_path.display().to_string())
-                })
-        });
+    let registered_binary = match optional_parse_identity_fields(invocation.payload) {
+        Some(identity) => {
+            let key = crate::runtime::runner_registry_key(
+                &identity.vm_id,
+                &identity.role_id,
+                identity.resource_ref.as_ref(),
+                identity.resource_uid.as_ref(),
+                identity.zone_uid.as_ref(),
+                identity.runtime_scope,
+            );
+            registered_binary_from_registry(crate::runtime::runner_metadata_registry(), &key).await
+        }
+        None => None,
+    };
     let invocation_id = invocation.ctx.invocation_id;
     let registered = crate::runtime::runner_pidfds().contains_key(invocation_id)
         && match crate::runtime::runner_pidfds().get(invocation_id) {
@@ -554,6 +548,19 @@ async fn observe_process(invocation: &DirectInvocation<'_>) -> Result<DispatchOu
         }))?,
         fds: Vec::new(),
     })
+}
+
+async fn registered_binary_from_registry(
+    registry: &tokio::sync::Mutex<
+        std::collections::HashMap<String, crate::runtime::RunnerRegistration>,
+    >,
+    key: &str,
+) -> Option<String> {
+    registry
+        .lock()
+        .await
+        .get(key)
+        .map(|registration| registration.binary_path.display().to_string())
 }
 
 /// The controller-bootstrap escrow surrender.
@@ -2795,6 +2802,54 @@ mod tests {
 
     fn string(value: &str) -> CanonicalJsonValue {
         CanonicalJsonValue::String(value.to_owned())
+    }
+
+    fn runner_registration(binary_path: &str) -> crate::runtime::RunnerRegistration {
+        crate::runtime::RunnerRegistration {
+            vm_id: "test-vm".to_owned(),
+            role_id: "controller".to_owned(),
+            resource_ref: None,
+            resource_uid: None,
+            zone_uid: None,
+            generation: None,
+            runtime_scope: None,
+            owner_ref: None,
+            provider_ref: None,
+            provider_identity: None,
+            template_identity: None,
+            role: d2b_contracts_broker::broker_wire::RunnerRole::ProviderController,
+            bundle_runner_intent_ref: "runner:test-vm:role:controller".to_owned(),
+            pid: 1,
+            start_time_ticks: 1,
+            binary_path: PathBuf::from(binary_path),
+            cgroup_subtree: "d2b.slice/test-vm/controller".to_owned(),
+            guest_execution: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn registered_binary_lookup_waits_for_metadata_contention() {
+        let key = "test-vm:controller".to_owned();
+        let registry = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::from([(
+            key.clone(),
+            runner_registration("/nix/store/controller/bin/controller"),
+        )])));
+        let guard = registry.lock().await;
+        let lookup = tokio::spawn({
+            let registry = Arc::clone(&registry);
+            let key = key.clone();
+            async move { registered_binary_from_registry(&registry, &key).await }
+        });
+        tokio::task::yield_now().await;
+        assert!(
+            !lookup.is_finished(),
+            "metadata contention must wait instead of fabricating an absent binary"
+        );
+        drop(guard);
+        assert_eq!(
+            lookup.await.unwrap().as_deref(),
+            Some("/nix/store/controller/bin/controller")
+        );
     }
 
     #[test]

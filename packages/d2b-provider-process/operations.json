@@ -769,7 +769,7 @@
         }
       },
       "deadline": {
-        "tier": "standard"
+        "tier": "extended"
       },
       "fds": {
         "maxFds": 3,
