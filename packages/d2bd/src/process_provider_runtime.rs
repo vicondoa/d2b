@@ -17,7 +17,7 @@ use std::{
 
 use tokio::sync::Mutex;
 
-use d2b_contracts_broker::broker_wire::{BrokerCallerRole, DEFAULT_CONTEXT_DEADLINE_MS};
+use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_contracts_resource::v3::{
     ControllerGeneration, ResourceGeneration, ResourceRef, ResourceSpec, ResourceUid,
@@ -864,11 +864,12 @@ impl std::fmt::Debug for ProductionProcessProviders {
 /// Process-family row (`SpawnRunner`, and the `spawn_process` kernel it
 /// forwards to) declares `DeadlineTier::Standard`, the carrier mints that
 /// budget for the call, and both execution legs serve it as their handler
-/// deadline. A client poll shorter than the budget it wraps abandons a call
-/// the broker is still entitled to serve, and an abandoned spawn is not
-/// inert: the broker has already created the child and holds its runner
-/// registration, so `reserve_runner_id_for_spawn` refuses every relaunch as
-/// a duplicate and the Process wedges with no recovery.
+/// deadline. The client therefore waits through both Standard legs, bounded
+/// by the shared context ceiling. A shorter poll abandons a call the broker
+/// is still entitled to serve, and an abandoned spawn is not inert: the
+/// broker has already created the child and holds its runner registration, so
+/// `reserve_runner_id_for_spawn` refuses every relaunch as a duplicate and
+/// the Process wedges with no recovery.
 ///
 /// Measured 2026-09-25 (`runtime-cloud-hypervisor-guest-preflight`, gate
 /// head `dc995602c`): a flat 10s poll abandoned one volume-local controller
@@ -879,7 +880,8 @@ impl std::fmt::Debug for ProductionProcessProviders {
 /// zero `handler-refused` lines and establishes all three controller
 /// sessions by t=10s; its `reply timeout`s are all on `observe` legs, which
 /// register no runner and are simply re-probed.
-const BROKER_IO_TIMEOUT: Duration = Duration::from_millis(DEFAULT_CONTEXT_DEADLINE_MS);
+const BROKER_IO_TIMEOUT: Duration =
+    Duration::from_millis(d2b_contracts_broker::broker_wire::MAX_CONTEXT_DEADLINE_MS);
 
 impl ProductionProcessProviders {
     /// Construct both fixed process Providers over the authenticated broker.
@@ -4633,6 +4635,25 @@ mod tests {
         bundle::{Bundle, BundleGeneration},
         processes::ProcessesJson,
     };
+
+    #[test]
+    fn broker_io_timeout_covers_both_standard_execution_legs() {
+        assert!(
+            BROKER_IO_TIMEOUT
+                > Duration::from_millis(
+                    d2b_contracts_broker::broker_wire::DEFAULT_CONTEXT_DEADLINE_MS
+                        .saturating_mul(2),
+                ),
+            "client polling must outlive both Standard-budget handler legs"
+        );
+        assert!(
+            BROKER_IO_TIMEOUT
+                <= Duration::from_millis(
+                    d2b_contracts_broker::broker_wire::MAX_CONTEXT_DEADLINE_MS,
+                ),
+            "client polling must remain within the shared context ceiling"
+        );
+    }
 
     /// The daemon's own minijail `PlatformGate` converts into the Host
     /// family's gate type field for field, including the negative posture:
