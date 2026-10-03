@@ -94,3 +94,77 @@ replace. Production schema and generation output are unchanged by this entry.
   has never carried since the destination moved into the closed `presentation`
   vocabulary, so the wait could not succeed against any row. It now asserts the
   committed `spec.presentation` instead, with the same destination.
+- A ComponentSession no longer discards ttrpc frames it has already read off
+  the wire when the session ends. `EventQueue::fail` failed every waiter and
+  dropped the frames the driver had read but not yet handed out, so a peer
+  that ended the session right after answering a request took the answer with
+  it: the caller's `receive_ttrpc` returned `session-disconnected` instead of
+  the response the peer had already written. The visible symptom was a ttrpc
+  call that had been answered losing its response under load - a
+  `DisplayService/Finalize` whose response the finalizing peer never
+  collected, intermittently, while the peer that answered it had gone on to
+  tear the session down. Frames that were read are now handed back at the
+  driver's teardown and are drained by the next `receive_ttrpc` on the same
+  session handle, before that call reports the session's own failure, so the
+  answer survives the teardown that would have discarded it. A frame is only
+  ever kept if it was actually read: nothing unread is retained, the socket
+  is still closed, and no admission, revocation, or fencing changes.
+- The admitted-effect and authority-publication frame gates no longer reach the
+  audit worker from the reactor that read the frame. Both gates are awaited
+  directly inside a task of the accept loop, where the ordinary request path
+  instead hands the work to the dispatch pool and bridges it with `block_on` on
+  a plain worker thread; removing the boundary's own `block_on` left the gates'
+  refusal audits behind on the reactor. An audit append is a bounded channel
+  send plus a reply receive with no deadline, and the privileged class
+  backpressures on a full queue rather than dropping, so a caller waits for as
+  long as the worker takes. The broker runs four reactor workers, so four
+  stalled refusals stopped it accepting anything at all. Each of the nine
+  refusal appends on those two gates now runs on the dispatch pool and is
+  awaited in async time, exactly as the peer-authentication and stale-wire
+  appends on the same task already were: a full pool queue is backpressure on
+  the connection task rather than a parked thread. The appends themselves are
+  unchanged, and no new blocking surface or suppression was introduced. The
+  two gates also take the IPC admission limiter with `.lock().await` instead of
+  spinning on `try_lock`, which was there because the typed path reaches the
+  limiter from a synchronous dispatch worker with nothing else to do; on the
+  reactor the same spin burns a worker for as long as the critical section
+  takes to drain, and the reactor is the one thread every other connection's
+  frame I/O needs. The typed path keeps the spin, and neither path holds the
+  guard across a later await.
+- The admitted-effect table case releases the process-wide kernel bundle guard
+  as soon as its last read of the installed slot is done, rather than holding
+  it across the two scratch-directory removals at the end of the body. That
+  guard arrives from a function return rather than from a `.lock()` at the
+  binding site, which is why `clippy::await_holding_lock` cannot see it; the
+  hold that remains is the one the case's determinism depends on, and nothing
+  after the release reads the slot.
+- A second `SpecStore` handle on one database is now refused for
+  cross-connection write-lock contention as the store's own typed, retryable
+  `SpecStoreError::Locked`, instead of a raw `SQLITE_BUSY` escaping as an
+  unclassified `Sqlite` error. The store already waits out its whole
+  `busy_timeout` window internally; past it the request is refused, and that
+  refusal said nothing a caller could act on, so a manager - or a test -
+  holding two handles on one file could not tell "another writer is briefly
+  ahead of me" from "this store is broken". `Locked` carries the same contract
+  as `SpecStoreError::Busy`: the writer is alive, nothing was committed, and a
+  retry succeeds once the other connection settles.
+- `spec_store::tests::a_second_writer_queues_behind_the_outstanding_transaction`
+  no longer asserts on which error a contended attempt happened to produce. It
+  is deterministic now - no sleep, no retry loop, no concurrency - and it
+  asserts the fence itself: a second handle on the same database is refused
+  with the identity of the transaction holding the Zone, the refused candidate
+  reserves no sequence and commits no desired row, and settling that
+  transaction releases the Zone with a later sequence rather than a reused one.
+  The assertion it replaced panicked on a `SQLITE_BUSY` the store produced
+  correctly whenever contention on one file outlived the busy window, which is
+  the handover case the store's own header names.
+- `spec_store::tests::two_writer_handles_serialize_the_zone_sequence` carries
+  the concurrent half of that test and asserts the writer serialisation as
+  durable state. Twenty mutations from two handles on one Zone still have to
+  produce twenty rows at generation 1 and twenty `authority.ensure` audit
+  records, and now also exactly the sequences 1..=20 - none reused by two
+  writers, none skipped - twenty distinct transaction identities, a Zone
+  sequence of 20, an accepted cursor at 20, and fence refusals that name a
+  transaction the test actually staged. A writer that raced another's fence
+  fails on that state whatever its losing attempt returned along the way.
+

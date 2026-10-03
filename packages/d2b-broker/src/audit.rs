@@ -363,7 +363,7 @@ struct DailyAppender {
 
 #[cfg(test)]
 #[derive(Debug)]
-enum InjectedAuditIoFailure {
+pub(crate) enum InjectedAuditIoFailure {
     PartialWrite,
     Flush,
     Sync { remaining: u32 },
@@ -545,7 +545,7 @@ impl AuditLog {
     }
 
     #[cfg(test)]
-    fn inject_io_failure(&self, failure: InjectedAuditIoFailure) -> io::Result<()> {
+    pub(crate) fn inject_io_failure(&self, failure: InjectedAuditIoFailure) -> io::Result<()> {
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         self.submit(
             AuditCommand::InjectIoFailure {

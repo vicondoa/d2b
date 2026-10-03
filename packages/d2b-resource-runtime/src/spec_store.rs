@@ -12,7 +12,7 @@
 //! run inside an async context or an actor mailbox (KTD12), writers serialize
 //! structurally on the single connection, and `busy_timeout` covers the
 //! remaining cross-connection case (two stores open on one file, e.g. during
-//! handover).
+//! handover) for as long as it waits.
 //!
 //! Admission is refuse-don't-queue (the loader_worker doctrine): a full
 //! 256-slot queue refuses with [`SpecStoreError::Busy`] - backpressure, the
@@ -21,6 +21,12 @@
 //! reopened. The reply await is unbounded once admitted (a deadline cannot
 //! preempt the serial writer); a writer panic drops the reply sender and the
 //! await ends with WriterGone.
+//! Past that window the cross-connection case is refused rather than queued,
+//! and it is refused as itself: [`SpecStoreError::Locked`], backpressure from
+//! the same class as [`SpecStoreError::Busy`] and with the same contract (the
+//! writer is alive, nothing was committed, a retry succeeds once the other
+//! connection settles). It is not a raw SQLite code, because a caller that
+//! cannot read a refusal reports a live store as a broken one.
 //!
 //! ## Durability posture
 //!
@@ -259,6 +265,18 @@ pub enum SpecStoreError {
     /// full queue - a full queue is [`Self::Busy`].
     #[error("spec store writer unavailable")]
     WriterGone,
+    /// Another connection holds this database's write lock past the window
+    /// this store waits on, so the request was refused before it ran. This is
+    /// the cross-connection case the module header names - a second store
+    /// open on one file, e.g. during handover - and it is backpressure in the
+    /// same sense as [`Self::Busy`]: the writer is alive, this committed
+    /// nothing, and the call succeeds on a retry once the other connection's
+    /// transaction settles. It is its own variant because the writer thread's
+    /// raw SQLite code says nothing about which of the two it was, and a
+    /// caller that cannot tell a refusal from a writer death reports a live
+    /// store as dead.
+    #[error("spec store database is locked by another connection ({detail})")]
+    Locked { detail: String },
     /// The database's schema could not be applied. The refusal case carries
     /// the database's own `user_version`: this release starts from a fresh
     /// store and never converts existing data.
@@ -906,9 +924,33 @@ impl SpecStore {
         // practice: the writer drains FIFO and every op is capped by
         // `busy_timeout` (5s). A writer panic drops the reply sender, so the
         // await ends with WriterGone instead of hanging on a dead worker.
-        rx.await.map_err(|_| SpecStoreError::WriterGone)?
+        rx.await.map_err(|_| SpecStoreError::WriterGone)?.map_err(classify_refusal)
     }
 }
+
+/// Name the refusal the writer thread's own answer is, so a caller can act
+/// on it.
+///
+/// A `SQLITE_BUSY` out of a store that already waited out its whole busy
+/// window is the cross-connection case, not a broken database: this store
+/// holds one connection, so the other writer is a second store on the same
+/// file. It arrives as [`SpecStoreError::Locked`] - retryable backpressure
+/// like [`SpecStoreError::Busy`], from the same "nothing was committed"
+/// contract - and every other SQLite failure keeps its own code, because a
+/// caller must not read a corrupt database as a busy one.
+fn classify_refusal(error: SpecStoreError) -> SpecStoreError {
+    match error {
+        SpecStoreError::Sqlite(rusqlite::Error::SqliteFailure(failure, detail))
+            if matches!(
+                failure.code,
+                rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+            ) =>
+        {
+            SpecStoreError::Locked { detail: detail.unwrap_or_else(|| "database is locked".to_owned()) }
+        }
+        other => other,
+    }
+ }
 
 /// Drop is synchronous by construction and has no async form: the writer
 /// teardown (drain, checkpoint, exit) is the dedicated worker's own bounded
@@ -1158,9 +1200,82 @@ mod tests {
     /// One Zone has at most one outstanding publication transaction, so two
     /// writer handles on one database serialize by refusing the second
     /// candidate by name rather than by racing the first one's fence.
+    ///
+    /// Nothing here sleeps, retries, or runs concurrently: the fence is
+    /// committed state the moment `stage_mutation` returns, so the refusal is
+    /// a fact to read rather than a duration to wait out. The refusal is
+    /// checked against the identity of the transaction that holds the Zone,
+    /// and the release is checked by settling that transaction and staging
+    /// again - both of which a test that only counted refusals could not see.
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_second_writer_queues_behind_the_outstanding_transaction() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("specs.db");
+        let a = Arc::new(SpecStore::open(&path).unwrap());
+        let b = Arc::new(SpecStore::open(&path).unwrap());
+
+        let held = a.stage_mutation(DesiredMutation::Ensure(row("a-0", b"spec"))).await.unwrap();
+        assert_eq!(held.zone, "host");
+        let held_sequence = held.sequence.get();
+
+        // A second handle on the same database, the same Zone: refused, and
+        // the refusal names the transaction that holds the fence rather than
+        // merely having its shape.
+        let Err(SpecStoreError::ZoneTransactionOutstanding { zone, transaction }) =
+            b.stage_mutation(DesiredMutation::Ensure(row("b-0", b"spec"))).await
+        else {
+            panic!("a second writer must queue behind the outstanding transaction");
+        };
+        assert_eq!(zone, "host");
+        assert_eq!(
+            transaction,
+            held.transaction,
+            "the refusal names the fence that holds the Zone"
+        );
+        // The refused candidate reserved nothing: the Zone's durable
+        // sequence is still the one the first transaction consumed.
+        assert_eq!(a.zone_sequence("host").await.unwrap().get(), held_sequence);
+        assert!(a.list(SpecSelector::default()).await.unwrap().is_empty(), "a staged candidate commits no desired row");
+
+        // Settling the outstanding transaction releases the Zone, and the
+        // second handle takes it with the next sequence in order.
+        publish_after_stage(&a, held).await;
+        let next = b
+            .stage_mutation(DesiredMutation::Ensure(row("b-0", b"spec")))
+            .await
+            .expect("an acknowledged transaction releases the Zone");
+        let next_sequence = next.sequence.get();
+        assert!(
+            next_sequence > held_sequence,
+            "the released Zone hands out a later sequence, not a reused one"
+        );
+        publish_after_stage(&b, next).await;
+        let rows = a.list(SpecSelector::default()).await.unwrap();
+        let mut names: Vec<String> = rows.iter().map(|row| row.key.name.clone()).collect();
+        names.sort();
+        assert_eq!(names, ["a-0", "b-0"], "each handle committed its own candidate once");
+        assert_eq!(a.zone_sequence("host").await.unwrap().get(), next_sequence);
+        let accepted = a.accepted_cursor("host").await.unwrap().expect("a published Zone");
+        assert_eq!(accepted.sequence.get(), next_sequence, "the accepted cursor is the Zone's last accepted sequence");
+    }
+
+    /// Twenty mutations, one Zone, two writer handles on one database: the
+    /// Zone's durable sequence is the writer serialisation, so this asserts
+    /// that state directly instead of asserting on which refusal a
+    /// contended attempt happened to produce.
+    ///
+    /// What has to hold is that every mutation committed exactly once and
+    /// took its own sequence: twenty rows at generation 1, twenty
+    /// `authority.ensure` audit records, and committed sequences that are
+    /// exactly 1..=20 - none reused by two writers, none skipped, none left
+    /// behind. A writer that raced another's fence would show up there as a
+    /// duplicate, a gap, or a mutation that never committed, whichever error
+    /// its losing attempt returned along the way.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn two_writer_handles_serialize_the_zone_sequence() {
+
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("specs.db");
         let a = Arc::new(SpecStore::open(&path).unwrap());
@@ -1172,16 +1287,34 @@ mod tests {
                 let mut r = row(&format!("{name}-{i}"), b"spec");
                 r.provenance = ResourceProvenance::Nix;
                 handles.push(tokio::spawn(async move {
+                    // What this attempt reserved, and which transaction each
+                    // fence refusal named, is returned to the parent instead
+                    // of pushed into a shared handle: a handle lock has no
+                    // place in an async task, and the join handle carries
+                    // the same observations without a cross-task Mutex.
                     // A refused candidate leaves the Zone fenced, so the
                     // retry after the outstanding transaction settles is the
-                    // whole production behavior.
+                    // whole production behavior. Both refusals that commit
+                    // nothing are retried - the Zone fence, and the database
+                    // write lock this store's sibling handle holds past its
+                    // busy window. Every other error is a real failure, so a
+                    // journal that lost a fence, a sequence, or a desired row
+                    // still fails this test.
+                    let mut staged = Vec::new();
+                    let mut named = Vec::new();
                     for _ in 0..2_000 {
-                        match store.stage_mutation(DesiredMutation::Ensure(r.clone())).await {
-                            Ok(staged) => {
-                                publish_after_stage(&store, staged).await;
-                                return;
+                        let attempt = store.stage_mutation(DesiredMutation::Ensure(r.clone())).await;
+                        match attempt {
+                            Ok(reserved) => {
+                                staged.push((reserved.transaction, reserved.sequence.get()));
+                                publish_after_stage(&store, reserved).await;
+                                return (staged, named);
                             }
-                            Err(SpecStoreError::ZoneTransactionOutstanding { .. }) => {
+                            Err(SpecStoreError::ZoneTransactionOutstanding { transaction, .. }) => {
+                                named.push(transaction);
+                                tokio::time::sleep(Duration::from_millis(1)).await;
+                            }
+                            Err(SpecStoreError::Locked { .. }) => {
                                 tokio::time::sleep(Duration::from_millis(1)).await;
                             }
                             Err(error) => panic!("a staged mutation must not fail: {error:?}"),
@@ -1191,14 +1324,48 @@ mod tests {
                 }));
             }
         }
+        let mut observations = Vec::new();
         for handle in handles {
-            handle.await.unwrap();
+            observations.push(handle.await.unwrap());
         }
+        let staged: Vec<_> = observations.iter().flat_map(|(s, _)| s.iter().copied()).collect();
+        let named_by_a_refusal: Vec<_> =
+            observations.iter().flat_map(|(_, n)| n.iter().copied()).collect();
+
         let rows = a.list(SpecSelector::default()).await.unwrap();
         assert_eq!(rows.len(), 20, "two writer handles, no lost or doubled row");
         assert!(rows.iter().all(|row| row.generation == 1));
         let history = a.history(1000).await.unwrap();
         assert_eq!(history.iter().filter(|rec| rec.operation == "authority.ensure").count(), 20);
+
+        assert_eq!(staged.len(), 20, "one staged transaction per mutation");
+        let transactions: Vec<TransactionId> = staged.iter().map(|(id, _)| *id).collect();
+        let mut distinct = transactions.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(distinct.len(), 20, "twenty distinct transactions, none minted twice");
+        let mut sequences: Vec<u64> = staged.iter().map(|(_, sequence)| *sequence).collect();
+        sequences.sort_unstable();
+        assert_eq!(
+            sequences,
+            (1..=20).collect::<Vec<u64>>(),
+            "one Zone, twenty mutations: every reserved sequence is used once, none reused, none skipped"
+        );
+        assert!(
+            named_by_a_refusal.iter().all(|named| transactions.contains(named)),
+            "a refusal names a transaction this test staged: {named_by_a_refusal:?}"
+        );
+        assert_eq!(
+            a.zone_sequence("host").await.unwrap().get(),
+            20,
+            "the Zone's durable counter is the last sequence it reserved"
+        );
+        let accepted = a.accepted_cursor("host").await.unwrap().expect("a published Zone");
+        assert_eq!(
+            accepted.sequence.get(),
+            20,
+            "the accepted cursor is the last sequence the Zone reserved"
+        );
     }
 
     async fn publish_after_stage(store: &SpecStore, staged: StagedMutation) {

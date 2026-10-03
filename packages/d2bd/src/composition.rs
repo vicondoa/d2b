@@ -14898,9 +14898,23 @@ mod guest_deployment_bootstrap_tests {
 
     /// The delivery root one Guest reads, under a scratch directory that is
     /// this test's own.
+    ///
+    /// The scratch root carries the process id, because the name alone is not
+    /// unique to a test: every case here names a fixed root under the
+    /// process-wide `TMPDIR`, and `bazel test --runs_per_test=N` runs N copies
+    /// of this binary at the same time against that same `TMPDIR`. A fixed
+    /// root is then one shared directory, and this helper both recreates it
+    /// and the cases below delete it again on the way out, so one run's
+    /// teardown removed the delivered graph another run was still about to
+    /// read and that Guest boot path refused with "deployment-bootstrap.json
+    /// is absent". The id is the same per-process qualifier the other
+    /// scratch helpers in this crate already use.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn deployment_root(name: &str, document: Option<&str>) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("d2b-guest-bootstrap-{name}"));
+        let root = std::env::temp_dir().join(format!(
+            "d2b-guest-bootstrap-{name}-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("guest deployment root");
         if let Some(document) = document {

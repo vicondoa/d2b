@@ -1252,6 +1252,17 @@ mod tests {
         )
     }
 
+    /// The requester identity a fixture picks for itself when nothing about
+    /// the test needs a real peer credential.
+    ///
+    /// A launch is admitted for exactly one subject, so the registry's
+    /// admitted set, the uid a test dispatches with, and the requester this
+    /// admission names are one fact expressed three ways. Naming it once
+    /// keeps a fixture from splitting it: a test that pairs this constant
+    /// with the runner's own uid on the other side is green only on a
+    /// runner whose uid happens to be 1000.
+    const FIXTURE_REQUESTER_UID: u32 = 1000;
+
     fn admitted_for(requester_uid: u32) -> HelperGraphAdmission {
         HelperGraphAdmission::new(
             committed_row(),
@@ -1263,11 +1274,22 @@ mod tests {
     }
 
     fn launch(request_id: u64, operation_id: &str, arg: &str) -> HelperLaunchRequest {
+        launch_for(FIXTURE_REQUESTER_UID, request_id, operation_id, arg)
+    }
+
+    /// A launch admitted for `requester_uid`, for the tests whose caller
+    /// identity is fixed by something other than this fixture.
+    fn launch_for(
+        requester_uid: u32,
+        request_id: u64,
+        operation_id: &str,
+        arg: &str,
+    ) -> HelperLaunchRequest {
         HelperLaunchRequest {
             request_id,
             operation_id: OperationId::parse(operation_id).unwrap(),
             workload: committed_row(),
-            admission: admitted_for(1000),
+            admission: admitted_for(requester_uid),
             target: WorkloadTarget::parse("tools.host.d2b").unwrap(),
             item_id: ProtocolToken::parse("browser").unwrap(),
             argv: ConfiguredArgv::new(vec![arg.to_owned()]).unwrap(),
@@ -1616,9 +1638,9 @@ mod tests {
         }
         let uid = unistd::getuid().as_raw();
         let registry = Arc::new(HelperRegistry::new(uid.wrapping_add(1), [uid]));
-        let first = register_helper(Arc::clone(&registry), 11);
+        let first = register_helper(Arc::clone(&registry), uid, 11);
         assert_eq!(registry.active_generation(uid), Some(11));
-        let second = register_helper(Arc::clone(&registry), 12);
+        let second = register_helper(Arc::clone(&registry), uid, 12);
         assert_eq!(registry.active_generation(uid), Some(12));
         drop(first);
         drop(second);
@@ -1650,8 +1672,14 @@ mod tests {
         }
         let uid = unistd::getuid().as_raw();
         let registry = Arc::new(HelperRegistry::new(uid.wrapping_add(1), [uid]));
-        let helper = register_helper(Arc::clone(&registry), 21);
-        let request = launch(91, "op-correlated", "/bin/true");
+        let helper = register_helper(Arc::clone(&registry), uid, 21);
+        // The kernel reports this process's own uid as the peer's, so the
+        // admission has to name that same subject. Admitting a fixture
+        // literal here instead would leave the dispatch refused with
+        // `RequesterMismatch` on every runner whose uid is not 1000, and
+        // the receive loop below would then wait for a frame that is
+        // never sent.
+        let request = launch_for(uid, 91, "op-correlated", "/bin/true");
         let expected_operation = request.operation_id.clone();
         let dispatch_registry = Arc::clone(&registry);
         let dispatch = std::thread::spawn(move || dispatch_registry.dispatch_launch(uid, request));
@@ -1689,10 +1717,10 @@ mod tests {
 
     #[test]
     fn queue_saturation_does_not_leave_operation_replayable_as_active() {
-        if unistd::getuid().is_root() {
-            return;
-        }
-        let uid = unistd::getuid().as_raw();
+        // Nothing here reads a peer credential: the connection is inserted
+        // directly, so the test picks its own subject and is the same on
+        // every runner.
+        let uid = FIXTURE_REQUESTER_UID;
         let registry = HelperRegistry::new(uid.wrapping_add(1), [uid]);
         let (socket, peer) = seqpacket_pair();
         let (outbound, _outbound_rx) = mpsc::sync_channel(1);
@@ -1766,9 +1794,11 @@ mod tests {
         assert_eq!(registry.last_failure(1000, &editor), None);
     }
 
+    /// `uid` is the subject this caller's registry admitted, and the
+    /// subject the kernel will report as the peer. It is a parameter so a
+    /// caller cannot pair one uid here with another in the registry.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn register_helper(registry: Arc<HelperRegistry>, generation: u64) -> Socket {
-        let uid = unistd::getuid().as_raw();
+    fn register_helper(registry: Arc<HelperRegistry>, uid: u32, generation: u64) -> Socket {
         let (server, client) = seqpacket_pair();
         let server_registry = Arc::clone(&registry);
         std::thread::spawn(move || {

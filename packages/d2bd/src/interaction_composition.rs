@@ -1252,10 +1252,34 @@ where
         .await?;
         lease.finish().map_err(|_| "interaction-operation-failed")?;
         if finalize_after_response {
+            // Nothing here is a flush. `send_component_response` awaited the
+            // session writer, and the writer reports completion only after
+            // the batch carrying this response has been written, so the frame
+            // is on the transport before this branch runs; the release below
+            // then takes the registrar's writer-acknowledged revocation.
+            //
+            // The delay is not what makes the response arrive. Ending this
+            // session closes its socket, and a peer's driver ends its loop on
+            // that EOF; the frames it had already read from the wire are owed
+            // to the peer regardless, so that teardown hands them back to the
+            // peer's next `receive_ttrpc` rather than discarding them
+            // (`EventQueue::fail` in `packages/d2b-session/src/driver.rs`
+            // returns them and `SessionDriverHandle::receive_ttrpc` drains
+            // them before it reports the session's own failure). What the
+            // delay still buys is the peer's scheduler: it keeps the peer's
+            // bookkeeping from racing the socket close. The ttrpc
+            // request/response exchange carries no acknowledgement that the
+            // peer finished reading, so this stays a bounded grace rather
+            // than an ordering guarantee.
             tokio::time::sleep(Duration::from_millis(1)).await;
-            self.finalize_async(d2b_provider_display_wayland::GraceState::Expired)
+            // The release is scoped to the session that asked for it. Another
+            // service's session, and any request it has in flight, survives
+            // this Finalize; the display runtime and its dependents are torn
+            // down by `remove_session` only when this was the last display
+            // session.
+            self.remove_session(session_key)
                 .await
-                .map_err(|_| "interaction-finalization-failed")?;
+                .map_err(|error| format!("interaction-finalization-failed: {error}"))?;
         }
         Ok(())
     }
@@ -6399,6 +6423,22 @@ mod tests {
         handle.lock().await.has_service_session(service)
     }
 
+    /// End every remaining session the way the daemon ends them: through the
+    /// one caller entitled to tear a whole Zone down at once. A test that
+    /// finalizes one service must reach for this to close the others, so the
+    /// per-request Finalize can never be mistaken for shutdown again.
+    async fn shutdown_test_interactions(runtime: &TestInteractionRuntime) {
+        assert!(
+            finalize_interaction_runtimes(
+                runtime,
+                d2b_provider_display_wayland::GraceState::Expired
+            )
+            .await
+            .is_none(),
+            "daemon shutdown finalized every Zone composition"
+        );
+    }
+
     #[test]
     fn durable_display_process_payloads_bind_owner_provider_template_and_target() {
         let supervisor = d2b_provider_supervisor::ProviderSupervisor::new(Backend::default());
@@ -7564,6 +7604,31 @@ mod tests {
         .await
         .expect("client handshake timeout")
         .unwrap_or_else(|error| panic!("client handshake failed for {service}: {error}"));
+        // The client handshake finishing is not the server admitting this
+        // service: `admit_interaction_socket` still has to verify the peer,
+        // find the Zone's composition and register the session, and it does
+        // that on its own task after the handshake it just answered. Every
+        // assertion below reads that registration, so returning here first
+        // made the helper race its own server and `route_for_service` read
+        // `None` under load. Wait for the admission these tests depend on.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let handle = {
+                    let guard = runtime.lock().await;
+                    guard.as_ref().and_then(|set| set.runtime_handle(zone))
+                };
+                let admitted = match handle {
+                    Some(handle) => handle.lock().await.has_service_session(service),
+                    None => false,
+                };
+                if admitted {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("interaction session for {service} was never admitted"));
         (Arc::new(engine.into_driver()), server)
     }
 
@@ -7581,7 +7646,20 @@ mod tests {
             .await
             .expect("interaction response timeout")
             .unwrap();
-        assert!(driver.complete_ttrpc(request_id).await.unwrap());
+        // Retiring the request id is local bookkeeping that has to go through
+        // the session's own driver, so it needs that session to still be
+        // there. `DisplayService/Finalize` is the one request whose contract
+        // is to take the session away, so whether its id can still be retired
+        // is a race between the peer retiring it and the peer's driver ending
+        // on the close this very request causes - the same close
+        // `hermetic_listener_authenticates_...` asserts has already happened
+        // by the time the response returns. There is no ordering to assert
+        // here, so every Finalize call site asserts the deterministic outcome
+        // instead: the response was delivered and that session is gone.
+        let retired = driver.complete_ttrpc(request_id).await;
+        if method != "DisplayService/Finalize" {
+            assert!(retired.unwrap());
+        }
         TtrpcResponse::parse_from_bytes(&response[ttrpc::proto::MESSAGE_HEADER_LENGTH..]).unwrap()
     }
 
@@ -7907,6 +7985,25 @@ mod tests {
         )
         .await;
         assert_eq!(finalize.status().code(), TtrpcCode::OK);
+        // Finalize is a per-session teardown. The display session is the only
+        // one that ends; the sessions that did not ask for it stay admitted,
+        // so a peer with a command in flight on one of them still gets its
+        // answer.
+        let display_server = clients.remove(0).4;
+        assert!(display_server.await.unwrap().is_ok());
+        assert_eq!(zone_session_count(&runtime, &zone).await, Some(3));
+        for survivor in [
+            d2b_provider_clipboard_wayland::BRIDGE_SERVICE,
+            d2b_provider_clipboard_wayland::PICKER_SERVICE,
+            d2b_provider_notification_desktop::SERVICE_PACKAGE,
+        ] {
+            assert!(
+                zone_has_service_session(&runtime, &zone, survivor).await,
+                "{survivor} kept its session across another service's Finalize"
+            );
+        }
+        // Only the daemon's shutdown ends the rest.
+        shutdown_test_interactions(&runtime).await;
         for (_, _, _, _, server) in clients {
             assert!(server.await.unwrap().is_ok());
         }
@@ -8087,9 +8184,16 @@ mod tests {
         )
         .await;
         assert_eq!(finalize.status().code(), TtrpcCode::OK);
+        // The display session that asked for the Finalize is the only one that
+        // ends; the bridge and picker sessions were not part of that request.
+        let display_server = clients.remove(0).4;
+        assert!(display_server.await.unwrap().is_ok());
+        assert_eq!(zone_session_count(&runtime, &zone).await, Some(2));
+        shutdown_test_interactions(&runtime).await;
         for (_, _, _, _, server) in clients {
             assert!(server.await.unwrap().is_ok());
         }
+        assert_eq!(zone_session_count(&runtime, &zone).await, Some(0));
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -8274,9 +8378,152 @@ mod tests {
         )
         .await;
         assert_eq!(finalize.status().code(), TtrpcCode::OK);
+        // Only the session that asked to be finalized ends here; the bridge
+        // and notification sessions outlive the display they depend on.
+        let display_server = clients.remove(0).4;
+        assert!(display_server.await.unwrap().is_ok());
+        assert_eq!(zone_session_count(&runtime, &zone).await, Some(2));
+        shutdown_test_interactions(&runtime).await;
         for (_, _, _, _, server) in clients {
             assert!(server.await.unwrap().is_ok());
         }
+        assert_eq!(zone_session_count(&runtime, &zone).await, Some(0));
+    }
+
+    /// A Finalize is a request on one session and releases that session, so a
+    /// second session that pipelined a command behind it is untouched: the
+    /// command is still answered, and the session is still there to be driven
+    /// afterwards. Finalizing every registered session instead drops that
+    /// peer's in-flight command and refuses the request as
+    /// `session-disconnected`, which is what a multiplexed connection does to
+    /// any client that keeps writing after its Finalize.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn one_session_finalize_leaves_another_sessions_in_flight_command_answered() {
+        let directory = tempfile::tempdir().unwrap();
+        let zone = ZoneId::parse("work").unwrap();
+        let uid = nix::unistd::getuid().as_raw();
+        let runtime = Arc::new(AsyncMutex::new(Some(committed_test_interaction_runtime(
+            &zone, uid,
+        ))));
+        let display_service = d2b_provider_display_wayland::SERVICE_PACKAGE;
+        let notification_service = d2b_provider_notification_desktop::SERVICE_PACKAGE;
+        let mut clients = Vec::new();
+        for service in [display_service, notification_service] {
+            let path = directory
+                .path()
+                .join(service.replace('.', "-"))
+                .with_extension("sock");
+            let listener = bind_interaction_listener(&path, uid).await.unwrap();
+            let (client, server) =
+                establish_test_client(&listener, &runtime, &zone, service, uid, &path).await;
+            clients.push((service, path, listener, client, server));
+        }
+        // Own the two drivers so the client table can be drained later.
+        let display = Arc::clone(&clients[0].3);
+        let notification = Arc::clone(&clients[1].3);
+        let display_spec = WaylandSessionSpec::new(
+            ResourceRef::parse("Guest/work").unwrap(),
+            ResourceRef::parse("Host/host").unwrap(),
+            ResourceRef::parse("User/alice").unwrap(),
+            ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/display-wayland").unwrap(),
+            d2b_provider_display_wayland::DisplayIdentity::new(
+                "cross-session-finalize",
+                "#112233",
+                "#223344",
+                "#334455",
+            )
+            .unwrap(),
+            true,
+        )
+        .unwrap();
+        let reconcile = dispatch_test_request(
+            &display,
+            display_service,
+            500,
+            "DisplayService/Reconcile",
+            serde_json::to_vec(&serde_json::json!({"spec": display_spec})).unwrap(),
+        )
+        .await;
+        assert_eq!(reconcile.status().code(), TtrpcCode::OK);
+
+        // The notification session pipelines a command and does not read it
+        // yet, so it is outstanding across the display session's Finalize.
+        let in_flight = request_frame_for_test(
+            notification_service,
+            1,
+            "NotificationService/Drain",
+            Vec::new(),
+        );
+        let in_flight_id = d2b_session::ttrpc_request_id(1, &in_flight).unwrap();
+        notification
+            .start_ttrpc(in_flight_id.clone(), in_flight)
+            .await
+            .unwrap();
+
+        let finalize = dispatch_test_request(
+            &display,
+            display_service,
+            501,
+            "DisplayService/Finalize",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(finalize.status().code(), TtrpcCode::OK);
+
+        // The command this session had already written is answered, and its
+        // request id retires against a session that is still there. Which of
+        // the two answers it gets is the display's business - `OK` if the
+        // command ran before the display session's teardown reconciled the
+        // dependents, `FAILED_PRECONDITION` if it ran after - but an answer
+        // arrives either way, because this session's own authority was never
+        // part of what that Finalize was asked to release.
+        let answered = tokio::time::timeout(Duration::from_secs(5), notification.receive_ttrpc())
+            .await
+            .expect("the other session's in-flight command was never answered")
+            .unwrap_or_else(|error| {
+                panic!("another session's Finalize dropped this session's in-flight command: {error}")
+            });
+        let answered =
+            TtrpcResponse::parse_from_bytes(&answered[ttrpc::proto::MESSAGE_HEADER_LENGTH..])
+                .unwrap();
+        assert!(
+            matches!(
+                answered.status().code(),
+                TtrpcCode::OK | TtrpcCode::FAILED_PRECONDITION
+            ),
+            "the in-flight command was answered with {:?}",
+            answered.status().code()
+        );
+        assert!(notification.complete_ttrpc(in_flight_id).await.unwrap());
+
+        let display_server = clients.remove(0).4;
+        assert!(display_server.await.unwrap().is_ok());
+
+        // The surviving session is still admitted, and still answers for
+        // itself. The display is gone, so anything these providers serve is
+        // legitimately refused now; what has to survive is the session, and
+        // that it still gets a response at all.
+        assert_eq!(zone_session_count(&runtime, &zone).await, Some(1));
+        assert!(
+            zone_has_service_session(&runtime, &zone, notification_service).await,
+            "the session that did not send Finalize was revoked by it"
+        );
+        assert!(!zone_has_service_session(&runtime, &zone, display_service).await);
+        let after = dispatch_test_request(
+            &notification,
+            notification_service,
+            2,
+            "NotificationService/CloseObserver",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(after.status().code(), TtrpcCode::UNIMPLEMENTED);
+
+        shutdown_test_interactions(&runtime).await;
+        let (_, _, _, _, notification_server) = clients.remove(0);
+        assert!(notification_server.await.unwrap().is_ok());
+        assert_eq!(zone_session_count(&runtime, &zone).await, Some(0));
     }
 
     #[test]

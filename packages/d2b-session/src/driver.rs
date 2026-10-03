@@ -108,6 +108,24 @@ pub struct SessionDriverHandle {
     mandatory_commands: mpsc::UnboundedSender<DriverCommand>,
     generation: Arc<AtomicU64>,
     writer_fence: Cancellation,
+    undelivered_ttrpc: UndeliveredTtrpc,
+}
+
+/// ttrpc frames this session read off the wire that no local consumer had
+/// claimed when the driver ended.
+///
+/// A response the peer already wrote is owed to the caller waiting for it.
+/// The teardown that ends the driver is the peer's, and the frame outlives
+/// the driver task, so the frame is handed back here instead of being
+/// dropped with the queue. Only frames that were actually read are kept.
+type UndeliveredTtrpc = Arc<tokio::sync::Mutex<VecDeque<Vec<u8>>>>;
+
+fn undelivered_ttrpc() -> UndeliveredTtrpc {
+    Arc::new(tokio::sync::Mutex::new(VecDeque::new()))
+}
+
+async fn take_undelivered_ttrpc(undelivered: &UndeliveredTtrpc) -> Option<Vec<u8>> {
+    undelivered.lock().await.pop_front()
 }
 
 impl fmt::Debug for SessionDriverHandle {
@@ -230,8 +248,25 @@ impl ComponentSessionDriver for SessionDriverHandle {
         .await
     }
 
+    /// Receives the next inbound ttrpc frame.
+    ///
+    /// A frame the driver already read off the wire is owed to this caller
+    /// even when the session has since ended. The peer's teardown can end
+    /// the driver while a frame is buffered and this caller has not claimed
+    /// it yet, so the driver hands those frames back and they are drained
+    /// here before the session's own failure is reported.
     async fn receive_ttrpc(&self) -> Result<Vec<u8>> {
-        self.request(DriverCommand::ReceiveTtrpc).await
+        if let Some(frame) = take_undelivered_ttrpc(&self.undelivered_ttrpc).await {
+            return Ok(frame);
+        }
+        match self.request(DriverCommand::ReceiveTtrpc).await {
+            Ok(frame) => Ok(frame),
+            // The driver ended between the check above and this request
+            // landing, and its teardown published a frame this call is owed.
+            Err(error) => take_undelivered_ttrpc(&self.undelivered_ttrpc)
+                .await
+                .ok_or(error),
+        }
     }
 
     async fn register_inbound_call(&self, request_id: RequestId) -> Result<Cancellation> {
@@ -358,6 +393,7 @@ impl<T: OwnedTransport + 'static> SessionEngine<T> {
             writer_failures,
             timeout,
         ));
+        let undelivered_ttrpc = undelivered_ttrpc();
         tokio::spawn(run_driver(
             self,
             receiver,
@@ -366,12 +402,14 @@ impl<T: OwnedTransport + 'static> SessionEngine<T> {
             write_sender,
             priority_sender,
             writer_fence.clone(),
+            Arc::clone(&undelivered_ttrpc),
         ));
         SessionDriverHandle {
             commands,
             mandatory_commands,
             generation,
             writer_fence,
+            undelivered_ttrpc,
         }
     }
 }
@@ -867,14 +905,23 @@ impl DriverQueues {
         self.named_sends = retained;
     }
 
-    fn fail(self, error: SessionError) {
+    /// Fails every waiter and hands back the ttrpc frames the driver read
+    /// from the wire that no waiter had claimed.
+    ///
+    /// Those frames are returned rather than dropped: a ttrpc response the
+    /// peer already wrote is the answer to a request this side is waiting
+    /// for, and the teardown ending this driver is the peer's teardown, not
+    /// the local consumer's cancellation. The other channels keep the
+    /// teardown contract they have always had.
+    fn fail(self, error: SessionError) -> VecDeque<Vec<u8>> {
         for pending in self.named_sends {
             let _ = pending.reply.send(Err(error));
         }
-        self.ttrpc.fail(error);
+        let undelivered = self.ttrpc.fail(error);
         self.attachments.fail(error);
         self.streams.fail(error);
         self.control.fail(error);
+        undelivered
     }
 }
 
@@ -987,10 +1034,15 @@ impl<T: EventBytes> EventQueue<T> {
         Ok(())
     }
 
-    fn fail(self, error: SessionError) {
+    /// Fails every waiter and returns the events that were read from the wire
+    /// but never claimed, so a consumer that is still owed an event can be
+    /// given it instead of losing it with the driver.
+    fn fail(mut self, error: SessionError) -> VecDeque<T> {
         for waiter in self.waiters {
             let _ = waiter.send(Err(error));
         }
+        self.queued_bytes = 0;
+        std::mem::take(&mut self.events)
     }
 }
 
@@ -1082,7 +1134,7 @@ impl NamedStreamEventQueue {
     }
 
     fn fail(self, error: SessionError) {
-        self.events.fail(error);
+        drop(self.events.fail(error));
         for waiters in self.waiters.into_values() {
             for waiter in waiters {
                 let _ = waiter.send(Err(error));
@@ -1091,6 +1143,12 @@ impl NamedStreamEventQueue {
     }
 }
 
+// The parameters are the driver's whole wiring surface: `into_driver` owns
+// constructing it and has nothing else to bind them to.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "driver task entry point; parameters are its entire wiring surface"
+)]
 async fn run_driver<T: OwnedTransport>(
     mut engine: SessionEngine<T>,
     mut commands: mpsc::Receiver<DriverCommand>,
@@ -1099,6 +1157,7 @@ async fn run_driver<T: OwnedTransport>(
     write_commands: mpsc::Sender<WriterCommand>,
     priority_writes: mpsc::UnboundedSender<WriterCommand>,
     writer_fence: Cancellation,
+    undelivered_ttrpc: UndeliveredTtrpc,
 ) {
     let mut queues = DriverQueues::new(&engine);
     let mut fairness_turn = 0_u8;
@@ -1206,7 +1265,14 @@ async fn run_driver<T: OwnedTransport>(
     };
 
     let error = result.err().unwrap_or_else(disconnected);
-    queues.fail(error);
+    let undelivered = queues.fail(error);
+    if !undelivered.is_empty() {
+        // Frames the peer already wrote and this driver already read are owed
+        // to a local consumer that has not claimed them yet. Publishing them
+        // past the driver's own teardown is what keeps a response from being
+        // lost to the peer's teardown of the session carrying it.
+        undelivered_ttrpc.lock().await.extend(undelivered);
+    }
 }
 
 trait WriterFailureRecorder {

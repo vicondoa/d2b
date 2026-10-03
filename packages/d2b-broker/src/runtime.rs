@@ -469,6 +469,16 @@ fn screen_admitted_effect_frame(
 ///    accepted, unfenced authority for admits no effect.
 /// 6. The boundary itself, over the process-lifetime ledger, the serve-time
 ///    implementation table, and the broker's own private execution values.
+///
+/// Every wait this gate performs is in async time on the reactor that read the
+/// frame: this connection is served as one of the accept loop's tasks, and the
+/// boundary is awaited there rather than driven through a second runtime, so
+/// no reactor worker is parked on an admitted effect. That includes the
+/// refusal audits - an append on the audit worker is a bounded channel send
+/// plus a reply receive with no deadline, so it runs on the dispatch pool
+/// ([`write_refusal_audit_off_reactor`]) and the limiter is locked with
+/// `.await` rather than spun on, because a reactor worker is the one thread
+/// every other connection's frame I/O needs.
 async fn answer_admitted_effect_frame(
     connection: AsyncSeqpacket,
     server: &Server,
@@ -488,8 +498,11 @@ async fn answer_admitted_effect_frame(
     };
 
     if peer_uid != server.config.d2bd_uid {
-        let _ = write_refusal_audit_bounded(
-            &audit_log,
+        let _ = write_refusal_audit_off_reactor(
+            RefusalAuditBoundary {
+                dispatches: &server.dispatches,
+                log: &audit_log,
+            },
             AuditWriteClass::Unprivileged,
             ADMITTED_EFFECT_FRAME_KIND,
             peer_uid,
@@ -497,7 +510,8 @@ async fn answer_admitted_effect_frame(
             "peer-refused",
             ADMITTED_EFFECT_FRAME_KIND,
             "closed",
-        );
+        )
+        .await;
         return connection
             .send_json_frame(
                 &BrokerError::PeerCredentialRefused {
@@ -508,16 +522,14 @@ async fn answer_admitted_effect_frame(
             .await;
     }
 
-    // The limiter runs on the synchronous dispatch workers, which must never
-    // block, so it spins on `try_lock` for the short bounded `check`
-    // critical section. The guard is dropped before any dispatch below.
+    // The limiter's critical section is a short bounded `check`. This gate is
+    // awaited on the accept reactor, so the lock is taken in async time: the
+    // `try_lock` spin the typed path uses burns a worker for as long as the
+    // section takes to drain, and here the thread it would burn is the one
+    // every other connection's frame I/O needs. The guard is dropped before
+    // any dispatch below, so nothing holds it across a later await.
     let rate_allowed = {
-        let mut limiter = loop {
-            match server.ipc_rate_limiter.try_lock() {
-                Ok(guard) => break guard,
-                Err(_) => std::hint::spin_loop(),
-            }
-        };
+        let mut limiter = server.ipc_rate_limiter.lock().await;
         limiter.check(
             IpcRatePool::Daemon,
             peer_uid,
@@ -526,8 +538,11 @@ async fn answer_admitted_effect_frame(
         )
     };
     if !rate_allowed {
-        let _ = write_refusal_audit_bounded(
-            &audit_log,
+        let _ = write_refusal_audit_off_reactor(
+            RefusalAuditBoundary {
+                dispatches: &server.dispatches,
+                log: &audit_log,
+            },
             AuditWriteClass::Privileged,
             ADMITTED_EFFECT_FRAME_KIND,
             peer_uid,
@@ -535,7 +550,8 @@ async fn answer_admitted_effect_frame(
             "ipc-rate-limited",
             ADMITTED_EFFECT_FRAME_KIND,
             "closed",
-        );
+        )
+        .await;
         return connection
             .send_json_frame(&BrokerError::IpcRateLimited.into_response())
             .await;
@@ -556,8 +572,11 @@ async fn answer_admitted_effect_frame(
     // accepted graph, and an effect it cannot show authority for is refused
     // rather than admitted blind.
     let Some(projection) = crate::authority_projection::authority_projection() else {
-        let _ = write_refusal_audit_bounded(
-            &audit_log,
+        let _ = write_refusal_audit_off_reactor(
+            RefusalAuditBoundary {
+                dispatches: &server.dispatches,
+                log: &audit_log,
+            },
             AuditWriteClass::Privileged,
             ADMITTED_EFFECT_FRAME_KIND,
             peer_uid,
@@ -565,15 +584,19 @@ async fn answer_admitted_effect_frame(
             crate::envelope::UNACCEPTED_PROJECTION,
             &zone,
             "refused",
-        );
+        )
+        .await;
         return connection
             .send_json_frame(&refuse(crate::envelope::UNACCEPTED_PROJECTION))
             .await;
     };
     let posture = crate::envelope::ProjectionPosture::current(&zone).await;
     let Some(accepted) = projection.accepted_graph(&zone).await else {
-        let _ = write_refusal_audit_bounded(
-            &audit_log,
+        let _ = write_refusal_audit_off_reactor(
+            RefusalAuditBoundary {
+                dispatches: &server.dispatches,
+                log: &audit_log,
+            },
             AuditWriteClass::Privileged,
             ADMITTED_EFFECT_FRAME_KIND,
             peer_uid,
@@ -581,7 +604,8 @@ async fn answer_admitted_effect_frame(
             crate::envelope::UNACCEPTED_PROJECTION,
             &zone,
             "refused",
-        );
+        )
+        .await;
         return connection
             .send_json_frame(&refuse(crate::envelope::UNACCEPTED_PROJECTION))
             .await;
@@ -595,8 +619,11 @@ async fn answer_admitted_effect_frame(
     // effect whose values the broker cannot prove is refused rather than run
     // against a table of defaults.
     let Some(values) = private_execution_values(wiring, &accepted) else {
-        let _ = write_refusal_audit_bounded(
-            &audit_log,
+        let _ = write_refusal_audit_off_reactor(
+            RefusalAuditBoundary {
+                dispatches: &server.dispatches,
+                log: &audit_log,
+            },
             AuditWriteClass::Privileged,
             ADMITTED_EFFECT_FRAME_KIND,
             peer_uid,
@@ -604,7 +631,8 @@ async fn answer_admitted_effect_frame(
             crate::envelope::UNPROVEN_EFFECT,
             &zone,
             "refused",
-        );
+        )
+        .await;
         return connection
             .send_json_frame(&refuse(crate::envelope::UNPROVEN_EFFECT))
             .await;
@@ -614,20 +642,26 @@ async fn answer_admitted_effect_frame(
         &wiring.table,
         Some(&wiring.chain_audit),
     );
-    let outcome = envelope_call_runtime()
-        .block_on(boundary.run(
-            posture,
-            &zone,
-            &accepted,
-            &values,
-            &invocation,
-            &request_fds,
-        ));
+    // The boundary is async end to end: the ledger awaits a lock, and a
+    // declared implementation runs as a `Send` future. It is awaited here on
+    // the connection's own reactor, beside the frame read and write it
+    // answers with. The `block_on` this site carried belonged to the shape
+    // where the frame ran on a plain pool worker, which has no executor; from
+    // a task of the accept reactor it is worse than a held worker, because
+    // `Runtime::block_on` panics on a thread that is already driving a
+    // runtime, so the connection died without answering. The dispatch pool
+    // keeps the bridge, because its workers are plain threads.
+    let outcome = boundary
+        .run(posture, &zone, &accepted, &values, &invocation, &request_fds)
+        .await;
     let answer = match outcome {
         Ok(answer) => answer,
         Err(refusal) => {
-            let _ = write_refusal_audit_bounded(
-                &audit_log,
+            let _ = write_refusal_audit_off_reactor(
+                RefusalAuditBoundary {
+                    dispatches: &server.dispatches,
+                    log: &audit_log,
+                },
                 AuditWriteClass::Privileged,
                 ADMITTED_EFFECT_FRAME_KIND,
                 peer_uid,
@@ -635,7 +669,8 @@ async fn answer_admitted_effect_frame(
                 refusal.code,
                 &zone,
                 "refused",
-            );
+            )
+            .await;
             return connection.send_json_frame(&refuse(refusal.code)).await;
         }
     };
@@ -1440,9 +1475,13 @@ struct Server {
     /// forwarded call parks its worker until the nested leg's reply returns,
     /// so a shared pool can deadlock the pair (see NESTED_DISPATCH_WORKERS).
     nested_dispatches: Arc<DispatchPool>,
-    /// The per-uid IPC admission limiter. `tokio::sync` per plan U8: the
-    /// check runs on the synchronous dispatch workers, which reach it
-    /// through the non-blocking `try_lock` (never held across an await).
+    /// The per-uid IPC admission limiter. `tokio::sync` per plan U8, reached
+    /// in the form each caller runs under: the typed path reaches it from a
+    /// synchronous dispatch worker with the non-blocking `try_lock` spin,
+    /// while the two frame gates - awaited on the accept reactor - take it
+    /// with `.lock().await`. Neither holds the guard across an await; the
+    /// spin exists only because the thread it runs on has no other work,
+    /// which a reactor worker does have.
     ipc_rate_limiter: Arc<tokio::sync::Mutex<IpcRateLimiter>>,
 }
 /// The process-lifetime handles background work reaches the broker's runtime
@@ -2283,6 +2322,65 @@ fn write_refusal_audit_bounded(
         Err(err) if err.kind() == io::ErrorKind::WouldBlock => Ok(()),
         Err(err) => Err(err),
     }
+}
+
+/// The blocking audit append a reactor task must reach through the dispatch
+/// pool.
+///
+/// The audit worker's caller side is a bounded channel send plus a reply
+/// receive with no deadline: the privileged class backpressures on a full
+/// queue rather than dropping, so a caller waits for as long as the worker
+/// takes, however long that is. The two frame gates that answer an
+/// admitted-effect or an authority-publication frame are awaited directly on
+/// the accept reactor - the reactor that read the frame - so reaching the
+/// worker from there parks a reactor thread for the whole wait. Four stalled
+/// appends occupy all four reactor workers and the broker stops accepting.
+/// The append therefore runs on the dispatch pool, the same bounded worker
+/// every other append with no async form uses, and the reply is awaited in
+/// async time: a full queue is backpressure on the connection task, not a
+/// blocked thread.
+struct RefusalAuditBoundary<'a> {
+    dispatches: &'a DispatchPool,
+    log: &'a Arc<AuditLog>,
+}
+
+/// Append one refusal audit record from a task on the accept reactor.
+///
+/// The gate refusal paths are audited before the peer is answered, so this
+/// cannot be skipped or reordered: a pool that is gone answers the audit with
+/// the same error the connection is closed with, and the caller keeps its own
+/// `let _ =` so an audit failure never rewrites a refusal's answer.
+async fn write_refusal_audit_off_reactor(
+    boundary: RefusalAuditBoundary<'_>,
+    audit_class: AuditWriteClass,
+    operation: &str,
+    caller_uid: u32,
+    caller_gid: u32,
+    disposition: &str,
+    opaque_target_id: &str,
+    outcome: &str,
+) -> io::Result<()> {
+    let RefusalAuditBoundary { dispatches, log } = boundary;
+    let log = Arc::clone(log);
+    let operation = operation.to_owned();
+    let disposition = disposition.to_owned();
+    let opaque_target_id = opaque_target_id.to_owned();
+    let outcome = outcome.to_owned();
+    dispatches
+        .run(move || {
+            write_refusal_audit_bounded(
+                &log,
+                audit_class,
+                &operation,
+                caller_uid,
+                caller_gid,
+                &disposition,
+                &opaque_target_id,
+                &outcome,
+            )
+        })
+        .await
+        .map_err(|_| io::Error::other("broker dispatch pool is not running"))?
 }
 
 /// Real-wire dispatch results can carry zero-or-more `OwnedFd`s
@@ -12158,8 +12256,11 @@ async fn answer_authority_publication_frame(
         })
     };
     if peer_uid != server.config.d2bd_uid {
-        let _ = write_refusal_audit_bounded(
-            &audit_log,
+        let _ = write_refusal_audit_off_reactor(
+            RefusalAuditBoundary {
+                dispatches: &server.dispatches,
+                log: &audit_log,
+            },
             AuditWriteClass::Unprivileged,
             operation,
             peer_uid,
@@ -12167,21 +12268,19 @@ async fn answer_authority_publication_frame(
             "peer-refused",
             "authority-publication",
             "closed",
-        );
+        )
+        .await;
         return connection
             .send_json_frame(&refuse(crate::envelope::UNGRANTED_CALLER))
             .await;
     }
-    // The limiter runs on the synchronous dispatch workers, which must never
-    // block, so it spins on `try_lock` for the short bounded `check` critical
-    // section, exactly as the admitted-effect gate does.
+    // The limiter's critical section is a short bounded `check`, and this
+    // gate is awaited on the accept reactor exactly as the admitted-effect
+    // gate is, so the lock is taken in async time rather than spun on.
+    // The guard is dropped before the publication below, so nothing holds it
+    // across a later await.
     let rate_allowed = {
-        let mut limiter = loop {
-            match server.ipc_rate_limiter.try_lock() {
-                Ok(guard) => break guard,
-                Err(_) => std::hint::spin_loop(),
-            }
-        };
+        let mut limiter = server.ipc_rate_limiter.lock().await;
         limiter.check(
             IpcRatePool::Daemon,
             peer_uid,
@@ -12190,8 +12289,11 @@ async fn answer_authority_publication_frame(
         )
     };
     if !rate_allowed {
-        let _ = write_refusal_audit_bounded(
-            &audit_log,
+        let _ = write_refusal_audit_off_reactor(
+            RefusalAuditBoundary {
+                dispatches: &server.dispatches,
+                log: &audit_log,
+            },
             AuditWriteClass::Privileged,
             operation,
             peer_uid,
@@ -12199,28 +12301,20 @@ async fn answer_authority_publication_frame(
             "ipc-rate-limited",
             "authority-publication",
             "closed",
-        );
+        )
+        .await;
         return connection
             .send_json_frame(&refuse(crate::envelope::UNACCEPTED_PROJECTION))
             .await;
     }
     let state_dir = server.config.state_dir.clone();
-    // A refusal here is recorded and answered with the family's own refusal
+    // A refusal below is recorded and answered with the family's own refusal
     // rather than a closed connection: the daemon can then tell "the broker
     // could not answer" apart from "the broker refused", which is the
-    // difference between a retry and a fence.
-    let failed = |audit_log: &AuditLog, disposition: &str| {
-        let _ = write_refusal_audit_bounded(
-            audit_log,
-            AuditWriteClass::Privileged,
-            operation,
-            peer_uid,
-            peer_gid,
-            disposition,
-            &zone,
-            "refused",
-        );
-    };
+    // difference between a retry and a fence. Each site performs that append
+    // itself rather than through a closure, because the append is awaited off
+    // the reactor and a closure returning that future cannot borrow the Zone
+    // out of the enclosing frame.
     // The projection's own decision is answered as itself: it carries the
     // closed code, the stage, the reason, and the state the Zone was left in,
     // and the manager reconciles from exactly those. Replacing it with the
@@ -12243,7 +12337,20 @@ async fn answer_authority_publication_frame(
                 Ok(reply) => connection.send_json_frame(&reply).await,
                 Err(error) => {
                     tracing::error!(error = %error, zone = %zone, "authority publication session open failed");
-                    failed(&audit_log, "publication-open-failed");
+                    let _ = write_refusal_audit_off_reactor(
+                        RefusalAuditBoundary {
+                            dispatches: &server.dispatches,
+                            log: &audit_log,
+                        },
+                        AuditWriteClass::Privileged,
+                        operation,
+                        peer_uid,
+                        peer_gid,
+                        "publication-open-failed",
+                        &zone,
+                        "refused",
+                    )
+                    .await;
                     connection.send_json_frame(&answer(error)).await
                 }
             }
@@ -12253,7 +12360,20 @@ async fn answer_authority_publication_frame(
                 Ok(reply) => connection.send_json_frame(&reply).await,
                 Err(error) => {
                     tracing::error!(error = %error, zone = %zone, "authority publication failed");
-                    failed(&audit_log, "publication-failed");
+                    let _ = write_refusal_audit_off_reactor(
+                        RefusalAuditBoundary {
+                            dispatches: &server.dispatches,
+                            log: &audit_log,
+                        },
+                        AuditWriteClass::Privileged,
+                        operation,
+                        peer_uid,
+                        peer_gid,
+                        "publication-failed",
+                        &zone,
+                        "refused",
+                    )
+                    .await;
                     connection.send_json_frame(&answer(error)).await
                 }
             }
@@ -13535,18 +13655,33 @@ mod tests {
     /// Zone drives the publication and acceptance the manager drives first,
     /// through [`serve_authority_publication_open`] and
     /// [`serve_authority_publication`] themselves: open the Zone's session,
-    /// then install one whole snapshot at the next accepted sequence. An
-    /// accepted snapshot with nothing outstanding leaves the Zone `Unfenced`
-    /// under its accepted cursor, which is the posture ordinary effects run
-    /// under.
+    /// then install one whole snapshot that RESTATES the accepted cursor the
+    /// Zone already holds. An accepted snapshot with nothing outstanding
+    /// leaves the Zone `Unfenced` under that cursor, which is the posture
+    /// ordinary effects run under.
     ///
     /// The snapshot carries no rows: what authorizes these dispatches is the
     /// committed catalog the case's envelope is built from, and the
-    /// publication is what moves the Zone off `Unprovisioned` onto an
-    /// accepted cursor.
+    /// publication is what moves the Zone off `Unprovisioned`/`Reconciling`
+    /// onto an accepted cursor.
+    ///
+    /// The document restates the accepted cursor rather than advancing it,
+    /// because advancing is what a `PrepareChange`/`CommitChange` pair is
+    /// for. A snapshot transfer that opens from `Reconciling` is by definition
+    /// a reconciliation rather than an install (`begin_snapshot_locked`), and
+    /// `prove_resynchronization` checks such a document by EQUALITY against
+    /// the projection the broker holds: a document that moves the cursor
+    /// forward describes revisions no fence this broker validated, and is
+    /// refused `publication-projection-unproven`/`StaleAuthority`. Restating is
+    /// the one document that recovers every posture this helper can meet -
+    /// `Unprovisioned` (accepted is initial) and `Reconciling` (accepted is
+    /// whatever survived the boot) alike.
     ///
     /// Idempotent, because the projection outlives every single test: a Zone
-    /// already `Unfenced` is left exactly as it stands.
+    /// already `Unfenced` is left exactly as it stands, and a Zone the broker
+    /// re-bootstrapped to `Reconciling` - which is every Zone, on the second
+    /// and later run of this binary, since the durable state directory is
+    /// stable across runs - is reconciled rather than failed.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn provision_zone_for_ordinary_effects(zone: &str) {
         use d2b_contracts_broker::broker_wire::{
@@ -13557,7 +13692,7 @@ mod tests {
             publication_snapshot_digest,
         };
         use d2b_contracts_resource::v3::{
-            AuthoritySubject, AuthoritySubjectKind, DesiredDigest, StoreIncarnation,
+            AuthoritySubject, AuthoritySubjectKind, StoreIncarnation,
         };
 
         let state_dir = authority_projection_state_dir();
@@ -13626,13 +13761,11 @@ mod tests {
                 // The generation the Zone holds, not the fixture's: a Zone
                 // provisioned earlier already established it.
                 store_incarnation: opened.binding.store_incarnation.clone(),
-                cursor: AuthorityCursor {
-                    sequence: accepted
-                        .sequence
-                        .try_next()
-                        .expect("the accepted desired sequence has room"),
-                    digest: DesiredDigest::of(format!("provisioned-{zone}").as_bytes()),
-                },
+                // Restated, not advanced: see the doc comment above. This is
+                // the document a Zone the broker re-bootstrapped to
+                // `Reconciling` accepts, and the document an `Unprovisioned`
+                // Zone accepts at its initial cursor.
+                cursor: accepted.clone(),
                 root_subject: AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap),
                 rows: Vec::new(),
                 outstanding: None,
@@ -17400,8 +17533,16 @@ mod tests {
         tokio::fs::create_dir_all(&bundle_root)
             .await
             .expect("create the bundle scratch dir");
+        // The guard holds the process-wide bundle lock for as long as it is
+        // alive, and this body is a task of a current-thread test reactor, so
+        // every other test that installs a bundle waits behind it for the
+        // whole time. It is dropped as soon as the last read of the installed
+        // slot is done: the assertion below is the boundary's own answer, not
+        // another lookup of the resolver, so releasing it first cannot change
+        // what this case observes - it only shortens the window a sibling
+        // test has to wait.
         let bundle = build_spawn_kernel_bundle(&bundle_root);
-        let _verified_bundle = install_test_kernel_bundle(&bundle);
+        let verified_bundle = install_test_kernel_bundle(&bundle);
 
         // A committed `Volume` relationship for the same Zone, so the join
         // has a row to record rather than nothing at all to say.
@@ -17499,6 +17640,7 @@ mod tests {
         assert_eq!(refusal.stage, AdmissionStage::Authorize);
         assert_eq!(refusal.reason, RefusalReason::UntrustedImplementation);
         assert_eq!(refusal.operation.to_canonical_string(), "Operation/spawn-process");
+        drop(verified_bundle);
         let _ = tokio::fs::remove_dir_all(&root).await;
         let _ = tokio::fs::remove_dir_all(&bundle_root).await;
     }
@@ -22803,6 +22945,195 @@ mod tests {
         assert!(
             both.is_ok(),
             "two requests must be able to run at once: {both:?}"
+        );
+    }
+
+    /// How long the holder leaves the audit worker parked inside one append.
+    /// This reactor has exactly this long to make progress - or fail to -
+    /// while an append it started is still outstanding.
+    const STALLED_APPEND_WINDOW_MS: u64 = 250;
+
+    /// Ticks this reactor must manage in that window for the offloaded append
+    /// to count as non-parking. The heartbeat runs every millisecond, so this
+    /// is a twenty-fold margin rather than a timing threshold: what it rules
+    /// out is a worker that got one stray poll before parking, not a loaded
+    /// machine.
+    const MIN_REACTOR_TICKS_WHILE_AWAITING_AN_APPEND: u64 = 5;
+
+    /// How one arm of the case reaches the audit worker.
+    #[derive(Clone, Copy)]
+    enum AuditReach {
+        /// On the dispatch pool, as the frame gates now reach it.
+        OffReactor,
+        /// Inline on the reactor, which is the shape the gates had before.
+        InlineOnReactor,
+    }
+
+    /// Park the audit worker inside its next append, and hand back the two
+    /// ends of that hold: the signal it raises on reaching the append, and
+    /// the release that lets the append finish.
+    ///
+    /// This is the real audit worker's own transaction stall, so a caller
+    /// that has reached the worker really is inside the reply wait for as long
+    /// as this hold lasts - the wait is not simulated and it has no deadline.
+    fn hold_the_next_append(
+        audit_log: &AuditLog,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (reached_tx, reached_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        audit_log
+            .inject_io_failure(crate::audit::InjectedAuditIoFailure::Stall {
+                stalled: reached_tx,
+                release: release_rx,
+            })
+            .expect("hold the audit worker's next append");
+        (reached_rx, release_tx)
+    }
+
+    /// Reach one audit append through `reach` while the audit worker is held
+    /// inside it, and report how far this reactor got in the meantime.
+    ///
+    /// Both the append and the heartbeat are tasks of this reactor's one
+    /// worker, which is where a frame gate's append actually runs: the gates
+    /// are awaited inside a task of the accept loop, not on the thread that
+    /// called `block_on`. A heartbeat on that worker can tick only while the
+    /// worker is free, so a worker parked in the audit wait freezes it. The
+    /// hold is released from a plain thread rather than by this reactor's own
+    /// clock, because a parked reactor cannot run a timer either; the observed
+    /// count is read at the release instant, so it is the progress made with
+    /// the append outstanding, not the progress made after it.
+    async fn ticks_while_one_append_is_outstanding(
+        audit_log: Arc<AuditLog>,
+        dispatches: Arc<DispatchPool>,
+        reach: AuditReach,
+    ) -> u64 {
+        let (reached, release) = hold_the_next_append(&audit_log);
+        let ticks = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let observed = Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
+        let holder_ticks = Arc::clone(&ticks);
+        let holder_observed = Arc::clone(&observed);
+        let _holder = std::thread::spawn(move || {
+            reached
+                .blocking_recv()
+                .expect("the audit worker reached the held append");
+            let window = std::time::Instant::now()
+                + std::time::Duration::from_millis(STALLED_APPEND_WINDOW_MS);
+            while std::time::Instant::now() < window {
+                std::thread::yield_now();
+            }
+            holder_observed.store(
+                holder_ticks.load(std::sync::atomic::Ordering::SeqCst),
+                std::sync::atomic::Ordering::SeqCst,
+            );
+            release.send(()).expect("release the held append");
+        });
+        let heartbeat = Arc::clone(&ticks);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                heartbeat.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+
+        let append_log = Arc::clone(&audit_log);
+        tokio::spawn(async move {
+            match reach {
+                AuditReach::OffReactor => {
+                    write_refusal_audit_off_reactor(
+                        RefusalAuditBoundary {
+                            dispatches: dispatches.as_ref(),
+                            log: &append_log,
+                        },
+                        AuditWriteClass::Privileged,
+                        ADMITTED_EFFECT_FRAME_KIND,
+                        0,
+                        0,
+                        "peer-refused",
+                        ADMITTED_EFFECT_FRAME_KIND,
+                        "closed",
+                    )
+                    .await
+                    .expect("the offloaded append lands once the worker is released");
+                }
+                AuditReach::InlineOnReactor => {
+                    write_refusal_audit_bounded(
+                        &append_log,
+                        AuditWriteClass::Privileged,
+                        ADMITTED_EFFECT_FRAME_KIND,
+                        0,
+                        0,
+                        "peer-refused",
+                        ADMITTED_EFFECT_FRAME_KIND,
+                        "closed",
+                    )
+                    .expect("the inline append lands once the worker is released");
+                }
+            }
+        })
+        .await
+        .expect("the audit append task ran to completion");
+
+        observed.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// A refusal audit append reached from a frame gate leaves the reactor
+    /// that is answering the gate running.
+    ///
+    /// The audit worker's caller side is a bounded channel send plus a reply
+    /// receive with no deadline: the privileged class backpressures on a full
+    /// queue rather than dropping, so a caller waits for as long as the worker
+    /// takes, however long that is. The admitted-effect and
+    /// authority-publication gates are awaited on the accept reactor - the
+    /// reactor that read the frame - so an append reached from there directly
+    /// parks a reactor thread for the whole wait. The broker runs four of
+    /// them, so four stalled refusals stop it accepting anything at all.
+    ///
+    /// The gates therefore reach the worker through the dispatch pool. What
+    /// this pins is that the wait leaves the reactor: the heartbeat can only
+    /// tick while the worker running the append is free, and the append is
+    /// held open by the audit worker's own transaction stall for the whole
+    /// window.
+    ///
+    /// The second arm is the negative control. It performs the same append
+    /// inline on this reactor - the shape the gates had before the offload -
+    /// and requires the heartbeat to be frozen, so the first arm's ticks
+    /// cannot be explained by an idle reactor that was simply never asked.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn a_refusal_audit_append_from_a_frame_gate_leaves_the_reactor_running() {
+        let audit_dir = test_audit_dir("frame-gate-audit-leaves-the-reactor");
+        crate::sys::path_safe::ensure_dir(&audit_dir, 0o750, None, None)
+            .expect("create the audit scratch dir");
+        let audit_log = Arc::new(
+            AuditLog::open(&audit_dir, Gid::current().as_raw(), true, 0)
+                .expect("open the audit log"),
+        );
+        let dispatches = DispatchPool::new(1);
+
+        let off_reactor = ticks_while_one_append_is_outstanding(
+            Arc::clone(&audit_log),
+            Arc::clone(&dispatches),
+            AuditReach::OffReactor,
+        )
+        .await;
+        assert!(
+            off_reactor >= MIN_REACTOR_TICKS_WHILE_AWAITING_AN_APPEND,
+            "the reactor kept serving its other tasks while the append was \
+             outstanding, which is what the offload is for: {off_reactor} ticks"
+        );
+
+        let inline = ticks_while_one_append_is_outstanding(
+            Arc::clone(&audit_log),
+            Arc::clone(&dispatches),
+            AuditReach::InlineOnReactor,
+        )
+        .await;
+        assert_eq!(
+            inline, 0,
+            "an append reached inline parks the reactor for the whole wait, \
+             so a heartbeat beside it cannot tick at all"
         );
     }
 
