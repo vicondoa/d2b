@@ -31,8 +31,9 @@ use d2b_contracts_resource::v3::{
 };
 use d2b_core_controller::OwnedChildIntent;
 use d2b_provider_endpoint::endpoint::{
-    EndpointAttachmentPolicy, EndpointClass, EndpointConsumerPolicy, EndpointLifecyclePolicy,
-    EndpointLocality, EndpointOperation, EndpointSpec, EndpointTransport, EndpointVisibility,
+    EndpointAttachmentPolicy, EndpointBindingPublication, EndpointClass, EndpointConsumerPolicy,
+    EndpointLifecyclePolicy, EndpointLocality, EndpointOperation, EndpointSpec, EndpointTransport,
+    EndpointVisibility,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -531,16 +532,20 @@ fn durable_endpoint_payload(
             expected_frontend_fingerprint(spec),
         ),
     };
-    // The proxy's endpoint is consumed by the guest frontend row; the
-    // frontend's own endpoint has no in-Zone consumer, so it stays
-    // unconstrained rather than naming a subject that does not exist yet.
-    let allowed_subjects = match role {
+    // Publication intent and authorization are separate axes (KTD4). The proxy's
+    // endpoint is PUBLISHED to exactly one subject - the session's guest
+    // frontend row - and that is the only relationship derived from it. The
+    // frontend's own endpoint publishes NOTHING: it gates the session's
+    // aggregate readiness, and there is no in-Zone consumer for it to deliver
+    // to (R20), so naming a subject here would invent one.
+    let published_subjects = match role {
         DisplayProcessRole::HostProxy => vec![durable_process_ref(
             session_uid,
             DisplayProcessRole::GuestFrontend,
         )?],
         DisplayProcessRole::GuestFrontend => Vec::new(),
     };
+    let allowed_subjects = published_subjects.clone();
     let allowed_operations = match role {
         DisplayProcessRole::HostProxy => {
             vec![EndpointOperation::Attach, EndpointOperation::Resolve]
@@ -565,7 +570,17 @@ fn durable_endpoint_payload(
             .map_err(|_| WorkerEffectError::LaunchRejected)?,
         EndpointLifecyclePolicy::RecycleWithProducer,
     )
-    .map_err(|_| WorkerEffectError::LaunchRejected)?;
+    .map_err(|_| WorkerEffectError::LaunchRejected)?
+    // An empty subject list is the `none` class, not an empty `named` list:
+    // "publishes nothing" and "publishes to nobody I listed" are the same
+    // commitment here, and spelling it as `none` keeps the guest frontend's
+    // endpoint honest about having no in-Zone relationship at all (R20).
+    .with_binding_publication(if published_subjects.is_empty() {
+        EndpointBindingPublication::None
+    } else {
+        EndpointBindingPublication::named(published_subjects)
+            .map_err(|_| WorkerEffectError::LaunchRejected)?
+    });
     endpoint_envelope(
         zone,
         session_ref,
@@ -601,11 +616,16 @@ fn durable_compositor_endpoint_payload(
         EndpointVisibility::Owner,
         EndpointAttachmentPolicy::new(false, 0)
             .map_err(|_| WorkerEffectError::LaunchRejected)?,
-        EndpointConsumerPolicy::new(vec![proxy_ref], Vec::new(), vec![EndpointOperation::Resolve])
+        EndpointConsumerPolicy::new(vec![proxy_ref.clone()], Vec::new(), vec![EndpointOperation::Resolve])
             .map_err(|_| WorkerEffectError::LaunchRejected)?,
         EndpointLifecyclePolicy::RecycleWithProducer,
     )
-    .map_err(|_| WorkerEffectError::LaunchRejected)?;
+    .map_err(|_| WorkerEffectError::LaunchRejected)?
+    // The compositor socket is published to exactly one consumer: this
+    // session's host proxy row. Nothing else reaches it.
+    .with_binding_publication(EndpointBindingPublication::named(vec![proxy_ref]).map_err(
+        |_| WorkerEffectError::LaunchRejected,
+    )?);
     endpoint_envelope(
         zone,
         session_ref,
@@ -865,6 +885,33 @@ pub fn wayland_session_resource_projection(
 mod tests {
     use super::*;
 
+    fn zone() -> ZoneId {
+        ZoneId::parse("work").expect("zone")
+    }
+
+    fn session_ref() -> ResourceRef {
+        ResourceRef::parse("display-wayland.d2bus.org.WaylandSession/display-wayland")
+            .expect("session ref")
+    }
+
+    fn session_uid() -> ResourceUid {
+        ResourceUid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").expect("session uid")
+    }
+
+    fn session_spec() -> WaylandSessionSpec {
+        WaylandSessionSpec::new(
+            ResourceRef::parse("Guest/work").expect("guest"),
+            ResourceRef::parse("Host/host-system").expect("host"),
+            ResourceRef::parse("User/alice").expect("user"),
+            ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/default")
+                .expect("policy"),
+            crate::DisplayIdentity::new("work", "#112233", "#223344", "#334455")
+                .expect("identity"),
+            true,
+        )
+        .expect("session spec")
+    }
+
     /// The session's durable child set: two Process rows and two Endpoint
     /// rows, owned by the session, carrying no host socket vocabulary.
     #[test]
@@ -922,5 +969,109 @@ mod tests {
                     && !value.to_string().contains("NIRI_SOCKET")
             );
         }
+    }
+
+    /// The display graph still derives its two canonical `EndpointBinding`
+    /// rows from PUBLICATION INTENT alone (KTD4, R16).
+    ///
+    /// This is the regression guard for the cutover: publication intent
+    /// defaults to `none`, so an emitter that forgot to declare it would
+    /// silently derive no relationship at all. The two relationships this
+    /// session really has - the host proxy consuming the compositor socket,
+    /// and the guest frontend consuming the proxy's cross-domain endpoint -
+    /// are derived here through the source's own derivation, and the guest
+    /// frontend's own endpoint derives none because it gates aggregate
+    /// readiness without an in-Zone consumer (R20).
+    #[test]
+    fn display_publication_intent_derives_exactly_the_two_real_relationships() {
+        let zone = zone();
+        let session_uid = session_uid();
+        let spec = session_spec();
+        let intents =
+            display_owned_child_intents(&zone, &session_ref(), &session_uid, &spec, 4)
+                .expect("display child intents");
+
+        let mut derived: Vec<(String, String)> = Vec::new();
+        for intent in intents {
+            if intent.target().resource_type().as_str() != "Endpoint" {
+                continue;
+            }
+            let value: serde_json::Value =
+                serde_json::from_slice(intent.canonical_resource()).expect("child resource");
+            let endpoint_ref = intent.target().clone();
+            let decoded: EndpointSpec =
+                serde_json::from_value(value["spec"].clone()).expect("endpoint spec");
+            let deliveries = d2b_provider_endpoint::declared_endpoint_bindings(
+                &zone,
+                &decoded,
+                &endpoint_ref,
+            )
+            .expect("the source derives its relationships");
+            for delivery in deliveries {
+                derived.push((
+                    endpoint_ref.name().as_str().to_owned(),
+                    delivery.consumer().as_ref().to_canonical_string(),
+                ));
+            }
+        }
+        derived.sort();
+
+        let compositor = durable_compositor_endpoint_ref(&session_uid)
+            .expect("compositor endpoint reference");
+        let proxy_endpoint = durable_endpoint_ref(&session_uid, DisplayProcessRole::HostProxy)
+            .expect("proxy endpoint reference");
+        let frontend = durable_process_ref(&session_uid, DisplayProcessRole::GuestFrontend)
+            .expect("frontend process reference");
+        let proxy = durable_process_ref(&session_uid, DisplayProcessRole::HostProxy)
+            .expect("proxy process reference");
+        let expected = vec![
+            (compositor.name().as_str().to_owned(), proxy.to_canonical_string()),
+            (proxy_endpoint.name().as_str().to_owned(), frontend.to_canonical_string()),
+        ];
+        assert_eq!(
+            derived, expected,
+            "the session derives exactly the host proxy's compositor relationship \
+             and the guest frontend's proxy relationship, from publication intent"
+        );
+    }
+
+    /// The guest frontend's own endpoint publishes nothing.
+    ///
+    /// It gates the session's aggregate readiness and has no in-Zone consumer,
+    /// so an endpoint that named one would invent a relationship no row
+    /// backs (R20).
+    #[test]
+    fn the_frontend_endpoint_publishes_no_relationship() {
+        let zone = zone();
+        let uid = session_uid();
+        let spec = session_spec();
+        let endpoint_ref = durable_endpoint_ref(&uid, DisplayProcessRole::GuestFrontend)
+            .expect("frontend endpoint reference");
+        let payload = durable_endpoint_payload(
+            &zone,
+            &session_ref(),
+            &uid,
+            &spec,
+            DisplayProcessRole::GuestFrontend,
+            &durable_process_ref(&uid, DisplayProcessRole::GuestFrontend)
+                .expect("frontend process reference"),
+            4,
+        )
+        .expect("frontend endpoint payload");
+        let value: serde_json::Value =
+            serde_json::from_slice(&payload).expect("endpoint envelope");
+        let decoded: EndpointSpec =
+            serde_json::from_value(value["spec"].clone()).expect("endpoint spec");
+        assert!(
+            decoded.binding_publication().is_none(),
+            "the guest frontend's endpoint publishes nothing, which is distinct \
+             from an unconstrained consumer policy"
+        );
+        assert!(
+            d2b_provider_endpoint::declared_endpoint_bindings(&zone, &decoded, &endpoint_ref)
+                .expect("the source derives its relationships")
+                .is_empty(),
+            "and therefore derives no binding row"
+        );
     }
 }

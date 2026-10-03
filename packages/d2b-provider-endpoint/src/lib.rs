@@ -51,7 +51,7 @@ pub use facets::{
 };
 
 pub use binding::{
-    ENDPOINT_BINDING_TYPE_NAME, AdmittedEndpointBinding, BindingReadiness,
+    ENDPOINT_BINDING_TYPE_NAME, AdmittedEndpointBinding, BindingDeliveryProjection, BindingReadiness,
     DeclaredEndpointBinding, DeliveryFenceViolation, DeliveryForm, EndpointAccessObservation,
     EndpointBindingAdmission, EndpointBindingDriver, EndpointBindingDriverArgs,
     EndpointBindingDriverError, EndpointBindingDriverFactory, EndpointBindingDriverStatus,
@@ -62,8 +62,9 @@ pub use binding::{
     declared_endpoint_bindings, endpoint_access_request, endpoint_binding_descriptor,
     endpoint_binding_spec_decoder, endpoint_binding_support,
     endpoint_binding_support_ceiling, endpoint_delivery_slot, endpoint_grants_observe,
-    ensure_realizable, fence_delivery_environment, fence_delivery_environment_all,
-    fence_delivery_payload, fence_delivery_payload_all, required_right_bits,
+    ensure_realizable, expected_bindings_for_process, fence_delivery_environment,
+    fence_delivery_environment_all, fence_delivery_payload, fence_delivery_payload_all,
+    required_right_bits,
 };
 
 /// The Endpoint ResourceType spec and status shapes owned by this crate.

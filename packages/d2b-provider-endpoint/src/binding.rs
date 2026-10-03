@@ -81,17 +81,17 @@ use d2b_contracts_resource::v3::{
     ChildSupportCeiling, CompletionCondition, EndpointAttachmentKind, EndpointBindingRequest,
     FreshnessTuple, PrimitiveSpecError, RefusalReason, ReleaseOutcome, RequestedRights,
     ResourceGeneration, ResourceRef, ResourceSpec, ResourceUid, SourceAdmission, SourceReservation,
-    ZoneId, admit_binding_request, canonical_json_bytes, redacted_debug,
+    ZoneId, admit_binding_request, canonical_json_bytes, framed_canonical_digest, redacted_debug,
 };
 
 use d2b_contracts_resource::v3::endpoint_binding::{
     EndpointBindingSpec, EndpointExecutionParentInput,
 };
 
+use d2b_resource_runtime::ResourceStatus;
 use d2b_resource_runtime::context::{
     ResourceContext, RowLookup, SpecDecoder, WatchCondition, typed_spec_decoder,
 };
-use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::driver::{
     DynResourceDriver, ReconcileOutcome, RecoveryOutcome, ResourceDriver, ResourceDriverFactory,
 };
@@ -99,13 +99,14 @@ use d2b_resource_runtime::error::{
     DriverFailure, DriverOp, FailureClass, FailureComparison, FailureDetail, FailureKind,
     FailureKinds,
 };
+use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_types::{
     AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType,
 };
 
 use crate::endpoint::{
     EndpointClass, EndpointConsumerPolicy, EndpointLocality, EndpointOperation, EndpointSpec,
-    EndpointTransport,
+    EndpointTransport, RealizationIncarnation,
 };
 use crate::facets::EndpointAccessDispatch;
 
@@ -2454,14 +2455,20 @@ pub fn declared_attachment(spec: &EndpointSpec) -> Option<EndpointAttachmentKind
     None
 }
 
-/// The deliveries one committed `Endpoint` row declares for its consumers.
+/// The deliveries one committed `Endpoint` row publishes for its consumers.
 ///
-/// This is the derivation's own input: the endpoint's own consumer policy is
-/// the set of consumers the owner publishes its endpoint to, and every fact
-/// about HOW each of them reaches it is read off the same row. Nothing here is
-/// supplied by the consumer or by the caller, so a consumer cannot widen the
-/// relationship by asking for a different slot, a different operation, or a
-/// different endpoint.
+/// This is the derivation's own input, and it is the endpoint's PUBLICATION
+/// INTENT ([`EndpointSpec::binding_publication`]) rather than its consumer
+/// policy: publication says which relationships exist, authorization says
+/// which subjects are admitted, and a row exists only where both hold (R16,
+/// KTD4). A consumer policy that admits everyone while the endpoint publishes
+/// nothing therefore derives nothing, which is the distinction the two axes
+/// exist to make.
+///
+/// Every fact about HOW each consumer reaches the endpoint is read off the
+/// same row, so nothing here is supplied by the consumer or the caller: a
+/// consumer cannot widen the relationship by asking for a different slot, a
+/// different operation, or a different endpoint.
 ///
 /// A subject the binding kind does not admit as a consumer is refused rather
 /// than skipped: an `Endpoint` row naming a `Host` as its consumer is a
@@ -2471,8 +2478,10 @@ pub fn declared_attachment(spec: &EndpointSpec) -> Option<EndpointAttachmentKind
 /// # Errors
 ///
 /// Returns [`EndpointBindingError::WrongResourceType`] for a subject that is
-/// not a typed execution target, and [`EndpointBindingError::Contract`] when
-/// the endpoint's own derived slot is not a bounded slot.
+/// not a typed execution target, [`EndpointBindingError::ConsumerNotAllowed`]
+/// for a subject the endpoint publishes but does not authorize, and
+/// [`EndpointBindingError::Contract`] when the endpoint's own derived slot is
+/// not a bounded slot.
 pub fn declared_endpoint_bindings(
     zone: &ZoneId,
     spec: &EndpointSpec,
@@ -2484,10 +2493,13 @@ pub fn declared_endpoint_bindings(
         return Ok(Vec::new());
     };
     let slot = endpoint_delivery_slot(zone, endpoint_ref)?;
-    spec.consumer_policy()
-        .allowed_subjects()
+    spec.binding_publication()
+        .subjects()
         .iter()
         .map(|subject| {
+            if !spec.consumer_policy().admits_subject(subject) {
+                return Err(EndpointBindingError::ConsumerNotAllowed);
+            }
             Ok(DeclaredEndpointBinding::new(
                 EndpointConsumerTarget::new(subject.clone())?,
                 slot.clone(),
@@ -2656,6 +2668,259 @@ pub enum EndpointBindingDriverStatus {
     /// while what is outstanding drains.
     Draining,
 }
+
+/// What one binding's delivery evidence currently says (R17).
+///
+/// This is the closed, redacted projection a consumer and a launch gate read
+/// instead of a host fact. It carries no path, no `(dev, ino)` pair, and no
+/// host error text: the relationship's own authority binding is what a reader
+/// compares, and the pinned identity stays inside the actor that read it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BindingDeliveryProjection {
+    /// The exact endpoint is granted and the KERNEL's effective access covers
+    /// the admitted right at THIS incarnation.
+    Delivered {
+        /// The same opaque realization-incarnation token Endpoint readiness
+        /// publishes (KTD8), so a consumer can prove it is looking at the
+        /// same realization rather than at a re-derived one.
+        incarnation: RealizationIncarnation,
+        /// The binding row generation this evidence was published for. A
+        /// projection carried over from an older row generation is not
+        /// evidence of the current one.
+        generation: u64,
+    },
+    /// The pinned endpoint changed under a prepared relationship, so the access
+    /// the previous pass proved belongs to an inode that is no longer there.
+    ///
+    /// The relationship is reported here rather than silently re-read as
+    /// delivered: the grant has already been re-applied against the NEW inode,
+    /// and a consumer watching the old identity has to re-derive.
+    EndpointReplaced {
+        /// The inode the new grant landed on.
+        socket: EndpointSocketIdentity,
+    },
+    /// No host effect is standing for this relationship.
+    Undelivered {
+        /// Closed, field-free: why the exact endpoint is not delivered.
+        reason: EndpointDeliveryRefusal,
+    },
+    /// The relationship is fenced: pre-drain ran and no new use is admitted
+    /// while what is outstanding drains.
+    Draining,
+}
+
+impl BindingDeliveryProjection {
+
+    /// Project one actor status into the redacted delivery evidence.
+    ///
+    /// The mapping is total and one-way: every status this actor publishes
+    /// has exactly one projection state, so a reader never has to guess which
+    /// verdict a status implies. `generation` is the row generation the
+    /// evidence belongs to, which is what fences a projection carried over
+    /// from an older row.
+    pub fn from_status(
+        status: &EndpointBindingDriverStatus,
+        incarnation: &RealizationIncarnation,
+        generation: u64,
+    ) -> Self {
+        match status {
+            EndpointBindingDriverStatus::Delivered { .. } => Self::Delivered {
+                incarnation: incarnation.clone(),
+                generation,
+            },
+            EndpointBindingDriverStatus::EndpointReplaced { socket } => {
+                Self::EndpointReplaced { socket: *socket }
+            }
+            EndpointBindingDriverStatus::Undelivered { reason } => Self::Undelivered {
+                reason: reason.clone(),
+            },
+            EndpointBindingDriverStatus::Draining => Self::Draining,
+        }
+    }
+    /// Whether this evidence proves a delivered exact endpoint at the
+    /// incarnation the caller expects.
+    ///
+    /// Only `Delivered` at the SAME incarnation qualifies. `EndpointReplaced`
+    /// is deliberately excluded: the grant was re-applied against a new
+    /// inode, so the consumer holding the old identity must re-derive rather
+    /// than treat the replacement as its own delivery (R17, R18).
+    pub fn proves_delivery(&self, expected: &RealizationIncarnation) -> bool {
+        matches!(
+            self,
+            Self::Delivered { incarnation, .. } if incarnation.same_incarnation(expected)
+        )
+    }
+
+    /// The closed, host-free wire form of this evidence.
+    ///
+    /// This is the whole published projection: a state slug, the row
+    /// generation it belongs to, and the opaque incarnation token. A refusal
+    /// rides as its closed slug and nothing else, so no host error text, no
+    /// socket name, and no `(dev, ino)` pair can reach a consumer through it.
+    pub fn projection(&self) -> serde_json::Value {
+        let mut layer = serde_json::Map::new();
+        layer.insert(
+            "state".to_owned(),
+            serde_json::Value::String(self.state_slug().to_owned()),
+        );
+        if let Self::Delivered { incarnation, generation } = self {
+            layer.insert(
+                "generation".to_owned(),
+                serde_json::Value::from(*generation),
+            );
+            layer.insert(
+                "incarnation".to_owned(),
+                serde_json::Value::String(incarnation.as_str().to_owned()),
+            );
+        }
+        if let Self::Undelivered { reason } = self {
+            layer.insert(
+                "reason".to_owned(),
+                serde_json::Value::String(reason.code().to_owned()),
+            );
+        }
+        serde_json::Value::Object(layer)
+    }
+
+    /// The closed state slug this evidence publishes.
+    pub const fn state_slug(&self) -> &'static str {
+        match self {
+            Self::Delivered { .. } => "delivered",
+            Self::EndpointReplaced { .. } => "endpoint-replaced",
+            Self::Undelivered { .. } => "undelivered",
+            Self::Draining => "draining",
+        }
+    }
+
+    /// Read one published projection back, refusing anything malformed.
+    ///
+    /// A reader that cannot parse the evidence must REFUSE rather than treat
+    /// an unreadable row as delivered: the launch gate's whole property is
+    /// that evidence it did not understand cannot authorize an effect.
+    pub fn from_projection(value: &serde_json::Value) -> Option<Self> {
+        match value.pointer("/state").and_then(serde_json::Value::as_str)? {
+            "delivered" => Some(Self::Delivered {
+                incarnation: serde_json::from_value(value.pointer("/incarnation")?.clone()).ok()?,
+                generation: value.pointer("/generation").and_then(serde_json::Value::as_u64)?,
+            }),
+            "endpoint-replaced" => Some(Self::EndpointReplaced {
+                socket: EndpointSocketIdentity::new(0, 0),
+            }),
+            "undelivered" => Some(Self::Undelivered {
+                reason: EndpointDeliveryRefusal::Refused(
+                    value
+                        .pointer("/reason")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("endpoint-delivery-unreadable")
+                        .to_owned(),
+                ),
+            }),
+            "draining" => Some(Self::Draining),
+            _ => None,
+        }
+    }
+}
+
+/// Derive the publication-intent-named binding set one Process must observe.
+///
+/// This is the source-derived answer to "which canonical `EndpointBinding`
+/// rows does this exact Process require", and it is derived from the
+/// endpoint's own publication intent naming that Process - never from a
+/// consumer-local slot table and never from the rows that happen to exist
+/// (R18, U4 step 6).
+///
+/// An endpoint whose publication intent names this Process but does not
+/// authorize it is a declaration the family cannot honor, so it is refused
+/// rather than silently dropped.
+pub fn expected_bindings_for_process(
+    zone: &ZoneId,
+    spec: &EndpointSpec,
+    endpoint_ref: &ResourceRef,
+    process_ref: &ResourceRef,
+) -> Result<Vec<EndpointBindingRow>, EndpointBindingError> {
+    let Some(attachment) = declared_attachment(spec) else {
+        return Ok(Vec::new());
+    };
+    if !spec.binding_publication().publishes_to(process_ref) {
+        return Ok(Vec::new());
+    }
+    let slot = endpoint_delivery_slot(zone, endpoint_ref)?;
+    let delivery = DeclaredEndpointBinding::new(
+        EndpointConsumerTarget::new(process_ref.clone())?,
+        slot,
+        attachment,
+    );
+    canonical_binding_rows(zone, spec, endpoint_ref, &[delivery])
+}
+
+/// The digest of the AUTHORIZATION one published relationship was derived
+/// under (R16, R18).
+///
+/// It is a domain-separated digest over the committed facts the derivation
+/// read - the Zone, the endpoint row identity and generation, the consumer
+/// identity, the canonical slot, and the endpoint's own publication intent -
+/// so any authorization-only change (a withdrawn `RoleBinding`, a consumer
+/// owner change, a provider reassignment) moves it while the endpoint row
+/// generation stays exactly where it was. That is what lets a launch gate see
+/// an authorization change with no endpoint generation bump.
+///
+/// Nothing host-shaped enters it: no path, no `(dev, ino)` pair, and no host
+/// error text.
+pub fn binding_authorization_digest(
+    zone: &ZoneId,
+    spec: &EndpointSpec,
+    endpoint_ref: &ResourceRef,
+    endpoint_generation: u64,
+    consumer_ref: &ResourceRef,
+    slot: &BindingSlot,
+) -> Result<String, EndpointBindingError> {
+    let mut subjects: Vec<String> = spec
+        .binding_publication()
+        .subjects()
+        .iter()
+        .map(ResourceRef::to_canonical_string)
+        .collect();
+    subjects.sort();
+    let frame = serde_json::json!({
+        "domain": AUTHORIZATION_DIGEST_DOMAIN,
+        "zone": zone.as_str(),
+        "endpoint": endpoint_ref.to_canonical_string(),
+        "endpointGeneration": endpoint_generation,
+        "consumer": consumer_ref.to_canonical_string(),
+        "slot": slot.as_str(),
+        "publication": subjects.join(","),
+    });
+    Ok(framed_canonical_digest(
+        AUTHORIZATION_DIGEST_DOMAIN,
+        &canonical_json_bytes(&frame).map_err(|_| EndpointBindingError::InvalidRequest)?,
+    ))
+}
+
+/// The digest of the DEPENDENCIES one published relationship was read at
+/// (R18).
+///
+/// It mixes the endpoint row generation with the producer row generation the
+/// endpoint's realization was derived against, so a producer that was
+/// replaced or re-issued moves the digest even when the endpoint row itself
+/// has not.
+pub fn binding_dependency_revision(endpoint_generation: u64, producer_generation: u64) -> String {
+    framed_canonical_digest(
+        DEPENDENCY_REVISION_DOMAIN,
+        &canonical_json_bytes(&serde_json::json!({
+            "domain": DEPENDENCY_REVISION_DOMAIN,
+            "endpointGeneration": endpoint_generation,
+            "producerGeneration": producer_generation,
+        }))
+        .expect("a two-field object is always canonical JSON"),
+    )
+}
+
+/// The domain tag framing one relationship authorization digest.
+const AUTHORIZATION_DIGEST_DOMAIN: &str = "d2b:v3:endpoint-binding-authorization";
+
+/// The domain tag framing one relationship dependency revision.
+const DEPENDENCY_REVISION_DOMAIN: &str = "d2b:v3:endpoint-binding-dependency-revision";
+
 
 /// The exact wire request one committed relationship's delivery is sent as.
 ///
@@ -3075,6 +3340,65 @@ impl EndpointBindingDriver {
         Ok((binding, rights))
     }
 
+    /// The owning `Endpoint` row's live readiness evidence.
+    ///
+    /// This is the second half of the delivery fence (R18, KTD8): a
+    /// relationship is delivered over one exact REALIZATION, so the
+    /// incarnation token the owning endpoint published is what the delivery
+    /// carries and what a launch gate compares. An endpoint that is not
+    /// currently `Ready`, or that published no token for this generation, has
+    /// proven nothing about the realization this relationship would grant
+    /// access to, so it is reported unavailable rather than as a standing
+    /// delivery.
+    async fn source_incarnation(
+        &self,
+        ctx: &mut ResourceContext,
+        binding: &EndpointBindingSpec,
+        op: DriverOp,
+    ) -> Result<RealizationIncarnation, EndpointBindingDriverError> {
+        let key = self.endpoint_key(binding);
+        let view = match ctx.lookup_view(&key).await {
+            RowLookup::Present { row, .. } => row,
+            RowLookup::Absent { .. } | RowLookup::Unavailable { .. } | RowLookup::Error { .. } => {
+                return Err(self.error(EndpointBindingDriverErrorKind::ParentUnavailable, op));
+            }
+        };
+        if view.observed_status() != Some(ResourceStatus::Ready) {
+            return Err(self.error(EndpointBindingDriverErrorKind::ParentUnavailable, op));
+        }
+        // The projection is the endpoint's OWN published evidence for this
+        // exact row generation; a projection carried over from an older
+        // generation is not observed state of the current row.
+        view.observed_status_projection()
+            .and_then(|projection| {
+                projection
+                    .pointer("/endpoint/incarnation")
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok())
+            })
+            .ok_or_else(|| self.error(EndpointBindingDriverErrorKind::ParentUnavailable, op))
+    }
+
+    /// Publish this pass's redacted delivery evidence.
+    ///
+    /// The published layer is the whole host-free projection: a closed state
+    /// slug, the row generation it belongs to, and the opaque incarnation
+    /// token a `Delivered` verdict carries. No path, no `(dev, ino)` pair, and
+    /// no raw broker error ever reaches it (R17).
+    fn publish_delivery(
+        &self,
+        ctx: &mut ResourceContext,
+        status: &EndpointBindingDriverStatus,
+        incarnation: &RealizationIncarnation,
+    ) {
+        let projection = BindingDeliveryProjection::from_status(
+            status,
+            incarnation,
+            ctx.generation(),
+        );
+        ctx.set_status_projection(serde_json::json!({ "binding": projection.projection() }));
+    }
+
     /// Register one dependency watch, at most once per target (R12/R17).
     async fn watch_once(&mut self, ctx: &mut ResourceContext, target: ResourceKey) {
         if self.watched.contains(&target) {
@@ -3170,6 +3494,31 @@ impl ResourceDriver for EndpointBindingDriver {
         self.watch_once(ctx, self.consumer_key(&binding)).await;
         let zone_uid = self.zone_uid(ctx, op).await?;
 
+        // The delivery is granted over one exact REALIZATION (KTD8), so the
+        // owning endpoint's own published incarnation is what this pass
+        // carries. An endpoint that is not currently Ready has proven nothing
+        // about what this relationship would grant access to: the pass reports
+        // the closed undelivered class and re-checks rather than delivering
+        // against an incarnation it cannot name.
+        let incarnation = match self.source_incarnation(ctx, &binding, op).await {
+            Ok(incarnation) => incarnation,
+            Err(error) => {
+                ctx.set_status(EndpointBindingDriverStatus::Undelivered {
+                    reason: EndpointDeliveryRefusal::Refused(
+                        ENDPOINT_REALIZATION_UNPROVEN.to_owned(),
+                    ),
+                });
+                let projection = BindingDeliveryProjection::Undelivered {
+                    reason: EndpointDeliveryRefusal::Refused(
+                        ENDPOINT_REALIZATION_UNPROVEN.to_owned(),
+                    ),
+                };
+                ctx.set_status_projection(serde_json::json!({ "binding": projection.projection() }));
+                let _ = ctx.requeue_after(ENDPOINT_BINDING_RESYNC);
+                return Err(error);
+            }
+        };
+
         let previous = pinned_before(ctx.status::<EndpointBindingDriverStatus>());
         // A grant that is already standing is OBSERVED first, not re-applied:
         // a re-grant would repair the very drift this pass exists to detect, so
@@ -3187,10 +3536,13 @@ impl ResourceDriver for EndpointBindingDriver {
                 && !answer.parent_listable
                 && EndpointSocketIdentity::new(answer.socket_device, answer.socket_inode) == pinned
             {
-                ctx.set_status(EndpointBindingDriverStatus::Delivered {
-                    socket: pinned,
-                    effective_rights: answer.socket_effective_rights,
-                });
+                let status =
+                    EndpointBindingDriverStatus::Delivered {
+                        socket: pinned,
+                        effective_rights: answer.socket_effective_rights,
+                    };
+                ctx.set_status(status.clone());
+                self.publish_delivery(ctx, &status, &incarnation);
                 return Ok(ReconcileOutcome::Satisfied);
             }
         }
@@ -3229,7 +3581,8 @@ impl ResourceDriver for EndpointBindingDriver {
                         effective_rights: answer.socket_effective_rights,
                     }
                 };
-                ctx.set_status(status);
+                ctx.set_status(status.clone());
+                self.publish_delivery(ctx, &status, &incarnation);
             }
             Err(error) => {
                 let reason = match &error {
@@ -3240,7 +3593,9 @@ impl ResourceDriver for EndpointBindingDriver {
                         EndpointDeliveryRefusal::Unanswered
                     }
                 };
-                ctx.set_status(EndpointBindingDriverStatus::Undelivered { reason });
+                let status = EndpointBindingDriverStatus::Undelivered { reason };
+                ctx.set_status(status.clone());
+                self.publish_delivery(ctx, &status, &incarnation);
             }
         }
         if matches!(
@@ -3334,6 +3689,17 @@ const ENDPOINT_EFFECTIVE_ACCESS_MISSING: &str = "endpoint-access-effective-acces
 
 /// The closed slug an exact endpoint whose parent is listable reports.
 const ENDPOINT_PARENT_LISTABLE: &str = "endpoint-access-parent-listable";
+
+/// The closed slug a relationship whose owning endpoint has published no
+/// current realization evidence reports (KTD8).
+///
+/// The delivery is granted over one exact realization, so an endpoint that is
+/// not currently `Ready` - or that published no incarnation token for this row
+/// generation - leaves the relationship with nothing to prove it is delivered
+/// over. That is an ordinary undelivered relationship the next pass re-checks,
+/// not a terminal refusal: the endpoint's own actor owns whether it is
+/// realized.
+const ENDPOINT_REALIZATION_UNPROVEN: &str = "endpoint-realization-unproven";
 
 /// The `Zone` ResourceType whose committed self row carries the uid the
 /// broker's verified bundle is filed under.

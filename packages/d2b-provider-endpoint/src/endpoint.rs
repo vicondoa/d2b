@@ -306,6 +306,82 @@ pub enum EndpointLifecyclePolicy {
     RecreateOnGeneration,
 }
 
+/// What one `Endpoint` row publishes as `EndpointBinding` relationships
+/// (KTD4: publication, authorization, and delivery are three owners).
+///
+/// Publication intent is a SEPARATE axis from [`EndpointConsumerPolicy`],
+/// and the separation is the point:
+///
+/// - [`Self::None`] publishes no relationship at all. It is NOT the same
+///   thing as an unconstrained consumer policy: an endpoint that admits
+///   everyone but publishes nothing still delivers nothing, and an endpoint
+///   that publishes a subject it does not authorize is refused rather than
+///   repaired.
+/// - [`Self::Named`] names the exact consumer subjects this endpoint
+///   publishes a row for. The row is a function of that list alone, so the
+///   set of relationships a consumer can ever reach is declared by the
+///   endpoint OWNER and is not widened by a consumer asking for a different
+///   slot, operation, or endpoint.
+///
+/// The default is [`Self::None`]: an endpoint that never declared publication
+/// intent derives no relationship, so this field cannot widen any existing
+/// row's reach.
+#[derive(Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum EndpointBindingPublication {
+    /// This endpoint publishes no `EndpointBinding` row.
+    #[default]
+    None,
+    /// This endpoint publishes exactly one row per named consumer subject.
+    Named(Vec<ResourceRef>),
+}
+
+impl EndpointBindingPublication {
+    /// Build a publication intent over one unordered subject list.
+    ///
+    /// # Errors
+    ///
+    /// Refuses with [`EndpointSpecError::TooManyConsumerEntries`] past
+    /// [`MAX_ENDPOINT_CONSUMER_ENTRIES`] and with
+    /// [`EndpointSpecError::DuplicateConsumerEntry`] on a repeat, so the
+    /// declared set is the same set a reader re-derives from the row.
+    pub fn named(mut subjects: Vec<ResourceRef>) -> Result<Self, EndpointSpecError> {
+        if subjects.len() > MAX_ENDPOINT_CONSUMER_ENTRIES {
+            return Err(EndpointSpecError::TooManyConsumerEntries);
+        }
+        subjects.sort_by_key(ResourceRef::to_canonical_string);
+        if has_duplicates(&subjects) {
+            return Err(EndpointSpecError::DuplicateConsumerEntry);
+        }
+        Ok(Self::Named(subjects))
+    }
+
+    /// Whether this endpoint publishes no relationship at all.
+    pub const fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
+
+    /// The subjects this endpoint publishes a row for.
+    pub fn subjects(&self) -> &[ResourceRef] {
+        match self {
+            Self::None => &[],
+            Self::Named(subjects) => subjects,
+        }
+    }
+
+    /// Whether this endpoint publishes a row for `subject`.
+    ///
+    /// This is publication ALONE. Whether the relationship is admitted is
+    /// the consumer policy's separate question
+    /// ([`EndpointConsumerPolicy::admits_subject`]), and both must hold
+    /// before a row exists.
+    pub fn publishes_to(&self, subject: &ResourceRef) -> bool {
+        self.subjects().contains(subject)
+    }
+}
+
+redacted_debug!(EndpointBindingPublication);
+
 /// The stable, locator-free Endpoint base spec.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -322,7 +398,135 @@ pub struct EndpointSpec {
     attachment_policy: EndpointAttachmentPolicy,
     consumer_policy: EndpointConsumerPolicy,
     lifecycle_policy: EndpointLifecyclePolicy,
+    /// Which consumer subjects this endpoint publishes an `EndpointBinding`
+    /// row for (KTD4). `None` is the default and is distinct from an
+    /// unconstrained consumer policy.
+    binding_publication: EndpointBindingPublication,
 }
+
+/// The opaque token that names ONE realization incarnation of one exact
+/// endpoint (KTD8).
+///
+/// A socket path, an `(dev, ino)` pair, and a host error are all facts a
+/// consumer must never read, so the token that proves "this is the same
+/// realization I observed" is a domain-separated digest over the committed
+/// identities instead of any of them. Two observations of one incarnation
+/// produce the same token; a replaced socket, a new producer generation, a
+/// new reconnect generation, or a changed service fingerprint produces a
+/// different one, which is exactly the comparison a launch gate needs
+/// (R17, R18).
+///
+/// # Ownership
+///
+/// U4 owns this TYPE and the comparison
+/// ([`Self::same_incarnation`]); the display shapes' own evidence
+/// contributes the private socket facts to the derivation in U5. What
+/// crosses any projection here is the token value and nothing else, so the
+/// refinement cannot widen what a consumer reads.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(transparent)]
+pub struct RealizationIncarnation(BoundedToken);
+
+impl RealizationIncarnation {
+    /// Derive the incarnation token of one exact realization.
+    ///
+    /// Every input is a COMMITTED identity the endpoint owner already
+    /// declared, so the derivation is a pure function of the row: the same
+    /// row at the same generation with the same producer and reconnect
+    /// evidence yields the same token, and any change to those yields a
+    /// different one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EndpointSpecError::Primitive`] when the derived value is
+    /// not a bounded token.
+    pub fn derive(
+        zone: &str,
+        endpoint_ref: &ResourceRef,
+        endpoint_generation: u64,
+        producer_uid: &str,
+        producer_generation: u64,
+        reconnect_generation: u64,
+        fingerprint: Option<&str>,
+    ) -> Result<Self, EndpointSpecError> {
+        let mut frame = std::collections::BTreeMap::new();
+        frame.insert(
+            "domain".to_owned(),
+            serde_json::Value::String(REALIZATION_INCARNATION_DOMAIN.to_owned()),
+        );
+        frame.insert("zone".to_owned(), serde_json::Value::String(zone.to_owned()));
+        frame.insert(
+            "endpoint".to_owned(),
+            serde_json::Value::String(endpoint_ref.to_canonical_string()),
+        );
+        frame.insert(
+            "endpointGeneration".to_owned(),
+            serde_json::Value::from(endpoint_generation),
+        );
+        frame.insert(
+            "producer".to_owned(),
+            serde_json::Value::String(producer_uid.to_owned()),
+        );
+        frame.insert(
+            "producerGeneration".to_owned(),
+            serde_json::Value::from(producer_generation),
+        );
+        frame.insert(
+            "reconnectGeneration".to_owned(),
+            serde_json::Value::from(reconnect_generation),
+        );
+        frame.insert(
+            "fingerprint".to_owned(),
+            match fingerprint {
+                Some(value) => serde_json::Value::String(value.to_owned()),
+                None => serde_json::Value::Null,
+            },
+        );
+        let canonical = d2b_contracts_resource::v3::canonical_json_bytes(&frame)
+            .map_err(|_| EndpointSpecError::Primitive(PrimitiveSpecError::InvalidText))?;
+        let digest =
+            d2b_contracts_resource::v3::framed_canonical_digest(REALIZATION_INCARNATION_DOMAIN, &canonical);
+        // The token grammar admits at most `MAX_BOUNDED_TOKEN_BYTES` bytes and
+        // only lowercase alphanumerics and `-`, while the framed digest renders
+        // as a `sha256:`-prefixed 64-hex string. Carrying the whole digest
+        // would put the token permanently out of grammar and no endpoint would
+        // ever publish an incarnation, so the derivation takes a fixed-length
+        // window of it: 48 hex characters is 192 bits, which keeps the token
+        // unpredictable and domain-separated (KTD8) and leaves the prefix
+        // inside the bound.
+        let window = digest
+            .rsplit(':')
+            .next()
+            .expect("the framed digest is a prefixed hex string");
+        let token = BoundedToken::parse(format!("incarnation-{}", &window[..48]))
+            .map_err(|_| EndpointSpecError::Primitive(PrimitiveSpecError::InvalidText))?;
+        Ok(Self(token))
+    }
+
+    /// Borrow the opaque token value.
+    ///
+    /// This is the ONLY thing any projection, log line, or comparison carries
+    /// about the realization: no path, no device or inode pair, and no host
+    /// error text.
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    /// Whether two observations name the SAME realization incarnation.
+    ///
+    /// Equality over the derived token is the whole comparison: an endpoint
+    /// that was realized again, whose socket was rebound, or whose producer
+    /// generation moved cannot compare equal to the earlier observation, so a
+    /// launch gated on an older token cannot be replayed against the new one.
+    pub fn same_incarnation(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+redacted_debug!(RealizationIncarnation);
+
+/// The domain tag framing one realization-incarnation derivation.
+const REALIZATION_INCARNATION_DOMAIN: &str = "d2b:v3:endpoint-realization-incarnation";
 
 impl EndpointSpec {
     /// Construct a strict endpoint specification.
@@ -372,7 +576,37 @@ impl EndpointSpec {
             attachment_policy,
             consumer_policy,
             lifecycle_policy,
+            // An endpoint that constructed its spec without a builder call has
+            // declared no publication intent, and publishes no relationship
+            // (KTD4). `with_binding_publication` / `publishing_to` are the
+            // only ways to widen this.
+            binding_publication: EndpointBindingPublication::None,
         })
+    }
+
+    /// Declare which consumer subjects this endpoint publishes an
+    /// `EndpointBinding` row for (KTD4).
+    ///
+    /// Publication intent is separate from authorization on purpose: a
+    /// consumer policy admits subjects, this field publishes relationships,
+    /// and a relationship exists only where both hold. An endpoint that
+    /// declares a subject its own policy does not admit is refused by the
+    /// derivation rather than delivered, so that is checked where the rows
+    /// are derived and not only here.
+    #[must_use]
+    pub fn with_binding_publication(mut self, publication: EndpointBindingPublication) -> Self {
+        self.binding_publication = publication;
+        self
+    }
+
+    /// Declare a publication intent over one subject list.
+    ///
+    /// # Errors
+    ///
+    /// The same refusals [`EndpointBindingPublication::named`] reports.
+    pub fn publishing_to(mut self, subjects: Vec<ResourceRef>) -> Result<Self, EndpointSpecError> {
+        self.binding_publication = EndpointBindingPublication::named(subjects)?;
+        Ok(self)
     }
 
     /// Borrow the selected semantic Provider.
@@ -434,6 +668,29 @@ impl EndpointSpec {
     pub const fn lifecycle_policy(&self) -> EndpointLifecyclePolicy {
         self.lifecycle_policy
     }
+
+    /// Borrow the endpoint's own binding publication intent.
+    ///
+    /// This is the DECLARATION of which relationships this endpoint
+    /// publishes; [`Self::consumer_policy`] is the authorization that admits
+    /// them. `EndpointBinding` rows are derived from this field, never from
+    /// the consumer policy alone and never from rows that already exist
+    /// (R16).
+    pub const fn binding_publication(&self) -> &EndpointBindingPublication {
+        &self.binding_publication
+    }
+
+    /// Whether this endpoint publishes a relationship for `subject` AND
+    /// authorizes it.
+    ///
+    /// Both halves are required: a published subject the owner does not
+    /// authorize is a declaration this family cannot honor, and an authorized
+    /// subject the owner does not publish is a relationship that does not
+    /// exist.
+    pub fn publishes_and_admits(&self, subject: &ResourceRef) -> bool {
+        self.binding_publication.publishes_to(subject)
+            && self.consumer_policy.admits_subject(subject)
+    }
 }
 
 redacted_debug!(EndpointSpec);
@@ -459,6 +716,8 @@ impl<'de> Deserialize<'de> for EndpointSpec {
             consumer_policy: EndpointConsumerPolicy,
             #[serde(default = "recycle_with_producer")]
             lifecycle_policy: EndpointLifecyclePolicy,
+            #[serde(default)]
+            binding_publication: EndpointBindingPublication,
         }
         let wire = Wire::deserialize(deserializer)?;
         Self::new(
@@ -474,6 +733,7 @@ impl<'de> Deserialize<'de> for EndpointSpec {
             wire.consumer_policy,
             wire.lifecycle_policy,
         )
+        .map(|spec| spec.with_binding_publication(wire.binding_publication))
         .map_err(serde::de::Error::custom)
     }
 }
@@ -538,6 +798,7 @@ impl EndpointAttachmentPolicy {
 mod tests {
     use super::*;
     use d2b_contracts_resource::v3::resource_schema::canonical_json_bytes;
+    use d2b_contracts_resource::v3::execution_policy::MAX_BOUNDED_TOKEN_BYTES;
 
     fn minimal() -> EndpointSpec {
         EndpointSpec::new(
@@ -562,7 +823,7 @@ mod tests {
         let bytes = canonical_json_bytes(&endpoint).unwrap();
         assert_eq!(
             bytes,
-            br#"{"attachmentPolicy":{"maxAttachments":0,"supported":false},"consumerPolicy":{},"endpointClass":"service","lifecyclePolicy":"recycle-with-producer","locality":"zone-local","producerRef":"Process/wayland-proxy","providerRef":"Provider/display-wayland","purpose":"wayland-control","transport":"opaque-carriage","visibility":"provider"}"#
+            br#"{"attachmentPolicy":{"maxAttachments":0,"supported":false},"bindingPublication":"none","consumerPolicy":{},"endpointClass":"service","lifecyclePolicy":"recycle-with-producer","locality":"zone-local","producerRef":"Process/wayland-proxy","providerRef":"Provider/display-wayland","purpose":"wayland-control","transport":"opaque-carriage","visibility":"provider"}"#
         );
         assert_eq!(
             serde_json::from_slice::<EndpointSpec>(&bytes).unwrap(),
@@ -618,5 +879,71 @@ mod tests {
         let mut object = serde_json::to_value(minimal()).unwrap();
         object["producerRef"] = serde_json::json!("User/alice");
         assert!(serde_json::from_value::<EndpointSpec>(object).is_err());
+    }
+
+
+    #[test]
+    fn a_derived_incarnation_is_a_grammar_token_and_is_stable_for_one_realization() {
+        let endpoint = ResourceRef::parse("Endpoint/compositor").unwrap();
+        let derive = |generation: u64, producer_generation: u64, reconnect: u64| {
+            RealizationIncarnation::derive(
+                "dev",
+                &endpoint,
+                generation,
+                "00000000000000000000000000000001",
+                producer_generation,
+                reconnect,
+                Some("sha256:compositor"),
+            )
+        };
+        let first = derive(3, 1, 0).expect("a realization derives an incarnation token");
+        assert_eq!(
+            first.as_str(),
+            derive(3, 1, 0)
+                .expect("the same realization derives the same token")
+                .as_str(),
+            "the derivation is a pure function of the committed facts"
+        );
+        assert!(
+            first.as_str().len() <= MAX_BOUNDED_TOKEN_BYTES,
+            "the token fits the grammar every projection has to spell it in"
+        );
+        assert!(
+            BoundedToken::parse(first.as_str()).is_ok(),
+            "the token is a token: a derivation that fell outside the grammar \
+             would leave every endpoint publishing no incarnation at all"
+        );
+    }
+
+    #[test]
+    fn every_realization_fact_moves_the_incarnation_token() {
+        let endpoint = ResourceRef::parse("Endpoint/compositor").unwrap();
+        let other = ResourceRef::parse("Endpoint/proxy").unwrap();
+        let baseline = RealizationIncarnation::derive(
+            "dev",
+            &endpoint,
+            3,
+            "00000000000000000000000000000001",
+            1,
+            0,
+            Some("sha256:compositor"),
+        )
+        .unwrap();
+        let moved = [
+            RealizationIncarnation::derive("zone", &endpoint, 3, "00000000000000000000000000000001", 1, 0, Some("sha256:compositor")).unwrap(),
+            RealizationIncarnation::derive("dev", &other, 3, "00000000000000000000000000000001", 1, 0, Some("sha256:compositor")).unwrap(),
+            RealizationIncarnation::derive("dev", &endpoint, 4, "00000000000000000000000000000001", 1, 0, Some("sha256:compositor")).unwrap(),
+            RealizationIncarnation::derive("dev", &endpoint, 3, "00000000000000000000000000000002", 1, 0, Some("sha256:compositor")).unwrap(),
+            RealizationIncarnation::derive("dev", &endpoint, 3, "00000000000000000000000000000001", 2, 0, Some("sha256:compositor")).unwrap(),
+            RealizationIncarnation::derive("dev", &endpoint, 3, "00000000000000000000000000000001", 1, 1, Some("sha256:compositor")).unwrap(),
+            RealizationIncarnation::derive("dev", &endpoint, 3, "00000000000000000000000000000001", 1, 0, Some("sha256:proxy")).unwrap(),
+            RealizationIncarnation::derive("dev", &endpoint, 3, "00000000000000000000000000000001", 1, 0, None).unwrap(),
+        ];
+        for candidate in moved {
+            assert!(
+                !candidate.same_incarnation(&baseline),
+                "a changed realization fact must not compare as the same incarnation"
+            );
+        }
     }
 }

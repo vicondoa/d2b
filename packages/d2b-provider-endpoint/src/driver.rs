@@ -41,7 +41,8 @@
 use std::sync::Arc;
 
 use d2b_contracts_resource::v3::{
-    CanonicalJsonObject, ChildSupportCeiling, ResourceRef, ResourceSpec, ZoneId,
+    BoundedText, CanonicalJsonObject, ChildSupportCeiling, ResourceRef, ResourceSpec, ResourceUid,
+    ZoneId,
 };
 use crate::binding::{ ENDPOINT_BINDING_TYPE_NAME, EndpointBindingError };
 use crate::endpoint::{ EndpointClass, EndpointLifecyclePolicy, EndpointLocality, EndpointSpec, EndpointTransport,
@@ -506,6 +507,154 @@ impl EndpointDriver {
         }
         Ok(())
     }
+
+    /// Derive this row's realization-incarnation token (KTD8).
+    ///
+    /// The token is a pure function of COMMITTED identities: this endpoint's
+    /// own row identity and generation, its producer's store-assigned identity
+    /// and the generation that producer row is at, and the service fingerprint
+    /// this row declares. Nothing a consumer supplies takes part, and nothing
+    /// host-shaped leaves this function - the value is a digest, so the same
+    /// row yields the same token and any of those facts moving yields a
+    /// different one.
+    ///
+    /// `None` when this row's producer is not a row this manager serves: there
+    /// is then no committed producer identity to bind the realization to, so
+    /// the pass publishes NO realization evidence rather than naming an
+    /// incarnation it cannot prove. A dependent that needs one defers on it,
+    /// which is the honest answer and not a hole.
+    async fn realization_incarnation(
+        &self,
+        ctx: &mut ResourceContext,
+        spec: &EndpointSpec,
+        op: DriverOp,
+    ) -> Result<(Option<crate::endpoint::RealizationIncarnation>, u64), EndpointDriverError> {
+        let producer_key = ResourceKey::new(
+            ctx.key().zone.as_str(),
+            spec.producer_ref().resource_type().as_str(),
+            spec.producer_ref().name().as_str(),
+        );
+        let producer = match ctx.lookup_view(&producer_key).await {
+            d2b_resource_runtime::context::RowLookup::Present { row, .. } => row,
+            _ => return Ok((None, 0)),
+        };
+        let producer_uid = ResourceUid::from_bytes(&producer.uid)
+            .map_err(|_| EndpointDriverError::new(EndpointDriverErrorKind::SpecInvalid, op))?;
+        let endpoint_ref = key_ref(ctx.key())
+            .map_err(|_| EndpointDriverError::new(EndpointDriverErrorKind::SpecInvalid, op))?;
+        crate::endpoint::RealizationIncarnation::derive(
+            ctx.key().zone.as_str(),
+            &endpoint_ref,
+            ctx.generation(),
+            producer_uid.as_str(),
+            producer.generation,
+            producer.generation,
+            spec.service_fingerprint().map(BoundedText::as_str),
+        )
+        .map(|incarnation| (Some(incarnation), producer.generation))
+        .map_err(|_| EndpointDriverError::new(EndpointDriverErrorKind::SpecInvalid, op))
+    }
+
+    /// Publish the endpoint's own readiness evidence.
+    ///
+    /// The published layer is what a dependent reads to decide whether this
+    /// exact realization is standing: the observed row generation and, only
+    /// once the endpoint is realized, the opaque incarnation token. No
+    /// locator, no `(dev, ino)` pair, and no host error crosses it (R15, R17).
+    fn publish_readiness(
+        &self,
+        ctx: &mut ResourceContext,
+        spec: &EndpointSpec,
+        realized: bool,
+        incarnation: Option<&crate::endpoint::RealizationIncarnation>,
+        producer_generation: Option<u64>,
+    ) {
+        let mut endpoint = serde_json::Map::new();
+        endpoint.insert(
+            "readiness".to_owned(),
+            serde_json::Value::String(if realized { "realized" } else { "realizing" }.to_owned()),
+        );
+        endpoint.insert(
+            "generation".to_owned(),
+            serde_json::Value::from(ctx.generation()),
+        );
+        if let Some(incarnation) = incarnation {
+            endpoint.insert(
+                "incarnation".to_owned(),
+                serde_json::Value::String(incarnation.as_str().to_owned()),
+            );
+        }
+        // The source-derived EXPECTED binding set: one entry per canonical row
+        // this endpoint's own publication intent mints for a consumer. A
+        // dependent derives what it requires from THIS, never from a
+        // consumer-local slot table and never from the rows that happen to
+        // exist (R18). The digests travel with each entry so the dependent can
+        // tell an authorization-only change from a row that simply moved.
+        endpoint.insert(
+            "bindings".to_owned(),
+            serde_json::Value::Array(self.expected_bindings_layer(ctx, spec, producer_generation)),
+        );
+        ctx.set_status_projection(serde_json::json!({ "endpoint": serde_json::Value::Object(endpoint) }));
+    }
+
+    /// The `/endpoint/bindings` layer: the canonical rows this endpoint
+    /// publishes, each with the authority facts a dependent compares.
+    ///
+    /// Every entry is derived here, by the driver's own derivation, from the
+    /// endpoint row and its publication intent. A relationship the endpoint
+    /// cannot derive contributes no entry, so a dependent's expected set is
+    /// exactly the set this source mints.
+    fn expected_bindings_layer(
+        &self,
+        ctx: &ResourceContext,
+        spec: &EndpointSpec,
+        producer_generation: Option<u64>,
+    ) -> Vec<serde_json::Value> {
+        let Ok(zone) = ZoneId::parse(ctx.key().zone.as_str()) else {
+            return Vec::new();
+        };
+        let Ok(endpoint_ref) = key_ref(ctx.key()) else {
+            return Vec::new();
+        };
+        let Ok(deliveries) =
+            crate::binding::declared_endpoint_bindings(&zone, spec, &endpoint_ref)
+        else {
+            return Vec::new();
+        };
+        deliveries
+            .iter()
+            .filter_map(|delivery| {
+                let slot = delivery.slot();
+                let authorization =
+                    crate::binding::binding_authorization_digest(
+                        &zone,
+                        spec,
+                        &endpoint_ref,
+                        ctx.generation(),
+                        delivery.consumer().as_ref(),
+                        slot,
+                    )
+                    .ok()?;
+                let dependency = crate::binding::binding_dependency_revision(
+                    ctx.generation(),
+                    producer_generation.unwrap_or_default(),
+                );
+                Some(serde_json::json!({
+                    "name": crate::binding::binding_row_name(
+                        &zone,
+                        &endpoint_ref,
+                        delivery.consumer().as_ref(),
+                        slot,
+                    ).ok()?.as_str(),
+                    "endpoint": endpoint_ref.to_canonical_string(),
+                    "consumer": delivery.consumer().as_ref().to_canonical_string(),
+                    "slot": slot.as_str(),
+                    "authorizationDigest": authorization,
+                    "dependencyRevision": dependency,
+                }))
+            })
+            .collect()
+    }
 }
 
 #[async_trait::async_trait]
@@ -546,6 +695,12 @@ impl ResourceDriver for EndpointDriver {
             .socket_present(spec.producer_ref(), spec.purpose().as_str())
             .await
         {
+            // A restart publishes NO adoption token: this actor witnessed no
+            // host effect for the incarnation that is there now, so it names
+            // none. The next reconcile pass derives one from committed
+            // identities, and a dependent defers until then rather than
+            // trusting a token this process could not have observed (R18).
+            self.publish_readiness(ctx, &spec, true, None, None);
             ctx.set_status(EndpointDriverStatus::Realized);
             Ok(RecoveryOutcome::Adopted)
         } else {
@@ -566,11 +721,14 @@ impl ResourceDriver for EndpointDriver {
         // whose row is going away still has a relationship to withdraw.
         self.reconcile_binding_children(ctx, &spec, DriverOp::Reconcile)
             .await?;
+        let op = DriverOp::Reconcile;
+        let (incarnation, producer_generation) = self.realization_incarnation(ctx, &spec, op).await?;
         if self
             .effects
             .socket_present(spec.producer_ref(), spec.purpose().as_str())
             .await
         {
+            self.publish_readiness(ctx, &spec, true, incarnation.as_ref(), Some(producer_generation));
             ctx.set_status(EndpointDriverStatus::Realized);
             return Ok(ReconcileOutcome::Satisfied);
         }
@@ -603,6 +761,10 @@ impl ResourceDriver for EndpointDriver {
                 result: effect_result,
             });
         });
+        // A realization still in flight publishes the not-realized class and
+        // NO token: a dependent must not read a standing incarnation out of a
+        // pass whose socket effect has not landed yet.
+        self.publish_readiness(ctx, &spec, false, None, None);
         ctx.set_status(EndpointDriverStatus::Realizing);
         Ok(ReconcileOutcome::InProgress { operation })
     }

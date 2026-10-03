@@ -54,6 +54,7 @@ use d2b_core::processes::ProcessesJson;
 use d2b_provider_endpoint::endpoint::{
     EndpointAttachmentPolicy, EndpointClass, EndpointConsumerPolicy, EndpointLifecyclePolicy,
     EndpointLocality, EndpointOperation, EndpointSpec, EndpointTransport, EndpointVisibility,
+    RealizationIncarnation,
 };
 use d2b_resource_types::WellKnownType;
 
@@ -77,6 +78,7 @@ use d2b_resource_runtime::identity::{
     ResourceKey, ResourceProvenance, StoredDesiredResource,
 };
 use d2b_resource_runtime::manager::ResourceView;
+use d2b_resource_runtime::resource::ResourceStatus;
 use d2b_resource_runtime::spec_store::EnsureOutcome;
 
 // ---------------------------------------------------------------------------
@@ -189,6 +191,7 @@ fn realized_facets() -> d2b_provider_endpoint::EndpointEffectFacets {
 /// every child mutation it performs is observable.
 struct RecordingManager {
     rows: tokio::sync::Mutex<Vec<StoredDesiredResource>>,
+    views: tokio::sync::Mutex<Vec<ResourceView>>,
     ensured: tokio::sync::Mutex<Vec<ChildEnsure>>,
     deleted: tokio::sync::Mutex<Vec<ResourceKey>>,
     watched: tokio::sync::Mutex<Vec<ResourceKey>>,
@@ -196,13 +199,22 @@ struct RecordingManager {
 
 impl RecordingManager {
     fn with(rows: Vec<StoredDesiredResource>) -> Arc<Self> {
+        Self::with_views(rows, Vec::new())
+    }
+
+    fn with_views(
+        rows: Vec<StoredDesiredResource>,
+        views: Vec<ResourceView>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             rows: tokio::sync::Mutex::new(rows),
+            views: tokio::sync::Mutex::new(views),
             ensured: tokio::sync::Mutex::new(Vec::new()),
             deleted: tokio::sync::Mutex::new(Vec::new()),
             watched: tokio::sync::Mutex::new(Vec::new()),
         })
     }
+
 
     async fn ensured(&self) -> Vec<ChildEnsure> {
         self.ensured.lock().await.to_vec()
@@ -276,9 +288,16 @@ impl ManagerEndpoint for RecordingManager {
             .cloned())
     }
 
-    async fn view(&self, _key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
-        Ok(None)
+    async fn view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
+        Ok(self
+            .views
+            .lock()
+            .await
+            .iter()
+            .find(|view| view.key == *key)
+            .cloned())
     }
+
 
     async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
         self.deleted.lock().await.push(key.clone());
@@ -569,7 +588,13 @@ fn resolver() -> BundleResolver {
 /// The shape is one this driver's own closed realization set admits, so the
 /// derivation runs against a committed `Endpoint` row the plane really serves
 /// rather than against a look-alike.
+///
+/// The publication intent is stated, not inferred: the consumer allowlist says
+/// who MAY hold the endpoint, while the intent says who this endpoint
+/// PUBLISHES a relationship to. A fixture that named only the former derives
+/// no row at all.
 fn endpoint_spec(subjects: Vec<ResourceRef>) -> EndpointSpec {
+    let published = subjects.clone();
     EndpointSpec::new(
         ResourceRef::parse("Provider/display-wayland").expect("provider ref"),
         ResourceRef::parse(PRODUCER).expect("producer ref"),
@@ -585,6 +610,8 @@ fn endpoint_spec(subjects: Vec<ResourceRef>) -> EndpointSpec {
         EndpointLifecyclePolicy::RecycleWithProducer,
     )
     .expect("endpoint spec")
+    .publishing_to(published)
+    .expect("the endpoint publishes a binding to its declared consumer")
 }
 
 /// The canonical spec-store envelope one committed row is stored as.
@@ -674,6 +701,63 @@ fn graph(spec: &EndpointSpec, binding: &StoredDesiredResource) -> Vec<StoredDesi
     let mut rows = committed_rows(spec);
     rows.push(binding.clone());
     rows
+}
+
+/// The manager the serving pass reads, carrying the owning `Endpoint` row's
+/// OWN published readiness.
+///
+/// Delivery is granted over one exact realization, so the serving actor reads
+/// the endpoint's published status and its published incarnation token rather
+/// than re-deriving either. A manager that answered no view would leave the
+/// relationship with nothing to prove it is delivered over, which is the
+/// fail-closed answer and not the one these cases are about.
+fn serving_manager(rows: Vec<StoredDesiredResource>) -> Arc<RecordingManager> {
+    let endpoint = rows
+        .iter()
+        .find(|row| row.key.type_name == "Endpoint")
+        .expect("the graph carries the owning Endpoint row");
+    let view = endpoint_readiness_view(endpoint);
+    RecordingManager::with_views(rows, vec![view])
+}
+
+/// The view an `Endpoint` actor publishes for one realized row: the observed
+/// status, and the projection carrying the row's own opaque incarnation token.
+fn endpoint_readiness_view(endpoint: &StoredDesiredResource) -> ResourceView {
+    let incarnation = RealizationIncarnation::derive(
+        ZONE,
+        &ResourceRef::parse(ENDPOINT).expect("endpoint ref"),
+        endpoint.generation,
+        &hex(&[0x31; 16]),
+        1,
+        0,
+        Some("sha256:compositor"),
+    )
+    .expect("the fixture realizes into a bounded token");
+    let projection = serde_json::json!({
+        "endpoint": {
+            "readiness": "realized",
+            "generation": endpoint.generation,
+            "incarnation": incarnation.as_str(),
+        }
+    });
+    ResourceView {
+        key: endpoint.key.clone(),
+        uid: endpoint.uid,
+        generation: endpoint.generation,
+        deleting: endpoint.deleting,
+        provenance: endpoint.provenance.clone(),
+        spec: endpoint.spec.clone(),
+        metadata: endpoint.metadata.clone(),
+        owner_key: None,
+        status: Some(ResourceStatus::Ready),
+        status_generation: Some(endpoint.generation),
+        status_projection: Some(projection),
+    }
+}
+
+/// The canonical lowercase hex of a resource uid.
+fn hex(bytes: &[u8; 16]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// The bytes of the Zone self row's committed uid.
@@ -1176,7 +1260,7 @@ async fn deliver_passes(
         .find(|row| row.key.type_name == ENDPOINT_BINDING_TYPE_NAME)
         .expect("the graph carries the committed relationship")
         .clone();
-    let manager = RecordingManager::with(graph);
+    let manager = serving_manager(graph);
     let (mut ctx, _requeue) = context(
         row.clone(),
         endpoint_binding_spec_decoder(),

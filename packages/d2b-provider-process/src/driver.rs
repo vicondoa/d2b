@@ -39,7 +39,11 @@ use std::{
     time::Duration,
 };
 
-use crate::effects::{ProcessDriverEffects, ProviderAdoption, ProviderLiveness};
+use crate::effects::{
+    BindingAuthorityLease, BindingDeliveryEvidence, BindingGateError, ExpectedBindingRow,
+    ObservedBinding, ProcessBindingPreparation, ProcessDriverEffects, ProviderAdoption,
+    ProviderLiveness, resolve_process_binding_preparation,
+};
 use crate::effects_service::{PROCESS_EFFECTS_SERVICE, ProcessEffectsService};
 use crate::execution::{ExecutionMode, execution_target_allowed};
 use crate::facets::ProcessEffectFacets;
@@ -48,13 +52,15 @@ use crate::launch_identity::{LaunchRow, resolve_launch_identity};
 use crate::operations::process_family_operations;
 use crate::worker_launch::{ServingWorkerLaunch, ServingWorkerRoot};
 use d2b_contracts_resource::v3::{
-    AdoptionPolicy, ControllerGeneration, ResourceGeneration, ResourceName, ResourceRef,
-    ResourceSpec, ResourceTypeName as ContractResourceTypeName, ResourceUid, ZoneId,
+    AdoptionPolicy, ControllerGeneration, ENDPOINT_BINDING_RESOURCE_TYPE, EndpointBindingSpec,
+    ResourceGeneration, ResourceName, ResourceRef, ResourceSpec,
+    ResourceTypeName as ContractResourceTypeName, ResourceUid, ZoneId,
     process::{DesiredLifecycle, EphemeralProcessSpec, ProcessSpec, RestartClass},
 };
-use d2b_process_conformance::{GuestExecutionBinding, ProcessStatusReport, ResolvedProcessPlan};
+use d2b_process_conformance::{BindingPreparation, GuestExecutionBinding, ProcessStatusReport};
 use d2b_resource_runtime::context::{
-    EffectCompleted, EffectResult, ResourceContext, SpecDecoder, typed_spec_decoder,
+    EffectCompleted, EffectResult, ResourceContext, RowLookup, SpecDecoder, WatchCondition,
+    typed_spec_decoder,
 };
 use d2b_resource_runtime::driver::{
     DynResourceDriver, ReconcileOutcome, RecoveryOutcome, ResourceDriver, ResourceDriverFactory,
@@ -64,6 +70,8 @@ use d2b_resource_runtime::error::{
     FailureKinds,
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
+use d2b_resource_runtime::manager::ResourceView;
+use d2b_resource_runtime::resource::ResourceStatus;
 use d2b_resource_types::{
     AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, OperationDef, ServiceDecl,
     WellKnownType,
@@ -588,14 +596,17 @@ pub(crate) const PROCESS_FAMILY_EXECUTION_DOMAINS: &[&str] = &["host", "guest"];
 /// Derived from the driver's row reads: a serving worker resolves its owning
 /// `VolumeBinding` and that binding's `Volume`; a Device-owned worker reads
 /// its `Device` (GPU settings, TPM state volume); a guest-owned row resolves
-/// its owning `Guest`; and a controller row binds its committed `Provider`
-/// identity (KTD7).
+/// its owning `Guest`; a controller row binds its committed `Provider`
+/// identity (KTD7); and the launch binding gate reads the `Endpoint` rows this
+/// row's owner owns, because their own publication intent is what names the
+/// relationships this launch requires (R18).
 pub(crate) const PROCESS_FAMILY_READS: &[WellKnownType] = &[
     WellKnownType::VOLUME_BINDING,
     WellKnownType::VOLUME,
     WellKnownType::DEVICE,
     WellKnownType::GUEST,
     WellKnownType::PROVIDER,
+    WellKnownType::ENDPOINT,
 ];
 
 /// The family's driver declarations: one descriptor per member type, both
@@ -662,6 +673,12 @@ pub(crate) struct ProcessDriver {
     budget: Arc<RestartBudget>,
     ephemeral: Arc<EphemeralRuntime>,
     durable: Arc<DurableRuntime>,
+    /// The dependency rows this actor has already registered an evidence
+    /// watch on. Watches are ephemeral (R12) and this actor re-registers them
+    /// from the rows it read each pass, so the set is a per-target guard
+    /// against re-registering the same edge every pass rather than state the
+    /// launch decision depends on.
+    watched: Vec<ResourceKey>,
 }
 
 /// Runtime-only one-shot lifecycle memory (R11: nothing here is persisted;
@@ -784,6 +801,198 @@ struct ProcessZoneAuthority {
     mode: ExecutionMode,
 }
 
+// ---------------------------------------------------------------------------
+// The launch binding gate read (U4, KTD6, R18, R21)
+// ---------------------------------------------------------------------------
+
+/// The `Endpoint` row type whose own publication intent names the
+/// relationships a Process launch requires (R18).
+const ENDPOINT_ROW_TYPE: &str = "Endpoint";
+
+/// What one read of the manager proved about the bindings this Process
+/// requires.
+///
+/// `expected` is derived from each `Endpoint` row's OWN `/endpoint/bindings`
+/// publication layer - the source's current publication intent, never a
+/// consumer-local slot table and never the rows that happen to exist.
+/// `observed` is read from the manager for exactly those rows: a
+/// relationship's consumer and canonical slot come from its OWN committed
+/// spec, so comparing them against the source's publication is a real check,
+/// and its delivery state comes from the `/binding` projection its own actor
+/// publishes. The two authority digests exist only in the endpoint's
+/// publication layer, so they are read with it - which is exactly what lets
+/// the sealed lease notice an authorization-only change that moved no
+/// endpoint generation (R18, R21).
+#[derive(Default)]
+struct BindingObservation {
+    expected: Vec<ExpectedBindingRow>,
+    observed: Vec<ObservedBinding>,
+    /// The rows this read took evidence from: the endpoints it derived
+    /// expectations from and the relationships it observed.
+    dependencies: Vec<ResourceKey>,
+}
+
+/// Why one binding read could not produce an observation.
+enum BindingObservationFault {
+    /// The manager cannot answer right now, or a source published a
+    /// relationship whose realization or committed row it has not proven yet:
+    /// the launch defers and issues no effect.
+    Unproven,
+    /// The published evidence is malformed or foreign: terminal, because
+    /// retrying the same evidence cannot change the answer.
+    Refused(BindingGateError),
+}
+
+/// Derive what one `Endpoint` row publishes for `process_ref`, and observe the
+/// relationships it names (R18).
+///
+/// Nothing here consults a consumer-local slot table or the set of rows that
+/// happen to exist: the endpoint's own `/endpoint/bindings` layer is the
+/// publication intent, and only the entries naming this exact consumer are
+/// required. An endpoint that publishes nothing therefore mints no
+/// expectation, which is the answer for every Process that requires no
+/// `EndpointBinding` at all.
+async fn observe_endpoint_bindings(
+    ctx: &mut ResourceContext,
+    view: &ResourceView,
+    process_ref: &ResourceRef,
+    observation: &mut BindingObservation,
+) -> Result<(), BindingObservationFault> {
+    let Some(projection) = view.observed_status_projection() else {
+        return Ok(());
+    };
+    let published = projection.pointer("/endpoint/bindings");
+    let Some(entries) = published.and_then(serde_json::Value::as_array) else {
+        return match published {
+            // The layer is published and does not carry the publication set:
+            // the source stated something this reader cannot interpret.
+            Some(_) => Err(BindingObservationFault::Refused(BindingGateError::Malformed)),
+            None => Ok(()),
+        };
+    };
+    let consumer = process_ref.to_canonical_string();
+    // The source's own readiness evidence travels with every expectation: a
+    // relationship is delivered over one exact REALIZATION, and the token the
+    // endpoint published is the realization this launch is gated on (R18).
+    let ready = view.observed_status() == Some(ResourceStatus::Ready);
+    let published_incarnation = projection
+        .pointer("/endpoint/incarnation")
+        .and_then(serde_json::Value::as_str);
+    for entry in entries {
+        if entry.pointer("/consumer").and_then(serde_json::Value::as_str) != Some(consumer.as_str()) {
+            continue;
+        }
+        let (Some(name), Some(endpoint), Some(slot), Some(authorization), Some(dependency)) = (
+            published_field(entry, "/name"),
+            published_field(entry, "/endpoint"),
+            published_field(entry, "/slot"),
+            published_field(entry, "/authorizationDigest"),
+            published_field(entry, "/dependencyRevision"),
+        ) else {
+            return Err(BindingObservationFault::Refused(BindingGateError::Malformed));
+        };
+        let Some(incarnation) = published_incarnation.map(str::to_owned) else {
+            // An endpoint that published a relationship without naming a
+            // realization has proven nothing about what it would grant access
+            // to, so the launch waits for the token instead of gating on one it
+            // cannot name.
+            return Err(BindingObservationFault::Unproven);
+        };
+        let (Ok(endpoint_ref), Ok(binding_ref)) = (
+            ResourceRef::parse(&endpoint),
+            ResourceRef::parse(&format!("{ENDPOINT_BINDING_RESOURCE_TYPE}/{name}")),
+        ) else {
+            return Err(BindingObservationFault::Refused(BindingGateError::Malformed));
+        };
+        let key = binding_key(ctx, &binding_ref);
+        observation.dependencies.push(key.clone());
+        let relation = match ctx.lookup_view(&key).await {
+            RowLookup::Present { row, .. } => row,
+            // The publication intent names this relationship and the manager
+            // has not shown it. That is the ordinary not-yet: the gate defers
+            // on a required row it cannot see rather than dropping the
+            // expectation and launching as if it were never required.
+            RowLookup::Absent { .. } | RowLookup::Unavailable { .. } => {
+                return Err(BindingObservationFault::Unproven);
+            }
+            RowLookup::Error { .. } => {
+                return Err(BindingObservationFault::Refused(
+                    BindingGateError::EvidenceUnreadable,
+                ));
+            }
+        };
+        let committed: EndpointBindingSpec = serde_json::from_slice(&relation.spec).map_err(|_| {
+            BindingObservationFault::Refused(BindingGateError::EvidenceUnreadable)
+        })?;
+        // The relationship's OWN committed endpoint and consumer, compared
+        // against what the source published for it. This is what tells a
+        // withdrawn authorization - the source no longer admits this consumer,
+        // or moved it - from a delivery that simply has not arrived, with no
+        // endpoint generation bump involved.
+        if committed.endpoint_ref() != &endpoint_ref || committed.execution_ref() != process_ref {
+            return Err(BindingObservationFault::Refused(BindingGateError::Foreign));
+        }
+        let expectation = ExpectedBindingRow::new(
+            binding_ref.clone(),
+            endpoint_ref,
+            view.generation,
+            // The relationship's row generation is store-assigned, so no
+            // publication can name it before the row is read and inventing one
+            // would make every expectation a guess. What fences a re-issued row
+            // is the lease, which seals this row's identity and generation and
+            // compares them again immediately before the effect.
+            relation.generation,
+            process_ref.clone(),
+            slot,
+            authorization.clone(),
+            dependency.clone(),
+            incarnation.clone(),
+            if ready {
+                BindingPreparation::Prepared
+            } else {
+                BindingPreparation::Incomplete
+            },
+        )
+        .map_err(BindingObservationFault::Refused)?;
+        let binding_uid = resource_uid_from_bytes(&relation.uid)
+            .map(|uid| uid.as_str().to_owned())
+            .ok_or(BindingObservationFault::Refused(BindingGateError::Foreign))?;
+        observation.expected.push(expectation);
+        observation.observed.push(ObservedBinding::new(
+            binding_ref,
+            binding_uid,
+            relation.generation,
+            committed.execution_ref().clone(),
+            committed.slot().as_str().to_owned(),
+            authorization,
+            dependency,
+            ready,
+            Some(incarnation.clone()),
+            BindingDeliveryEvidence::from_projection(relation.observed_status_projection()),
+        ));
+    }
+    Ok(())
+}
+
+/// The manager key of one canonical relationship row.
+fn binding_key(ctx: &ResourceContext, binding_ref: &ResourceRef) -> ResourceKey {
+    ResourceKey::new(
+        ctx.key().zone.as_str(),
+        ENDPOINT_BINDING_RESOURCE_TYPE,
+        binding_ref.name().as_str(),
+    )
+}
+
+/// One non-empty string field of a published entry, or the fact that it is
+/// not there.
+fn published_field(entry: &serde_json::Value, pointer: &str) -> Option<String> {
+    entry
+        .pointer(pointer)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
 impl ProcessDriver {
     pub(crate) fn new(args: ProcessDriverArgs) -> Self {
         let ProcessDriverArgs {
@@ -813,6 +1022,7 @@ impl ProcessDriver {
             budget: Arc::new(RestartBudget::default()),
             ephemeral: Arc::new(EphemeralRuntime::default()),
             durable: Arc::new(DurableRuntime::default()),
+            watched: Vec::new(),
         }
     }
 
@@ -1235,14 +1445,35 @@ impl ProcessDriver {
     /// and the next pass applies the policy backoff. A launch ticket the
     /// trusted bundle can never mint, and an exhausted budget, are terminal
     /// instead - no requeue ever follows them.
-    fn spawn_launch(
+    ///
+    /// The sealed binding lease is revalidated HERE, immediately before the
+    /// effect and under this pass's own serialized manager boundary, not
+    /// earlier: a lease that was correct when preparation concluded says
+    /// nothing about the moment the process starts (KTD6, R18). A lease that
+    /// no longer holds issues no effect at all - the pass reports the revoked
+    /// authority and schedules the retry the rest of this arm already uses.
+    async fn spawn_launch(
         &mut self,
         ctx: &mut ResourceContext,
         identity: ProcessResourceIdentity,
         spec: &ProcessSpec,
+        lease: Option<&BindingAuthorityLease>,
     ) -> Result<ReconcileOutcome, ProcessDriverError> {
         if self.budget.is_exhausted() {
             return Err(self.error(ProcessDriverErrorKind::StartExhausted, DriverOp::Reconcile));
+        }
+        if let Some(lease) = lease
+            && self
+                .revalidate_lease(ctx, &identity, lease)
+                .await
+                .is_err()
+        {
+            tracing::warn!(
+                resource = %identity.resource_ref.to_canonical_string(),
+                "the launch authority moved before the launch effect; issuing none"
+            );
+            let _ = ctx.requeue_after(PROCESS_RESYNC);
+            return Ok(ReconcileOutcome::RetryScheduled);
         }
         let operation = ctx.begin_operation();
         let effects = Arc::clone(&self.effects);
@@ -1370,7 +1601,6 @@ impl ProcessDriver {
         }
     }
 
-    /// The durable arm: preserved adopt/launch/stop-stale behavior.
     /// The one preparation both Process lifetimes run before they act.
     ///
     /// A long-running `Process` and a run-to-completion `EphemeralProcess`
@@ -1380,14 +1610,23 @@ impl ProcessDriver {
     /// time - asks the effect owner for the plan, and refuses a launch whose
     /// bindings are not prepared (AE20, AE28, R40).
     ///
-    /// `Ok(None)` is the pre-plan path: the effect owner has not resolved a
+    /// After the plan it answers the launch binding gate (KTD6, R18) and
+    /// returns that closed answer: the expected canonical `EndpointBinding`
+    /// set comes from the CURRENT publication intent of the `Endpoint` rows
+    /// this row's owner holds, so the caller acts on the gate instead of
+    /// dropping it. The plan answer is consumed here - `admits_start` is the
+    /// last thing that reads it - and the gate outcome is what the launch and
+    /// adoption paths act on.
+    ///
+    /// A `None` plan is the pre-plan path: the effect owner has not resolved a
     /// plan for this row, and the row's own posture still drives the launch.
     /// U34 removes that branch together with the ticket authority.
     async fn prepare_launch(
-        &self,
+        &mut self,
+        ctx: &mut ResourceContext,
         identity: &ProcessResourceIdentity,
         op: DriverOp,
-    ) -> Result<Option<ResolvedProcessPlan>, ProcessDriverError> {
+    ) -> Result<ProcessBindingPreparation, ProcessDriverError> {
         let subject = identity
             .subject()
             .map_err(|refusal| {
@@ -1419,7 +1658,137 @@ impl ProcessDriver {
                         .with_note("a required binding is not prepared"),
                 ));
         }
-        Ok(plan)
+        let binding = match self.observe_bindings(ctx, &identity.resource_ref).await {
+            Ok(observation) => {
+                self.watch_evidence(ctx, &observation.dependencies).await;
+                resolve_process_binding_preparation(
+                    identity.resource_uid.clone(),
+                    &observation.expected,
+                    &observation.observed,
+                )
+            }
+            Err(BindingObservationFault::Unproven) => ProcessBindingPreparation::Pending,
+            Err(BindingObservationFault::Refused(error)) => {
+                ProcessBindingPreparation::Refused(error)
+            }
+        };
+        Ok(binding)
+    }
+
+    /// Revalidate one sealed lease against freshly read evidence, inside the
+    /// same serialized manager boundary the preparation ran under (KTD6).
+    ///
+    /// This is the call that belongs immediately before the effect, never the
+    /// preparation: authority that was standing when the lease was sealed says
+    /// nothing about the moment the process starts. Anything that moved in
+    /// between - a re-derived row, a re-issued grant, a withdrawn
+    /// authorization, a re-realized endpoint - fails closed and issues no
+    /// effect.
+    async fn revalidate_lease(
+        &mut self,
+        ctx: &mut ResourceContext,
+        identity: &ProcessResourceIdentity,
+        lease: &BindingAuthorityLease,
+    ) -> Result<(), ProcessDriverError> {
+        let observed = match self.observe_bindings(ctx, &identity.resource_ref).await {
+            Ok(observation) => observation.observed,
+            // A plane that cannot answer is not a world that stayed still.
+            Err(_) => {
+                return Err(self.binding_gate_refused(
+                    identity,
+                    BindingGateError::LeaseRevoked,
+                ));
+            }
+        };
+        lease
+            .revalidate(&observed)
+            .map_err(|error| self.binding_gate_refused(identity, error))
+    }
+
+    /// Register this actor's evidence watch on one dependency row, at most
+    /// once per target (R12, R21).
+    ///
+    /// The condition is [`WatchCondition::ProjectionChanged`], never `Ready`:
+    /// a delivery downgrade - a relationship whose endpoint was replaced, or
+    /// whose authorization was withdrawn - keeps its target on `Ready` while
+    /// its evidence layer changes underneath it, so a readiness phase can
+    /// never be the wake-up this row needs.
+    async fn watch_evidence(&mut self, ctx: &mut ResourceContext, targets: &[ResourceKey]) {
+        for target in targets {
+            if self.watched.contains(target) {
+                continue;
+            }
+            if ctx
+                .watch(target.clone(), WatchCondition::ProjectionChanged)
+                .await
+                .is_ok()
+            {
+                self.watched.push(target.clone());
+            }
+        }
+    }
+
+    /// The terminal refusal one binding-gate answer carries (R18).
+    ///
+    /// The gate's closed slug rides the failure detail: the failure-kind
+    /// vocabulary is the contracts crate's, and the slug is what says WHICH
+    /// gate condition stopped this launch - malformed expectation, foreign
+    /// evidence, unreadable projection, or a revoked lease.
+    fn binding_gate_refused(
+        &self,
+        identity: &ProcessResourceIdentity,
+        error: BindingGateError,
+    ) -> ProcessDriverError {
+        tracing::warn!(
+            resource = %identity.resource_ref.to_canonical_string(),
+            slug = error.code(),
+            "process launch binding gate refused the pass"
+        );
+        self.error(ProcessDriverErrorKind::ResolutionRefused, DriverOp::Reconcile)
+            .with_detail(FailureDetail::at("prepare/binding-gate").comparison(
+                FailureComparison::new(
+                    "binding.evidence",
+                    "delivered at the expected realization",
+                    error.code(),
+                ),
+            ))
+    }
+
+    /// Read what the manager currently proves about the canonical
+    /// `EndpointBinding` rows this exact Process requires (R18).
+    ///
+    /// The endpoints a Process may consume are the endpoints its OWNER owns: a
+    /// session owns the `Process` rows and the `Endpoint` rows together, so
+    /// this is the existing owner-scoped sibling listing and no new manager
+    /// surface is added for it. A root Process has no siblings, which is the
+    /// honest answer - and the one every existing non-display Process gets.
+    async fn observe_bindings(
+        &self,
+        ctx: &mut ResourceContext,
+        process_ref: &ResourceRef,
+    ) -> Result<BindingObservation, BindingObservationFault> {
+        let siblings = ctx
+            .owner_siblings()
+            .await
+            .map_err(|_| BindingObservationFault::Unproven)?;
+        let mut observation = BindingObservation::default();
+        for row in siblings
+            .iter()
+            .filter(|row| row.key.type_name == ENDPOINT_ROW_TYPE)
+        {
+            observation.dependencies.push(row.key.clone());
+            let view = match ctx.lookup_view(&row.key).await {
+                RowLookup::Present { row, .. } => row,
+                // An endpoint row the plane holds no view for has published no
+                // publication intent this launch could require.
+                RowLookup::Absent { .. } => continue,
+                RowLookup::Unavailable { .. } | RowLookup::Error { .. } => {
+                    return Err(BindingObservationFault::Unproven);
+                }
+            };
+            observe_endpoint_bindings(ctx, &view, process_ref, &mut observation).await?;
+        }
+        Ok(observation)
     }
 
     async fn reconcile_process(
@@ -1435,8 +1804,10 @@ impl ProcessDriver {
         // behind that reading is a realized state the row never reached.
         // Both lifetimes prepare through this one call before they act, so
         // the long-running and run-to-completion arms reach their plan the
-        // same way (AE20, AE28).
-        self.prepare_launch(&identity, DriverOp::Reconcile).await?;
+        // same way (AE20, AE28). The launch binding gate is answered inside
+        // it: the expected canonical relationship set comes from what the
+        // endpoints this row's owner publishes for this exact consumer (R18).
+        let binding = self.prepare_launch(ctx, &identity, DriverOp::Reconcile).await?;
         if spec.desired_lifecycle() == DesiredLifecycle::Stopped {
             // A live identity is stopped through the same exact escalation
             // every other path uses; with no verified identity there is
@@ -1476,6 +1847,26 @@ impl ProcessDriver {
             };
         }
 
+        // The launch binding gate (KTD6, R18). `NotRequired` is a real answer
+        // - this row requires no `EndpointBinding` - and every path below then
+        // runs exactly as it did before the gate existed. `Ready` carries the
+        // sealed authority the effect revalidates. `Pending` is the ordinary
+        // not-yet: no launch, no adoption, no readiness claim, and one
+        // retryable requeue on the cadence this arm already uses. `Refused` is
+        // terminal, because retrying the same malformed or foreign evidence
+        // cannot change the answer.
+        let lease = match &binding {
+            ProcessBindingPreparation::NotRequired => None,
+            ProcessBindingPreparation::Ready(lease) => Some(lease),
+            ProcessBindingPreparation::Pending => {
+                let _ = ctx.requeue_after(PROCESS_RESYNC);
+                return Ok(ReconcileOutcome::RetryScheduled);
+            }
+            ProcessBindingPreparation::Refused(error) => {
+                return Err(self.binding_gate_refused(&identity, *error));
+            }
+        };
+
         // A retryable launch failure from the previous pass: schedule exactly
         // one runtime-only requeue with the policy restart delay (R13; spec
         // section 32 - nothing is persisted). The row is NOT ready (no
@@ -1505,7 +1896,7 @@ impl ProcessDriver {
                     .await?;
             }
             ctx.set_status(ProcessDriverStatus::Launching);
-            return self.spawn_launch(ctx, identity, spec);
+            return self.spawn_launch(ctx, identity, spec, lease).await;
         }
 
         // Steady state: a row this actor saw live is observed through the
@@ -1552,6 +1943,18 @@ impl ProcessDriver {
             };
         }
 
+        // The adoption classification is itself an effect this row's authority
+        // is held to, so the sealed lease is revalidated before it runs and
+        // not only before the launch that may follow it (KTD6, R18).
+        if let Some(lease) = lease
+            && self
+                .revalidate_lease(ctx, &identity, lease)
+                .await
+                .is_err()
+        {
+            let _ = ctx.requeue_after(PROCESS_RESYNC);
+            return Ok(ReconcileOutcome::RetryScheduled);
+        }
         match self.effects.adopt(&identity, spec).await {
             Ok(ProviderAdoption::Adopted(_)) => {
                 // The live identity is observed from here on: this pass arms
@@ -1564,7 +1967,7 @@ impl ProcessDriver {
             }
             Ok(ProviderAdoption::Absent) => {
                 ctx.set_status(ProcessDriverStatus::Launching);
-                self.spawn_launch(ctx, identity, spec)
+                self.spawn_launch(ctx, identity, spec, lease).await
             }
             Ok(ProviderAdoption::ControllerBootstrapMissing) => {
                 // The Provider owns the exact stop and finalization before the
@@ -1573,7 +1976,7 @@ impl ProcessDriver {
                 self.stop_and_finalize(&identity, spec, DriverOp::Reconcile)
                     .await?;
                 ctx.set_status(ProcessDriverStatus::Launching);
-                self.spawn_launch(ctx, identity, spec)
+                self.spawn_launch(ctx, identity, spec, lease).await
             }
             Ok(ProviderAdoption::Stale { candidate }) => {
                 self.effects
@@ -1581,7 +1984,7 @@ impl ProcessDriver {
                     .await
                     .map_err(|error| map_provider_error(error, DriverOp::Reconcile))?;
                 ctx.set_status(ProcessDriverStatus::Launching);
-                self.spawn_launch(ctx, identity, spec)
+                self.spawn_launch(ctx, identity, spec, lease).await
             }
             Ok(ProviderAdoption::Quarantined(report)) => {
                 Err(self.identity_ambiguous(DriverOp::Reconcile, &report))
@@ -1665,7 +2068,7 @@ impl ProcessDriver {
         // The same single preparation the long-running arm runs. Nothing here
         // branches on the lifetime: the row's own reference decides it inside
         // the plan, and both arms then follow the same path (AE20, AE28).
-        self.prepare_launch(identity, DriverOp::Reconcile).await?;
+        let binding = self.prepare_launch(ctx, identity, DriverOp::Reconcile).await?;
 
         // Runtime deadline (old `ephemeral runtime-deadline` arm): the process
         // this actor started outlived its bounded run, so it stops exactly and
@@ -1696,6 +2099,22 @@ impl ProcessDriver {
             });
             return self.ephemeral_retention(ctx, spec, completion).await;
         }
+
+        // The launch binding gate, answered exactly as the long-running arm
+        // answers it and AFTER the bounded-runtime stop above: a one-shot whose
+        // runtime deadline elapsed still stops exactly, because the stop is
+        // the fence, not a use of the authority (R18, R22).
+        let lease = match &binding {
+            ProcessBindingPreparation::NotRequired => None,
+            ProcessBindingPreparation::Ready(lease) => Some(lease),
+            ProcessBindingPreparation::Pending => {
+                let _ = ctx.requeue_after(PROCESS_RESYNC);
+                return Ok(ReconcileOutcome::RetryScheduled);
+            }
+            ProcessBindingPreparation::Refused(error) => {
+                return Err(self.binding_gate_refused(identity, *error));
+            }
+        };
 
         // Steady state: the process this actor started is observed through
         // the preserved liveness probe (old `probe_record`), and `Exited` is
@@ -1732,6 +2151,19 @@ impl ProcessDriver {
             };
         }
 
+        // The adoption classification is itself an effect this row's authority
+        // is held to, so the sealed lease is revalidated before it runs and
+        // not only before the launch that may follow it (KTD6, R18).
+        if let Some(lease) = lease
+            && self
+                .revalidate_lease(ctx, identity, lease)
+                .await
+                .is_err()
+        {
+            let _ = ctx.requeue_after(PROCESS_RESYNC);
+            return Ok(ReconcileOutcome::RetryScheduled);
+        }
+
         // First sight of the row (first pass, or the first after a daemon
         // restart): the preserved adoption classification decides adopt (an
         // already-live identity), launch (absent), exact stale replacement,
@@ -1745,7 +2177,7 @@ impl ProcessDriver {
             }
             Ok(ProviderAdoption::Absent) => {
                 ctx.set_status(ProcessDriverStatus::Launching);
-                self.spawn_ephemeral_launch(ctx, identity, spec)
+                self.spawn_ephemeral_launch(ctx, identity, spec, lease).await
             }
             Ok(ProviderAdoption::Stale { candidate }) => {
                 self.effects
@@ -1753,7 +2185,7 @@ impl ProcessDriver {
                     .await
                     .map_err(|error| map_provider_error(error, DriverOp::Reconcile))?;
                 ctx.set_status(ProcessDriverStatus::Launching);
-                self.spawn_ephemeral_launch(ctx, identity, spec)
+                self.spawn_ephemeral_launch(ctx, identity, spec, lease).await
             }
             Ok(ProviderAdoption::Quarantined(report)) => {
                 Err(self.identity_ambiguous(DriverOp::Reconcile, &report))
@@ -1863,12 +2295,30 @@ impl ProcessDriver {
     /// one-shot row has no restart policy, so a refused launch is terminal
     /// (old `handle_start_failure` with no ephemeral restart arm) and the
     /// start is remembered only on success.
-    fn spawn_ephemeral_launch(
+    ///
+    /// The sealed binding lease is revalidated HERE, immediately before the
+    /// effect under this pass's own serialized manager boundary, for the same
+    /// reason the durable arm does it there (KTD6, R18).
+    async fn spawn_ephemeral_launch(
         &mut self,
         ctx: &mut ResourceContext,
         identity: &ProcessResourceIdentity,
         spec: &EphemeralProcessSpec,
+        lease: Option<&BindingAuthorityLease>,
     ) -> Result<ReconcileOutcome, ProcessDriverError> {
+        if let Some(lease) = lease
+            && self
+                .revalidate_lease(ctx, identity, lease)
+                .await
+                .is_err()
+        {
+            tracing::warn!(
+                resource = %identity.resource_ref.to_canonical_string(),
+                "the launch authority moved before the one-shot launch effect; issuing none"
+            );
+            let _ = ctx.requeue_after(PROCESS_RESYNC);
+            return Ok(ReconcileOutcome::RetryScheduled);
+        }
         let operation = ctx.begin_operation();
         let effects = Arc::clone(&self.effects);
         let effect_sender = ctx.effect_sender();

@@ -187,15 +187,21 @@ pub enum ResourceMsg {
     TargetReconnected { session_generation: u64 },
 }
 
-/// Evaluate a watch condition against the actor's in-memory status (R12).
+/// Evaluate a watch condition against the actor's in-memory status and the
+/// pass's projection change (R12, R21).
 ///
 /// `Custom` predicates are driver-supplied; the contract hook for named
 /// custom predicates lands with the provider conversion units (U6+). U3
 /// treats unknown custom ids as unsatisfied - registered, never silently
 /// satisfied by the wrong predicate.
-fn condition_matches(condition: &WatchCondition, status: &ResourceStatus) -> bool {
+fn condition_matches(
+    condition: &WatchCondition,
+    status: &ResourceStatus,
+    projection_changed: bool,
+) -> bool {
     match condition {
         WatchCondition::Ready => *status == ResourceStatus::Ready,
+        WatchCondition::ProjectionChanged => projection_changed,
         WatchCondition::Custom(_) => false,
     }
 }
@@ -322,6 +328,11 @@ pub struct ResourceActorState {
     row: StoredDesiredResource,
     /// In-memory status (R11). Never persisted.
     status: ResourceStatus,
+    /// The wire-visible `status.resource` layer this actor last published
+    /// (R11: in-memory only). Compared on every transition so a
+    /// [`WatchCondition::ProjectionChanged`] subscriber learns about an
+    /// evidence change that left the readiness phase untouched (R21).
+    last_projection: Option<serde_json::Value>,
     /// The durable deleting mark was committed before this flag was set.
     deleting: bool,
 
@@ -370,7 +381,9 @@ impl ResourceActorState {
         projection: Option<serde_json::Value>,
     ) {
         self.status = status;
-        self.evaluate_watchers();
+        let projection_changed = projection != self.last_projection;
+        self.last_projection = projection.clone();
+        self.evaluate_watchers(projection_changed);
         let _ = self.manager.send_message(ResourceManagerMsg::RuntimeChanged {
             key: self.row.key.clone(),
             generation: self.row.generation,
@@ -381,12 +394,14 @@ impl ResourceActorState {
 
     /// AE2, spec section 15: satisfy matching watchers in the transition
     /// handler and remove them (exactly once per registration).
-    fn evaluate_watchers(&mut self) {
+    fn evaluate_watchers(&mut self, projection_changed: bool) {
         let target = self.row.key.clone();
         let satisfied: Vec<WatchId> = self
             .watchers
             .iter()
-            .filter(|(_, watcher)| condition_matches(&watcher.condition, &self.status))
+            .filter(|(_, watcher)| {
+                condition_matches(&watcher.condition, &self.status, projection_changed)
+            })
             .map(|(id, _)| *id)
             .collect();
         for id in satisfied {
@@ -649,6 +664,18 @@ impl ResourceActorState {
             self.handle_driver_failure(failure, &myself);
             return;
         }
+        // The pre-drain fence is PUBLISHED before any teardown stage runs
+        // (R22, KTD6). A driver's pre-drain reports what it has fenced off -
+        // a binding's `Draining`, for one - and a reader that could only see
+        // it after the revoke had already happened would have no window in
+        // which to stop a new use. Publishing here is in-memory and rides the
+        // same runtime transition every other status does, so it creates no
+        // persistent write and takes the actor out of its mailbox for no
+        // longer than the send itself.
+        let projection = self.ctx.take_status_projection();
+        if let Some(projection) = projection {
+            self.transition_published(self.status.clone(), Some(projection));
+        }
         if let Err(failure) = self.driver.finalize(&mut self.ctx).await {
             self.handle_driver_failure(failure, &myself);
             return;
@@ -747,6 +774,7 @@ impl Actor for ResourceActor {
             timers,
             deleting: row.deleting,
             status: ResourceStatus::Pending,
+            last_projection: None,
             row,
             driver,
             ctx,
@@ -804,7 +832,11 @@ impl Actor for ResourceActor {
                 // ATOMICITY INVARIANT (AE2, R12): evaluate and register in
                 // this one handler. Condition already true: notify now.
                 // Otherwise insert; transitions re-evaluate in their handler.
-                if condition_matches(&condition, &state.status) {
+                // Registration never counts as a projection CHANGE: a
+                // subscriber registering today is asking for the next change,
+                // and answering it with the layer already published would wake
+                // every subscriber on every registration.
+                if condition_matches(&condition, &state.status, false) {
                     let _ = subscriber.send(WatchSatisfied {
                         watch: id,
                         target: state.row.key.clone(),

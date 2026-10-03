@@ -71,6 +71,17 @@ pub enum WatchCondition {
     /// unsatisfied, so readiness is expressed with [`Self::Ready`] until the
     /// driver-supplied predicate hook lands (U6+).
     Custom(String),
+    /// Satisfied when the watched resource publishes a NEW `status.resource`
+    /// projection.
+    ///
+    /// A readiness phase cannot express a delivery downgrade: a relationship
+    /// whose endpoint was replaced, or whose authorization was withdrawn,
+    /// keeps reporting `Ready` while its evidence layer changes underneath.
+    /// This condition is how a dependent learns about that change (R21): the
+    /// target actor notifies on every transition that carries a projection
+    /// different from the one it published before, so the subscriber re-reads
+    /// the evidence instead of waiting for a phase that never changes.
+    ProjectionChanged,
 }
 
 /// Runtime-only watch id allocated by the target actor at registration.
@@ -609,6 +620,24 @@ impl ResourceContext {
     /// Rows of the resources this resource owns (R8, R9).
     pub async fn children(&mut self) -> Result<Vec<StoredDesiredResource>, ResourceError> {
         self.manager.list_owned(self.row.uid).await
+    }
+
+    /// Rows owned by this resource's OWNER (R8).
+    ///
+    /// A dependent derives what it requires from the committed declarations
+    /// its owner publishes, and those declarations are siblings: a session
+    /// owns the `Process` rows and the `Endpoint` rows together, so the
+    /// endpoints a process consumes are this row's siblings rather than its
+    /// children. The read is the existing owner-scoped listing applied to the
+    /// owner uid this row already carries, so it adds no new manager surface.
+    ///
+    /// `Vec::new()` for a row with no owner: a root row has no siblings, which
+    /// is the honest answer rather than an error.
+    pub async fn owner_siblings(&mut self) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+        match self.row.owner_uid {
+            Some(owner) => self.manager.list_owned(owner).await,
+            None => Ok(Vec::new()),
+        }
     }
 
     /// Finalize every resource this one owns, children first (F3; owner
