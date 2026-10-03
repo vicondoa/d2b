@@ -3310,12 +3310,26 @@ const CORE_HOST_TARGET_NAME: &str = "host-system";
 /// ExecutionRef` resolves. A row whose type has no execution anchor, or a
 /// legacy row that carries none, returns `None` and realizes on the Zone's
 /// Host target.
+///
+/// A declared reference that is not an execution TARGET is not an anchor
+/// either, and is treated exactly as an absent one is. The target directory's
+/// closed vocabulary is `Host/<name>` and `Guest/<name>`, while several
+/// binding specs carry an `executionRef` naming the CONSUMER of the
+/// relationship instead: an `EndpointBinding` delivers to a `Guest` or a
+/// `Process` helper, and that helper is a row of its own with its own anchor.
+/// Handing such a reference to the directory cannot place the row - it fails
+/// the directory's own parse, the row commits, and no actor is ever spawned
+/// for it, so the whole relationship converges for ever behind a deferred
+/// answer that never says why. The anchor of the type is the anchor of the
+/// row.
 struct DeclaredExecutionRef;
 
 impl TargetResolver for DeclaredExecutionRef {
     fn execution_ref(&self, _key: &ResourceKey, spec: &[u8]) -> Option<String> {
         let value: serde_json::Value = serde_json::from_slice(spec).ok()?;
-        value.get("executionRef")?.as_str().map(str::to_owned)
+        let reference = value.get("executionRef")?.as_str()?;
+        TargetRef::parse(reference).ok()?;
+        Some(reference.to_owned())
     }
 }
 
@@ -9528,14 +9542,73 @@ HOST_EFFECTS_SERVICE.id,
         let serving = d2b_provider_volume_binding::test_support::FakeServingEffects::new();
         serving.make_ready();
         inputs.binding_facets = serving.facet_set();
+    /// The scripted private host observation the display scene installs for
+    /// the daemon's own socket facet.
+    ///
+    /// The production facet ([`PlaneHostSocketEvidence`]) resolves the locator
+    /// the endpoint owner committed, compares the exact socket standing there
+    /// and whether it accepts a connection, and mints a handle only for an
+    /// observation that proved it. A scene hosts no socket to compare, so this
+    /// one answers the same scripted presence the rest of the Endpoint family's
+    /// double answers - and mints ONE handle per endpoint reference, because a
+    /// fresh nonce on every pass is a replacement the scene never made and
+    /// would rotate the realization under the binding that already read it.
+    struct ScriptedHostSocketObservation {
+        present: std::sync::atomic::AtomicBool,
+        minted: tokio::sync::Mutex<std::collections::HashMap<String, RealizationHandle>>,
+    }
+
+    impl ScriptedHostSocketObservation {
+        fn new() -> Self {
+            Self {
+                present: std::sync::atomic::AtomicBool::new(false),
+                minted: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+            }
+        }
+
+        /// Script the observation as proving a realization, as a bound and
+        /// connectable socket does.
+        fn make_present(&self) {
+            self.present.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl HostSocketEvidenceSource for ScriptedHostSocketObservation {
+        async fn observe(
+            &self,
+            endpoint_ref: &ResourceRef,
+            _purpose: &str,
+        ) -> Option<RealizationHandle> {
+            if !self.present.load(std::sync::atomic::Ordering::SeqCst) {
+                return None;
+            }
+            let mut minted = self.minted.lock().await;
+            let handle = minted
+                .entry(endpoint_ref.to_canonical_string())
+                .or_insert_with(|| {
+                    RealizationHandle::mint(
+                        realization_nonce().expect("128 bits of kernel randomness"),
+                        1,
+                    )
+                    .expect("a full-width nonce clears the incarnation floor")
+                })
+                .clone();
+            Some(handle)
+        }
+    }
+
         let sockets = d2b_provider_endpoint::test_support::FakeSocketEffects::new();
         sockets.make_present();
+        let host_sockets = ScriptedHostSocketObservation::new();
+        host_sockets.make_present();
         inputs.endpoint_facets = sockets
             .facet_set()
             .with_committed_shapes(
                 Arc::clone(&inputs.display_endpoint_vocabulary)
                     as Arc<dyn CommittedEndpointShapeSource>,
-            );
+            )
+            .with_host_socket_observation(Arc::new(host_sockets) as Arc<dyn HostSocketEvidenceSource>);
         DisplayComposition { dir, inputs, client }
     }
 
@@ -9593,6 +9666,11 @@ HOST_EFFECTS_SERVICE.id,
                 .expect("a bounded reconnect generation");
         }
         let mut rows = vec![
+            // The Zone self row, exactly as the foundation seed files it. The
+            // EndpointBinding driver resolves the authority the broker's
+            // verified bundle is filed under by reading this committed row, so
+            // a scene without one defers every derived relationship for ever.
+            bundle_row("Zone", "test", serde_json::json!({})),
             bundle_row(
                 "Guest",
                 DISPLAY_GUEST_NAME,
@@ -9852,7 +9930,6 @@ HOST_EFFECTS_SERVICE.id,
             "the committed binding rows are exactly what the endpoint rows' own publication intent \
              derives"
         );
-
         scene.plane.shutdown().await;
     }
 

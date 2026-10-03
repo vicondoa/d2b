@@ -63,7 +63,7 @@ use d2b_resource_runtime::driver::{
 };
 use d2b_resource_runtime::error::{
     DriverFailure, DriverOp, FailureClass, FailureComparison, FailureDetail, FailureKind,
-    FailureKinds,
+    FailureKinds, ResourceError,
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::ResourceStatus;
@@ -400,6 +400,29 @@ impl EndpointDriverError {
     fn with_detail(mut self, detail: FailureDetail) -> Self {
         self.detail = detail;
         self
+    }
+
+    /// One child-mutation failure, reported as this pass's drain-pending
+    /// error with the manager's own refusal carried alongside it.
+    ///
+    /// The classification stays `DrainPending` because it is true of every
+    /// one of these three calls: the relationship set is not yet the one the
+    /// manager holds, so this pass defers and the next one re-drives the
+    /// derivation. What the manager actually said is a different question,
+    /// and it is the whole diagnosis - a live child that has not retired yet
+    /// converges on its own, while a permanently refused child would defer
+    /// for ever behind an answer that names only the deferral. So the refusal
+    /// rides out as the compared observed value, in the same shape the shape
+    /// and socket refusals above report, and the stage says which of the
+    /// three mutations failed.
+    fn child_mutation(error: ResourceError, op: DriverOp, stage: &'static str) -> Self {
+        Self::new(EndpointDriverErrorKind::DrainPending, op).with_detail(
+            FailureDetail::at(stage).comparison(FailureComparison::new(
+                "manager.childMutation",
+                "accepted",
+                error.to_string(),
+            )),
+        )
     }
 }
 
@@ -746,14 +769,14 @@ impl EndpointDriver {
                 metadata: Vec::new(),
             })
             .await
-            .map_err(|_| {
-                EndpointDriverError::new(EndpointDriverErrorKind::DrainPending, op)
+            .map_err(|error| {
+                EndpointDriverError::child_mutation(error, op, "bindings/ensure")
             })?;
         }
         for row in ctx
             .children()
             .await
-            .map_err(|_| EndpointDriverError::new(EndpointDriverErrorKind::DrainPending, op))?
+            .map_err(|error| EndpointDriverError::child_mutation(error, op, "bindings/children"))?
         {
             if row.key.type_name != ENDPOINT_BINDING_TYPE_NAME {
                 continue;
@@ -765,8 +788,8 @@ impl EndpointDriver {
                 // skipped, because the manager refuses a second delete.
                 ctx.delete(&row.key)
                     .await
-                    .map_err(|_| {
-                        EndpointDriverError::new(EndpointDriverErrorKind::DrainPending, op)
+                    .map_err(|error| {
+                        EndpointDriverError::child_mutation(error, op, "bindings/retire")
                     })?;
             }
         }
@@ -1231,8 +1254,8 @@ impl ResourceDriver for EndpointDriver {
     async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
         ctx.finalize_owned_resources()
             .await
-            .map_err(|_| {
-                EndpointDriverError::new(EndpointDriverErrorKind::DrainPending, DriverOp::Delete)
+            .map_err(|error| {
+                EndpointDriverError::child_mutation(error, DriverOp::Delete, "finalize/children")
             })?;
         Ok(())
     }

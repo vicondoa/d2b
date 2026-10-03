@@ -3289,7 +3289,19 @@ impl ResourceDriver for ProcessDriver {
     async fn validate(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
         let (envelope, spec) = self.decoded_spec(ctx, DriverOp::Validate)?;
         self.check_provider(&envelope, DriverOp::Validate)?;
-        if !execution_target_allowed(self.authority.mode, spec.execution().execution_ref()) {
+        // The gate is a statement about WHERE this row's effects run, and a row
+        // the manager committed to a Guest target answers that itself: its
+        // whole lifecycle rides the authenticated target session its own
+        // `TargetBinding` carries, so a Host-mode plane drives it over exactly
+        // the transport a Guest-mode plane would (KTD11, R29). The gate
+        // therefore fences what is LEFT - rows that would run locally and have
+        // no target session to run over - which keeps the Host/Guest pairing
+        // symmetric in both modes and leaves every row carrying no Guest
+        // binding refused exactly as before.
+        let on_guest_target = ctx.target().is_some_and(TargetBinding::is_guest);
+        if !on_guest_target
+            && !execution_target_allowed(self.authority.mode, spec.execution().execution_ref())
+        {
             return Err(self
                 .error(
                     ProcessDriverErrorKind::ExecutionUnsupported,
