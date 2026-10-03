@@ -168,14 +168,17 @@ use d2b_provider_shell_session::{ShellSession, shell_session_descriptor};
 use d2b_provider_audio_pipewire::AudioMediator;
 use d2b_provider_wayland_policy::{
     AudioMediatorSource, InteractionDriverArgs, InteractionEffectError, InteractionEffectFacets,
-    InteractionEffectsService, InteractionIdentitySource, InteractionPlaneRead, WaylandPolicy,
-    wayland_policy_descriptor,
+    InteractionEffectsService, InteractionIdentitySource, InteractionPlaneRead,
+    InteractionSpecEnvelope, WaylandPolicy, spec_decoder, wayland_policy_descriptor,
 };
 use d2b_provider_wayland_session::{
-    DisplayChildRequest, DisplayChildSource, WaylandSession, wayland_session_descriptor,
+    DisplayChildRequest, DisplayChildSource, WAYLAND_SESSION_TYPE, WaylandSession,
+    wayland_session_descriptor,
 };
 
-use d2b_provider_display_wayland::{SharedDisplayEndpointVocabulary, session_children};
+use d2b_provider_display_wayland::{
+    SharedDisplayEndpointVocabulary, WaylandSessionSpec, session_children,
+};
 
 /// The `WaylandSession` child-intent source this plane installs (U12, KTD5).
 ///
@@ -192,6 +195,10 @@ use d2b_provider_display_wayland::{SharedDisplayEndpointVocabulary, session_chil
 /// are in the vocabulary by the time the manager holds the rows they describe
 /// and the Endpoint actor can be asked to classify them. The child intents are
 /// the ones the display Provider derived, unchanged.
+///
+/// That ordering covers a session admitted while the plane is open. A restart
+/// is covered by [`restore_display_endpoint_vocabulary`], which commits the
+/// same shapes from the durable rows before the manager spawns anything.
 #[derive(Clone)]
 struct PlaneDisplayChildSource {
     vocabulary: Arc<SharedDisplayEndpointVocabulary>,
@@ -227,6 +234,112 @@ impl DisplayChildSource for PlaneDisplayChildSource {
             .map_err(refuse)?;
         Ok(intents)
     }
+}
+
+/// Decode one durable `WaylandSession` row's spec the way that row's own
+/// driver opens it: the interaction family's envelope decode, then the typed
+/// base spec. The restore and the driver therefore read the same spec out of
+/// the same bytes, and the shapes the restore commits are derived from the
+/// spec the durable child rows were built from.
+fn restore_session_spec(
+    decoder: &dyn SpecDecoder,
+    spec: &[u8],
+) -> Result<WaylandSessionSpec, String> {
+    let envelope = decoder
+        .decode(spec)
+        .map_err(|error| error.to_string())?
+        .downcast::<InteractionSpecEnvelope>()
+        .map_err(|_| "the row's spec is not an interaction spec envelope".to_owned())?;
+    envelope
+        .base_spec::<WaylandSessionSpec>()
+        .map_err(|error| error.to_string())
+}
+
+/// Rebuild the display Provider's committed-shape vocabulary from the durable
+/// `WaylandSession` rows this store holds (F5).
+///
+/// The live admission path commits a session's shapes from
+/// [`PlaneDisplayChildSource`] as that session's child intents are derived,
+/// which orders the shapes correctly for every session admitted after the
+/// plane is open. It orders nothing on a restart: the manager spawns one
+/// actor per durable row at once, so an `Endpoint` child row whose
+/// `WaylandSession` has not reconciled yet asks a vocabulary holding nothing,
+/// is refused `ShapeUnsupported`, and that refusal is terminal - the row never
+/// requeues and display readiness never republishes for it.
+///
+/// The shapes are a pure function of the session's own row uid and its durable
+/// spec - the same two values the child intents are derived from - so a
+/// restart rebuilds them from the durable rows themselves, into the same
+/// registry, before the spawn. A restart therefore no longer depends on
+/// reconcile order.
+///
+/// Every durable row of this Zone contributes, a row already marked deleting
+/// included: that row is still a session this Provider commits shapes for, and
+/// its children are torn down with it rather than refused for a shape that
+/// exists. A row this Provider cannot derive contributes nothing and is named
+/// in the log - its own session actor refuses that row on the same derivation,
+/// so the restart reproduces the live verdict rather than inventing one. A
+/// store that cannot be read at all IS this plane's failure: an unreadable
+/// vocabulary is the terminal-refusal window this closes, moved earlier and
+/// made loud rather than left to the actors that would hit it first.
+async fn restore_display_endpoint_vocabulary(
+    store: &SpecStore,
+    zone: &ZoneId,
+    vocabulary: &SharedDisplayEndpointVocabulary,
+) -> Result<usize, PlaneError> {
+    let rows = store
+        .list(SpecSelector {
+            zone: Some(zone.as_str().to_owned()),
+            type_name: Some(WAYLAND_SESSION_TYPE.to_owned()),
+            owner_uid: None,
+        })
+        .await?;
+    let decoder = spec_decoder();
+    let mut committed = 0;
+    for row in &rows {
+        let uid = match resource_uid(&row.uid) {
+            Ok(uid) => uid,
+            Err(()) => {
+                tracing::warn!(
+                    zone = %zone.as_str(),
+                    session = %row.key.name.as_str(),
+                    "the durable display session's row identity is not UUIDv4-shaped; its endpoint rows stay unadmitted"
+                );
+                continue;
+            }
+        };
+        let spec = match restore_session_spec(decoder.as_ref(), &row.spec) {
+            Ok(spec) => spec,
+            Err(reason) => {
+                tracing::warn!(
+                    zone = %zone.as_str(),
+                    session = %row.key.name.as_str(),
+                    reason = %reason,
+                    "the durable display session's spec does not decode into a committed shape; its endpoint rows stay unadmitted until its own actor refuses the row"
+                );
+                continue;
+            }
+        };
+        match vocabulary.commit_session(&uid, &spec) {
+            Ok(()) => committed += 1,
+            Err(error) => {
+                tracing::warn!(
+                    provider = d2b_provider_display_wayland::PROVIDER_REF,
+                    zone = %zone.as_str(),
+                    session = %row.key.name.as_str(),
+                    reason = %error,
+                    "the durable display session derives no committed shape; its endpoint rows stay unadmitted until its own actor refuses the row"
+                );
+            }
+        }
+    }
+    tracing::info!(
+        zone = %zone.as_str(),
+        sessions = committed,
+        durable_sessions = rows.len(),
+        "the display endpoint vocabulary was rebuilt from the zone's durable sessions before the manager spawned"
+    );
+    Ok(committed)
 }
 
 /// The construction arguments every interaction driver of this plane shares.
@@ -3640,6 +3753,21 @@ impl ResourcePlaneV3 {
                .registry
                .register_committed_provider_identity(provider_ref, uid.clone(), *generation).await;
         }
+        // F5: the display Provider's committed-shape vocabulary is rebuilt
+        // from the same durable rows, here, before the manager spawns any
+        // actor. The live path commits a session's shapes when that session's
+        // own actor reconciles, which orders them correctly for a session
+        // admitted after the plane is open and orders nothing at all on a
+        // restart - where the manager starts one actor per durable row at
+        // once, and an `Endpoint` child row would be refused for a shape its
+        // session does commit. A restart reads its shapes from the store
+        // instead of from reconcile order.
+        restore_display_endpoint_vocabulary(
+            &store,
+            &inputs.zone,
+            &inputs.display_endpoint_vocabulary,
+        )
+        .await?;
         readiness.set_spec_store_ready(true);
         // Stage 2: start the zone's providers through the toolkit base. Each
         // provider states its declaration and drivers; the base realizes the
@@ -4760,12 +4888,24 @@ use d2b_provider_system_core::MinijailPlatformGate;
             effects.make_ready();
             effects.facet_set()
         };
+        // The production composition installs ONE display vocabulary into both
+        // the Endpoint family's committed-shape seam and the session's
+        // child-intent source. The fixture wires that same object into both: a
+        // fixture that handed the Endpoint family its own empty registry would
+        // refuse every display endpoint row for a shape this plane does
+        // commit, and no test over it could see why.
+        let display_endpoint_vocabulary = Arc::new(SharedDisplayEndpointVocabulary::new());
         let endpoint_facets = {
             let effects = d2b_provider_endpoint::test_support::FakeSocketEffects::new();
             // The old plane fake reported the socket present
             // (socket_present true); the shared double starts absent.
             effects.make_present();
-            effects.facet_set()
+            effects
+                .facet_set()
+                .with_committed_shapes(
+                    Arc::clone(&display_endpoint_vocabulary)
+                        as Arc<dyn CommittedEndpointShapeSource>,
+                )
         };
         let credential_facets = {
             let runtime = d2b_provider_credential::test_support::RecordingRuntime::new(
@@ -4805,7 +4945,7 @@ host_facets: host_facets.clone(),
                 volume_facets: volume_facets.clone(),
                 binding_facets: binding_facets.clone(),
                 endpoint_facets: endpoint_facets.clone(),
-                display_endpoint_vocabulary: Arc::new(SharedDisplayEndpointVocabulary::new()),
+                display_endpoint_vocabulary,
                 activation_facets: activation_facets.clone(),
             deployment_graph: None,
             server_state: None,
@@ -8926,5 +9066,292 @@ HOST_EFFECTS_SERVICE.id,
             Vec::<String>::new(),
             "a display policy row realizes no resource children"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Restart ordering for the display committed-shape vocabulary (F5).
+    //
+    // The vocabulary was committed by the session's own reconcile and by
+    // nothing else, and a restart starts one actor per durable row at once: an
+    // `Endpoint` child row whose `WaylandSession` had not reconciled yet asked
+    // a vocabulary holding nothing, was refused `ShapeUnsupported` for good,
+    // and never requeued. The plane now rebuilds the vocabulary from the
+    // durable rows before the spawn, so a restart does not depend on reconcile
+    // order.
+    // -----------------------------------------------------------------------
+
+    /// One admitted display session, exactly as a durable row carries it.
+    fn display_session_spec() -> WaylandSessionSpec {
+        WaylandSessionSpec::new(
+            ResourceRef::parse("Guest/work").expect("guest ref"),
+            ResourceRef::parse("Host/host-system").expect("host ref"),
+            ResourceRef::parse("User/alice").expect("user ref"),
+            ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/default")
+                .expect("policy ref"),
+            d2b_provider_display_wayland::DisplayIdentity::new(
+                "work",
+                "#112233",
+                "#223344",
+                "#334455",
+            )
+            .expect("display identity"),
+            true,
+        )
+        .expect("a cross-domain session")
+    }
+
+    /// The durable row identity one admitted session is keyed by.
+    fn display_session_row(zone: &str, name: &str) -> (ResourceKey, ResourceUid) {
+        let key = ResourceKey::new(zone, WAYLAND_SESSION_TYPE, name);
+        let uid = resource_uid(&d2b_resource_runtime::manager::deterministic_uid(&key))
+            .expect("the manager's deterministic uid is UUIDv4-shaped");
+        (key, uid)
+    }
+
+    /// The `Endpoint` child rows one session's durable derivation builds, each
+    /// with the manager row the store holds for it and the spec that row
+    /// carries. This is the very derivation the live admission path commits
+    /// the vocabulary from, so the rows and the shapes cannot drift apart.
+    fn display_endpoint_child_rows(
+        session_ref: &ResourceRef,
+        session_uid: &ResourceUid,
+        spec: &WaylandSessionSpec,
+    ) -> Vec<(ResourceKey, d2b_provider_display_wayland::EndpointSpec)> {
+        session_children::display_owned_child_intents(
+            &ZoneId::parse("test").expect("zone"),
+            session_ref,
+            session_uid,
+            spec,
+            1,
+        )
+        .expect("the durable child derivation")
+        .into_iter()
+        .filter(|intent| intent.target().resource_type().as_str() == "Endpoint")
+        .map(|intent| {
+            let key = ResourceKey::new(
+                "test",
+                intent.target().resource_type().as_str(),
+                intent.target().name().as_str(),
+            );
+            let value: serde_json::Value =
+                serde_json::from_slice(intent.canonical_resource()).expect("child envelope");
+            let endpoint: d2b_provider_display_wayland::EndpointSpec =
+                serde_json::from_value(value["spec"].clone()).expect("endpoint spec");
+            (key, endpoint)
+        })
+        .collect()
+    }
+
+    /// Commit one durable row the way a previous boot's manager left it. No
+    /// broker in this fixture: the recording publisher fences and accepts what
+    /// the store publishes.
+    async fn commit_durable_row(
+        store: &SpecStore,
+        key: &ResourceKey,
+        owner_uid: Option<[u8; 16]>,
+        spec: &[u8],
+    ) {
+        let publisher = d2b_resource_runtime::test_support::RecordingPublisher::new();
+        store
+           .publish(
+                d2b_resource_runtime::DesiredMutation::Ensure(StoredDesiredResource {
+                    uid: d2b_resource_runtime::manager::deterministic_uid(key),
+                    key: key.clone(),
+                    generation: 1,
+                    owner_uid,
+                    provenance: d2b_resource_runtime::identity::ResourceProvenance::Nix,
+                    deleting: false,
+                    spec: spec.to_vec(),
+                    metadata: br#"{"annotations":{},"labels":{},"ownerRef":null}"#.to_vec(),
+                    created_at: 0,
+                }),
+                publisher.as_ref(),
+            )
+           .await
+            .expect("the durable row committed");
+    }
+
+    /// Every status one row published, polled until its first pass leaves the
+    /// pre-pass phases.
+    ///
+    /// `Pending`, `Recovering`, and `Reconciling` are what an actor publishes
+    /// while its pass is still running, so a test that stopped there has
+    /// observed nothing about the failure it is about - and a terminal refusal
+    /// publishes once and never requeues, so it stays readable for as long as
+    /// the row does. The budget is this test's own, not the actor's.
+    async fn observed_statuses(
+        plane: &ResourcePlaneV3,
+        key: &ResourceKey,
+        budget: Duration,
+    ) -> Vec<ResourceStatus> {
+        let deadline = tokio::time::Instant::now() + budget;
+        let mut seen: Vec<ResourceStatus> = Vec::new();
+        loop {
+            let view = plane
+               .client()
+               .get(key.clone())
+               .await
+               .expect("the manager serves the row")
+               .unwrap_or_else(|| panic!("the manager holds {key}"));
+            if let Some(status) = view.observed_status()
+                && !seen.contains(&status)
+            {
+                let converged = matches!(
+                    status,
+                    ResourceStatus::Ready | ResourceStatus::Failed(_) | ResourceStatus::Deleting
+                );
+                seen.push(status);
+                if converged {
+                    return seen;
+                }
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return seen;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// The restore rebuilds the vocabulary from the durable rows ALONE: no
+    /// actor runs here and no session reconciles, so every admitted shape can
+    /// only have come from the store. The Zone scope is exact - a session
+    /// homed in another Zone is not this plane's vocabulary - and a row whose
+    /// spec no longer decodes is skipped rather than failing the restore,
+    /// because that row's own actor refuses it on the same derivation.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_display_vocabulary_is_rebuilt_from_the_durable_rows_alone() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = SpecStore::open(dir.path().join("spec-store.sqlite3")).expect("store");
+        let zone = ZoneId::parse("test").expect("zone");
+        let spec = display_session_spec();
+        let spec_bytes = serde_json::to_vec(&spec).expect("spec bytes");
+
+        let (session_key, session_uid) = display_session_row("test", "display-work");
+        commit_durable_row(&store, &session_key, None, &spec_bytes).await;
+        let (elsewhere_key, elsewhere_uid) = display_session_row("elsewhere", "display-other");
+        commit_durable_row(&store, &elsewhere_key, None, &spec_bytes).await;
+        let (broken_key, _) = display_session_row("test", "display-broken");
+        commit_durable_row(
+            &store,
+            &broken_key,
+            None,
+            br#"{"guestRef":"Guest/not-a-session"}"#,
+        )
+        .await;
+
+        let vocabulary = SharedDisplayEndpointVocabulary::new();
+        let restored = restore_display_endpoint_vocabulary(&store, &zone, &vocabulary)
+            .await
+            .expect("the durable rows read back");
+        assert_eq!(
+            restored, 1,
+            "only this Zone's decodable session contributes shapes"
+        );
+
+        let admitted = |reference: &ResourceRef, uid: &ResourceUid| {
+            display_endpoint_child_rows(reference, uid, &spec)
+                .into_iter()
+                .all(|(_, endpoint)| {
+                    d2b_provider_endpoint::endpoint_realization(&endpoint, &vocabulary)
+                        .is_some()
+                })
+        };
+        assert!(
+            admitted(
+                &ResourceRef::parse("display-wayland.d2bus.org.WaylandSession/display-work")
+                    .expect("session ref"),
+                &session_uid
+            ),
+            "this Zone's durable session has its committed shapes admitted"
+        );
+        assert!(
+            !admitted(
+                &ResourceRef::parse("display-wayland.d2bus.org.WaylandSession/display-other")
+                    .expect("session ref"),
+                &elsewhere_uid
+            ),
+            "another Zone's session is not this plane's vocabulary"
+        );
+    }
+
+    /// A restart does not depend on reconcile order: the plane's production
+    /// open admits a display `Endpoint` row whose `WaylandSession` has not
+    /// reconciled. Before the plane starts, the exact admission question the
+    /// Endpoint driver's `check_shape` asks refuses every one of those rows -
+    /// that is the premise, and a refusal there is terminal. After the plane
+    /// opens the same question admits all of them, and no endpoint actor ends
+    /// up in a `Failed` status that requeues nothing.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_restart_admits_display_endpoint_rows_before_their_session_reconciles() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let vocabulary = Arc::clone(&inputs.display_endpoint_vocabulary);
+        let session_ref =
+            ResourceRef::parse("display-wayland.d2bus.org.WaylandSession/display-work")
+                .expect("session ref");
+        let spec = display_session_spec();
+        let (session_key, session_uid) =
+            display_session_row("test", session_ref.name().as_str());
+        let rows = display_endpoint_child_rows(&session_ref, &session_uid, &spec);
+        assert_eq!(rows.len(), 3, "one session derives three endpoint rows");
+
+        // The previous boot left the session and its children durable; nothing
+        // has admitted their shapes yet, which is the whole failure mode.
+        let store = SpecStore::open(ResourcePlaneV3::spec_store_path(&inputs.spec_store_dir))
+            .expect("store");
+        commit_durable_row(
+            &store,
+            &session_key,
+            None,
+            &serde_json::to_vec(&spec).expect("spec bytes"),
+        )
+        .await;
+        for (key, endpoint) in &rows {
+            assert!(
+                d2b_provider_endpoint::endpoint_realization(endpoint, &*vocabulary).is_none(),
+                "nothing has committed {key} yet: the premise"
+            );
+            commit_durable_row(
+                &store,
+                key,
+                Some(d2b_resource_runtime::manager::deterministic_uid(
+                    &session_key,
+                )),
+                &serde_json::to_vec(endpoint).expect("endpoint spec bytes"),
+            )
+            .await;
+        }
+        drop(store);
+
+        let plane = ResourcePlaneV3::open(inputs)
+            .await
+            .expect("the plane opens over the durable rows");
+        for (key, endpoint) in &rows {
+            assert!(
+                d2b_provider_endpoint::endpoint_realization(endpoint, &*vocabulary).is_some(),
+                "the plane rebuilt {key}'s committed shape before the manager spawned an actor"
+            );
+            // A terminal refusal publishes at `validate`, the first step of
+            // the actor's first pass, and never requeues - so it is readable
+            // within milliseconds and stays readable. The budget only has to
+            // outlast that first pass, not the row's convergence: these rows
+            // keep reconciling in this fixture and never settle on their own.
+            let observed = observed_statuses(&plane, key, Duration::from_secs(2)).await;
+            assert!(
+                !observed.is_empty(),
+                "{key} published no status the plane can read"
+            );
+            for status in observed {
+                if let ResourceStatus::Failed(failure) = status {
+                    assert!(
+                        failure.defers(),
+                        "{key} ended in a terminal failure with no requeue: {}",
+                        failure.report().code()
+                    );
+                }
+            }
+        }
+        plane.shutdown().await;
     }
 }

@@ -343,6 +343,7 @@ mod binding_gate {
             SLOT.to_owned(),
             "auth-digest-a".to_owned(),
             "dependency-revision-1".to_owned(),
+            2,
             true,
             Some(INCARNATION.to_owned()),
             Ok(BindingDeliveryEvidence::Delivered {
@@ -381,6 +382,7 @@ mod binding_gate {
             SLOT.to_owned(),
             "auth-digest-a".to_owned(),
             "dependency-revision-1".to_owned(),
+            2,
             true,
             Some(INCARNATION.to_owned()),
             Ok(BindingDeliveryEvidence::Undelivered),
@@ -405,6 +407,7 @@ mod binding_gate {
             SLOT.to_owned(),
             "auth-digest-a".to_owned(),
             "dependency-revision-1".to_owned(),
+            2,
             true,
             Some(INCARNATION.to_owned()),
             Ok(BindingDeliveryEvidence::EndpointReplaced),
@@ -433,6 +436,7 @@ mod binding_gate {
             SLOT.to_owned(),
             "auth-digest-a".to_owned(),
             "dependency-revision-1".to_owned(),
+            2,
             true,
             Some(INCARNATION.to_owned()),
             Ok(BindingDeliveryEvidence::Draining),
@@ -477,6 +481,7 @@ mod binding_gate {
                     SLOT.to_owned(),
                     "auth-digest-a".to_owned(),
                     "dependency-revision-1".to_owned(),
+                    2,
                     true,
                     Some(INCARNATION.to_owned()),
                     Ok(BindingDeliveryEvidence::Delivered { generation: 3, incarnation: INCARNATION.to_owned() }),
@@ -492,6 +497,7 @@ mod binding_gate {
                     SLOT.to_owned(),
                     "auth-digest-a".to_owned(),
                     "dependency-revision-1".to_owned(),
+                    2,
                     true,
                     Some(INCARNATION.to_owned()),
                     Ok(BindingDeliveryEvidence::Delivered { generation: 3, incarnation: INCARNATION.to_owned() }),
@@ -507,6 +513,7 @@ mod binding_gate {
                     SLOT.to_owned(),
                     "auth-digest-REVOKED".to_owned(),
                     "dependency-revision-1".to_owned(),
+                    2,
                     true,
                     Some(INCARNATION.to_owned()),
                     Ok(BindingDeliveryEvidence::Delivered { generation: 3, incarnation: INCARNATION.to_owned() }),
@@ -522,6 +529,7 @@ mod binding_gate {
                     SLOT.to_owned(),
                     "auth-digest-a".to_owned(),
                     "dependency-revision-7".to_owned(),
+                    2,
                     true,
                     Some(INCARNATION.to_owned()),
                     Ok(BindingDeliveryEvidence::Delivered { generation: 3, incarnation: INCARNATION.to_owned() }),
@@ -537,6 +545,7 @@ mod binding_gate {
                     "endpoint-slot-OTHER".to_owned(),
                     "auth-digest-a".to_owned(),
                     "dependency-revision-1".to_owned(),
+                    2,
                     true,
                     Some(INCARNATION.to_owned()),
                     Ok(BindingDeliveryEvidence::Delivered { generation: 3, incarnation: INCARNATION.to_owned() }),
@@ -579,6 +588,7 @@ mod binding_gate {
             SLOT.to_owned(),
             "auth-digest-REVOKED".to_owned(),
             "dependency-revision-1".to_owned(),
+            2,
             true,
             Some(INCARNATION.to_owned()),
             Ok(BindingDeliveryEvidence::Delivered { generation: 3, incarnation: INCARNATION.to_owned() }),
@@ -614,6 +624,7 @@ mod binding_gate {
             SLOT.to_owned(),
             "auth-digest-a".to_owned(),
             "dependency-revision-1".to_owned(),
+            2,
             true,
             Some(INCARNATION.to_owned()),
             Ok(BindingDeliveryEvidence::Delivered { generation: 4, incarnation: INCARNATION.to_owned() }),
@@ -633,6 +644,7 @@ mod binding_gate {
             SLOT.to_owned(),
             "auth-digest-a".to_owned(),
             "dependency-revision-1".to_owned(),
+            2,
             true,
             Some(INCARNATION.to_owned()),
             Ok(BindingDeliveryEvidence::Undelivered),
@@ -642,6 +654,78 @@ mod binding_gate {
         // The relationship row is gone entirely (scenario 5: a restart must
         // not trust cached delivery).
         assert_eq!(lease.revalidate(&[]), Err(BindingGateError::LeaseRevoked));
+    }
+
+    /// Scenario 8 / AE14: the endpoint RE-REALIZED between the seal and the
+    /// effect. The relationship row is untouched and its delivery projection
+    /// still names the sealed incarnation, so every relationship-side fact is
+    /// identical - but the endpoint itself now publishes a different
+    /// realization, and the observation the gate reads is internally
+    /// consistent about that new one. Only the sealed lease compares the
+    /// endpoint's OWN realization against the one it sealed, which is what
+    /// stops a launch over a grant the endpoint no longer holds.
+    #[test]
+    fn a_re_realized_endpoint_revokes_the_lease() {
+        let lease = match resolve(&[expected()], &[delivered(INCARNATION, 3)]) {
+            ProcessBindingPreparation::Ready(lease) => lease,
+            other => panic!("expected a sealed lease, got {other:?}"),
+        };
+        let re_realized = ObservedBinding::new(
+            reference(BINDING),
+            "binding-uid-1".to_owned(),
+            3,
+            reference(CONSUMER),
+            SLOT.to_owned(),
+            "auth-digest-a".to_owned(),
+            "dependency-revision-1".to_owned(),
+            2,
+            true,
+            Some("incarnation-OTHER-REALIZATION".to_owned()),
+            // The relationship still publishes a delivery at the SEALED
+            // incarnation: the endpoint moved, the row did not.
+            Ok(BindingDeliveryEvidence::Delivered {
+                generation: 3,
+                incarnation: INCARNATION.to_owned(),
+            }),
+        );
+        assert_eq!(
+            lease.revalidate(&[re_realized]),
+            Err(BindingGateError::LeaseRevoked),
+            "an endpoint that re-realized revokes the lease before the effect"
+        );
+    }
+
+    /// Scenario 8 / AE14: the endpoint row generation moved between the seal
+    /// and the effect, so the expectation this lease carries was derived from
+    /// a row that no longer stands - whatever the realization and the
+    /// delivery projection still say about it.
+    #[test]
+    fn a_moved_endpoint_row_generation_revokes_the_lease() {
+        let lease = match resolve(&[expected()], &[delivered(INCARNATION, 3)]) {
+            ProcessBindingPreparation::Ready(lease) => lease,
+            other => panic!("expected a sealed lease, got {other:?}"),
+        };
+        let re_derived = ObservedBinding::new(
+            reference(BINDING),
+            "binding-uid-1".to_owned(),
+            3,
+            reference(CONSUMER),
+            SLOT.to_owned(),
+            "auth-digest-a".to_owned(),
+            "dependency-revision-1".to_owned(),
+            7,
+            true,
+            Some(INCARNATION.to_owned()),
+            Ok(BindingDeliveryEvidence::Delivered {
+                generation: 3,
+                incarnation: INCARNATION.to_owned(),
+            }),
+        );
+        assert_eq!(
+            lease.revalidate(&[re_derived]),
+            Err(BindingGateError::LeaseRevoked),
+            "a moved endpoint row generation revokes the lease before the effect"
+        );
     }
 
     /// Scenario 8: sealing refuses an observation set that does not line up
@@ -669,6 +753,7 @@ mod binding_gate {
             SLOT.to_owned(),
             "auth-digest-a".to_owned(),
             "dependency-revision-1".to_owned(),
+            2,
             true,
             Some(INCARNATION.to_owned()),
             Err(BindingEvidenceFault::Unreadable),
@@ -691,6 +776,7 @@ mod binding_gate {
             SLOT.to_owned(),
             "auth-digest-a".to_owned(),
             "dependency-revision-1".to_owned(),
+            2,
             true,
             Some(INCARNATION.to_owned()),
             Err(BindingEvidenceFault::Absent),
@@ -713,6 +799,7 @@ mod binding_gate {
             SLOT.to_owned(),
             "auth-digest-a".to_owned(),
             "dependency-revision-1".to_owned(),
+            2,
             true,
             Some(INCARNATION.to_owned()),
             Ok(BindingDeliveryEvidence::Delivered { generation: 3, incarnation: INCARNATION.to_owned() }),
@@ -962,18 +1049,24 @@ mod gated_launch {
         serde_json::to_vec(&spec).expect("a committed binding spec serializes")
     }
 
-    /// The `/endpoint` layer the endpoint driver publishes, including the
-    /// `/endpoint/bindings` publication set this gate derives from.
-    fn endpoint_view(authorization: &str, consumer: &str) -> ResourceView {
+    /// The `/endpoint` layer the endpoint driver publishes at one row
+    /// generation and one realization, including the `/endpoint/bindings`
+    /// publication set this gate derives from.
+    fn endpoint_view_at(
+        generation: u64,
+        incarnation: &str,
+        authorization: &str,
+        consumer: &str,
+    ) -> ResourceView {
         view(
             endpoint_key(),
             [0x62; 16],
-            2,
+            generation,
             Some(serde_json::json!({
                 "endpoint": {
                     "readiness": "realized",
-                    "generation": 2,
-                    "incarnation": INCARNATION,
+                    "generation": generation,
+                    "incarnation": incarnation,
                     "bindings": [{
                         "name": BINDING_NAME,
                         "endpoint": endpoint_ref(),
@@ -986,6 +1079,12 @@ mod gated_launch {
             })),
             Vec::new(),
         )
+    }
+
+    /// The endpoint as this fixture's consumer is gated on it: generation 2,
+    /// the one realization this module names.
+    fn endpoint_view(authorization: &str, consumer: &str) -> ResourceView {
+        endpoint_view_at(2, INCARNATION, authorization, consumer)
     }
 
     /// One published relationship view carrying exactly one of the delivery
@@ -1351,6 +1450,74 @@ mod gated_launch {
                 .expect("the pass reports an outcome"),
             ReconcileOutcome::RetryScheduled,
             "a revoked lease issues no effect"
+        );
+        settle().await;
+        assert!(h.effects.try_recv().is_err(), "no launch effect was issued");
+        assert!(
+            !h.requeue.scheduled().is_empty(),
+            "the pass re-reads the evidence instead of launching"
+        );
+    }
+
+    /// Scenario 8 / AE14: the endpoint RE-REALIZED between the seal and the
+    /// effect. Preparation sealed the lease against the first read; the next
+    /// read inside the same pass sees a different realization published for
+    /// the same relationship row, which is a self-consistent observation of
+    /// the new one. Only the sealed lease compares the endpoint's own
+    /// realization against the one it sealed, so the launch effect is never
+    /// issued over a grant the endpoint no longer holds.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_re_realized_endpoint_between_seal_and_effect_refuses_the_launch() {
+        let manager = delivered_manager();
+        manager
+            .script(vec![
+                endpoint_view(AUTHORIZATION, CONSUMER),
+                endpoint_view_at(2, "incarnation-OTHER-REALIZATION", AUTHORIZATION, CONSUMER),
+            ])
+            .await;
+        let mut h = harness(process_row(Some(OWNER_UID)), manager).await;
+
+        assert_eq!(
+            h.driver
+                .reconcile(&mut h.ctx)
+                .await
+                .expect("the pass reports an outcome"),
+            ReconcileOutcome::RetryScheduled,
+            "an endpoint that re-realized issues no effect"
+        );
+        settle().await;
+        assert!(h.effects.try_recv().is_err(), "no launch effect was issued");
+        assert!(
+            !h.requeue.scheduled().is_empty(),
+            "the pass re-reads the evidence instead of launching"
+        );
+    }
+
+    /// Scenario 8 / AE14: the endpoint row generation moved between the seal
+    /// and the effect, so the expectation the lease carries was derived from
+    /// a row that no longer stands. The realization and the delivery
+    /// projection are unchanged, which is what makes this the one movement
+    /// the relationship-side facts cannot see.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_moved_endpoint_row_generation_between_seal_and_effect_refuses_the_launch() {
+        let manager = delivered_manager();
+        manager
+            .script(vec![
+                endpoint_view(AUTHORIZATION, CONSUMER),
+                endpoint_view_at(7, INCARNATION, AUTHORIZATION, CONSUMER),
+            ])
+            .await;
+        let mut h = harness(process_row(Some(OWNER_UID)), manager).await;
+
+        assert_eq!(
+            h.driver
+                .reconcile(&mut h.ctx)
+                .await
+                .expect("the pass reports an outcome"),
+            ReconcileOutcome::RetryScheduled,
+            "a moved endpoint row generation issues no effect"
         );
         settle().await;
         assert!(h.effects.try_recv().is_err(), "no launch effect was issued");

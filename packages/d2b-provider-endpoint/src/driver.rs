@@ -931,7 +931,7 @@ impl EndpointDriver {
     /// closed connectability state of a Provider-committed host socket, and -
     /// only once the endpoint is realized - the opaque incarnation token. No
     /// locator, no `(dev, ino)` pair, and no host error crosses it (R15, R17).
-    fn publish_readiness(
+    async fn publish_readiness(
         &self,
         ctx: &mut ResourceContext,
         spec: &EndpointSpec,
@@ -978,7 +978,7 @@ impl EndpointDriver {
         // tell an authorization-only change from a row that simply moved.
         endpoint.insert(
             "bindings".to_owned(),
-            serde_json::Value::Array(self.expected_bindings_layer(ctx, spec, readiness.producer_generation)),
+            serde_json::Value::Array(self.expected_bindings_layer(ctx, spec, readiness.producer_generation).await),
         );
         ctx.set_status_projection(serde_json::json!({ "endpoint": serde_json::Value::Object(endpoint) }));
     }
@@ -987,12 +987,17 @@ impl EndpointDriver {
     /// publishes, each with the authority facts a dependent compares.
     ///
     /// Every entry is derived here, by the driver's own derivation, from the
-    /// endpoint row and its publication intent. A relationship the endpoint
-    /// cannot derive contributes no entry, so a dependent's expected set is
-    /// exactly the set this source mints.
-    fn expected_bindings_layer(
+    /// endpoint row, its publication intent, AND the consumer row's CURRENT
+    /// authorization. A relationship the endpoint cannot derive contributes
+    /// no entry, so a dependent's expected set is exactly the set this source
+    /// mints; and because the authorization is read at publish time rather
+    /// than folded in from the endpoint's own facts, a consumer owner change,
+    /// a provider reassignment, or a consumer row this pass could not read at
+    /// all moves the entry's `authorizationDigest` with the endpoint row
+    /// generation sitting exactly where it was (R16, R18, AE13).
+    async fn expected_bindings_layer(
         &self,
-        ctx: &ResourceContext,
+        ctx: &mut ResourceContext,
         spec: &EndpointSpec,
         producer_generation: Option<u64>,
     ) -> Vec<serde_json::Value> {
@@ -1007,39 +1012,66 @@ impl EndpointDriver {
         else {
             return Vec::new();
         };
-        deliveries
-            .iter()
-            .filter_map(|delivery| {
-                let slot = delivery.slot();
-                let authorization =
-                    crate::binding::binding_authorization_digest(
-                        &zone,
-                        spec,
-                        &endpoint_ref,
-                        ctx.generation(),
-                        delivery.consumer().as_ref(),
-                        slot,
-                    )
-                    .ok()?;
-                let dependency = crate::binding::binding_dependency_revision(
-                    ctx.generation(),
-                    producer_generation.unwrap_or_default(),
-                );
-                Some(serde_json::json!({
-                    "name": crate::binding::binding_row_name(
-                        &zone,
-                        &endpoint_ref,
-                        delivery.consumer().as_ref(),
-                        slot,
-                    ).ok()?.as_str(),
-                    "endpoint": endpoint_ref.to_canonical_string(),
-                    "consumer": delivery.consumer().as_ref().to_canonical_string(),
-                    "slot": slot.as_str(),
-                    "authorizationDigest": authorization,
-                    "dependencyRevision": dependency,
-                }))
-            })
-            .collect()
+        let mut entries = Vec::with_capacity(deliveries.len());
+        for delivery in &deliveries {
+            let slot = delivery.slot();
+            let consumer = delivery.consumer().as_ref();
+            let Ok(name) =
+                crate::binding::binding_row_name(&zone, &endpoint_ref, consumer, slot)
+            else {
+                continue;
+            };
+            // The authorization this relationship is delivered UNDER, read
+            // from the consumer's own committed row at its CURRENT state, and
+            // through the same derivation the serving fence reads it with: the
+            // digest a dependent compares and the fence that decides whether a
+            // delivery may stand cannot disagree about what the authorization
+            // is (R16, R18, AE13).
+            //
+            // A consumer row this pass could not read contributes the explicit
+            // `Unread` frame rather than an all-absent one, so an entry nobody
+            // could authorize is never read as an entry nobody needs to.
+            let authorization = match ctx
+                .lookup(&ResourceKey::new(
+                    zone.as_str(),
+                    consumer.resource_type().as_str(),
+                    consumer.name().as_str(),
+                ))
+                .await
+            {
+                d2b_resource_runtime::context::RowLookup::Present { row, .. } => {
+                    crate::binding::RelationshipAuthorization::from_committed_row(&row).ok()
+                }
+                _ => None,
+            }
+            .unwrap_or(crate::binding::RelationshipAuthorization::Unread);
+            let Some(authorization) = crate::binding::binding_authorization_digest_for(
+                &zone,
+                spec,
+                &endpoint_ref,
+                ctx.generation(),
+                consumer,
+                slot,
+                &authorization,
+            )
+            .ok()
+            else {
+                continue;
+            };
+            let dependency = crate::binding::binding_dependency_revision(
+                ctx.generation(),
+                producer_generation.unwrap_or_default(),
+            );
+            entries.push(serde_json::json!({
+                "name": name.as_str(),
+                "endpoint": endpoint_ref.to_canonical_string(),
+                "consumer": consumer.to_canonical_string(),
+                "slot": slot.as_str(),
+                "authorizationDigest": authorization,
+                "dependencyRevision": dependency,
+            }));
+        }
+        entries
     }
 }
 
@@ -1086,7 +1118,7 @@ impl ResourceDriver for EndpointDriver {
                 self.committed_readiness(ctx, &spec, shape, DriverOp::Recover).await?;
             let adopted = readiness.realized;
             readiness.incarnation = None;
-            self.publish_readiness(ctx, &spec, &readiness);
+            self.publish_readiness(ctx, &spec, &readiness).await;
             if adopted {
                 ctx.set_status(EndpointDriverStatus::Realized);
                 return Ok(RecoveryOutcome::Adopted);
@@ -1103,7 +1135,7 @@ impl ResourceDriver for EndpointDriver {
             // none. The next reconcile pass derives one from committed
             // identities, and a dependent defers until then rather than
             // trusting a token this process could not have observed (R18).
-            self.publish_readiness(ctx, &spec, &EndpointReadiness::realized_family(None, None));
+            self.publish_readiness(ctx, &spec, &EndpointReadiness::realized_family(None, None)).await;
             ctx.set_status(EndpointDriverStatus::Realized);
             Ok(RecoveryOutcome::Adopted)
         } else {
@@ -1127,7 +1159,7 @@ impl ResourceDriver for EndpointDriver {
         let op = DriverOp::Reconcile;
         if let Some(shape) = provider_committed_endpoint_shape(&spec, &*self.effects) {
             let readiness = self.committed_readiness(ctx, &spec, shape, op).await?;
-            self.publish_readiness(ctx, &spec, &readiness);
+            self.publish_readiness(ctx, &spec, &readiness).await;
             if readiness.realized {
                 ctx.set_status(EndpointDriverStatus::Realized);
                 return Ok(ReconcileOutcome::Satisfied);
@@ -1150,7 +1182,8 @@ impl ResourceDriver for EndpointDriver {
                 ctx,
                 &spec,
                 &EndpointReadiness::realized_family(incarnation, Some(producer_generation)),
-            );
+            )
+            .await;
             ctx.set_status(EndpointDriverStatus::Realized);
             return Ok(ReconcileOutcome::Satisfied);
         }
@@ -1186,7 +1219,7 @@ impl ResourceDriver for EndpointDriver {
         // A realization still in flight publishes the not-realized class and
         // NO token: a dependent must not read a standing incarnation out of a
         // pass whose socket effect has not landed yet.
-        self.publish_readiness(ctx, &spec, &EndpointReadiness::unrealized());
+        self.publish_readiness(ctx, &spec, &EndpointReadiness::unrealized()).await;
         ctx.set_status(EndpointDriverStatus::Realizing);
         Ok(ReconcileOutcome::InProgress { operation })
     }
@@ -1260,11 +1293,20 @@ const ENDPOINT_EXECUTION_DOMAINS: &[&str] = &["host"];
 /// Derived from the driver's row reads: the guest-runtime control evidence
 /// reads the producer's committed `Process` row (the guest's VMM child for
 /// the Guest-produced purpose), the device-worker evidence reads the producer
-/// `Process` row, and the virtiofsd socket target resolves through the
-/// binding's committed `VolumeBinding` row.
+/// `Process` row, the virtiofsd socket target resolves through the binding's
+/// committed `VolumeBinding` row, and the `/endpoint/bindings` layer reads
+/// each published consumer's own row so the digests it publishes are framed
+/// over the CURRENT authorization rather than over the publishing row's own
+/// facts (R16, AE13).
+///
+/// The consumer types are exactly the four a binding request may name as its
+/// execution parent (`d2b_resource_runtime::relations`), so the declaration
+/// covers every consumer an endpoint can publish to and nothing else.
 const ENDPOINT_READS: &[WellKnownType] = &[
     WellKnownType::PROCESS,
     WellKnownType::GUEST,
+    WellKnownType::HOST,
+    WellKnownType::EPHEMERAL_PROCESS,
     WellKnownType::VOLUME_BINDING,
 ];
 

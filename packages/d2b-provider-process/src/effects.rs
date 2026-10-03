@@ -467,6 +467,12 @@ impl BindingDeliveryEvidence {
 /// different authorization, a different dependency revision, or a different
 /// canonical slot is FOREIGN evidence, and the only way to see that is to
 /// compare each fact rather than to trust the state slug (R18).
+///
+/// The ENDPOINT row generation and the realization token its owner currently
+/// publishes travel with them for the same reason: a delivery that still
+/// proves the sealed incarnation proves nothing about a relationship whose
+/// endpoint has since re-realized or re-derived, so a sealed lease compares
+/// all three (R18, AE14).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObservedBinding {
     binding_ref: ResourceRef,
@@ -476,6 +482,7 @@ pub struct ObservedBinding {
     slot: String,
     authorization_digest: String,
     dependency_revision: String,
+    endpoint_generation: u64,
     endpoint_ready: bool,
     endpoint_incarnation: Option<String>,
     delivery: Result<BindingDeliveryEvidence, BindingEvidenceFault>,
@@ -492,6 +499,7 @@ impl ObservedBinding {
         slot: String,
         authorization_digest: String,
         dependency_revision: String,
+        endpoint_generation: u64,
         endpoint_ready: bool,
         endpoint_incarnation: Option<String>,
         delivery: Result<BindingDeliveryEvidence, BindingEvidenceFault>,
@@ -504,6 +512,7 @@ impl ObservedBinding {
             slot,
             authorization_digest,
             dependency_revision,
+            endpoint_generation,
             endpoint_ready,
             endpoint_incarnation,
             delivery,
@@ -542,7 +551,15 @@ impl BindingLeaseRow {
 
     /// Whether one freshly observed relationship still matches what was
     /// sealed: the same row identity, the same row generation, the same
-    /// authority facts, and a delivery that still proves the SAME realization.
+    /// authority facts, the same ENDPOINT row generation, the same
+    /// realization, and a delivery that still proves that same realization.
+    ///
+    /// The two endpoint comparisons are the same-incarnation property (AE14).
+    /// A relationship whose delivery projection still names the sealed
+    /// incarnation proves nothing once the endpoint has re-realized or
+    /// re-derived: the grant this consumer would start over is one the
+    /// endpoint no longer holds, and the projection is evidence about the
+    /// realization that replaced it.
     fn matches(&self, observed: &ObservedBinding) -> bool {
         if observed.binding_uid != self.binding_uid
             || observed.binding_generation != self.binding_generation
@@ -550,6 +567,9 @@ impl BindingLeaseRow {
             || observed.slot != self.expectation.slot
             || observed.authorization_digest != self.expectation.authorization_digest
             || observed.dependency_revision != self.expectation.dependency_revision
+            || observed.endpoint_generation != self.expectation.endpoint_generation
+            || observed.endpoint_incarnation.as_deref()
+                != Some(self.expectation.incarnation.as_str())
             || !observed.endpoint_ready
         {
             return false;

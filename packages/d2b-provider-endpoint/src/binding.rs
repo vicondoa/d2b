@@ -99,7 +99,7 @@ use d2b_resource_runtime::error::{
     DriverFailure, DriverOp, FailureClass, FailureComparison, FailureDetail, FailureKind,
     FailureKinds,
 };
-use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
+use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName, StoredDesiredResource};
 use d2b_resource_types::{
     AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType,
 };
@@ -2853,26 +2853,126 @@ pub fn expected_bindings_for_process(
     canonical_binding_rows(zone, spec, endpoint_ref, &[delivery])
 }
 
-/// The digest of the AUTHORIZATION one published relationship was derived
-/// under (R16, R18).
+/// The CURRENT authorization one published relationship is delivered under.
 ///
-/// It is a domain-separated digest over the committed facts the derivation
-/// read - the Zone, the endpoint row identity and generation, the consumer
-/// identity, the canonical slot, and the endpoint's own publication intent -
-/// so any authorization-only change (a withdrawn `RoleBinding`, a consumer
-/// owner change, a provider reassignment) moves it while the endpoint row
-/// generation stays exactly where it was. That is what lets a launch gate see
-/// an authorization change with no endpoint generation bump.
+/// A relationship is not authorized by the `Endpoint` row that publishes it:
+/// it is authorized by state committed on OTHER rows. The consumer row's
+/// durable lifecycle owner and the Provider it is assigned to are the two
+/// this family can read, and neither is a field of the publishing `Endpoint`
+/// row - so a digest framed over that row alone cannot move when one of them
+/// moves, and a launch gate would then be reading a digest that describes an
+/// authorization nobody re-read (R16, R18, AE13).
+///
+/// # There is no RoleBinding read here, and there will not be one
+///
+/// AE13 also names a withdrawn `RoleBinding`. That authorization does not
+/// exist in this plane: a `RoleBinding` is a Zone/session-plane row
+/// (`d2b_contracts_zone_session::v3::RoleBindingSpec`), and the
+/// `AuthorizationRelation` edge that describes it is derived by the manager's
+/// own relation index - which a serving driver reaches rows AROUND: it holds
+/// a [`ResourceContext`] and no handle on that index. A `RoleBinding`
+/// withdrawal therefore arrives here the only way it can, as the consumer row
+/// it authorized moving, going away, or ceasing to be admitted, and all three
+/// are fenced here. Reading the Role directly would mean a second authority
+/// for authorization, which is the thing the relation index exists to prevent
+/// (R16, R22).
 ///
 /// Nothing host-shaped enters it: no path, no `(dev, ino)` pair, and no host
 /// error text.
-pub fn binding_authorization_digest(
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RelationshipAuthorization {
+    /// No committed consumer row was read for this relationship.
+    ///
+    /// A distinct frame rather than an all-absent one, so "the authorization
+    /// was never read" can never collide with "the consumer row was read and
+    /// carries none of it": a dependent has to be able to tell a digest that
+    /// proves nothing about authorization apart from one that does.
+    Unread,
+    /// The authorization the consumer's committed row currently carries.
+    Committed {
+        /// The consumer row's durable lifecycle owner.
+        owner: Option<ResourceUid>,
+        /// The Provider the consumer row is assigned to.
+        provider: Option<ResourceRef>,
+        /// The registered schema id of the consumer row's Provider extension:
+        /// the assignment a provider downgrade moves without touching
+        /// `provider`.
+        provider_schema: Option<String>,
+    },
+}
+
+impl RelationshipAuthorization {
+    /// Read the CURRENT authorization out of one committed consumer row.
+    ///
+    /// The row's own bytes are the only input: nothing here is inferred from
+    /// the publishing endpoint, from the relationship row, or from what an
+    /// earlier pass saw, so a pass cannot carry a stale authorization
+    /// forward.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EndpointBindingError::InvalidRequest`] when the row is not
+    /// canonical [`ResourceSpec`] bytes or names an owner identity that is
+    /// not one. A row whose authorization cannot be READ is not a row whose
+    /// authorization is absent, and only the former is refused here.
+    pub fn from_committed_row(row: &StoredDesiredResource) -> Result<Self, EndpointBindingError> {
+        let spec = serde_json::from_slice::<ResourceSpec>(&row.spec)
+            .map_err(|_| EndpointBindingError::InvalidRequest)?;
+        let owner = row
+            .owner_uid
+            .as_ref()
+            .map(ResourceUid::from_bytes)
+            .transpose()
+            .map_err(|_| EndpointBindingError::InvalidRequest)?;
+        Ok(Self::Committed {
+            owner,
+            provider: spec.provider_ref().cloned(),
+            provider_schema: spec
+                .provider()
+                .map(|extension| wire(extension.schema_id())),
+        })
+    }
+
+    /// The host-free frame this authorization contributes to a digest.
+    fn frame(&self) -> serde_json::Value {
+        match self {
+            Self::Unread => serde_json::json!({ "read": false }),
+            Self::Committed {
+                owner,
+                provider,
+                provider_schema,
+            } => serde_json::json!({
+                "read": true,
+                "owner": owner.as_ref().map(ResourceUid::as_str),
+                "provider": provider.as_ref().map(ResourceRef::to_canonical_string),
+                "providerSchema": provider_schema,
+            }),
+        }
+    }
+}
+
+/// The digest of the AUTHORIZATION one published relationship is derived
+/// under, framed over the CURRENT authorization of its consumer (R16, R18).
+///
+/// It is a domain-separated digest over the committed facts the derivation
+/// read - the Zone, the endpoint row identity and generation, the consumer
+/// identity, the canonical slot, the endpoint's own publication intent, AND
+/// the consumer's current authorization - so an authorization-only change (a
+/// consumer owner change, a provider reassignment, a provider downgrade)
+/// moves it while the endpoint row generation stays exactly where it was.
+/// That is what lets a launch gate see an authorization change with no
+/// endpoint generation bump.
+///
+/// Nothing host-shaped enters it: no path, no `(dev, ino)` pair, and no host
+/// error text.
+pub fn binding_authorization_digest_for(
     zone: &ZoneId,
     spec: &EndpointSpec,
     endpoint_ref: &ResourceRef,
     endpoint_generation: u64,
     consumer_ref: &ResourceRef,
     slot: &BindingSlot,
+    authorization: &RelationshipAuthorization,
 ) -> Result<String, EndpointBindingError> {
     let mut subjects: Vec<String> = spec
         .binding_publication()
@@ -2889,6 +2989,7 @@ pub fn binding_authorization_digest(
         "consumer": consumer_ref.to_canonical_string(),
         "slot": slot.as_str(),
         "publication": subjects.join(","),
+        "authorization": authorization.frame(),
     });
     Ok(framed_canonical_digest(
         AUTHORIZATION_DIGEST_DOMAIN,
@@ -3354,14 +3455,34 @@ impl EndpointBindingDriver {
         self.check_parent_policy(&endpoint, &binding, op)?;
         // The consumer's store-assigned identity is part of the relationship's
         // key, so a consumer replaced under the same name produces a different
-        // relationship rather than silently continuing the old one.
+        // relationship rather than silently continuing the old one, and the
+        // authorization that row CURRENTLY carries is what this relationship
+        // is delivered under (R16, AE13). It is read through the SAME
+        // derivation the published authorization digest is framed over, so the
+        // fence that decides whether a delivery may stand and the digest a
+        // launch gate compares cannot disagree about what the authorization is.
         let consumer = self.consumer_key(&binding);
-        if !matches!(ctx.lookup(&consumer).await, RowLookup::Present { .. }) {
-            return Err(self
-                .error(EndpointBindingDriverErrorKind::ParentUnavailable, op)
-                .with_detail(FailureDetail::at("consumer/lookup").comparison(
-                    FailureComparison::new("consumer.executionRef", "present", "absent"),
-                )));
+        match ctx.lookup(&consumer).await {
+            RowLookup::Present { row, .. } => {
+                RelationshipAuthorization::from_committed_row(&row).map_err(|_| {
+                    self.error(EndpointBindingDriverErrorKind::ParentUnavailable, op).with_detail(
+                        FailureDetail::at("consumer/authorization").comparison(
+                            FailureComparison::new(
+                                "consumer.authorization",
+                                "the committed consumer's own authorization",
+                                "unreadable",
+                            ),
+                        ),
+                    )
+                })?;
+            }
+            _ => {
+                return Err(self
+                    .error(EndpointBindingDriverErrorKind::ParentUnavailable, op)
+                    .with_detail(FailureDetail::at("consumer/lookup").comparison(
+                        FailureComparison::new("consumer.executionRef", "present", "absent"),
+                    )));
+            }
         }
         Ok((binding, rights))
     }
@@ -3642,12 +3763,38 @@ impl ResourceDriver for EndpointBindingDriver {
     /// The fence is the driver's own in-memory status (R11), so a relationship
     /// that has run pre-drain reports `Draining` on the next pass rather than
     /// handing a consumer back a delivery it may no longer start. The
-    /// privileged removal is [`Self::delete`]'s work. Idempotent under retry,
-    /// and a row whose spec no longer decodes converges without effects.
+    /// privileged removal is [`Self::delete`]'s work, and that pass converges
+    /// on the row's OWN bytes precisely so cleanup keeps working when
+    /// everything AROUND the row has moved - so pre-drain must not turn that
+    /// same permissiveness into "publish nothing": a relationship whose revoke
+    /// has not been proved yet is exactly the one that must stop handing a
+    /// consumer a delivery.
+    ///
+    /// Only an UNDECODABLE row converges without a fence. It cannot name its
+    /// own entry, so there is no delivery for it to be handing out either, and
+    /// refusing it terminally would strand a row [`Self::delete`] retires
+    /// cleanly. Every other failure is a state this relationship depends on -
+    /// an owning `Endpoint` that moved, a consumer whose row or authorization
+    /// cannot be read, an owner fence that no longer matches - and each leaves
+    /// a grant that may still be standing, so the fence is published and the
+    /// pass defers to the revoke.
     async fn pre_drain(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
-        if self.structural(ctx, DriverOp::Delete).await.is_err() {
-            // Nothing durable to fence: converged without effects.
-            return Ok(());
+        match self.structural(ctx, DriverOp::Delete).await {
+            Ok(_) => {}
+            // Nothing durable to fence: a row that cannot name its own
+            // relationship has no delivery to hand out either.
+            Err(error) if error.kind == EndpointBindingDriverErrorKind::SpecInvalid => {
+                return Ok(());
+            }
+            // The fence is published BEFORE the failure is reported, because
+            // the grant this relationship installed may still be standing
+            // even though this pass could not re-prove the relationship: a
+            // consumer that is gone is exactly the case where handing a
+            // delivery back is worst.
+            Err(error) => {
+                ctx.set_status(EndpointBindingDriverStatus::Draining);
+                return Err(error);
+            }
         }
         ctx.set_status(EndpointBindingDriverStatus::Draining);
         Ok(())
@@ -3881,4 +4028,226 @@ fn answer_effective_access(
 ) -> bool {
     let required = required_right_bits(rights);
     answer.ancestors_traversable && answer.socket_effective_rights & required == required
+}
+
+/// The authorization digest, at the level its own frame is built.
+///
+/// These cases are deliberately narrow: each one fixes every framed input but
+/// the one it is about - Zone, endpoint row identity, endpoint row
+/// generation, consumer, slot, and the endpoint's own publication intent - so
+/// the only thing that can move a digest is the thing under test.
+#[cfg(test)]
+mod tests {
+    use d2b_resource_runtime::identity::ResourceProvenance;
+
+    use super::*;
+    use crate::endpoint::{EndpointAttachmentPolicy, EndpointLifecyclePolicy, EndpointVisibility};
+
+    /// The Zone every case here derives its relationships in.
+    const ZONE: &str = "authorization";
+
+    /// The one consumer the fixture's endpoint publishes to.
+    const CONSUMER: &str = "Process/frontend";
+
+    /// The endpoint row identity every case frames.
+    const ENDPOINT: &str = "Endpoint/compositor";
+
+    /// The endpoint row generation every case pins. It is the same in every
+    /// comparison below, which is what makes "no generation bump" checkable
+    /// rather than merely claimed.
+    const ENDPOINT_GENERATION: u64 = 9;
+
+    fn zone() -> ZoneId {
+        ZoneId::parse(ZONE).expect("a canonical Zone id")
+    }
+
+    fn reference(value: &str) -> ResourceRef {
+        ResourceRef::parse(value).expect("a canonical reference")
+    }
+
+    /// One endpoint publishing a relationship to exactly one consumer, so the
+    /// publication intent in the frame is fixed and cannot be what moves the
+    /// digest under test.
+    fn publishing_spec() -> EndpointSpec {
+        let consumer = reference(CONSUMER);
+        EndpointSpec::new(
+            reference("Provider/display"),
+            reference("Process/compositor"),
+            EndpointClass::Service,
+            EndpointTransport::Unix,
+            BoundedToken::parse("wayland-socket").expect("a bounded purpose"),
+            None,
+            EndpointLocality::HostLocal,
+            EndpointVisibility::Owner,
+            EndpointAttachmentPolicy::new(false, 0).expect("an unbounded attachment policy"),
+            EndpointConsumerPolicy::new(
+                vec![consumer.clone()],
+                Vec::new(),
+                vec![EndpointOperation::Resolve],
+            )
+            .expect("a consumer policy"),
+            EndpointLifecyclePolicy::RecycleWithProducer,
+        )
+        .expect("a canonical endpoint spec")
+        .publishing_to(vec![consumer])
+        .expect("the endpoint publishes a relationship to its consumer")
+    }
+
+    /// One committed consumer row carrying exactly the authorization the case
+    /// states: a durable owner identity and, optionally, the Provider the row
+    /// is assigned to. There is nothing on it to put a path, a device, an
+    /// inode, or host error text into the frame either.
+    fn consumer_row(owner: [u8; 16], provider: Option<&str>) -> StoredDesiredResource {
+        let mut spec = serde_json::Map::new();
+        spec.insert(
+            "domain".to_owned(),
+            serde_json::Value::String("system".to_owned()),
+        );
+        if let Some(provider) = provider {
+            spec.insert(
+                "providerRef".to_owned(),
+                serde_json::Value::String(provider.to_owned()),
+            );
+        }
+        StoredDesiredResource {
+            key: ResourceKey::new(ZONE, "Process", "frontend"),
+            uid: [0x11; 16],
+            generation: 7,
+            owner_uid: Some(owner),
+            provenance: ResourceProvenance::Resource,
+            deleting: false,
+            spec: serde_json::to_vec(&serde_json::Value::Object(spec))
+                .expect("the committed consumer row encodes"),
+            metadata: Vec::new(),
+            created_at: 0,
+        }
+    }
+
+    /// The authorization one committed consumer row currently carries.
+    fn authorization(owner: [u8; 16], provider: Option<&str>) -> RelationshipAuthorization {
+        RelationshipAuthorization::from_committed_row(&consumer_row(owner, provider))
+            .expect("the fixture row is canonical bytes")
+    }
+
+    /// The framed digest for the one relationship the fixture publishes, at
+    /// the endpoint row generation every case pins.
+    fn digest(authorization: &RelationshipAuthorization) -> String {
+        let zone = zone();
+        let endpoint_ref = reference(ENDPOINT);
+        let slot = endpoint_delivery_slot(&zone, &endpoint_ref).expect("the derived delivery slot");
+        binding_authorization_digest_for(
+            &zone,
+            &publishing_spec(),
+            &endpoint_ref,
+            ENDPOINT_GENERATION,
+            &reference(CONSUMER),
+            &slot,
+            authorization,
+        )
+        .expect("a canonical frame is always a digest")
+    }
+
+    /// A consumer that was re-owned and re-assigned moves the digest while the
+    /// endpoint row generation stays exactly where it was.
+    ///
+    /// A `RoleBinding` withdrawal, a consumer owner change, and a provider
+    /// reassignment are states committed on OTHER rows, so this is the fence
+    /// that lets a launch gate see one of them with the endpoint generation
+    /// sitting exactly where it was (R16, R18, AE13).
+    #[test]
+    fn the_authorization_digest_moves_with_the_authorization_alone() {
+        let granted = digest(&authorization([0x31; 16], Some("Provider/display")));
+
+        assert_ne!(
+            granted,
+            digest(&authorization([0x71; 16], Some("Provider/display"))),
+            "a consumer owner change is an authorization-only change: the endpoint row \
+             generation is the same in both digests"
+        );
+        assert_ne!(
+            granted,
+            digest(&authorization([0x31; 16], Some("Provider/other"))),
+            "a provider reassignment moves the digest with no endpoint generation bump"
+        );
+        assert_ne!(
+            granted,
+            digest(&authorization([0x31; 16], None)),
+            "withdrawing the Provider the consumer row is assigned to moves it too"
+        );
+        assert_eq!(
+            granted,
+            digest(&authorization([0x31; 16], Some("Provider/display"))),
+            "and the digest is a function of the authorization alone, so an unchanged \
+             consumer keeps the same one across passes"
+        );
+    }
+
+    /// The framed digest reads nothing host-shaped.
+    ///
+    /// It carries a store-assigned identity, a canonical reference, and a
+    /// registered schema id - which is the whole of the authorization - and no
+    /// path, no `(dev, ino)` pair, and no host error text can enter it,
+    /// because there is no field here one could arrive in.
+    #[test]
+    fn the_frame_carries_the_authorization_and_nothing_else() {
+        let frame =
+            authorization([0x31; 16], Some("Provider/display")).frame();
+        assert_eq!(
+            frame,
+            serde_json::json!({
+                "read": true,
+                "owner": ResourceUid::from_bytes(&[0x31; 16])
+                    .expect("a canonical uid")
+                    .as_str(),
+                "provider": "Provider/display",
+                "providerSchema": serde_json::Value::Null,
+            })
+        );
+    }
+
+    /// A row whose authorization cannot be READ is not a row whose
+    /// authorization is absent.
+    ///
+    /// Folding "I could not tell" in as "there is none" would be a digest that
+    /// moves for the wrong reason, so an unreadable row is refused at the read
+    /// instead.
+    #[test]
+    fn an_unreadable_consumer_row_is_refused_rather_than_read_as_empty() {
+        let mut row = consumer_row([0x31; 16], Some("Provider/display"));
+        row.spec = b"not the committed row".to_vec();
+        assert!(
+            RelationshipAuthorization::from_committed_row(&row).is_err(),
+            "bytes that are not a committed resource row name no authorization at all"
+        );
+    }
+
+    /// An authorization nobody read is its own frame, never an empty one.
+    ///
+    /// A consumer row a pass could not read - absent, unavailable, or not
+    /// canonical committed bytes - must never fold into the same digest as a
+    /// row that WAS read, including one that genuinely carries no owner and no
+    /// Provider. Collapsing the two would let an unreadable row reach a launch
+    /// gate as "authorized, with nothing else attached", which is the one
+    /// answer an unreadable row must never produce.
+    #[test]
+    fn an_unread_authorization_is_never_a_readable_one() {
+        let unread = digest(&RelationshipAuthorization::Unread);
+        assert_eq!(
+            unread,
+            digest(&RelationshipAuthorization::Unread),
+            "the unread frame is stable across passes, so a dependent can tell a row it could \
+             not read from a row whose authorization moved"
+        );
+        assert_ne!(
+            unread,
+            digest(&authorization([0x31; 16], None)),
+            "and it is never the digest of a row that WAS read and carries neither an owner nor \
+             a Provider - that collision is the one this frame exists to prevent"
+        );
+        assert_ne!(
+            unread,
+            digest(&authorization([0x31; 16], Some("Provider/display"))),
+            "nor of a fully authorized row"
+        );
+    }
 }

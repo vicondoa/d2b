@@ -239,6 +239,12 @@ impl RecordingManager {
             .filter(|row| row.key.type_name == ENDPOINT_BINDING_TYPE_NAME)
             .collect()
     }
+
+    /// Drop one committed row, the way a consumer that has gone away leaves
+    /// the store while a relationship that names it is still committed.
+    async fn remove_row(&self, key: &ResourceKey) {
+        self.rows.lock().await.retain(|row| row.key != *key);
+    }
 }
 
 #[async_trait::async_trait]
@@ -808,7 +814,9 @@ impl HostEndpoints {
             .expect("a temporary directory under /tmp for the endpoint tree")
     }
 
-    fn new(admitted: &str) -> Self {
+    /// The broker-owned tree, binding exactly `sockets` inside its own
+    /// endpoint directory.
+    fn with_sockets(sockets: &[&str]) -> Self {
         let root = Self::tempdir_in_tmp();
         let runtime_root = root.path().join("run");
         let endpoints = runtime_root.join("endpoints");
@@ -822,11 +830,13 @@ impl HostEndpoints {
             fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
                 .expect("restrict the broker endpoint tree");
         }
-        let mut listeners = vec![UnixListener::bind(endpoints.join(admitted))
-            .expect("bind the admitted endpoint")];
-        listeners.push(
-            UnixListener::bind(endpoints.join(SIBLING)).expect("bind the sibling endpoint"),
-        );
+        let mut listeners = sockets
+            .iter()
+            .map(|name| {
+                UnixListener::bind(endpoints.join(name))
+                    .unwrap_or_else(|error| panic!("bind the endpoint {name}: {error}"))
+            })
+            .collect::<Vec<UnixListener>>();
         listeners.push(
             UnixListener::bind(root.path().join(ALTERNATE_ABSOLUTE))
                 .expect("bind the alternate absolute socket"),
@@ -837,6 +847,21 @@ impl HostEndpoints {
             endpoints,
             _listeners: listeners,
         }
+    }
+
+    fn new(admitted: &str) -> Self {
+        Self::with_sockets(&[admitted, SIBLING])
+    }
+
+    /// The same tree with NOTHING bound inside the broker's own endpoint
+    /// directory.
+    ///
+    /// This is the state a second cleanup pass over an already-revoked - or
+    /// never granted - relationship finds, and it is the one the broker's own
+    /// accept path answers with its own absent class rather than with an
+    /// effect failure.
+    fn without_socket() -> Self {
+        Self::with_sockets(&[])
     }
 
     fn admitted(&self, name: &str) -> PathBuf {
@@ -2372,4 +2397,329 @@ async fn an_endpoint_waits_for_every_relationship_it_still_owns() {
         .delete(&mut ctx)
         .await
         .expect("the owning row's own teardown runs last");
+}
+
+// ---------------------------------------------------------------------------
+// The authorization fence and the no-grant proof, each on the production path
+// ---------------------------------------------------------------------------
+
+/// A live relationship whose consumer is gone still fences new use.
+///
+/// The fence is the row's own in-memory status, so a relationship that
+/// reached `Delivered` with its consumer intact and lost that consumer
+/// afterwards must publish `Draining` rather than skip the fence: the ACL
+/// entry it installed may still be standing, and handing a consumer back a
+/// delivery it may no longer start is exactly what the fence exists to stop.
+///
+/// Only an UNDECODABLE relationship converges without a fence. It cannot name
+/// its own entry, so there is no delivery for it to hand out either - and
+/// that is the case cleanup converges on, which is why the asymmetry with the
+/// revoke below is the point rather than an inconsistency.
+#[tokio::test]
+async fn a_missing_consumer_fences_a_live_relationship_before_its_revoke() {
+    let (spec, binding) = committed_relationship();
+    let consumer_key = ResourceKey::new(ZONE, "Process", "frontend");
+    let manager = serving_manager(graph(&spec, &binding));
+    let dispatch = ScriptedDispatch::answered();
+    let (mut ctx, _requeue) = context(
+        binding.clone(),
+        endpoint_binding_spec_decoder(),
+        Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+    );
+    let mut driver = EndpointBindingDriverFactory::new(EndpointBindingDriverArgs {
+        zone: d2b_contracts_resource::v3::ZoneId::parse(ZONE).expect("zone id"),
+        access: Arc::clone(&dispatch) as Arc<dyn EndpointAccessDispatch>,
+    })
+    .create(&ResourceKey::new(ZONE, ENDPOINT_BINDING_TYPE_NAME, &binding.key.name))
+    .await;
+
+    driver.reconcile(&mut ctx).await.expect("the delivered pass converges");
+    assert!(
+        matches!(
+            ctx.status::<EndpointBindingDriverStatus>(),
+            Some(EndpointBindingDriverStatus::Delivered { .. })
+        ),
+        "the grant is standing, so there is a delivery to stop handing out"
+    );
+
+    // The consumer row goes away and nothing else does: the owning `Endpoint`
+    // row is byte-identical and its generation is exactly where it was, so
+    // nothing here is a source that narrowed its own policy.
+    manager.remove_row(&consumer_key).await;
+
+    assert!(
+        driver.pre_drain(&mut ctx).await.is_err(),
+        "a relationship whose consumer is gone defers to its revoke rather than \
+         reporting that it converged"
+    );
+    assert_eq!(
+        ctx.status::<EndpointBindingDriverStatus>(),
+        Some(&EndpointBindingDriverStatus::Draining),
+        "the fence is published even though the pass could not re-prove the \
+         relationship: the entry it installed may still be standing"
+    );
+
+    // Cleanup is unaffected, and that asymmetry is deliberate: `delete` derives
+    // the revoke from the row's OWN committed bytes precisely so it keeps
+    // working when everything around the row has moved.
+    assert!(
+        driver.delete(&mut ctx).await.is_ok(),
+        "the revoke is still derived from the row itself, so a missing consumer \
+         does not strand the relationship"
+    );
+}
+
+/// The positive no-grant proof is the broker's OWN absent class.
+///
+/// The cleanup barrier retires a row on two proofs: a revoke the broker
+/// answered, and a revoke the broker reports as leaving nothing standing. The
+/// second one is not a slug this crate invented - it is the closed code the
+/// broker's own accept path returns, read here where the broker renders it, so
+/// a rename on either side shows up as a test failure rather than as a row
+/// that silently stops converging.
+///
+/// The pass is then driven over the REAL dispatch - the broker's own
+/// `accept_endpoint_access` across the broker's own wire codec - against a
+/// broker tree that holds no socket at all. The verdict is whatever the broker
+/// answered: on a host that has provisioned an account for this fixture's
+/// consumer row that answer IS the absent class and the row retires; on a host
+/// that has provisioned none, the accept path refuses the consumer principal
+/// first, by name, and the row is retained. Both are the broker's own code and
+/// the driver acts on exactly that one of them.
+#[tokio::test]
+async fn the_no_grant_proof_is_the_brokers_own_absent_class() {
+    assert_eq!(
+        EndpointAccessError::EndpointAbsent.code(),
+        endpoint_absent_code(),
+        "the positive no-grant proof is exactly the code the broker's own accept \
+         path returns when no exact endpoint is standing"
+    );
+
+    let (spec, binding) = committed_relationship();
+    let host = HostEndpoints::without_socket();
+    let dispatch = BrokerBackedDispatch::new(host.runtime_root.clone(), resolver());
+    let verdict = cleanup_pass(
+        graph(&spec, &binding),
+        Arc::clone(&dispatch) as Arc<dyn EndpointAccessDispatch>,
+    )
+    .await;
+
+    let refusals = dispatch.refusals();
+    assert_eq!(
+        refusals.len(),
+        1,
+        "the revoke reached the broker's own resolution path exactly once"
+    );
+    assert_eq!(
+        dispatch
+            .sent()
+            .iter()
+            .map(|(verb, _)| *verb)
+            .collect::<Vec<_>>(),
+        vec![EndpointAccessVerb::Revoke],
+        "and it asked about the row's own slot with the revoke verb, not with a grant"
+    );
+    assert_eq!(
+        verdict.is_ok(),
+        refusals[0] == endpoint_absent_code(),
+        "the row retires on the absent class and on nothing else; this host answered {}",
+        refusals[0]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AE13: the published authorization digest IS the authorization fence
+// ---------------------------------------------------------------------------
+
+/// One committed consumer row whose Provider assignment the case states.
+///
+/// `providerRef` is the UNIVERSAL desired-state layer, so it rides beside the
+/// type's own base spec rather than inside it - which is where
+/// `ResourceSpec`, and therefore every reader of a committed row, looks for
+/// it. Building it through the fixture's own envelope keeps the row canonical
+/// and identical to the one the rest of this lane commits.
+fn consumer_row_with_provider(provider: Option<&str>) -> StoredDesiredResource {
+    let base = envelope(
+        "Process",
+        "frontend",
+        0x31,
+        Some("Process/compositor"),
+        serde_json::json!({ "domain": "system" }),
+    );
+    let mut resource: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_slice(&base).expect("the fixture envelope decodes as an object");
+    if let Some(provider) = provider {
+        resource.insert(
+            "providerRef".to_owned(),
+            serde_json::Value::String(provider.to_owned()),
+        );
+    }
+    stored(
+        ResourceKey::new(ZONE, "Process", "frontend"),
+        [0x31; 16],
+        Some([0x42; 16]),
+        CanonicalJsonValue::parse(
+            &serde_json::to_vec(&serde_json::Value::Object(resource))
+                .expect("fixture envelope serializes"),
+        )
+        .expect("fixture envelope is canonical JSON")
+        .to_canonical_bytes(),
+    )
+}
+
+/// The committed graph with its consumer row replaced by `consumer`, and
+/// nothing else touched.
+fn graph_with_consumer(spec: &EndpointSpec, consumer: StoredDesiredResource) -> Vec<StoredDesiredResource> {
+    committed_rows(spec)
+        .into_iter()
+        .map(|row| {
+            if row.key.type_name == "Process" {
+                consumer.clone()
+            } else {
+                row
+            }
+        })
+        .collect()
+}
+
+/// One real `EndpointDriver` pass over `rows`, and the authorization digest it
+/// PUBLISHED for the one relationship this endpoint declares.
+///
+/// The value is read out of the `/endpoint/bindings` layer - the projection a
+/// launch gate actually compares - rather than out of the function that mints
+/// it, so this lane cannot pass while the publication is still stale.
+async fn published_authorization_digest(rows: Vec<StoredDesiredResource>) -> String {
+    let endpoint_row = rows
+        .iter()
+        .find(|row| row.key.type_name == "Endpoint")
+        .expect("the graph carries the owning Endpoint row")
+        .clone();
+    let manager = RecordingManager::with(rows);
+    let (mut ctx, _requeue) = context(
+        endpoint_row,
+        endpoint_spec_decoder(),
+        Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+    );
+    EndpointDriverFactory::new(EndpointDriverArgs {
+        zone: ZONE.to_owned(),
+        facets: realized_facets(),
+    })
+    .create(&ResourceKey::new(ZONE, "Endpoint", "compositor"))
+    .await
+    .reconcile(&mut ctx)
+    .await
+    .expect("the source pass reconciles");
+    ctx.take_status_projection()
+        .expect("the pass publishes the endpoint layer")
+        .pointer("/endpoint/bindings")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|entries| entries.first())
+        .and_then(|entry| entry.pointer("/authorizationDigest"))
+        .and_then(serde_json::Value::as_str)
+        .expect("every published relationship carries its authorization digest")
+        .to_owned()
+}
+
+/// AE13, end to end: the PUBLISHED authorization digest moves when the
+/// consumer's authorization moves, at an unchanged endpoint row generation.
+///
+/// This is the property the finding said did not exist. Every input the
+/// publication is derived from except the consumer's own authorization is
+/// pinned: the endpoint row is byte-identical across all four passes, its
+/// generation is the same, and the Zone, the consumer reference, the canonical
+/// slot and the publication intent are the same facts. So the digest can only
+/// be moving because the authorization moved - which is what lets a launch
+/// gate see an authorization-only change with no endpoint generation bump
+/// (R16, R18, AE13).
+///
+/// The delivery withdrawal half is the same read seen from the serving actor:
+/// `a_missing_consumer_fences_a_live_relationship_before_its_revoke` above is
+/// where a relationship whose consumer stopped being readable stops
+/// publishing `Delivered` and publishes `Draining` instead.
+#[tokio::test]
+async fn the_published_digest_moves_with_the_consumers_authorization_alone() {
+    let spec = endpoint_spec(vec![ResourceRef::parse(CONSUMER).expect("consumer ref")]);
+
+    // The baseline is a consumer row that carries BOTH halves of an
+    // authorization, so either half can be moved on its own and the only
+    // thing left in every other framed input is identical.
+    let granted_row = consumer_row_with_provider(Some("Provider/display"));
+    let granted = published_authorization_digest(graph_with_consumer(&spec, granted_row.clone())).await;
+
+    // The consumer row is RE-OWNED. Nothing else moves: the owning endpoint is
+    // the same row at the same generation.
+    let mut reowned = granted_row.clone();
+    reowned.owner_uid = Some([0x71; 16]);
+    assert_ne!(
+        granted,
+        published_authorization_digest(graph_with_consumer(&spec, reowned)).await,
+        "a consumer owner change is an authorization-only change, and it moves the published \
+         digest with the endpoint row generation sitting exactly where it was"
+    );
+
+    // The consumer row is RE-ASSIGNED to another Provider, and to none at all.
+    assert_ne!(
+        granted,
+        published_authorization_digest(graph_with_consumer(
+            &spec,
+            consumer_row_with_provider(Some("Provider/other")),
+        ))
+        .await,
+        "a provider reassignment moves it too"
+    );
+    let unassigned = consumer_row_with_provider(None);
+    assert_ne!(
+        granted,
+        published_authorization_digest(graph_with_consumer(&spec, unassigned.clone())).await,
+        "and withdrawing the Provider the consumer row is assigned to moves it as well"
+    );
+
+    // An unchanged graph publishes the unchanged digest: the digest is a
+    // function of the authorization, not of the pass that read it.
+    assert_eq!(
+        granted,
+        published_authorization_digest(graph_with_consumer(&spec, granted_row.clone())).await,
+        "an unchanged authorization keeps the same published digest across passes"
+    );
+
+    // A consumer row a pass CANNOT read is its own answer. It must never
+    // produce the digest of a readable relationship - least of all one that
+    // was read and carries nothing, which is the collision that would let an
+    // unreadable row authorize itself.
+    let mut unreadable = granted_row.clone();
+    unreadable.spec = b"not the committed row".to_vec();
+    let unread = published_authorization_digest(graph_with_consumer(&spec, unreadable)).await;
+    assert_ne!(
+        granted, unread,
+        "a consumer row whose authorization cannot be read never publishes a readable digest"
+    );
+    assert_ne!(
+        published_authorization_digest(graph_with_consumer(&spec, unassigned)).await,
+        unread,
+        "and it is not the digest of a row that WAS read and carries neither an owner nor a \
+         Provider either"
+    );
+
+    // A consumer row that is GONE is the same distinct answer, read through the
+    // same derivation - and it is the state the serving fence refuses, which is
+    // where the delivery stops.
+    let orphaned: Vec<StoredDesiredResource> =
+        graph_with_consumer(&spec, granted_row.clone())
+            .into_iter()
+            .filter(|row| row.key.type_name != "Process")
+            .collect();
+    assert_eq!(
+        unread,
+        published_authorization_digest(orphaned).await,
+        "a consumer row that is absent is reported as unread, never as authorized"
+    );
+
+    // The endpoint row generation is the same in every pass above: none of
+    // these is a source that changed its own spec.
+    assert_eq!(
+        committed_rows(&spec)[2].generation,
+        1,
+        "the endpoint row generation never moved, so every digest change above was \
+         authorization-only"
+    );
 }

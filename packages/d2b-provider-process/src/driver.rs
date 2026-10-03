@@ -1052,6 +1052,9 @@ async fn observe_endpoint_bindings(
             committed.slot().as_str().to_owned(),
             authorization,
             dependency,
+            // The relationship travels with the ENDPOINT row generation its
+            // owner published it from, so the sealed lease compares it too.
+            view.generation,
             ready,
             Some(incarnation.clone()),
             BindingDeliveryEvidence::from_projection(relation.observed_status_projection()),
@@ -1854,7 +1857,7 @@ impl ProcessDriver {
         }
         if let Some(lease) = lease
             && self
-                .revalidate_lease(ctx, &identity, lease)
+                .revalidate_lease(ctx, &identity, lease, DriverOp::Reconcile)
                 .await
                 .is_err()
         {
@@ -1959,12 +1962,40 @@ impl ProcessDriver {
     /// ambiguous evidence quarantines. `ControllerBootstrapMissing` cannot
     /// describe a one-shot ticket and stays terminal, exactly as the old
     /// `start_record_plan` refused it (`TemplateUnavailable`).
+    ///
+    /// The adoption is fenced by the same launch binding gate the reconcile
+    /// arm answers (KTD6, R18): a one-shot survivor is re-admitted by
+    /// evidence read now, never by the fact that its process still exists,
+    /// because a delivery withdrawn while this daemon was down is invisible
+    /// to every effect it has already issued.
     async fn recover_ephemeral(
         &mut self,
         ctx: &mut ResourceContext,
         identity: &ProcessResourceIdentity,
         spec: &EphemeralProcessSpec,
     ) -> Result<RecoveryOutcome, ProcessDriverError> {
+        // `Pending` reports `Missing` and touches nothing: the survivor is
+        // not an identity this pass verified, so unproven evidence is no
+        // reason to stop one. `Refused` is the same terminal refusal the
+        // reconcile arms report, and `Ready` carries the lease the adoption
+        // revalidates immediately before it runs.
+        let binding = self.prepare_launch(ctx, identity, DriverOp::Recover).await?;
+        let lease = match &binding {
+            ProcessBindingPreparation::NotRequired => None,
+            ProcessBindingPreparation::Ready(lease) => Some(lease),
+            ProcessBindingPreparation::Pending => return Ok(RecoveryOutcome::Missing),
+            ProcessBindingPreparation::Refused(error) => {
+                return Err(self.binding_gate_refused(identity, *error, DriverOp::Recover));
+            }
+        };
+        if let Some(lease) = lease
+            && self
+                .revalidate_lease(ctx, identity, lease, DriverOp::Recover)
+                .await
+                .is_err()
+        {
+            return Ok(RecoveryOutcome::Missing);
+        }
         match self.effects.adopt_ephemeral(identity, spec).await {
             Ok(ProviderAdoption::Adopted(_)) => {
                 self.ephemeral.mark_started().await;
@@ -2074,6 +2105,7 @@ impl ProcessDriver {
         ctx: &mut ResourceContext,
         identity: &ProcessResourceIdentity,
         lease: &BindingAuthorityLease,
+        op: DriverOp,
     ) -> Result<(), ProcessDriverError> {
         let observed = match self.observe_bindings(ctx, &identity.resource_ref).await {
             Ok(observation) => observation.observed,
@@ -2082,12 +2114,13 @@ impl ProcessDriver {
                 return Err(self.binding_gate_refused(
                     identity,
                     BindingGateError::LeaseRevoked,
+                    op,
                 ));
             }
         };
         lease
             .revalidate(&observed)
-            .map_err(|error| self.binding_gate_refused(identity, error))
+            .map_err(|error| self.binding_gate_refused(identity, error, op))
     }
 
     /// Register this actor's evidence watch on one dependency row, at most
@@ -2123,13 +2156,14 @@ impl ProcessDriver {
         &self,
         identity: &ProcessResourceIdentity,
         error: BindingGateError,
+        op: DriverOp,
     ) -> ProcessDriverError {
         tracing::warn!(
             resource = %identity.resource_ref.to_canonical_string(),
             slug = error.code(),
             "process launch binding gate refused the pass"
         );
-        self.error(ProcessDriverErrorKind::ResolutionRefused, DriverOp::Reconcile)
+        self.error(ProcessDriverErrorKind::ResolutionRefused, op)
             .with_detail(FailureDetail::at("prepare/binding-gate").comparison(
                 FailureComparison::new(
                     "binding.evidence",
@@ -2447,7 +2481,7 @@ impl ProcessDriver {
             }
             ProcessBindingPreparation::Refused(error) => {
                 self.stop_withdrawn_effect(ctx, &identity, spec).await?;
-                return Err(self.binding_gate_refused(&identity, *error));
+                return Err(self.binding_gate_refused(&identity, *error, DriverOp::Reconcile));
             }
         };
 
@@ -2548,7 +2582,7 @@ impl ProcessDriver {
         // not only before the launch that may follow it (KTD6, R18).
         if let Some(lease) = lease
             && self
-                .revalidate_lease(ctx, &identity, lease)
+                .revalidate_lease(ctx, &identity, lease, DriverOp::Reconcile)
                 .await
                 .is_err()
         {
@@ -2744,7 +2778,7 @@ impl ProcessDriver {
             }
             ProcessBindingPreparation::Refused(error) => {
                 self.stop_withdrawn_one_shot(ctx, identity, spec).await?;
-                return Err(self.binding_gate_refused(identity, *error));
+                return Err(self.binding_gate_refused(identity, *error, DriverOp::Reconcile));
             }
         };
 
@@ -2788,7 +2822,7 @@ impl ProcessDriver {
         // not only before the launch that may follow it (KTD6, R18).
         if let Some(lease) = lease
             && self
-                .revalidate_lease(ctx, identity, lease)
+                .revalidate_lease(ctx, identity, lease, DriverOp::Reconcile)
                 .await
                 .is_err()
         {
@@ -2940,7 +2974,7 @@ impl ProcessDriver {
     ) -> Result<ReconcileOutcome, ProcessDriverError> {
         if let Some(lease) = lease
             && self
-                .revalidate_lease(ctx, identity, lease)
+                .revalidate_lease(ctx, identity, lease, DriverOp::Reconcile)
                 .await
                 .is_err()
         {
@@ -3317,10 +3351,30 @@ impl ResourceDriver for ProcessDriver {
                     });
                     return Ok(RecoveryOutcome::Missing);
                 }
-                // Discovery runs on the realization target: for a Guest-targeted
-                // row that is the authenticated session, and a restart survivor
-                // is adopted only because the live target generation and the
-                // launch gate both said so (F5, R21, R29).
+                // The launch binding gate, answered before this pass acts at
+                // all (KTD6, R18). Adoption is an effect this row's authority
+                // is held to exactly as the launch is, and a restart is the
+                // pass that most needs the fence: a delivery withdrawn while
+                // this daemon was down is invisible to every effect it has
+                // already issued. `Pending` therefore reports `Missing` and
+                // touches nothing - a survivor is not a verified identity, so
+                // unproven evidence is no reason to stop one either - and
+                // `Refused` is the same terminal refusal the reconcile arms
+                // report. `Ready` carries the sealed lease, which the
+                // adoption revalidates immediately before it runs.
+                let binding = self.prepare_launch(ctx, &identity, DriverOp::Recover).await?;
+                let lease = match &binding {
+                    ProcessBindingPreparation::NotRequired => None,
+                    ProcessBindingPreparation::Ready(lease) => Some(lease),
+                    ProcessBindingPreparation::Pending => return Ok(RecoveryOutcome::Missing),
+                    ProcessBindingPreparation::Refused(error) => {
+                        return Err(self.binding_gate_refused(&identity, *error, DriverOp::Recover));
+                    }
+                };
+                // Discovery runs on the realization target: for a
+                // Guest-targeted row that is the authenticated session, and a
+                // restart survivor is adopted only because the live target
+                // generation said so (F5, R21, R29).
                 let mut guest =
                     self.guest_arm(ctx.target().cloned(), DriverOp::Recover).await?;
                 if process.adoption_policy() == AdoptionPolicy::NeverAdopt {
@@ -3333,6 +3387,19 @@ impl ResourceDriver for ProcessDriver {
                     return Ok(RecoveryOutcome::Missing);
                 }
 
+                // The adoption effect revalidates the sealed lease against
+                // freshly read evidence under this pass's own boundary,
+                // exactly as the reconcile arms do before the same
+                // classification: a lease that moved since it was sealed
+                // adopts nothing and signals nothing.
+                if let Some(lease) = lease
+                    && self
+                        .revalidate_lease(ctx, &identity, lease, DriverOp::Recover)
+                        .await
+                        .is_err()
+                {
+                    return Ok(RecoveryOutcome::Missing);
+                }
                 match self
                     .adopt_process(guest.as_mut(), &identity, process, DriverOp::Recover)
                     .await?
@@ -6043,6 +6110,11 @@ mod tests {
         const ENDPOINT_NAME: &str = "relay";
         const BINDING_NAME: &str = "relay";
         const CONSUMER: &str = "Process/worker";
+
+        /// The one-shot row's own consumer reference: the one-shot arm is
+        /// gated by the same evidence, for the consumer it names.
+        const ONE_SHOT_CONSUMER: &str = "EphemeralProcess/activation-nixos--runner--gen-1";
+
         const SLOT: &str = "slot-0";
         const INCARNATION: &str = "incarnation-1";
         const DEPENDENCY: &str = "revision-1";
@@ -6056,10 +6128,13 @@ mod tests {
             ResourceKey::new("work", "EndpointBinding", BINDING_NAME)
         }
 
-        fn binding_spec_bytes() -> Vec<u8> {
+        /// The committed relationship bytes naming one exact consumer: the
+        /// publication and the row must name the same consumer, or the gate
+        /// reads the evidence as foreign.
+        fn binding_spec_bytes_for(consumer: &str) -> Vec<u8> {
             let spec = EndpointBindingSpec::new(
                 ResourceRef::parse(&format!("Endpoint/{ENDPOINT_NAME}")).expect("endpoint ref"),
-                ResourceRef::parse(CONSUMER).expect("consumer ref"),
+                ResourceRef::parse(consumer).expect("consumer ref"),
                 EndpointAttachmentKind::Connect,
                 BoundedToken::parse(SLOT).expect("slot token"),
                 BindingSourceDecision::new(
@@ -6071,6 +6146,10 @@ mod tests {
             )
             .expect("binding spec");
             serde_json::to_vec(&spec).expect("a committed binding spec serializes")
+        }
+
+        fn binding_spec_bytes() -> Vec<u8> {
+            binding_spec_bytes_for(CONSUMER)
         }
 
         fn view(
@@ -6095,7 +6174,7 @@ mod tests {
             }
         }
 
-        fn endpoint_view() -> ResourceView {
+        fn endpoint_view_for(consumer: &str) -> ResourceView {
             view(
                 endpoint_key(),
                 [0x62; 16],
@@ -6106,7 +6185,7 @@ mod tests {
                         "bindings": [{
                             "name": BINDING_NAME,
                             "endpoint": format!("Endpoint/{ENDPOINT_NAME}"),
-                            "consumer": CONSUMER,
+                            "consumer": consumer,
                             "slot": SLOT,
                             "authorizationDigest": "authorization-1",
                             "dependencyRevision": DEPENDENCY,
@@ -6117,9 +6196,13 @@ mod tests {
             )
         }
 
-        /// One relationship view: delivered at this exact realization, or not
-        /// delivered at all.
-        fn binding_view_over(incarnation: &str, delivered: bool) -> ResourceView {
+        fn endpoint_view() -> ResourceView {
+            endpoint_view_for(CONSUMER)
+        }
+
+        /// One relationship view for one consumer: delivered at this exact
+        /// realization, or not delivered at all.
+        fn binding_view_for(consumer: &str, incarnation: &str, delivered: bool) -> ResourceView {
             view(
                 binding_key(),
                 [0x61; 16],
@@ -6135,8 +6218,12 @@ mod tests {
                         serde_json::json!({ "state": "undelivered" })
                     },
                 })),
-                binding_spec_bytes(),
+                binding_spec_bytes_for(consumer),
             )
+        }
+
+        fn binding_view_over(incarnation: &str, delivered: bool) -> ResourceView {
+            binding_view_for(CONSUMER, incarnation, delivered)
         }
 
         fn binding_view(delivered: bool) -> ResourceView {
@@ -6163,6 +6250,7 @@ mod tests {
         struct BindingManager {
             rows: Vec<StoredDesiredResource>,
             views: parking_lot::Mutex<Vec<ResourceView>>,
+            reads: parking_lot::Mutex<Vec<ResourceKey>>,
         }
 
         #[async_trait::async_trait]
@@ -6189,6 +6277,7 @@ mod tests {
                 &self,
                 key: &ResourceKey,
             ) -> Result<Option<ResourceView>, ResourceError> {
+                self.reads.lock().push(key.clone()); // async-gate-allow: fixture records under a short guard and holds no await
                 Ok(self.views.lock().iter().find(|view| view.key == *key).cloned()) // async-gate-allow: fixture reads under a short guard and holds no await
             }
 
@@ -6223,6 +6312,15 @@ mod tests {
             }
         }
 
+        impl BindingManager {
+            /// The keys whose view this manager served, in order: how a case
+            /// observes that the gate read the evidence a second time.
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            fn view_reads(&self) -> Vec<ResourceKey> {
+                self.reads.lock().clone() // async-gate-allow: fixture reads under a short guard and holds no await
+            }
+        }
+
         fn gated_guest_fixture() -> (GuestFixture, Arc<BindingManager>) {
             let mut row = guest_row();
             row.owner_uid = Some(OWNER_UID);
@@ -6234,6 +6332,7 @@ mod tests {
             let manager = Arc::new(BindingManager {
                 rows: vec![endpoint_row()],
                 views: parking_lot::Mutex::new(vec![endpoint_view(), binding_view(true)]),
+                reads: parking_lot::Mutex::new(Vec::new()),
             });
             (
                 GuestFixture::with(row, Arc::clone(&manager) as Arc<dyn ManagerEndpoint>),
@@ -6263,7 +6362,7 @@ mod tests {
         /// The committed relationship the endpoint published, owned by the
         /// endpoint that published it - so it is a sibling of the consumer
         /// and never one of the consumer's own children.
-        fn binding_row() -> StoredDesiredResource {
+        fn binding_row_for(consumer: &str) -> StoredDesiredResource {
             StoredDesiredResource {
                 key: binding_key(),
                 uid: [0x61; 16],
@@ -6271,10 +6370,14 @@ mod tests {
                 owner_uid: Some([0x62; 16]),
                 provenance: ResourceProvenance::Resource,
                 deleting: false,
-                spec: binding_spec_bytes(),
+                spec: binding_spec_bytes_for(consumer),
                 metadata: Vec::new(),
                 created_at: 0,
             }
+        }
+
+        fn binding_row() -> StoredDesiredResource {
+            binding_row_for(CONSUMER)
         }
 
         /// One host `Process` row owned by the same owner the `Endpoint` rows
@@ -6295,6 +6398,7 @@ mod tests {
             Arc::new(BindingManager {
                 rows,
                 views: parking_lot::Mutex::new(views),
+                reads: parking_lot::Mutex::new(Vec::new()),
             })
         }
 
@@ -6484,6 +6588,140 @@ mod tests {
                     Some(ProcessDriverStatus::Ready { .. })
                 ),
                 "the row is not ready behind an incarnation it can no longer attribute"
+            );
+        }
+
+        /// Recovery answers the same launch binding gate the reconcile arms
+        /// answer, and adoption is fenced exactly as the launch is (KTD6, R18).
+        ///
+        /// A restart is the pass that most needs the fence: a delivery
+        /// withdrawn while this daemon was down is invisible to every effect
+        /// it has already issued, so a survivor is re-admitted by evidence
+        /// read NOW, never by the fact that its process still exists. A
+        /// `Pending` answer adopts nothing, signals nothing, and reports
+        /// `Missing` - a survivor is not a verified identity, so unproven
+        /// evidence is no reason to stop one either.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        #[tokio::test]
+        async fn recovery_adopts_nothing_over_a_delivery_withdrawn_while_it_was_down() {
+            let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
+                adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
+                ..FakeFacetsConfig::default()
+            }));
+            let manager = binding_manager(
+                vec![endpoint_row(), binding_row()],
+                vec![endpoint_view(), binding_view(false)],
+            );
+            let mut f = fixture_with(
+                owned_host_row(),
+                Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+            );
+            let mut d = driver(Arc::clone(&fake)).await;
+
+            assert_eq!(
+                d.recover(&mut f.ctx)
+                    .await
+                    .expect("an unproven delivery is not a failure"),
+                RecoveryOutcome::Missing,
+                "nothing this pass cannot prove is adopted"
+            );
+            assert!(
+                !fake.call_order().contains(&"adopt"),
+                "the adoption classification never runs over withdrawn evidence"
+            );
+            assert!(
+                fake.stop_calls().is_empty(),
+                "and no signal reaches the survivor: recovery verified no identity"
+            );
+            assert!(
+                !matches!(
+                    f.ctx.status::<ProcessDriverStatus>().copied(),
+                    Some(ProcessDriverStatus::Ready { .. })
+                ),
+                "the row never reads ready over access its source withdrew"
+            );
+        }
+
+        /// The positive case the gate must not break: a survivor whose
+        /// delivery still holds at the realization this row launched over is
+        /// adopted - and the sealed lease is revalidated against freshly read
+        /// evidence immediately before the adoption effect, so the readiness
+        /// the pass publishes is the one the current evidence proves.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        #[tokio::test]
+        async fn recovery_adopts_a_survivor_whose_delivery_revalidates() {
+            let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
+                adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
+                ..FakeFacetsConfig::default()
+            }));
+            let manager = binding_manager(
+                vec![endpoint_row(), binding_row()],
+                vec![endpoint_view(), binding_view(true)],
+            );
+            let mut f = fixture_with(
+                owned_host_row(),
+                Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+            );
+            let mut d = driver(Arc::clone(&fake)).await;
+
+            assert_eq!(
+                d.recover(&mut f.ctx).await.expect("the revalidated survivor"),
+                RecoveryOutcome::Adopted
+            );
+            assert!(fake.call_order().contains(&"adopt"));
+            assert_eq!(
+                f.ctx.status::<ProcessDriverStatus>().copied(),
+                Some(ProcessDriverStatus::Ready { adopted: true })
+            );
+            assert!(fake.launch_calls().is_empty(), "adopted without launch");
+            assert_eq!(
+                manager
+                    .view_reads()
+                    .iter()
+                    .filter(|key| *key == &binding_key())
+                    .count(),
+                2,
+                "the sealed lease is revalidated immediately before the adoption effect"
+            );
+        }
+
+        /// The one-shot arm answers the same gate in recovery: its survivor
+        /// over a withdrawn delivery is not adopted either.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        #[tokio::test]
+        async fn recovery_adopts_no_one_shot_survivor_over_a_withdrawn_delivery() {
+            let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
+                adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
+                ..FakeFacetsConfig::default()
+            }));
+            let manager = binding_manager(
+                vec![endpoint_row(), binding_row_for(ONE_SHOT_CONSUMER)],
+                vec![
+                    endpoint_view_for(ONE_SHOT_CONSUMER),
+                    binding_view_for(ONE_SHOT_CONSUMER, INCARNATION, false),
+                ],
+            );
+            let mut row = ephemeral_row();
+            row.owner_uid = Some(OWNER_UID);
+            row.metadata =
+                br#"{"annotations":{},"labels":{},"ownerRef":"Provider/runtime-local"}"#.to_vec();
+            let mut f = fixture_with(row, Arc::clone(&manager) as Arc<dyn ManagerEndpoint>);
+            let mut d = driver(Arc::clone(&fake)).await;
+
+            assert_eq!(
+                d.recover(&mut f.ctx)
+                    .await
+                    .expect("an unproven delivery is not a failure"),
+                RecoveryOutcome::Missing,
+                "the one-shot arm adopts nothing it cannot prove either"
+            );
+            assert!(
+                !fake.call_order().contains(&"adopt-ephemeral"),
+                "the one-shot adoption classification never runs over withdrawn evidence"
+            );
+            assert!(
+                fake.stop_calls().is_empty(),
+                "and no signal reaches the one-shot survivor"
             );
         }
 
