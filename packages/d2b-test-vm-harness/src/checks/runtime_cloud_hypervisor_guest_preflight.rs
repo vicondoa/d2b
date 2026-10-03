@@ -797,6 +797,12 @@ const GUEST_VMM_PROCESS_EXPLAIN: &[DiagRow<'static>] = &[
     ("d2bd.service", "process launch failed"),
     ("d2bd.service", "launch request rejected"),
     ("d2bd.service", "forwarded invocation refused with a reason"),
+    ("d2bd.service", "broker observe invocation failed"),
+    (
+        "d2b-broker.service",
+        "ObserveRunner registered runner verification is incomplete",
+    ),
+    ("d2b-broker.service", "runner process identity changed"),
     ("d2b-broker.service", "spawn"),
 ];
 
