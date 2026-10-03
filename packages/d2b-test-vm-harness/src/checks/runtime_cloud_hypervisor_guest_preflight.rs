@@ -555,12 +555,14 @@ const VOLUME_BINDING_READY: &str = concat!(
 /// The binding's virtiofs worker Process and its private endpoint are
 /// `Ready`.
 const BINDING_WORKER_READY: &str = concat!(
+    "process_status=0; ",
     "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock ",
     "d2b --zone work --json list Process ",
-    ">/run/d2b-binding-worker.json; process_status=$?; ",
+    ">/run/d2b-binding-worker.json || process_status=$?; ",
+    "endpoint_status=0; ",
     "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock ",
     "d2b --zone work --json list Endpoint ",
-    ">/run/d2b-binding-endpoint.json; endpoint_status=$?; ",
+    ">/run/d2b-binding-endpoint.json || endpoint_status=$?; ",
     "test \"$process_status\" -eq 0 && ",
     "test \"$endpoint_status\" -eq 0 && ",
     "jq -e '",
@@ -785,6 +787,8 @@ const SESSION_GENERATION_EXPLAIN: &[DiagRow<'static>] = &[
 /// Controller-session and Process launch evidence needed when the Guest VMM
 /// wait finds the runtime controller still Pending.
 const GUEST_VMM_PROCESS_EXPLAIN: &[DiagRow<'static>] = &[
+    ("d2bd.service", "acceptance-guest-vmm"),
+    ("d2bd.service", "cloud-hypervisor-runner"),
     ("d2bd.service", "external Provider controller"),
     ("d2bd.service", "controller session reconciliation degraded"),
     ("d2bd.service", "controller assignment"),
