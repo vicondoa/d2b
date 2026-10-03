@@ -30,7 +30,7 @@
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
-use std::os::unix::fs::FileTypeExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -54,10 +54,10 @@ use d2b_provider_activation_nixos::{
     ActivationEffectsServiceFactory, activation_descriptor,
 };
 use d2b_provider_endpoint::{
-    ENDPOINT_EFFECTS_SERVICE, DeviceWorkerEvidenceSource, EndpointDriverArgs,
-    EndpointEffectFacets, EndpointEffectsServiceFactory, EndpointSocketSource,
-    GuestControlProducer, GuestVmmEvidenceSource, device_worker_purpose, endpoint_descriptor,
-    guest_control_producer,
+    CommittedEndpointShapeSource, DeviceWorkerEvidenceSource, ENDPOINT_EFFECTS_SERVICE,
+    EndpointDriverArgs, EndpointEffectFacets, EndpointEffectsServiceFactory, EndpointSocketSource,
+    GuestControlProducer, GuestVmmEvidenceSource, HostSocketEvidenceSource, RealizationHandle,
+    device_worker_purpose, endpoint_descriptor, guest_control_producer,
 };
 use d2b_provider_guest::{
     GUEST_EFFECTS_SERVICE, GuestDriverArgs, GuestEffectFacets, GuestEffectsServiceFactory,
@@ -167,10 +167,67 @@ use d2b_provider_shell_pool::{ShellPool, shell_pool_descriptor};
 use d2b_provider_shell_session::{ShellSession, shell_session_descriptor};
 use d2b_provider_audio_pipewire::AudioMediator;
 use d2b_provider_wayland_policy::{
-    AudioMediatorSource, InteractionDriverArgs, InteractionEffectFacets, InteractionEffectsService,
-    InteractionIdentitySource, InteractionPlaneRead, WaylandPolicy, wayland_policy_descriptor,
+    AudioMediatorSource, InteractionDriverArgs, InteractionEffectError, InteractionEffectFacets,
+    InteractionEffectsService, InteractionIdentitySource, InteractionPlaneRead, WaylandPolicy,
+    wayland_policy_descriptor,
 };
-use d2b_provider_wayland_session::{WaylandSession, wayland_session_descriptor};
+use d2b_provider_wayland_session::{
+    DisplayChildRequest, DisplayChildSource, WaylandSession, wayland_session_descriptor,
+};
+
+use d2b_provider_display_wayland::{SharedDisplayEndpointVocabulary, session_children};
+
+/// The `WaylandSession` child-intent source this plane installs (U12, KTD5).
+///
+/// The display Provider authors one admitted session's children - the two
+/// worker Process rows and each worker's private Endpoint - through its own
+/// durable derivation, and the manager turns them into child rows. This
+/// composition supplies one thing and authors nothing: the derivation is the
+/// display Provider's own function over the session's row identity and spec,
+/// and the shapes it commits are handed to the display Provider's own
+/// vocabulary so the Endpoint family admits them by that Provider's exact
+/// match.
+///
+/// The commit happens BEFORE the intents are returned, so a session's shapes
+/// are in the vocabulary by the time the manager holds the rows they describe
+/// and the Endpoint actor can be asked to classify them. The child intents are
+/// the ones the display Provider derived, unchanged.
+#[derive(Clone)]
+struct PlaneDisplayChildSource {
+    vocabulary: Arc<SharedDisplayEndpointVocabulary>,
+}
+
+impl DisplayChildSource for PlaneDisplayChildSource {
+    fn display_children(
+        &self,
+        request: &DisplayChildRequest<'_>,
+    ) -> Result<Vec<d2b_core_controller::OwnedChildIntent>, InteractionEffectError> {
+        let refuse = |error: d2b_provider_display_wayland::WorkerEffectError| {
+            tracing::warn!(
+                provider = d2b_provider_display_wayland::PROVIDER_REF,
+                session = %request.session_ref.to_canonical_string(),
+                reason = %error,
+                "display child derivation failed for wayland session"
+            );
+            InteractionEffectError::InvalidResource
+        };
+        let intents = session_children::display_owned_child_intents(
+            request.zone,
+            request.session_ref,
+            request.session_uid,
+            request.spec,
+            request.process_generation,
+        )
+        .map_err(refuse)?;
+        // The shapes are committed from the SAME derivation the rows were
+        // built from, so a session that cannot derive them commits nothing and
+        // the rows it did derive are never admitted by this Provider.
+        self.vocabulary
+            .commit_session(request.session_uid, request.spec)
+            .map_err(refuse)?;
+        Ok(intents)
+    }
+}
 
 /// The construction arguments every interaction driver of this plane shares.
 ///
@@ -1251,6 +1308,139 @@ impl EndpointSocketSource for PlaneEndpointSocketSource {
     }
 }
 
+/// The daemon's private host observation: the exact socket standing behind one
+/// committed endpoint, and the minted handle that names it (KTD5, KTD8).
+///
+/// A host socket realization is daemon state. The daemon knows the locator the
+/// endpoint owner committed - through the same socket-target registry the
+/// host socket facet resolves over - the exact socket that locator currently
+/// stands for, and whether that socket accepts a connection. None of that
+/// crosses the provider boundary: the only value that leaves is a
+/// [`RealizationHandle`], and only for an observation that proved all three.
+///
+/// The three ways a socket can fail to be the one this endpoint named -
+/// nothing bound at the locator, something bound that does not accept a
+/// connection, and a socket replaced under the same locator - are ONE answer.
+/// They read the same way to a consumer, so the facet answers the same way and
+/// the exact socket identity stays inside the daemon that compared it. An
+/// endpoint the daemon holds no committed locator for is the same answer: the
+/// daemon privately observed no exact socket, so the shape stays unrealized
+/// rather than reporting a readiness nothing proved.
+///
+/// The handle is minted from fresh randomness, never from the locator, the
+/// device, or the inode: the `(dev, ino)` pair is what decides whether a
+/// socket was REPLACED, and a token derived from it could be recomputed by
+/// anyone who read one. It is minted when the socket becomes current, kept
+/// while that same socket stands (a pass that re-observes the same
+/// realization must not invalidate a dependent that read the earlier token),
+/// and re-minted at a higher rotation when the socket behind the endpoint is
+/// replaced. The whole table lives in this process, so a daemon restart
+/// re-mints every handle from fresh randomness (KTD8).
+#[derive(Clone)]
+struct PlaneHostSocketEvidence {
+    registry: Arc<PlaneResourceRegistry>,
+    socket_runtime_dir: PathBuf,
+    zone_token: BoundedToken,
+    minted: Arc<tokio::sync::Mutex<MintedHostSockets>>,
+}
+
+/// The handles this daemon has minted, and the rotation counter they were
+/// minted at.
+///
+/// The counter is this process's own: it starts at zero on every daemon start
+/// and moves once per handle minted, so a replacement carries a different
+/// rotation than the realization it replaced and a restart mints from scratch.
+#[derive(Default)]
+struct MintedHostSockets {
+    /// Endpoint reference to the exact socket identity the live handle names,
+    /// and the handle itself.
+    current: BTreeMap<String, ((u64, u64), RealizationHandle)>,
+    rotations: u64,
+}
+
+impl PlaneHostSocketEvidence {
+    fn new(
+        registry: Arc<PlaneResourceRegistry>,
+        socket_runtime_dir: PathBuf,
+        zone_token: BoundedToken,
+    ) -> Self {
+        Self {
+            registry,
+            socket_runtime_dir,
+            zone_token,
+            minted: Arc::new(tokio::sync::Mutex::new(MintedHostSockets::default())),
+        }
+    }
+
+    /// The locator the endpoint owner committed, resolved exactly as the host
+    /// socket facet resolves one.
+    async fn path_for(&self, endpoint_ref: &ResourceRef) -> Option<PathBuf> {
+        let target = self
+            .registry
+            .socket_target_by_ref(&self.zone_token, endpoint_ref)
+            .await?;
+        serving_socket_path(
+            &self.socket_runtime_dir,
+            &self.zone_token,
+            &target.volume_ref,
+            &target.execution_ref,
+        )
+    }
+
+    /// The live handle for `identity`, minting one when the socket behind this
+    /// endpoint is not the one the previous handle named.
+    async fn handle_for(
+        &self,
+        endpoint_ref: &ResourceRef,
+        identity: (u64, u64),
+    ) -> Option<RealizationHandle> {
+        let mut minted = self.minted.lock().await;
+        let key = endpoint_ref.to_canonical_string();
+        if let Some((minted_identity, handle)) = minted.current.get(&key)
+            && *minted_identity == identity
+        {
+            return Some(handle.clone());
+        }
+        let rotations = minted.rotations + 1;
+        let handle = RealizationHandle::mint(realization_nonce()?, rotations)?;
+        minted.rotations = rotations;
+        minted.current.insert(key, (identity, handle.clone()));
+        Some(handle)
+    }
+}
+
+/// One fresh incarnation nonce: 128 bits of kernel randomness, rendered as the
+/// lowercase bounded token a [`RealizationHandle`] takes (KTD8).
+///
+/// The leading letter is a fixed prefix so the value is a bounded token; the
+/// entropy is the 32 hex characters behind it, which is why the handle's own
+/// floor of 32 characters is met rather than merely rounded at.
+fn realization_nonce() -> Option<BoundedToken> {
+    let mut bytes = [0_u8; 16];
+    getrandom::getrandom(&mut bytes).ok()?;
+    let hex = bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    BoundedToken::parse(format!("r{hex}")).ok()
+}
+
+#[async_trait::async_trait]
+impl HostSocketEvidenceSource for PlaneHostSocketEvidence {
+    /// The realization standing behind `endpoint_ref`, or `None` when nothing
+    /// proved one.
+    async fn observe(&self, endpoint_ref: &ResourceRef, _purpose: &str) -> Option<RealizationHandle> {
+        let path = self.path_for(endpoint_ref).await?;
+        let metadata = tokio::fs::metadata(&path).await.ok()?;
+        if !metadata.file_type().is_socket() {
+            return None;
+        }
+        // Connectability is part of the proof, not a nicety: a socket that is
+        // bound and refusing every connection publishes the closed
+        // `unavailable` state, and the Endpoint driver then publishes no
+        // realization at all.
+        tokio::net::UnixStream::connect(&path).await.ok()?;
+        self.handle_for(endpoint_ref, (metadata.dev(), metadata.ino())).await
+    }
+}
+
 /// Presence evidence for the guest-runtime control endpoints (`ch-api`,
 /// `guest-control`): the daemon's guest-VMM evidence facet the Endpoint
 /// family's effects service drives (U6).
@@ -1949,6 +2139,15 @@ pub user_facets: UserEffectFacets,
     /// two row-evidence probes, supplied through the composition root. The
     /// family never receives a daemon-built effect port (R2).
     pub endpoint_facets: EndpointEffectFacets,
+    /// The display Provider's Zone-wide committed-shape vocabulary, injected
+    /// into the Endpoint family's facet set above (KTD5).
+    ///
+    /// The display Provider owns the endpoint shapes it commits and every
+    /// field of its own exact match; this plane installs that object and adds
+    /// nothing to it. The session admission path commits each admitted
+    /// session's shapes into it, so a committed display `Endpoint` row is
+    /// admitted by the Provider that committed it and by nothing else.
+    pub display_endpoint_vocabulary: Arc<SharedDisplayEndpointVocabulary>,
     /// The daemon-supplied facet set the Credential family's effects
     /// implementation is built from (U8):the daemon's Credential runtime
     /// (the preserved Provider and execution-target reads, the lease-facts
@@ -2279,21 +2478,36 @@ Arc::new(DaemonAudioMediatorSource {
                 zone: zone.clone(),
             }),
         };
-        let endpoint_facets = EndpointEffectFacets {
-            socket: Arc::new(PlaneEndpointSocketSource {
+        // U6/KTD5: the Endpoint family's provider seam is wired here too. The
+        // display Provider owns the endpoint shapes it commits and this plane
+        // installs that one object and adds nothing to it, and the private
+        // host observation is the daemon's own: it resolves the locator the
+        // endpoint owner committed, compares the exact socket standing there,
+        // and mints a handle only for an observation that proved it.
+        let display_endpoint_vocabulary = Arc::new(SharedDisplayEndpointVocabulary::new());
+        let endpoint_facets = EndpointEffectFacets::new(
+            Arc::new(PlaneEndpointSocketSource {
                 registry: Arc::clone(&registry),
                 socket_runtime_dir: endpoint_socket_runtime_dir.clone(),
                 zone_token: endpoint_zone_token.clone(),
             }),
-            guest_vmm: Arc::new(GuestControlEndpointProbe::new(
+            Arc::new(GuestControlEndpointProbe::new(
                 Arc::clone(&state.v3_planes),
                 zone.clone(),
             )),
-            device_worker: Arc::new(DeviceWorkerEndpointProbe::new(
+            Arc::new(DeviceWorkerEndpointProbe::new(
                 Arc::clone(&state.v3_planes),
                 zone.clone(),
             )),
-        };
+        )
+        .with_committed_shapes(
+            Arc::clone(&display_endpoint_vocabulary) as Arc<dyn CommittedEndpointShapeSource>
+        )
+        .with_host_socket_observation(Arc::new(PlaneHostSocketEvidence::new(
+            Arc::clone(&registry),
+            endpoint_socket_runtime_dir.clone(),
+            endpoint_zone_token.clone(),
+        )) as Arc<dyn HostSocketEvidenceSource>);
         // U8: the Credential family's effects ride the declared facets too:
         // the daemon's Credential runtime (the preserved provider reads and
         // the ProviderSupervisor session handoff registry) is supplied
@@ -2336,6 +2550,7 @@ Arc::new(DaemonAudioMediatorSource {
             user_facets: user_facets.clone(),
             binding_facets: binding_facets.clone(),
             endpoint_facets: endpoint_facets.clone(),
+            display_endpoint_vocabulary: Arc::clone(&display_endpoint_vocabulary),
             volume_facets: volume_facets.clone(),
             activation_facets: activation_facets.clone(),
             credential_facets: credential_facets.clone(),
@@ -3211,7 +3426,14 @@ impl ResourcePlaneV3 {
             "wayland-session" => {
                 vec![wayland_session_descriptor(interaction_driver_args(
                     inputs,
-                    WaylandSession::default(),
+                    // The session's child intents are the display Provider's
+                    // own derivation, and admitting them is this Provider's
+                    // own vocabulary: the child source commits the session's
+                    // committed shapes into the same registry the Endpoint
+                    // family's facet set reads (KTD5).
+                    WaylandSession::new(Arc::new(PlaneDisplayChildSource {
+                        vocabulary: Arc::clone(&inputs.display_endpoint_vocabulary),
+                    })),
                 ))]
             }
             "audio-service" => vec![audio_service_descriptor(interaction_driver_args(
@@ -4583,6 +4805,7 @@ host_facets: host_facets.clone(),
                 volume_facets: volume_facets.clone(),
                 binding_facets: binding_facets.clone(),
                 endpoint_facets: endpoint_facets.clone(),
+                display_endpoint_vocabulary: Arc::new(SharedDisplayEndpointVocabulary::new()),
                 activation_facets: activation_facets.clone(),
             deployment_graph: None,
             server_state: None,

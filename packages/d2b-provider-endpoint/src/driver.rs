@@ -443,14 +443,14 @@ pub fn endpoint_spec_decoder() -> Arc<dyn SpecDecoder> {
 // ---------------------------------------------------------------------------
 
 /// The provider-facing effect surface the Endpoint driver needs. The
-/// production implementation delegates to the preserved endpoint realization
-/// in the daemon; test doubles implement the same seam.
+/// production implementation is this crate's own effects service, built over
+/// the daemon-supplied facets; test doubles implement the same seam.
 ///
 /// Every method but one has a closed answer. The exception is the private
 /// host observation a Provider-committed socket shape is realized behind: it
 /// is the daemon's private state (KTD5), so the default observes nothing and
-/// the production implementation stays unwired until the composition root
-/// supplies the daemon facet (U6). A shape that needs it is therefore never
+/// the production implementation answers through the daemon facet the
+/// composition root supplies (U6). A shape that needs it is therefore never
 /// admitted as realized in a composition that has not wired it - it stays
 /// unrealized, which is the honest answer, not a readiness claim nothing
 /// proved.

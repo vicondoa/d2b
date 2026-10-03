@@ -27,10 +27,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use d2b_contracts_resource::v3::{ResourceEnvelope, ResourceRef, ResourceUid, StoredResource, ZoneId};
+use d2b_contracts_resource::v3::{ResourceEnvelope, ResourceRef, StoredResource, ZoneId};
 use d2b_provider_audio_pipewire::{AudioBindingController, AudioBindingPhase, AudioBindingSpec};
 use d2b_provider_display_wayland::{
-    WaylandSessionResourceStatus, WaylandSessionSpec, session_children,
+    EndpointSpec, WaylandSessionResourceStatus, WaylandSessionSpec, session_children,
 };
 use d2b_provider_toolkit::{
     EffectResponse, EffectService, EffectServiceError, EffectServiceFactory, ServiceInvocation,
@@ -161,125 +161,80 @@ impl InteractionEffectsService {
         Ok(true)
     }
 
-    /// The committed generation one owned child row currently carries.
-    fn child_generation(
-        request: &InteractionEffectRequest<'_>,
-        target: &ResourceRef,
-    ) -> Option<u64> {
-        request
-            .children
-            .iter()
-            .find(|child| child.resource_ref == *target)
-            .map(|child| child.generation)
-    }
-
-    /// The admitted User one owned consumer row declares.
+    /// Whether every canonical `EndpointBinding` row this session's committed
+    /// `Endpoint` rows publish reports a DELIVERED relationship at its own
+    /// current row generation (R20).
     ///
-    /// A consumer row is the authority for the identity its endpoint
-    /// relationships are evaluated against, so this is read from the committed
-    /// row rather than assumed from the session.
-    async fn consumer_user(
-        &self,
-        consumer: &ResourceRef,
-    ) -> Result<Option<ResourceRef>, InteractionEffectError> {
-        let key = ResourceKey::new(
-            self.facets.zone().as_str(),
-            consumer.resource_type().as_str(),
-            consumer.name().as_str(),
-        );
-        let Some(view) = self
-            .plane()
-            .get(&key)
-            .await
-            .map_err(|_| InteractionEffectError::Unavailable)?
-        else {
-            return Err(InteractionEffectError::InvalidResource);
-        };
-        let value = spec_document_value(&view.spec)?;
-        Ok(value
-            .get("userRef")
-            .and_then(Value::as_str)
-            .and_then(|reference| ResourceRef::parse(reference).ok()))
-    }
-
-    /// The exact uid one owned child row carries.
-    fn child_uid(request: &InteractionEffectRequest<'_>, target: &ResourceRef) -> Option<ResourceUid> {
-        request
-            .children
-            .iter()
-            .find(|child| child.resource_ref == *target)
-            .map(|child| child.uid.clone())
-    }
-
-    /// Whether every endpoint relationship one display worker requires is
-    /// admitted over the exact endpoint and consumer the session derives.
+    /// The rows come from the display Provider's own vocabulary, which asks
+    /// the Endpoint family what a committed endpoint row publishes - its
+    /// publication intent names the consumer, its own operation allowlist and
+    /// attachment capacity decide how that consumer reaches it, and the
+    /// delivery slot is a function of the row's own identity. The `Endpoint`
+    /// driver mints the committed rows from that same derivation, so the row
+    /// this gate reads and the row the actor committed are the same name by
+    /// construction. This crate keeps no slot table beside them: a second
+    /// description of a relationship it does not own could only ever disagree.
     ///
-    /// The relationship is re-derived from the session's own row identity and
-    /// spec, then compared with the committed endpoint and consumer rows, so a
-    /// compositor socket, consumer, or reconnect generation from elsewhere -
-    /// or one this session never derived - cannot be substituted. A session
-    /// whose relationship is not admitted is not usable.
-    async fn display_endpoint_authority(
+    /// Requiring both relationships to be delivered is what orders the
+    /// workers. The host proxy's compositor delivery can only be delivered
+    /// while the compositor endpoint is realized behind the session's Host
+    /// target; the guest frontend's proxy delivery can only be delivered while
+    /// the proxy's own cross-domain Endpoint stands, and that Endpoint is
+    /// realized behind the host proxy's Process row. The frontend therefore
+    /// cannot read a delivered carriage before the proxy does - by evidence,
+    /// not by an ordering this graph imposed.
+    ///
+    /// The guest frontend's own Endpoint publishes nothing and so derives no
+    /// row: it gates aggregate readiness through `children_ready` above,
+    /// which is why nothing here has to invent an in-Zone consumer for it.
+    async fn display_binding_delivery(
         &self,
-        request: &InteractionEffectRequest<'_>,
-        spec: &WaylandSessionSpec,
+        sources: &[ResourceRef],
     ) -> Result<bool, InteractionEffectError> {
-        let bindings = session_children::display_endpoint_bindings(&request.uid, spec)
-            .map_err(|_| InteractionEffectError::InvalidResource)?;
-        for binding in &bindings {
-            let Some(consumer_generation) =
-                Self::child_generation(request, binding.consumer_ref())
-            else {
+        for source in sources {
+            let Some(view) = self.live_view(source).await? else {
                 return Ok(false);
             };
-            let Some(consumer_uid) = Self::child_uid(request, binding.consumer_ref()) else {
-                return Ok(false);
-            };
-            let key = ResourceKey::new(
-                self.facets.zone().as_str(),
-                binding.source_ref().resource_type().as_str(),
-                binding.source_ref().name().as_str(),
-            );
-            let Some(view) = self
-                .plane()
-                .get(&key)
-                .await
-                .map_err(|_| InteractionEffectError::Unavailable)?
-            else {
-                return Ok(false);
-            };
-            let source_uid =
-                ResourceUid::from_bytes(&view.uid).map_err(|_| InteractionEffectError::InvalidResource)?;
-            let endpoint_spec = session_children::decode_endpoint_spec(
-                &spec_document_value(&view.spec)?,
-            )
-            .map_err(|_| InteractionEffectError::InvalidResource)?;
-            let observed = session_children::DisplayEndpointObservation {
-                spec: &endpoint_spec,
-                source_generation: view.generation,
-                consumer_generation,
-                consumer_user: self
-                    .consumer_user(binding.consumer_ref())
-                    .await?,
-            };
-            if session_children::admit_display_endpoint(
+            let endpoint_spec: EndpointSpec =
+                serde_json::from_value(spec_document_value(&view.spec)?)
+                    .map_err(|error| InteractionEffectError::InvalidSpec(error.to_string()))?;
+            let rows = session_children::display_canonical_bindings(
                 self.facets.zone(),
-                spec,
-                &request.uid,
-                binding,
-                &observed,
-                &source_uid,
-                &consumer_uid,
+                source,
+                &endpoint_spec,
             )
-            .is_err()
-            {
-                return Ok(false);
+            .map_err(|_| InteractionEffectError::InvalidResource)?;
+            for row in rows {
+                if !self.binding_delivered(&row).await? {
+                    return Ok(false);
+                }
             }
         }
         Ok(true)
     }
 
+    /// Whether one canonical `EndpointBinding` row reports a delivered
+    /// relationship for its own current row generation.
+    ///
+    /// A relationship whose row is not committed, whose published layer is
+    /// absent, or whose state is anything other than a delivery at the row's
+    /// own current generation is not standing: a session that cannot prove
+    /// its delivery is not usable, however Ready its worker rows look.
+    async fn binding_delivered(&self, target: &ResourceRef) -> Result<bool, InteractionEffectError> {
+        let Some(view) = self.live_view(target).await? else {
+            return Ok(false);
+        };
+        let layer = view
+            .observed_status_projection()
+            .and_then(|projection| projection.pointer("/binding").cloned());
+        Ok(session_children::display_binding_delivered(
+            layer.as_ref(),
+            view.generation,
+        ))
+    }
+
     /// Spec documents of every row of one ResourceType, from the manager.
+
     async fn specs_of_type(
         &self,
         resource_type: &str,
@@ -367,10 +322,21 @@ impl InteractionEffectsService {
                 InteractionEffectPhase::Pending,
             ));
         }
-        // Every host connection the workers make is admitted over the exact
-        // endpoint and consumer this session derives; a session without that
-        // evidence is not usable, however Ready its worker rows look.
-        if !self.display_endpoint_authority(request, &spec).await? {
+        // R20: the session's aggregate readiness also waits for the two
+        // canonical `EndpointBinding` rows its committed endpoints publish to
+        // report a delivered relationship. Those rows are derived from the
+        // committed endpoint rows' own publication intent - the same
+        // derivation the `Endpoint` actor commits them from - and requiring
+        // both to be delivered is what orders the host proxy ahead of the
+        // guest frontend by evidence rather than by a launch this graph
+        // issued. The guest frontend's own Endpoint publishes nothing and
+        // gates readiness here through `children_ready` above.
+        let sources = intents
+            .iter()
+            .map(|intent| intent.target().clone())
+            .filter(|target| target.resource_type().as_str() == "Endpoint")
+            .collect::<Vec<_>>();
+        if !self.display_binding_delivery(&sources).await? {
             return Ok(InteractionEffectOutcome::phase(
                 InteractionEffectPhase::Pending,
             ));

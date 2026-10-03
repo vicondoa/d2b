@@ -1,11 +1,39 @@
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneId};
 use d2b_provider_display_wayland::{
     DisplayController, DisplayEndpointVocabulary, DisplayIdentity, DisplayLabelPosition,
-    DisplayProcessRole, EndpointSpec, FilterInput, Phase, PolicyWarning, PrincipalPool,
-    ProcessObservation, WaylandPolicy, WaylandPolicySnapshot, WaylandSessionSpec,
-    display_committed_endpoint_shape,
+    EndpointSpec, FilterInput, Phase, PolicyWarning, PrincipalPool, ProcessObservation,
+    SharedDisplayEndpointVocabulary, WaylandPolicy, WaylandPolicySnapshot, WaylandSessionSpec,
+    session_children,
 };
-use d2b_provider_endpoint::{CommittedEndpointShape, EndpointRealization};
+use d2b_provider_endpoint::{
+    CommittedEndpointShape, CommittedEndpointShapeSource, EndpointRealization,
+};
+
+/// The one shape this Provider commits for `spec`, asked through the seam the
+/// production composition injects this Provider's vocabulary through.
+fn seam_committed_shape(
+    vocabulary: &SharedDisplayEndpointVocabulary,
+    spec: &EndpointSpec,
+) -> Option<CommittedEndpointShape> {
+    vocabulary.committed_endpoint_shape(spec)
+}
+
+/// The shape this Provider commits for `spec`, asked through the Endpoint
+/// family's own provider-neutral seam.
+fn committed_shape(
+    vocabulary: &DisplayEndpointVocabulary,
+    spec: &EndpointSpec,
+) -> Option<CommittedEndpointShape> {
+    d2b_provider_endpoint::provider_committed_endpoint_shape(spec, vocabulary)
+}
+
+/// The same question under the name the vocabulary tests read it by.
+fn display_committed_endpoint_shape(
+    vocabulary: &DisplayEndpointVocabulary,
+    spec: &EndpointSpec,
+) -> Option<CommittedEndpointShape> {
+    committed_shape(vocabulary, spec)
+}
 
 fn refs() -> (ResourceRef, ResourceRef, ResourceRef, ResourceRef) {
     (
@@ -452,171 +480,221 @@ fn derived_endpoints(
         let value: serde_json::Value = serde_json::from_slice(intent.canonical_resource()).unwrap();
         (
             intent.target().clone(),
-            d2b_provider_display_wayland::decode_endpoint_spec(&value["spec"]).unwrap(),
+            serde_json::from_value::<EndpointSpec>(value["spec"].clone()).unwrap(),
         )
     })
     .collect()
 }
 
-/// One admitted relationship proved against the session's own derived rows.
-fn admit(
-    spec: &WaylandSessionSpec,
-    uid: &d2b_contracts_resource::v3::ResourceUid,
-    binding: &d2b_provider_display_wayland::DisplayEndpointBinding,
-    generation: u64,
-) -> Result<(), d2b_provider_display_wayland::WorkerEffectError> {
-    let endpoints = derived_endpoints(spec, uid, generation);
-    let source = endpoints
+/// The one committed endpoint row this session derives under `reference`.
+fn derived_endpoint<'a>(
+    endpoints: &'a [(ResourceRef, EndpointSpec)],
+    reference: &ResourceRef,
+) -> &'a EndpointSpec {
+    endpoints
         .iter()
-        .find(|(reference, _)| reference == binding.source_ref())
-        .map(|(_, endpoint_spec)| endpoint_spec)
-        .cloned()
-        .expect("the derived source row");
-    let observed = d2b_provider_display_wayland::DisplayEndpointObservation {
-        spec: &source,
-        source_generation: generation,
-        consumer_generation: generation,
-        consumer_user: Some(spec.user_ref().clone()),
-    };
-    d2b_provider_display_wayland::admit_display_endpoint(
-        &zone(),
-        spec,
-        uid,
-        binding,
-        &observed,
-        uid,
-        uid,
-    )
-    .map(|_| ())
+        .find(|(candidate, _)| candidate == reference)
+        .map(|(_, spec)| spec)
+        .expect("the derived endpoint row")
 }
 
+/// The canonical `EndpointBinding` rows one endpoint publishes to one consumer.
+///
+/// This is the launch gate's own derivation - the source's answer to "which
+/// committed relationship rows does this exact Process require" - filtered to
+/// the committed rows that endpoint actually publishes, so a consumer can
+/// never widen its own relationship by asking for a different slot or a
+/// different endpoint.
+fn required_rows(
+    endpoints: &[(ResourceRef, EndpointSpec)],
+    endpoint_ref: &ResourceRef,
+    consumer: &ResourceRef,
+) -> Vec<ResourceRef> {
+    let source = derived_endpoint(endpoints, endpoint_ref);
+    let expected = d2b_provider_endpoint::expected_bindings_for_process(
+        &zone(),
+        source,
+        endpoint_ref,
+        consumer,
+    )
+    .expect("the source derives this consumer's expectation");
+    session_children::display_canonical_bindings(&zone(), endpoint_ref, source)
+        .expect("the committed endpoint derives its relationships")
+        .into_iter()
+        .filter(|row| {
+            expected
+                .iter()
+                .any(|want| row.name().as_str() == want.name().as_str())
+        })
+        .collect()
+}
+
+/// The session's two workers and its three endpoint rows, named by the display
+/// Provider's own durable derivation.
+fn display_graph(uid: &ResourceUid) -> (ResourceRef, ResourceRef, ResourceRef, ResourceRef, ResourceRef) {
+    (
+        d2b_provider_display_wayland::durable_host_proxy_process_ref(uid).unwrap(),
+        d2b_provider_display_wayland::durable_guest_frontend_process_ref(uid).unwrap(),
+        d2b_provider_display_wayland::durable_compositor_endpoint_ref(uid).unwrap(),
+        d2b_provider_display_wayland::durable_host_proxy_endpoint_ref(uid).unwrap(),
+        d2b_provider_display_wayland::durable_wayland_endpoint_ref(uid).unwrap(),
+    )
+}
+
+/// Each worker requires exactly the canonical `EndpointBinding` row its
+/// endpoint's publication intent names for it (AE7-AE8, R18, R20).
+///
+/// The rows are the Endpoint family's own derivation of the committed
+/// endpoint's publication intent - the same derivation the `Endpoint` actor
+/// commits them from - so a worker can only ever be gated on a relationship
+/// the graph actually owns. The host proxy's expectation and the guest
+/// frontend's come from DIFFERENT endpoints, which is what makes the ordering
+/// an evidence ordering: the frontend's requirement names the proxy's own
+/// carriage, so it can only be satisfied once the proxy is standing, and no
+/// direct parent launch can stand in for that.
 #[test]
-fn every_worker_reaches_only_the_endpoint_its_relationship_names() {
+fn each_worker_requires_exactly_the_canonical_binding_row_publication_names() {
     let spec = session_spec();
     let uid = session_uid("11111111-1111-4111-8111-111111111111");
-    let bindings =
-        d2b_provider_display_wayland::display_endpoint_bindings(&uid, &spec).unwrap();
+    let endpoints = derived_endpoints(&spec, &uid, 3);
+    let (proxy, frontend, compositor, carriage, wayland) = display_graph(&uid);
 
-    let compositor = bindings
-        .iter()
-        .find(|binding| binding.role() == DisplayProcessRole::HostProxy)
-        .expect("the proxy consumes the host compositor");
     assert_eq!(
-        compositor.source_ref().resource_type().as_str(),
-        "Endpoint"
+        required_rows(&endpoints, &compositor, &proxy).len(),
+        1,
+        "the host proxy consumes the session's host compositor socket, once"
     );
     assert_eq!(
-        compositor.source_ref(),
-        &d2b_provider_display_wayland::durable_compositor_endpoint_ref(&uid).unwrap()
+        required_rows(&endpoints, &carriage, &frontend).len(),
+        1,
+        "the guest frontend consumes the proxy's own cross-domain carriage, once"
     );
-    assert_eq!(
-        compositor.request().slot().as_str(),
-        d2b_provider_display_wayland::COMPOSITOR_BINDING_SLOT
-    );
-    assert_eq!(
-        compositor.request().attachment(),
-        d2b_contracts_resource::v3::EndpointAttachmentKind::Connect
-    );
-    assert_eq!(
-        compositor.request().purpose().as_str(),
-        d2b_provider_display_wayland::COMPOSITOR_BINDING_PURPOSE
+    assert_ne!(
+        required_rows(&endpoints, &compositor, &proxy)[0],
+        required_rows(&endpoints, &carriage, &frontend)[0],
+        "the two relationships are two distinct committed rows"
     );
 
-    let frontend = bindings
-        .iter()
-        .find(|binding| binding.role() == DisplayProcessRole::GuestFrontend)
-        .expect("the frontend consumes the proxy's own endpoint");
-    assert_eq!(
-        frontend.request().slot().as_str(),
-        d2b_provider_display_wayland::PROXY_BINDING_SLOT
-    );
-    assert_eq!(
-        frontend.request().attachment(),
-        d2b_contracts_resource::v3::EndpointAttachmentKind::Attach
-    );
-    assert_ne!(frontend.source_ref(), compositor.source_ref());
+    // Neither worker consumes anything else: the proxy never reaches its own
+    // carriage, and the frontend never reaches the compositor socket.
+    assert!(required_rows(&endpoints, &carriage, &proxy).is_empty());
+    assert!(required_rows(&endpoints, &compositor, &frontend).is_empty());
 
-    // Every derived relationship is admitted against the session's own rows.
-    for binding in &bindings {
-        admit(&spec, &uid, binding, 3).expect("the derived relationship is admitted");
-    }
-
-    // The compositor row admits exactly the proxy row and no other subject.
-    let (_, compositor_endpoint) = derived_endpoints(&spec, &uid, 3)
-        .into_iter()
-        .find(|(reference, _)| reference == compositor.source_ref())
-        .unwrap();
+    // The compositor row publishes to the proxy row and to nobody else.
     assert_eq!(
-        compositor_endpoint
+        derived_endpoint(&endpoints, &compositor)
             .consumer_policy()
             .allowed_subjects(),
-        &[compositor.consumer_ref().clone()]
+        &[proxy.clone()]
+    );
+
+    // The guest frontend's own Endpoint publishes nothing, so it derives no
+    // row at all: it gates the session's aggregate readiness instead of
+    // delivering anything in-Zone (R20).
+    assert!(
+        session_children::display_canonical_bindings(
+            &zone(),
+            &wayland,
+            derived_endpoint(&endpoints, &wayland),
+        )
+        .expect("the frontend endpoint derives its relationships")
+        .is_empty(),
+        "the guest frontend's endpoint publishes nothing and therefore derives no row"
+    );
+    assert!(required_rows(&endpoints, &wayland, &proxy).is_empty());
+    assert!(required_rows(&endpoints, &wayland, &frontend).is_empty());
+
+    // The session's projected Wayland endpoint is that frontend-produced row,
+    // named by the Provider's own derivation rather than picked out of a list
+    // of children (R23).
+    assert_eq!(
+        wayland,
+        d2b_provider_display_wayland::durable_wayland_endpoint_ref(&uid).unwrap(),
+    );
+    assert_ne!(wayland, carriage);
+    assert_ne!(wayland, compositor);
+    assert_eq!(
+        derived_endpoint(&endpoints, &wayland).producer_ref(),
+        &frontend,
+        "the projected wayland endpoint is produced by the guest frontend itself"
     );
 }
 
-/// One observation of a committed endpoint row at one generation.
-fn observed(
-    generation: u64,
-    user: Option<ResourceRef>,
-    endpoint_spec: &d2b_provider_display_wayland::EndpointSpec,
-) -> d2b_provider_display_wayland::DisplayEndpointObservation<'_> {
-    d2b_provider_display_wayland::DisplayEndpointObservation {
-        spec: endpoint_spec,
-        source_generation: generation,
-        consumer_generation: generation,
-        consumer_user: user,
+/// Only a delivered projection at the binding row's OWN current generation
+/// proves the relationship is standing (R20).
+///
+/// Every other closed state - a replaced endpoint, an undelivered row, a
+/// draining row, an unreadable layer, and a delivery published for an earlier
+/// row generation - is the same answer: not standing. A session that cannot
+/// prove its delivery is not usable, however Ready its worker rows look.
+#[test]
+fn only_a_delivery_at_the_rows_own_generation_proves_the_relationship() {
+    let (uid, _, spec) = committed_session();
+    let (_, _, compositor, _, _) = display_graph(&uid);
+    let delivered = d2b_provider_endpoint::BindingDeliveryProjection::Delivered {
+        incarnation: d2b_provider_endpoint::endpoint::RealizationIncarnation::derive(
+            zone().as_str(),
+            &compositor,
+            4,
+            uid.as_str(),
+            1,
+            spec.reconnect_generation(),
+            None,
+        )
+        .expect("a committed row derives an incarnation"),
+        generation: 4,
+    };
+    let at = |generation: u64| {
+        session_children::display_binding_delivered(Some(&delivered.projection()), generation)
+    };
+    assert!(at(4), "the row's own current generation is delivered");
+    assert!(
+        !at(5),
+        "a delivery published for an earlier row generation proves nothing"
+    );
+    assert!(
+        !session_children::display_binding_delivered(None, 4),
+        "an absent published layer proves nothing"
+    );
+    for state in ["undelivered", "endpoint-replaced", "draining"] {
+        assert!(
+            !session_children::display_binding_delivered(
+                Some(&serde_json::json!({ "state": state })),
+                4
+            ),
+            "{state} is not a delivery"
+        );
     }
+    assert!(
+        !session_children::display_binding_delivered(
+            Some(&serde_json::json!({"state": "delivered"})),
+            4
+        ),
+        "a delivery layer that carries no incarnation cannot be read back"
+    );
 }
 
+/// An endpoint row admitted for another reconnect generation or another Host
+/// is not a shape this Provider commits, so the Endpoint plane admits no
+/// relationship over it at all.
+///
+/// This is where the display-local admission that used to sit beside the
+/// committed rows went: the committed row IS the authority, and the only
+/// question left is whether the row a reader sees is one this Provider
+/// committed for this session.
 #[test]
-fn a_wrong_compositor_endpoint_user_or_generation_is_refused() {
+fn a_foreign_or_stale_endpoint_row_is_no_shape_this_provider_commits() {
     let spec = session_spec();
     let uid = session_uid("22222222-2222-4222-8222-222222222222");
-    let bindings =
-        d2b_provider_display_wayland::display_endpoint_bindings(&uid, &spec).unwrap();
-    let compositor = bindings
-        .iter()
-        .find(|binding| binding.role() == DisplayProcessRole::HostProxy)
-        .unwrap();
-    let (_, endpoint) = derived_endpoints(&spec, &uid, 3)
-        .into_iter()
-        .find(|(reference, _)| reference == compositor.source_ref())
-        .unwrap();
-
-    let admit_with =
-        |observation: d2b_provider_display_wayland::DisplayEndpointObservation<'_>| {
-            d2b_provider_display_wayland::admit_display_endpoint(
-                &zone(),
-                &spec,
-                &uid,
-                compositor,
-                &observation,
-                &uid,
-                &uid,
-            )
-        };
-
+    let (_, _, compositor, _, _) = display_graph(&uid);
+    let vocabulary = DisplayEndpointVocabulary::for_session(&uid, &spec).unwrap();
+    let committed = derived_endpoints(&spec, &uid, 3);
     assert!(
-        admit_with(observed(3, Some(spec.user_ref().clone()), &endpoint)).is_ok(),
-        "the session's own compositor row is admitted"
+        committed_shape(&vocabulary, derived_endpoint(&committed, &compositor)).is_some(),
+        "the session's own compositor row is a shape this Provider commits"
     );
 
-    // A consumer row admitted for another User cannot reach this session's
-    // compositor endpoint.
-    assert!(
-        admit_with(observed(
-            3,
-            Some(ResourceRef::parse("User/mallory").unwrap()),
-            &endpoint
-        ))
-        .is_err()
-    );
-    // A consumer row with no admitted User at all is refused too.
-    assert!(admit_with(observed(3, None, &endpoint)).is_err());
-
-    // An endpoint row admitted for another reconnect generation is refused:
-    // the derived row's fingerprint binds it to this session's generation.
-    let other_generation = WaylandSessionSpec::new(
+    let stale = WaylandSessionSpec::new(
         spec.guest_ref().clone(),
         spec.host_ref().clone(),
         spec.user_ref().clone(),
@@ -625,19 +703,8 @@ fn a_wrong_compositor_endpoint_user_or_generation_is_refused() {
         true,
     )
     .unwrap()
-    .with_reconnect_generation(2)
+    .with_reconnect_generation(spec.reconnect_generation() + 1)
     .unwrap();
-    let (_, other_endpoint) = derived_endpoints(&other_generation, &uid, 3)
-        .into_iter()
-        .find(|(reference, _)| reference == compositor.source_ref())
-        .unwrap();
-    assert!(
-        admit_with(observed(3, Some(spec.user_ref().clone()), &other_endpoint)).is_err(),
-        "an endpoint admitted for another reconnect generation cannot be reused"
-    );
-
-    // A compositor endpoint produced by another Host is not this session's
-    // endpoint, so it is refused even when everything else matches.
     let other = WaylandSessionSpec::new(
         spec.guest_ref().clone(),
         ResourceRef::parse("Host/other-host").unwrap(),
@@ -647,11 +714,14 @@ fn a_wrong_compositor_endpoint_user_or_generation_is_refused() {
         true,
     )
     .unwrap();
-    let (_, foreign) = derived_endpoints(&other, &uid, 3)
-        .into_iter()
-        .find(|(reference, _)| reference == compositor.source_ref())
-        .unwrap();
-    assert!(admit_with(observed(3, Some(spec.user_ref().clone()), &foreign)).is_err());
+    for foreign in [stale, other] {
+        let rows = derived_endpoints(&foreign, &uid, 3);
+        assert!(
+            committed_shape(&vocabulary, derived_endpoint(&rows, &compositor)).is_none(),
+            "an endpoint admitted for another generation or another Host is not a \
+             shape this session commits"
+        );
+    }
 }
 
 #[test]
@@ -707,25 +777,23 @@ fn an_absolute_display_string_cannot_expand_admitted_access() {
         Some("wayland-1")
     );
     let uid = session_uid("33333333-3333-4333-8333-333333333333");
-    let bindings =
-        d2b_provider_display_wayland::display_endpoint_bindings(&uid, &spec).unwrap();
-    let compositor = bindings
-        .iter()
-        .find(|binding| binding.role() == DisplayProcessRole::HostProxy)
-        .unwrap();
+    let vocabulary = DisplayEndpointVocabulary::for_session(&uid, &spec).unwrap();
+    let (_, _, compositor, _, _) = display_graph(&uid);
+    let committed = derived_endpoints(&spec, &uid, 1);
+    let endpoint = derived_endpoint(&committed, &compositor);
     assert_eq!(
-        compositor.request().purpose().as_str(),
+        endpoint.purpose().as_str(),
         "wayland-1",
-        "the display name labels the admitted relationship"
+        "the display name labels the endpoint this session commits"
     );
-    assert!(admit(&spec, &uid, compositor, 1).is_ok());
+    assert!(
+        committed_shape(&vocabulary, endpoint).is_some(),
+        "the endpoint the display name selects is the one this Provider commits"
+    );
 
     // Naming another display does not redirect the relationship: the endpoint
-    // row this session derives for it is the only row that matches.
-    let (_, endpoint) = derived_endpoints(&spec, &uid, 1)
-        .into_iter()
-        .find(|(reference, _)| reference == compositor.source_ref())
-        .unwrap();
+    // row this session commits is the only row that matches, so a socket name
+    // that differs from it is not a shape this Provider commits at all.
     let sibling = d2b_provider_display_wayland::EndpointSpec::new(
         endpoint.provider_ref().clone(),
         endpoint.producer_ref().clone(),
@@ -740,24 +808,27 @@ fn an_absolute_display_string_cannot_expand_admitted_access() {
         endpoint.lifecycle_policy(),
     )
     .unwrap();
-    let refused = d2b_provider_display_wayland::DisplayEndpointObservation {
-        spec: &sibling,
-        source_generation: 1,
-        consumer_generation: 1,
-        consumer_user: Some(spec.user_ref().clone()),
-    };
     assert!(
-        d2b_provider_display_wayland::admit_display_endpoint(
-            &zone(),
-            &spec,
-            &uid,
-            compositor,
-            &refused,
-            &uid,
-            &uid,
-        )
-        .is_err(),
-        "a socket name that differs from the derived endpoint row is refused"
+        committed_shape(&vocabulary, &sibling).is_none(),
+        "a socket name that differs from the committed endpoint row is not a \
+         shape this Provider commits"
+    );
+    // A row rebuilt without the publication intent this session committed
+    // publishes nothing, so there is no relationship to serve over it at all -
+    // the committed row is the only one carrying that intent, and therefore the
+    // only one that derives a row.
+    assert!(
+        session_children::display_canonical_bindings(&zone(), &compositor, &sibling)
+            .expect("a valid endpoint row is derivable")
+            .is_empty(),
+        "a socket name that drops the committed publication intent derives no row"
+    );
+    assert_eq!(
+        session_children::display_canonical_bindings(&zone(), &compositor, endpoint)
+            .expect("the committed row publishes its one relationship")
+            .len(),
+        1,
+        "the committed row itself still publishes exactly its one relationship"
     );
 }
 
@@ -857,14 +928,15 @@ fn filtering_still_applies_to_a_session_with_admitted_endpoint_access() {
         .unwrap(),
     );
     let uid = session_uid("55555555-5555-4555-8555-555555555555");
-    let bindings =
-        d2b_provider_display_wayland::display_endpoint_bindings(&uid, &spec).unwrap();
-    for binding in &bindings {
-        assert!(
-            admit(&spec, &uid, binding, 1).is_ok(),
-            "endpoint admission is independent of the protocol filter"
-        );
-    }
+    let endpoints = derived_endpoints(&spec, &uid, 1);
+    let (proxy, frontend, compositor, carriage, _) = display_graph(&uid);
+    assert_eq!(
+        required_rows(&endpoints, &compositor, &proxy).len()
+            + required_rows(&endpoints, &carriage, &frontend).len(),
+        2,
+        "the session still derives exactly its two relationships; the protocol \
+         filter is independent of them"
+    );
     let compiled = WaylandPolicy::compile(
         &FilterInput::default(),
         &FilterInput::default(),
@@ -1098,6 +1170,196 @@ fn a_vocabulary_commits_only_its_own_sessions_shapes() {
         assert!(
             display_committed_endpoint_shape(&vocabulary, &shape).is_none(),
             "another session's endpoint row is not a shape this vocabulary commits"
+        );
+    }
+}
+
+// -- the Zone-wide vocabulary the production composition injects (KTD5) --------
+
+/// The registry the production composition installs admits exactly the shapes
+/// the sessions committed here commit, and nothing else (KTD5, R14).
+///
+/// This is the seam's own question, asked the way the Endpoint family asks it:
+/// the object answers with the one shape it commits, matched in full, and a
+/// row it does not commit is `None` - which the Endpoint driver turns into a
+/// terminal refusal rather than a near miss.
+#[test]
+fn the_shared_vocabulary_admits_exactly_the_committed_sessions_shapes() {
+    let (uid, session_ref, spec) = committed_session();
+    let vocabulary = SharedDisplayEndpointVocabulary::new();
+    let shapes = committed_endpoint_specs(&uid, &session_ref, &spec);
+    assert_eq!(shapes.len(), 3, "the session commits three endpoint rows");
+
+    for shape in &shapes {
+        assert_eq!(
+            seam_committed_shape(&vocabulary, shape),
+            None,
+            "an empty registry has committed no session, so it admits nothing"
+        );
+    }
+
+    vocabulary.commit_session(&uid, &spec).unwrap();
+    let expected = [
+        (0, EndpointRealization::HostSocketTransport),
+        (1, EndpointRealization::WorkerDataAttachment),
+        (2, EndpointRealization::WorkerCrossDomainTransport),
+    ];
+    for (index, realization) in expected {
+        let committed = seam_committed_shape(&vocabulary, &shapes[index]);
+        assert_eq!(
+            committed.map(CommittedEndpointShape::realization),
+            Some(realization),
+            "the committed row is served behind the realization this Provider names for it"
+        );
+        assert_eq!(
+            committed.map(CommittedEndpointShape::reconnect_generation),
+            Some(spec.reconnect_generation()),
+            "and each shape is bound to the generation the session currently authenticates"
+        );
+    }
+
+    // Another session's rows are not a shape this registry commits, even
+    // though they came out of the very same derivation.
+    let other_uid = session_uid("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+    for shape in committed_endpoint_specs(&other_uid, &session_ref, &spec) {
+        assert_eq!(
+            seam_committed_shape(&vocabulary, &shape),
+            None,
+            "a session that was never admitted contributes no shape"
+        );
+    }
+}
+
+/// A look-alike is refused through the injected registry on every committed
+/// axis, exactly as it is through one session's own vocabulary (R14).
+#[test]
+fn a_look_alike_is_not_admitted_through_the_shared_vocabulary() {
+    let (uid, session_ref, spec) = committed_session();
+    let vocabulary = SharedDisplayEndpointVocabulary::new();
+    vocabulary.commit_session(&uid, &spec).unwrap();
+    let shapes = committed_endpoint_specs(&uid, &session_ref, &spec);
+    let proxy = shapes
+        .iter()
+        .find(|shape| shape.producer_ref().resource_type().as_str() == "Process")
+        .expect("the host proxy's own endpoint row");
+    assert!(
+        seam_committed_shape(&vocabulary, proxy).is_some(),
+        "the committed proxy shape is admitted"
+    );
+
+    for (axis, look_alike) in [
+        (
+            "provider",
+            mutated(
+                proxy,
+                "providerRef",
+                serde_json::json!("Provider/device-tpm"),
+            ),
+        ),
+        (
+            "producer",
+            mutated(proxy, "producerRef", serde_json::json!("Process/impostor")),
+        ),
+        (
+            "class",
+            mutated(proxy, "endpointClass", serde_json::json!("service")),
+        ),
+        (
+            "transport",
+            mutated(proxy, "transport", serde_json::json!("tcp")),
+        ),
+        (
+            "purpose",
+            mutated(proxy, "purpose", serde_json::json!("wayland-other")),
+        ),
+        (
+            "locality",
+            mutated(proxy, "locality", serde_json::json!("host-local")),
+        ),
+        (
+            "visibility",
+            mutated(proxy, "visibility", serde_json::json!("provider")),
+        ),
+        (
+            "lifecycle",
+            mutated(proxy, "lifecyclePolicy", serde_json::json!("pinned")),
+        ),
+        (
+            "fingerprint",
+            mutated(
+                proxy,
+                "serviceFingerprint",
+                serde_json::json!("display-wayland-data-v3-r9"),
+            ),
+        ),
+        (
+            "attachment",
+            mutated(
+                proxy,
+                "attachmentPolicy",
+                serde_json::json!({"supported": true, "maxAttachments": 2}),
+            ),
+        ),
+        (
+            "publication",
+            mutated(proxy, "bindingPublication", serde_json::json!("none")),
+        ),
+    ] {
+        assert_ne!(&look_alike, proxy, "the {axis} fixture is edited");
+        assert_eq!(
+            seam_committed_shape(&vocabulary, &look_alike),
+            None,
+            "the shared vocabulary commits no {axis} look-alike either"
+        );
+    }
+}
+
+/// Re-committing a session REPLACES the shapes it committed before, so a
+/// replaced session's shape is never admitted from a stale entry (R15).
+///
+/// The session is the same row with the same uid; only its authenticated
+/// reconnect generation moved. Its earlier endpoint rows are gone from the
+/// plane, and nothing the registry still holds may answer for them.
+#[test]
+fn recommitting_a_session_supersedes_the_shapes_it_committed_before() {
+    let (uid, session_ref, spec) = committed_session();
+    let next = WaylandSessionSpec::new(
+        spec.guest_ref().clone(),
+        spec.host_ref().clone(),
+        spec.user_ref().clone(),
+        spec.policy_ref().clone(),
+        DisplayIdentity::new("work", "#112233", "#223344", "#334455").unwrap(),
+        true,
+    )
+    .unwrap()
+    .with_reconnect_generation(spec.reconnect_generation() + 1)
+    .unwrap();
+    let superseded = committed_endpoint_specs(&uid, &session_ref, &spec);
+    let current = committed_endpoint_specs(&uid, &session_ref, &next);
+
+    let vocabulary = SharedDisplayEndpointVocabulary::new();
+    vocabulary.commit_session(&uid, &spec).unwrap();
+    for shape in &superseded {
+        assert!(
+            seam_committed_shape(&vocabulary, shape).is_some(),
+            "the shapes this session committed are admitted while it commits them"
+        );
+    }
+
+    vocabulary.commit_session(&uid, &next).unwrap();
+    for shape in &superseded {
+        assert_eq!(
+            seam_committed_shape(&vocabulary, shape),
+            None,
+            "a superseded generation's shape is not admitted once the session moved on"
+        );
+    }
+    for shape in &current {
+        assert_eq!(
+            seam_committed_shape(&vocabulary, shape)
+                .map(CommittedEndpointShape::reconnect_generation),
+            Some(next.reconnect_generation()),
+            "and the shapes it commits now are admitted at the generation it now authenticates"
         );
     }
 }

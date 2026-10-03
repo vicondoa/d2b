@@ -31,21 +31,12 @@ pub use process::{
     WorkerSupervisor, WorkerSupervisorError,
 };
 pub use session_children::{
-    COMPOSITOR_BINDING_PURPOSE, COMPOSITOR_BINDING_SLOT, COMPOSITOR_ENDPOINT_FINGERPRINT,
-    DISPLAY_EXECUTION_POLICY_ANNOTATION, DisplayEndpointBinding, DisplayEndpointObservation,
-    DisplayEndpointAdmission, DisplayEndpointRole, FRONTEND_ENDPOINT_FINGERPRINT,
-    PROXY_BINDING_PURPOSE,
-    PROXY_BINDING_SLOT,
-    PROXY_ENDPOINT_FINGERPRINT, admit_display_endpoint, decode_endpoint_spec,
-    display_endpoint_bindings,
-    durable_compositor_endpoint_ref,
-};
-// The endpoint shapes this Provider commits are reachable only from a test or
-// non-production composition until the ownership cutover installs them as the
-// Endpoint driver's injected vocabulary (U5 -> U6, KTD5).
-#[cfg(any(test, feature = "test-support"))]
-pub use session_children::{
-    DisplayEndpointVocabulary, display_committed_endpoint_shape,
+    COMPOSITOR_BINDING_PURPOSE, COMPOSITOR_ENDPOINT_FINGERPRINT,
+    DISPLAY_EXECUTION_POLICY_ANNOTATION, DisplayEndpointRole, DisplayEndpointVocabulary,
+    FRONTEND_ENDPOINT_FINGERPRINT, PROXY_BINDING_PURPOSE, PROXY_ENDPOINT_FINGERPRINT,
+    SharedDisplayEndpointVocabulary, display_binding_delivered, display_canonical_bindings,
+    durable_compositor_endpoint_ref, durable_guest_frontend_process_ref,
+    durable_host_proxy_endpoint_ref, durable_host_proxy_process_ref, durable_wayland_endpoint_ref,
 };
 pub use d2b_provider_endpoint::endpoint::EndpointSpec;
 pub use runtime::{

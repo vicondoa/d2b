@@ -54,11 +54,11 @@ impl FakeSocketEffects {
     /// row-evidence facets (a realized evidence family answers the same
     /// scripted flag the socket family answers).
     pub fn facet_set(self: &Arc<Self>) -> EndpointEffectFacets {
-        EndpointEffectFacets {
-            socket: Arc::new(ScriptedSocketSource(Arc::clone(self))),
-            guest_vmm: Arc::new(ScriptedEvidence(Arc::clone(self))),
-            device_worker: Arc::new(ScriptedEvidence(Arc::clone(self))),
-        }
+        EndpointEffectFacets::new(
+            Arc::new(ScriptedSocketSource(Arc::clone(self))),
+            Arc::new(ScriptedEvidence(Arc::clone(self))),
+            Arc::new(ScriptedEvidence(Arc::clone(self))),
+        )
     }
 }
 

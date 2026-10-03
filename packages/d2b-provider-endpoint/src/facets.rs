@@ -10,8 +10,9 @@
 //! or mutate the bound socket on the host target), the two row-evidence
 //! probes (the guest-runtime control endpoints read the guest's committed
 //! VMM Process row; the device-worker endpoints read the producer worker
-//! Process row), and the private host observation a Provider-committed
-//! socket shape is realized behind. The purpose derivations that classify
+//! Process row), the private host observation a Provider-committed socket
+//! shape is realized behind, and the Provider vocabularies that admit the
+//! shapes a declaring Provider commits. The purpose derivations that classify
 //! one purpose onto those surfaces are this crate's own knowledge (see
 //! [`crate::effects_service`]), so the facets never see a purpose decision,
 //! and a host observation answers with an opaque minted handle rather than
@@ -26,26 +27,137 @@ use d2b_contracts_broker::broker_wire::{
 use d2b_contracts_resource::v3::execution_policy::{BoundedToken, redacted_debug};
 use d2b_contracts_resource::v3::ResourceRef;
 
+use crate::driver::CommittedEndpointShape;
+use crate::endpoint::EndpointSpec;
+
 /// The daemon-supplied facet set the provider-owned Endpoint effects are
 /// built from (U6).
 ///
 /// The composition root supplies the objects; the driver never holds a
-/// daemon state type (R2). The three facets are the host socket surface and
-/// the two row-evidence probes the preserved realization owns; every other
+/// daemon state type (R2). Five seams cross the provider boundary: the host
+/// socket surface and the two row-evidence probes this crate realizes
+/// itself, the Provider vocabularies that admit the shapes a declaring
+/// Provider commits, and the daemon's private host observation. Every other
 /// input (the purpose derivations and the dispatch onto the surfaces) is
 /// this crate's own knowledge.
+///
+/// The last two default to their closed answers. A composition that injects
+/// no Provider vocabulary and carries no daemon admits nothing on their
+/// account, which is the honest prior rather than a missing answer (KTD5).
 #[derive(Clone)]
 pub struct EndpointEffectFacets {
     /// The host socket surface: the binding-owned virtiofsd socket's
     /// presence, ensure, and removal over the daemon's socket target
     /// registry and runtime directory.
-    pub socket: Arc<dyn EndpointSocketSource>,
+    pub(crate) socket: Arc<dyn EndpointSocketSource>,
     /// The guest-runtime control evidence: whether the producer Guest's
     /// committed VMM Process row reports `Ready` at its current generation.
-    pub guest_vmm: Arc<dyn GuestVmmEvidenceSource>,
+    pub(crate) guest_vmm: Arc<dyn GuestVmmEvidenceSource>,
     /// The device-worker evidence: whether the producer worker Process row
     /// reports `Ready` at its current generation.
-    pub device_worker: Arc<dyn DeviceWorkerEvidenceSource>,
+    pub(crate) device_worker: Arc<dyn DeviceWorkerEvidenceSource>,
+    /// The Provider vocabularies of this Zone: which committed rows are the
+    /// shapes their declaring Providers commit.
+    pub(crate) committed: Arc<dyn CommittedEndpointShapeSource>,
+    /// The daemon's private host observation, for the shapes realized behind
+    /// a socket the daemon owns.
+    pub(crate) host_socket: Arc<dyn HostSocketEvidenceSource>,
+}
+
+impl EndpointEffectFacets {
+    /// Build the three daemon surfaces this crate realizes itself over.
+    ///
+    /// The two Provider-owned seams take their closed answers: nothing is
+    /// admitted from a shape no declaring Provider has committed, and no host
+    /// socket is observed. A composition that supplies the two installs them
+    /// with [`Self::with_committed_shapes`] and
+    /// [`Self::with_host_socket_observation`].
+    pub fn new(
+        socket: Arc<dyn EndpointSocketSource>,
+        guest_vmm: Arc<dyn GuestVmmEvidenceSource>,
+        device_worker: Arc<dyn DeviceWorkerEvidenceSource>,
+    ) -> Self {
+        Self {
+            socket,
+            guest_vmm,
+            device_worker,
+            committed: Arc::new(UnwiredCommittedShapes),
+            host_socket: Arc::new(UnwiredHostSocketEvidence),
+        }
+    }
+
+    /// Install the Provider vocabularies that admit this Zone's
+    /// Provider-committed shapes (KTD5).
+    ///
+    /// The vocabulary is a declaring Provider's own object, matched in full
+    /// against the shape that Provider committed; this crate asks the
+    /// question and takes the one exact verdict. Passing no vocabulary is the
+    /// closed answer and is what [`Self::new`] installs.
+    #[must_use]
+    pub fn with_committed_shapes(
+        mut self,
+        committed: Arc<dyn CommittedEndpointShapeSource>,
+    ) -> Self {
+        self.committed = committed;
+        self
+    }
+
+    /// Install the daemon's private host observation (KTD5, KTD8).
+    ///
+    /// The observation is daemon state: it knows the locator the endpoint
+    /// owner committed, the exact socket standing there, and whether that
+    /// socket accepts a connection, and none of that crosses. A composition
+    /// that installs none observes no exact socket, which is what
+    /// [`Self::new`] installs.
+    #[must_use]
+    pub fn with_host_socket_observation(
+        mut self,
+        host_socket: Arc<dyn HostSocketEvidenceSource>,
+    ) -> Self {
+        self.host_socket = host_socket;
+        self
+    }
+}
+
+/// The Provider vocabularies that decide which committed rows this Zone
+/// admits (KTD5).
+///
+/// A shape a declaring Provider commits is named by that Provider and by
+/// nobody else: the Provider owns its constants and every field of its own
+/// exact match, and answers with one verdict. This crate never names a
+/// Provider, a Provider type, or a Provider's vocabulary - it asks, and the
+/// composition root installs whichever vocabularies the Zone's Providers
+/// published.
+///
+/// The default admits nothing, which is what a composition that installs no
+/// Provider vocabulary gets.
+pub trait CommittedEndpointShapeSource: Send + Sync + 'static {
+    /// The exact shape ONE declaring Provider commits for `spec`, or `None`
+    /// for any spec this Provider does not commit.
+    ///
+    /// `None` is a terminal refusal and never a near miss: a row that differs
+    /// from the committed shape on any structural field is not a shape this
+    /// Provider commits, and this crate refuses it rather than repairing it
+    /// into an admission.
+    fn committed_endpoint_shape(&self, _spec: &EndpointSpec) -> Option<CommittedEndpointShape> {
+        None
+    }
+}
+
+/// The committed-shape source a composition that installed no Provider
+/// vocabulary answers with.
+///
+/// A Zone whose Providers published no vocabulary admits no Provider-committed
+/// shape: the closed answer is what a composition that supplied nothing gets,
+/// and it is the same answer a Provider that commits no shape of this crate's
+/// families gives (KTD5).
+#[derive(Clone, Copy, Default)]
+pub struct UnwiredCommittedShapes;
+
+impl CommittedEndpointShapeSource for UnwiredCommittedShapes {
+    fn committed_endpoint_shape(&self, _spec: &EndpointSpec) -> Option<CommittedEndpointShape> {
+        None
+    }
 }
 
 /// The daemon-supplied host socket surface (U6): the binding-owned

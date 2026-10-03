@@ -3746,6 +3746,9 @@ mod tests {
                 volume_facets: volume_facets.clone(),
                 binding_facets: binding_facets.clone(),
                 endpoint_facets: endpoint_facets.clone(),
+                display_endpoint_vocabulary: Arc::new(
+                    d2b_provider_display_wayland::SharedDisplayEndpointVocabulary::new(),
+                ),
                 activation_facets: activation_facets.clone(),
                 usbip_facets: usbip_facets.clone(),
                 security_key_facets: security_key_facets.clone(),

@@ -59,14 +59,14 @@ use d2b_provider_endpoint::endpoint::{
 use d2b_resource_types::WellKnownType;
 
 use d2b_provider_endpoint::{
-    ENDPOINT_BINDING_TYPE_NAME, DeviceWorkerEvidenceSource, EndpointAccessDispatch,
-    EndpointAccessDispatchError, EndpointBindingDriverArgs, EndpointBindingDriverFactory,
-    EndpointBindingDriverStatus, EndpointDeliveryRefusal, EndpointDriverArgs,
-    EndpointDriverEffects, EndpointDriverFactory, EndpointPurposeVocabulary,
-    EndpointSocketIdentity, EndpointSocketSource, GuestControlProducer, GuestVmmEvidenceSource,
-    canonical_binding_row, declared_endpoint_bindings, VIRTIOFSD_PURPOSE,
-    endpoint_binding_descriptor, endpoint_binding_spec_decoder, endpoint_delivery_slot,
-    endpoint_spec_decoder,
+    CommittedEndpointShape, CommittedEndpointShapeSource, DeviceWorkerEvidenceSource,
+    ENDPOINT_BINDING_TYPE_NAME, EndpointAccessDispatch, EndpointAccessDispatchError,
+    EndpointBindingDriverArgs, EndpointBindingDriverFactory, EndpointBindingDriverStatus,
+    EndpointDeliveryRefusal, EndpointDriverArgs, EndpointDriverEffects, EndpointDriverFactory,
+    EndpointDriverStatus, EndpointPurposeVocabulary, EndpointRealization, EndpointSocketIdentity,
+    EndpointSocketSource, GuestControlProducer, GuestVmmEvidenceSource, VIRTIOFSD_PURPOSE,
+    canonical_binding_row, declared_endpoint_bindings, endpoint_binding_descriptor,
+    endpoint_binding_spec_decoder, endpoint_delivery_slot, endpoint_spec_decoder,
 };
 use d2b_resource_runtime::context::{
     ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, SpecDecoder,
@@ -171,13 +171,14 @@ impl EndpointDriverEffects for RealizedSocketEffects {
 ///
 /// The socket and both evidence facets answer through the one scripted double,
 /// so the driver under test is the production construction and only the host
-/// effect is a double.
+/// effect is a double. No Provider vocabulary is installed here: this is the
+/// closed composition, and the Provider-committed lane below installs one.
 fn realized_facets() -> d2b_provider_endpoint::EndpointEffectFacets {
-    d2b_provider_endpoint::EndpointEffectFacets {
-        socket: Arc::new(RealizedSocketEffects),
-        guest_vmm: Arc::new(RealizedSocketEffects),
-        device_worker: Arc::new(RealizedSocketEffects),
-    }
+    d2b_provider_endpoint::EndpointEffectFacets::new(
+        Arc::new(RealizedSocketEffects),
+        Arc::new(RealizedSocketEffects),
+        Arc::new(RealizedSocketEffects),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1384,5 +1385,277 @@ fn the_binding_type_is_registered_with_a_real_driver() {
     assert_eq!(
         descriptor.reads,
         &[WellKnownType::ENDPOINT, WellKnownType::ZONE],
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The Provider-committed shape lane (U5, KTD5, R14)
+// ---------------------------------------------------------------------------
+
+/// The vocabulary a declaring Provider publishes and the composition root
+/// installs: the shapes that Provider committed, matched in full.
+///
+/// This is the whole shape of any Provider's own implementation - a set of
+/// committed shapes and one exact comparison - which is why the driver admits
+/// a row on the Provider's verdict and on nothing else, and never names the
+/// Provider that produced it (KTD5).
+struct InstalledVocabulary {
+    committed: Vec<(EndpointSpec, CommittedEndpointShape)>,
+}
+
+impl CommittedEndpointShapeSource for InstalledVocabulary {
+    fn committed_endpoint_shape(&self, spec: &EndpointSpec) -> Option<CommittedEndpointShape> {
+        self.committed
+            .iter()
+            .find(|(committed, _)| committed == spec)
+            .map(|(_, shape)| *shape)
+    }
+}
+
+/// One Provider-committed shape: the private cross-domain data carriage a
+/// worker the declaring Provider launched realizes, consumed by exactly one
+/// subject over the attach and resolve operations.
+///
+/// The purpose is outside every family this crate derives for itself, so the
+/// only thing that can classify it is the Provider that committed it.
+fn provider_committed_spec(producer: &ResourceRef, subjects: Vec<ResourceRef>) -> EndpointSpec {
+    let published = subjects.clone();
+    EndpointSpec::new(
+        ResourceRef::parse("Provider/display-wayland").expect("provider ref"),
+        producer.clone(),
+        EndpointClass::Data,
+        EndpointTransport::FdAttachment,
+        BoundedToken::parse("wayland-cross-domain").expect("bounded purpose"),
+        Some(BoundedText::parse("display-wayland-data-v3-r3").expect("bounded fingerprint")),
+        EndpointLocality::CrossDomain,
+        EndpointVisibility::Owner,
+        EndpointAttachmentPolicy::new(true, 1).expect("attachment policy"),
+        EndpointConsumerPolicy::new(
+            subjects,
+            Vec::new(),
+            vec![EndpointOperation::Attach, EndpointOperation::Resolve],
+        )
+        .expect("consumer policy"),
+        EndpointLifecyclePolicy::RecycleWithProducer,
+    )
+    .expect("endpoint spec")
+    .publishing_to(published)
+    .expect("the endpoint publishes a binding to its declared consumer")
+}
+
+/// One committed shape with a single field edited, built through the
+/// contract's own wire form so the result still decodes as a valid Endpoint
+/// spec: a look-alike, not a malformed row.
+fn mutated_spec(spec: &EndpointSpec, field: &str, value: serde_json::Value) -> EndpointSpec {
+    let mut wire = serde_json::to_value(spec).expect("the committed spec encodes");
+    wire.as_object_mut()
+        .expect("the committed spec is an object")
+        .insert(field.to_owned(), value);
+    serde_json::from_value(wire).expect("the edited spec is still a valid Endpoint spec")
+}
+
+/// The view of the worker row the Provider launched, reporting `Ready` at its
+/// own current generation: this row IS the shape's realization.
+fn producer_ready_view() -> ResourceView {
+    ResourceView {
+        key: ResourceKey::new(ZONE, "Process", "proxy"),
+        uid: [0x51; 16],
+        generation: 1,
+        deleting: false,
+        provenance: ResourceProvenance::Resource,
+        spec: envelope(
+            "Process",
+            "proxy",
+            0x51,
+            Some(ENDPOINT),
+            serde_json::json!({ "domain": "system" }),
+        ),
+        metadata: Vec::new(),
+        owner_key: None,
+        status: Some(ResourceStatus::Ready),
+        status_generation: Some(1),
+        status_projection: None,
+    }
+}
+
+/// The committed neighbourhood of a Provider-committed row: the Zone self row,
+/// the consumer row, the worker row the shape is realized behind, and the
+/// `Endpoint` row itself (index 3).
+fn provider_committed_rows(spec: &EndpointSpec) -> Vec<StoredDesiredResource> {
+    vec![
+        stored(
+            ResourceKey::new(ZONE, "Zone", ZONE),
+            zone_uid_bytes(),
+            None,
+            envelope(
+                "Zone",
+                ZONE,
+                0x11,
+                None,
+                serde_json::json!({ "display": "compositor" }),
+            ),
+        ),
+        stored(
+            ResourceKey::new(ZONE, "Process", "frontend"),
+            [0x31; 16],
+            Some([0x42; 16]),
+            envelope(
+                "Process",
+                "frontend",
+                0x31,
+                Some(ENDPOINT),
+                serde_json::json!({ "domain": "system" }),
+            ),
+        ),
+        stored(
+            ResourceKey::new(ZONE, "Process", "proxy"),
+            [0x51; 16],
+            Some([0x30; 16]),
+            envelope(
+                "Process",
+                "proxy",
+                0x51,
+                Some(ENDPOINT),
+                serde_json::json!({ "domain": "system" }),
+            ),
+        ),
+        stored(
+            ResourceKey::new(ZONE, "Endpoint", "compositor"),
+            [0x42; 16],
+            Some([0x30; 16]),
+            serde_json::to_vec(spec).expect("endpoint spec bytes"),
+        ),
+    ]
+}
+
+/// Drive one reconcile pass over `rows[3]` with `facets`, the production
+/// construction throughout: the driver factory builds this crate's own
+/// effects service from the composition's facet set.
+async fn reconcile_committed(
+    rows: Vec<StoredDesiredResource>,
+    facets: d2b_provider_endpoint::EndpointEffectFacets,
+) -> Result<ResourceContext, d2b_resource_runtime::error::DriverFailure> {
+    let manager = RecordingManager::with_views(rows.clone(), vec![producer_ready_view()]);
+    let (mut ctx, _requeue) = context(
+        rows[3].clone(),
+        endpoint_spec_decoder(),
+        Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+    );
+    let mut driver = EndpointDriverFactory::new(EndpointDriverArgs {
+        zone: ZONE.to_owned(),
+        facets,
+    })
+    .create(&ResourceKey::new(ZONE, "Endpoint", "compositor"))
+    .await;
+    driver.reconcile(&mut ctx).await?;
+    Ok(ctx)
+}
+
+/// The production composition admits a Provider-committed shape by the
+/// Provider's own exact match, and refuses a look-alike terminally.
+///
+/// `EndpointDriverFactory` builds this crate's own effects service from the
+/// facet set, so the only stand-in is the vocabulary a declaring Provider
+/// publishes - the object a composition root installs (KTD5). Nothing here
+/// writes a status from outside the actor: the `ManagerEndpoint` the driver
+/// holds declares no status verb at all, and what the pass published is the
+/// projection it set on its own context.
+#[tokio::test]
+async fn a_provider_committed_row_is_admitted_by_the_installed_vocabulary_and_its_look_alike_is_refused()
+ {
+    let consumer_ref = ResourceRef::parse(CONSUMER).expect("consumer ref");
+    let producer_ref = ResourceRef::parse("Process/proxy").expect("producer ref");
+    let spec = provider_committed_spec(&producer_ref, vec![consumer_ref.clone()]);
+    let shape = CommittedEndpointShape::new(EndpointRealization::WorkerDataAttachment, 3);
+
+    // The closed composition: with no Provider vocabulary installed, the very
+    // same committed row is not a shape anything realizes.
+    let closed = reconcile_committed(provider_committed_rows(&spec), realized_facets())
+        .await
+        .err()
+        .expect("a composition that injected no vocabulary admits no Provider shape");
+    assert_eq!(closed.kind().code(), "endpoint-shape-unsupported");
+
+    // The composition that installed the Provider's own vocabulary.
+    let vocabulary = Arc::new(InstalledVocabulary {
+        committed: vec![(spec.clone(), shape)],
+    });
+    let rows = provider_committed_rows(&spec);
+    let manager = RecordingManager::with_views(rows.clone(), vec![producer_ready_view()]);
+    let (mut ctx, _requeue) = context(
+        rows[3].clone(),
+        endpoint_spec_decoder(),
+        Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+    );
+    let mut driver = EndpointDriverFactory::new(EndpointDriverArgs {
+        zone: ZONE.to_owned(),
+        facets: realized_facets().with_committed_shapes(vocabulary),
+    })
+    .create(&ResourceKey::new(ZONE, "Endpoint", "compositor"))
+    .await;
+    driver
+        .reconcile(&mut ctx)
+        .await
+        .expect("the committed shape reaches a satisfied pass");
+
+    assert_eq!(
+        ctx.status::<EndpointDriverStatus>(),
+        Some(&EndpointDriverStatus::Realized),
+        "the actor publishes its own realized status"
+    );
+    let layer = ctx
+        .take_status_projection()
+        .expect("the actor publishes its own status layer");
+    assert_eq!(
+        layer["endpoint"]["readiness"],
+        serde_json::json!("realized")
+    );
+    assert_eq!(
+        layer["endpoint"]["observedProducerGeneration"],
+        serde_json::json!(1),
+        "the readiness is proved against the producer row's own current generation"
+    );
+    assert_eq!(
+        layer["endpoint"]["connectionAvailability"],
+        serde_json::Value::Null,
+        "a worker shape publishes no host connectability state"
+    );
+
+    // The whole set of mutations this pass issued.
+    let ensured = manager.ensured().await;
+    assert_eq!(
+        ensured.len(),
+        1,
+        "the pass committed the one relationship row it derives and nothing else"
+    );
+    assert_eq!(ensured[0].type_name.as_str(), ENDPOINT_BINDING_TYPE_NAME);
+    assert!(
+        manager.deleted().await.is_empty(),
+        "a first pass retires nothing"
+    );
+
+    // One structural field changed is not a shape this Provider commits: the
+    // driver refuses it terminally rather than repairing the near miss into
+    // an admission.
+    let look_alike = mutated_spec(&spec, "endpointClass", serde_json::json!("service"));
+    assert_ne!(&look_alike, &spec, "the look-alike fixture is edited");
+    let rejected = reconcile_committed(
+        provider_committed_rows(&look_alike),
+        realized_facets().with_committed_shapes(Arc::new(InstalledVocabulary {
+            committed: vec![(spec.clone(), shape)],
+        })),
+    )
+    .await
+    .err()
+    .expect("a look-alike on one committed axis is refused");
+    assert_eq!(
+        rejected.kind().code(),
+        "endpoint-shape-unsupported",
+        "the refusal names the shape, not an effect"
+    );
+    assert_eq!(
+        rejected.class(),
+        d2b_resource_runtime::error::FailureClass::Terminal,
+        "and it is terminal: a retry cannot turn the near miss into an admission"
     );
 }

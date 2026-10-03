@@ -17,3 +17,20 @@
   realization incarnation, and that authority is revalidated immediately
   before the effect, so a revoked or replaced binding stops the live helper
   instead of leaving it running on stale delivery.
+
+- A Process whose target binding resolves to a Guest is launched, adopted,
+  observed, and stopped through the authenticated target session, with its
+  endpoint bindings delivered only after the launch lease revalidates. A
+  reconnected session is re-adopted rather than assumed, and a stale or
+  ambiguous restart survivor is quarantined instead of resumed.
+- Display endpoints now admit only their three exact shapes: a lookalike
+  that differs in class, transport, producer, locality, visibility,
+  lifecycle, purpose, fingerprint, consumer policy, or operation is
+  refused instead of half-admitted, and a socket that is absent,
+  unconnectable, or rebound invalidates the readiness it previously proved.
+
+### Removed
+
+- The `Provider/execution-policy` reference. Nothing enforced it, so the
+  `ExecutionPolicy` resource claimed a Provider that did not exist; the
+  ResourceType vocabulary is now accepted without it.

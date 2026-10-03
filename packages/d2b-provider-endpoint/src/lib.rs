@@ -12,10 +12,12 @@
 //! The family's driver effects (U6) are implemented by this crate itself
 //! ([`crate::effects_service`]): the purpose derivations classify one
 //! purpose onto the realization the plane owns from the declaring providers'
-//! own vocabularies, and the daemon-owned realization surfaces - the host
-//! socket effect for the binding-owned virtiofsd socket and the two
-//! row-evidence probes - cross the provider boundary as the declared
-//! [`crate::facets::EndpointEffectFacets`] the composition root supplies.
+//! own vocabularies, and the surfaces the daemon owns - the host socket
+//! effect for the binding-owned virtiofsd socket, the two row-evidence
+//! probes, the Provider vocabularies that admit a Provider-committed shape,
+//! and the daemon's private host observation - cross the provider boundary as
+//! the declared [`crate::facets::EndpointEffectFacets`] the composition root
+//! supplies.
 //! The daemon hosts the family's declared effects service
 //! ([`crate::effects_service::ENDPOINT_EFFECTS_SERVICE`]) per zone from the
 //! family's registered factory; no externally built port appears at any
@@ -58,10 +60,10 @@ pub use effects_service::{
     guest_control_purpose,
 };
 pub use facets::{
-    DeviceWorkerEvidenceSource, EndpointAccessDispatch, EndpointAccessDispatchError,
-    UnwiredEndpointAccess,
-    EndpointEffectFacets, EndpointSocketSource, GuestVmmEvidenceSource,
-    HostSocketEvidenceSource, MIN_REALIZATION_NONCE_CHARS, RealizationHandle,
+    CommittedEndpointShapeSource, DeviceWorkerEvidenceSource, EndpointAccessDispatch,
+    EndpointAccessDispatchError, EndpointEffectFacets, EndpointSocketSource,
+    GuestVmmEvidenceSource, HostSocketEvidenceSource, MIN_REALIZATION_NONCE_CHARS,
+    RealizationHandle, UnwiredCommittedShapes, UnwiredEndpointAccess,
     UnwiredHostSocketEvidence,
 };
 
